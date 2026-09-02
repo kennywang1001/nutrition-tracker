@@ -1,0 +1,38 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: wallet
+      POSTGRES_PASSWORD: wallet
+      POSTGRES_DB: wallet
+    ports:
+      # 主機用 5433，避免跟開發機上其他專案的 PostgreSQL 撞埠。
+      # 容器之間仍走 5432（見下面 api 的 DATABASE_URL），CI 也用 5432（runner 是乾淨的）。
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wallet -d wallet"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://wallet:wallet@db:5432/wallet
+      JWT_SECRET: dev-secret-change-me-in-production
+      PHOTO_DIR: /app/data/photos
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/app/app
+      - photos:/app/data/photos
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  pgdata:
+  photos:
