@@ -1,0 +1,2242 @@
+# P1 計畫 1：專案骨架 + 認證 實作計畫
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** 建立可用 `docker compose up` 啟動的 FastAPI + PostgreSQL 專案骨架，完成使用者註冊、登入、JWT 驗證與角色權限，並建立整個 P1 後續都會依賴的測試基礎設施。
+
+**Architecture:** 單一 FastAPI 應用，async SQLAlchemy 2.0 連 PostgreSQL 16，Alembic 管理 schema。測試跑真的 PostgreSQL（不用 SQLite），每個測試包在資料庫交易內、跑完 rollback，因此測試之間完全隔離且不需清資料。錯誤回應統一格式，由 exception handler 集中處理。
+
+**Tech Stack:** Python 3.12、FastAPI、SQLAlchemy 2.0 (async) + asyncpg、Alembic、Pydantic v2 + pydantic-settings、PyJWT、argon2-cffi、pytest + pytest-asyncio + httpx、ruff、mypy、Docker Compose
+
+**規格來源：** [docs/superpowers/specs/2026-09-02-diet-tracker-p1-design.md](../specs/2026-09-02-diet-tracker-p1-design.md) 第 4、6.1、7.1、9、10 節
+
+---
+
+## 檔案結構
+
+實作完成後的專案長相：
+
+```
+pyproject.toml            依賴、ruff / mypy / pytest 設定
+Dockerfile                API 容器
+docker-compose.yml        api + db 服務
+alembic.ini               Alembic 設定
+.env.example              環境變數範本
+.github/workflows/ci.yml  CI
+
+app/
+  main.py                 FastAPI app 組裝（唯一組裝點）
+  config.py               設定（pydantic-settings）
+  db.py                   async engine / session / get_db
+  errors.py               AppError 家族 + exception handlers
+  cli.py                  建立管理員帳號的命令
+  models/
+    base.py               DeclarativeBase
+    user.py               User / UserRole
+  schemas/
+    auth.py               註冊、登入、token 的請求與回應
+  security/
+    password.py           Argon2 雜湊與驗證
+    tokens.py             JWT 建立與解碼
+  api/
+    deps.py               get_current_user / require_admin
+    routes/
+      health.py           健康檢查
+      auth.py             註冊、登入、換發 token
+      me.py               目前使用者
+
+migrations/
+  env.py
+  versions/0001_create_users.py
+
+tests/
+  conftest.py             測試資料庫、交易隔離、HTTP client
+  factories.py            測試資料產生器
+  test_health.py
+  test_config.py
+  test_password.py
+  test_tokens.py
+  test_errors.py
+  test_auth_register.py
+  test_auth_login.py
+  test_auth_me.py
+  test_auth_refresh.py
+  test_deps_admin.py
+  test_cli.py
+```
+
+**分割原則：** 依「職責」而非「技術層」分。`security/` 裡的兩個檔案彼此不相依，各自可獨立測試。`api/routes/` 一個檔案一組端點。之後計畫 2~4 會在 `models/`、`schemas/`、`api/routes/` 各加自己的檔案，不動既有檔案。
+
+---
+
+## 執行前提
+
+- 本機已安裝 Docker Desktop 與 Python 3.12
+- 每個 Task 結束都要 commit
+- 每個 Task 的測試步驟都要真的執行並看到預期輸出，不可跳過
+
+---
+
+### Task 1: 專案骨架與工具設定
+
+**Files:**
+- Create: `pyproject.toml`
+- Create: `.env.example`
+- Create: `app/__init__.py`
+- Create: `tests/__init__.py`
+
+- [ ] **Step 1: 建立 `pyproject.toml`**
+
+```toml
+[project]
+name = "wallet"
+version = "0.1.0"
+description = "飲食紀錄系統"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "pydantic[email]>=2.9",
+    "pydantic-settings>=2.6",
+    "pyjwt>=2.10",
+    "argon2-cffi>=23.1",
+    "python-multipart>=0.0.17",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "httpx>=0.27",
+    "ruff>=0.8",
+    "mypy>=1.13",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "ASYNC"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+# FastAPI 的路由裝飾器沒有型別註記，strict 模式會全部報錯
+disallow_untyped_decorators = false
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+```
+
+- [ ] **Step 2: 建立 `.env.example`**
+
+```
+DATABASE_URL=postgresql+asyncpg://wallet:wallet@localhost:5432/wallet
+TEST_DATABASE_URL=postgresql+asyncpg://wallet:wallet@localhost:5432/wallet_test
+JWT_SECRET=dev-secret-change-me-in-production
+PHOTO_DIR=data/photos
+```
+
+- [ ] **Step 3: 建立空的套件檔案**
+
+```bash
+mkdir -p app tests
+touch app/__init__.py tests/__init__.py
+```
+
+- [ ] **Step 4: 建立虛擬環境並安裝**
+
+```bash
+python -m venv .venv
+.venv/Scripts/activate      # Windows
+pip install -e ".[dev]"
+```
+
+Expected: 安裝成功，無錯誤。
+
+- [ ] **Step 5: 驗證工具可跑**
+
+Run: `ruff check .`
+Expected: `All checks passed!`
+
+Run: `pytest`
+Expected: `collected 0 items` / `no tests ran`
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add pyproject.toml .env.example app/__init__.py tests/__init__.py
+git commit -m "chore: 建立專案骨架與工具設定"
+```
+
+---
+
+### Task 2: 健康檢查端點
+
+先做一個不需要資料庫的端點，確認 FastAPI 與測試流程能跑通。
+
+**Files:**
+- Create: `app/main.py`
+- Create: `app/api/__init__.py`, `app/api/routes/__init__.py`
+- Create: `app/api/routes/health.py`
+- Test: `tests/test_health.py`
+
+- [ ] **Step 1: 寫失敗的測試**
+
+`tests/test_health.py`:
+
+```python
+from httpx import ASGITransport, AsyncClient
+
+from app.main import app
+
+
+async def test_health_returns_ok():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+```
+
+- [ ] **Step 2: 執行測試，確認失敗**
+
+Run: `pytest tests/test_health.py -v`
+Expected: FAIL，`ModuleNotFoundError: No module named 'app.main'`
+
+- [ ] **Step 3: 寫最小實作**
+
+```bash
+mkdir -p app/api/routes
+touch app/api/__init__.py app/api/routes/__init__.py
+```
+
+`app/api/routes/health.py`:
+
+```python
+from fastapi import APIRouter
+
+router = APIRouter(tags=["health"])
+
+
+@router.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
+```
+
+`app/main.py`:
+
+```python
+from fastapi import FastAPI
+
+from app.api.routes import health
+
+app = FastAPI(title="飲食紀錄 API", version="0.1.0")
+app.include_router(health.router, prefix="/api")
+```
+
+- [ ] **Step 4: 執行測試，確認通過**
+
+Run: `pytest tests/test_health.py -v`
+Expected: `1 passed`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add app/main.py app/api tests/test_health.py
+git commit -m "feat: 新增健康檢查端點"
+```
+
+---
+
+### Task 3: Docker Compose 環境
+
+**Files:**
+- Create: `Dockerfile`
+- Create: `.dockerignore`
+- Create: `docker-compose.yml`
+
+- [ ] **Step 1: 建立 `Dockerfile`**
+
+```dockerfile
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml ./
+COPY app ./app
+RUN pip install --no-cache-dir -e ".[dev]"
+
+COPY . .
+
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+> 註：先 COPY `app/` 再 `pip install -e .` 是因為 editable 安裝需要套件目錄存在。
+> 這犧牲了一點 layer 快取效率，換來設定簡單 —— 專案還小，值得。
+
+- [ ] **Step 2: 建立 `.dockerignore`**
+
+```
+.venv/
+__pycache__/
+*.pyc
+.git/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+data/photos/
+docs/
+```
+
+- [ ] **Step 3: 建立 `docker-compose.yml`**
+
+```yaml
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: wallet
+      POSTGRES_PASSWORD: wallet
+      POSTGRES_DB: wallet
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wallet -d wallet"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://wallet:wallet@db:5432/wallet
+      JWT_SECRET: dev-secret-change-me-in-production
+      PHOTO_DIR: /app/data/photos
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/app/app
+      - photos:/app/data/photos
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  pgdata:
+  photos:
+```
+
+- [ ] **Step 4: 啟動並驗證**
+
+Run: `docker compose up -d --build`
+Expected: 兩個服務都起來，`docker compose ps` 顯示 db 為 healthy
+
+Run: `curl http://localhost:8000/api/health`
+Expected: `{"status":"ok"}`
+
+Run: `curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/docs`
+Expected: `200`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add Dockerfile .dockerignore docker-compose.yml
+git commit -m "chore: 新增 Docker Compose 開發環境"
+```
+
+---
+
+### Task 4: 設定管理
+
+**Files:**
+- Create: `app/config.py`
+- Test: `tests/test_config.py`
+
+- [ ] **Step 1: 寫失敗的測試**
+
+`tests/test_config.py`:
+
+```python
+from app.config import Settings
+
+
+def test_settings_have_sensible_defaults():
+    settings = Settings()
+
+    assert settings.jwt_algorithm == "HS256"
+    assert settings.access_token_ttl_minutes == 15
+    assert settings.refresh_token_ttl_days == 30
+
+
+def test_settings_can_be_overridden():
+    settings = Settings(jwt_secret="from-test", access_token_ttl_minutes=1)
+
+    assert settings.jwt_secret == "from-test"
+    assert settings.access_token_ttl_minutes == 1
+```
+
+- [ ] **Step 2: 執行測試，確認失敗**
+
+Run: `pytest tests/test_config.py -v`
+Expected: FAIL，`ModuleNotFoundError: No module named 'app.config'`
+
+- [ ] **Step 3: 寫最小實作**
+
+`app/config.py`:
+
+```python
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    database_url: str = "postgresql+asyncpg://wallet:wallet@localhost:5432/wallet"
+    jwt_secret: str = "dev-secret-change-me-in-production"
+    jwt_algorithm: str = "HS256"
+    access_token_ttl_minutes: int = 15
+    refresh_token_ttl_days: int = 30
+    photo_dir: str = "data/photos"
+
+
+settings = Settings()
+```
+
+- [ ] **Step 4: 執行測試，確認通過**
+
+Run: `pytest tests/test_config.py -v`
+Expected: `2 passed`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add app/config.py tests/test_config.py
+git commit -m "feat: 新增設定管理"
+```
+
+---
+
+### Task 5: 資料庫連線與 Alembic
+
+**Files:**
+- Create: `app/db.py`
+- Create: `app/models/__init__.py`, `app/models/base.py`
+- Create: `alembic.ini`, `migrations/env.py`（由 `alembic init` 產生後修改）
+
+- [ ] **Step 1: 建立 Declarative Base**
+
+```bash
+mkdir -p app/models
+touch app/models/__init__.py
+```
+
+`app/models/base.py`:
+
+```python
+from sqlalchemy.orm import DeclarativeBase
+
+
+class Base(DeclarativeBase):
+    pass
+```
+
+- [ ] **Step 2: 建立資料庫連線模組**
+
+`app/db.py`:
+
+```python
+from collections.abc import AsyncIterator
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from app.config import settings
+
+engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+
+
+async def get_db() -> AsyncIterator[AsyncSession]:
+    async with SessionLocal() as session:
+        yield session
+```
+
+- [ ] **Step 3: 初始化 Alembic（async 樣板）**
+
+Run: `alembic init -t async migrations`
+Expected: 產生 `alembic.ini` 與 `migrations/` 目錄
+
+- [ ] **Step 4: 修改 `migrations/env.py`**
+
+把檔案開頭的 import 區塊之後、`config = context.config` 之前，加入：
+
+```python
+from app.config import settings
+from app.models.base import Base
+```
+
+然後把 `target_metadata = None` 改成：
+
+```python
+target_metadata = Base.metadata
+```
+
+並在 `config = context.config` 之後加入一行，讓連線字串來自環境變數而非 `alembic.ini`：
+
+```python
+config.set_main_option("sqlalchemy.url", settings.database_url)
+```
+
+- [ ] **Step 5: 驗證 Alembic 可執行**
+
+Run: `alembic current`
+Expected: 無錯誤（尚無 migration，輸出為空）
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add app/db.py app/models alembic.ini migrations
+git commit -m "feat: 新增資料庫連線與 Alembic 設定"
+```
+
+---
+
+### Task 6: User model 與第一個 migration
+
+**Files:**
+- Create: `app/models/user.py`
+- Create: `migrations/versions/0001_create_users.py`
+
+- [ ] **Step 1: 建立 User model**
+
+`app/models/user.py`:
+
+```python
+import enum
+from datetime import datetime
+
+from sqlalchemy import BigInteger, DateTime, Enum, Text, func
+from sqlalchemy.dialects.postgresql import CITEXT
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.models.base import Base
+
+
+class UserRole(enum.StrEnum):
+    USER = "user"
+    ADMIN = "admin"
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(CITEXT(), unique=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[UserRole] = mapped_column(
+        Enum(UserRole, name="user_role", values_callable=lambda e: [m.value for m in e]),
+        nullable=False,
+        default=UserRole.USER,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+```
+
+- [ ] **Step 2: 讓 Alembic 認得這個 model**
+
+在 `migrations/env.py` 的 `from app.models.base import Base` 下面加一行：
+
+```python
+from app.models.user import User  # noqa: F401  讓 Base.metadata 含有 users
+```
+
+> 之後每新增一個 model 都要在這裡 import，否則 `alembic revision --autogenerate`
+> 會以為那張表該被刪掉。這是 Alembic 最常見的坑。
+
+- [ ] **Step 3: 手寫第一個 migration**
+
+`migrations/versions/0001_create_users.py`:
+
+```python
+"""create users table and required extensions
+
+Revision ID: 0001
+Revises:
+"""
+
+from collections.abc import Sequence
+
+import sqlalchemy as sa
+from alembic import op
+from sqlalchemy.dialects.postgresql import CITEXT
+
+revision: str = "0001"
+down_revision: str | None = None
+branch_labels: Sequence[str] | None = None
+depends_on: Sequence[str] | None = None
+
+
+def upgrade() -> None:
+    # citext: email 比對不分大小寫
+    # btree_gist: user_targets 的 EXCLUDE 期間不重疊約束（計畫 4 會用到）
+    # pg_trgm: 食物名稱模糊搜尋（計畫 2 會用到）
+    op.execute("CREATE EXTENSION IF NOT EXISTS citext")
+    op.execute("CREATE EXTENSION IF NOT EXISTS btree_gist")
+    op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+
+    user_role = sa.Enum("user", "admin", name="user_role")
+    user_role.create(op.get_bind())
+
+    op.create_table(
+        "users",
+        sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
+        sa.Column("email", CITEXT(), nullable=False),
+        sa.Column("password_hash", sa.Text, nullable=False),
+        sa.Column("display_name", sa.Text, nullable=False),
+        sa.Column("role", user_role, nullable=False, server_default="user"),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+    )
+    op.create_unique_constraint("uq_users_email", "users", ["email"])
+
+
+def downgrade() -> None:
+    op.drop_table("users")
+    sa.Enum(name="user_role").drop(op.get_bind())
+```
+
+- [ ] **Step 4: 對開發資料庫執行 migration**
+
+Run: `docker compose up -d db`
+Run: `alembic upgrade head`
+Expected: 輸出 `Running upgrade  -> 0001, create users table and required extensions`
+
+- [ ] **Step 5: 驗證資料表確實建立**
+
+Run:
+```bash
+docker compose exec -T db psql -U wallet -d wallet -c "\d users"
+```
+Expected: 列出 `users` 的欄位，`email` 型別是 `citext`，`role` 型別是 `user_role`
+
+- [ ] **Step 6: 驗證 downgrade 可逆**
+
+Run: `alembic downgrade base`
+Expected: 成功，無錯誤
+
+Run: `alembic upgrade head`
+Expected: 成功
+
+> 這一步很重要。migration 只能往前跑、不能回退的專案，日後改 schema 會很痛。
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add app/models/user.py migrations/env.py migrations/versions/0001_create_users.py
+git commit -m "feat: 新增 users 資料表與必要的 PostgreSQL 擴充"
+```
+
+---
+
+### Task 7: 測試基礎設施
+
+**這是整個 P1 最重要的一個 Task。** 後面所有測試都靠它。
+
+**Files:**
+- Create: `tests/conftest.py`
+- Test: `tests/test_infra.py`
+
+- [ ] **Step 1: 寫失敗的測試**
+
+`tests/test_infra.py`:
+
+```python
+from sqlalchemy import select
+
+from app.models.user import User
+
+
+async def test_db_session_works(db_session):
+    user = User(email="infra@example.com", password_hash="x", display_name="Infra")
+    db_session.add(user)
+    await db_session.commit()
+
+    found = await db_session.scalar(select(User).where(User.email == "infra@example.com"))
+    assert found is not None
+    assert found.display_name == "Infra"
+
+
+async def test_each_test_starts_with_a_clean_database(db_session):
+    """上一個測試 commit 了一個使用者，這個測試不該看到它。"""
+    found = await db_session.scalar(select(User).where(User.email == "infra@example.com"))
+    assert found is None
+
+
+async def test_client_can_reach_the_api(client):
+    response = await client.get("/api/health")
+    assert response.status_code == 200
+```
+
+- [ ] **Step 2: 執行測試，確認失敗**
+
+Run: `pytest tests/test_infra.py -v`
+Expected: FAIL，`fixture 'db_session' not found`
+
+- [ ] **Step 3: 寫測試基礎設施**
+
+`tests/conftest.py`:
+
+```python
+import asyncio
+import os
+import subprocess
+from collections.abc import AsyncIterator
+
+import asyncpg
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
+
+from app.db import get_db
+from app.main import app
+
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql+asyncpg://wallet:wallet@localhost:5432/wallet_test",
+)
+
+
+async def _ensure_test_database_exists() -> None:
+    """連到 postgres 這個預設資料庫，建立測試資料庫（若不存在）。"""
+    base, db_name = TEST_DATABASE_URL.rsplit("/", 1)
+    admin_dsn = base.replace("postgresql+asyncpg://", "postgresql://") + "/postgres"
+
+    connection = await asyncpg.connect(admin_dsn)
+    try:
+        exists = await connection.fetchval(
+            "SELECT 1 FROM pg_database WHERE datname = $1", db_name
+        )
+        if not exists:
+            await connection.execute(f'CREATE DATABASE "{db_name}"')
+    finally:
+        await connection.close()
+
+
+@pytest.fixture(scope="session")
+def migrated_database() -> None:
+    """整個測試 session 只跑一次：建立測試資料庫並套用所有 migration。"""
+    asyncio.run(_ensure_test_database_exists())
+    subprocess.run(
+        ["alembic", "upgrade", "head"],
+        check=True,
+        env={**os.environ, "DATABASE_URL": TEST_DATABASE_URL},
+    )
+
+
+@pytest_asyncio.fixture
+async def db_connection(migrated_database: None) -> AsyncIterator[AsyncConnection]:
+    """每個測試開一個外層交易，測試結束整個 rollback。
+
+    這就是測試隔離的核心：測試裡即使呼叫了 commit，也只是 commit 到
+    savepoint，最外層交易一 rollback，資料庫就回到測試開始前的狀態。
+    因此測試之間互不干擾，也完全不需要手動清資料。
+    """
+    engine = create_async_engine(TEST_DATABASE_URL)
+    async with engine.connect() as connection:
+        transaction = await connection.begin()
+        try:
+            yield connection
+        finally:
+            await transaction.rollback()
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def db_session(db_connection: AsyncConnection) -> AsyncIterator[AsyncSession]:
+    session = AsyncSession(bind=db_connection, join_transaction_mode="create_savepoint")
+    try:
+        yield session
+    finally:
+        await session.close()
+
+
+@pytest_asyncio.fixture
+async def client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
+    """讓 API 使用測試的 session，這樣 API 寫入的資料也會被 rollback。"""
+
+    async def override_get_db() -> AsyncIterator[AsyncSession]:
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as async_client:
+        yield async_client
+    app.dependency_overrides.clear()
+```
+
+- [ ] **Step 4: 執行測試，確認通過**
+
+Run: `docker compose up -d db`
+Run: `pytest tests/test_infra.py -v`
+Expected: `3 passed`
+
+特別確認 `test_each_test_starts_with_a_clean_database` 通過 —— 它證明了交易隔離真的有效。
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tests/conftest.py tests/test_infra.py
+git commit -m "test: 建立測試基礎設施（真實 PostgreSQL + 交易隔離）"
+```
+
+---
+
+### Task 8: 密碼雜湊
+
+**Files:**
+- Create: `app/security/__init__.py`, `app/security/password.py`
+- Create: `tests/factories.py`
+- Test: `tests/test_password.py`
+
+- [ ] **Step 1: 寫失敗的測試**
+
+`tests/test_password.py`:
+
+```python
+from app.security.password import hash_password, verify_password
+
+
+def test_hash_is_not_the_plain_password():
+    hashed = hash_password("my-secret-password")
+    assert hashed != "my-secret-password"
+    assert hashed.startswith("$argon2")
+
+
+def test_same_password_produces_different_hashes():
+    """每次雜湊都要用不同的 salt，否則相同密碼的使用者會有相同雜湊值。"""
+    assert hash_password("same") != hash_password("same")
+
+
+def test_verify_accepts_the_correct_password():
+    hashed = hash_password("my-secret-password")
+    assert verify_password("my-secret-password", hashed) is True
+
+
+def test_verify_rejects_the_wrong_password():
+    hashed = hash_password("my-secret-password")
+    assert verify_password("wrong-password", hashed) is False
+
+
+def test_verify_rejects_a_malformed_hash():
+    assert verify_password("anything", "not-a-real-hash") is False
+```
+
+- [ ] **Step 2: 執行測試，確認失敗**
+
+Run: `pytest tests/test_password.py -v`
+Expected: FAIL，`ModuleNotFoundError: No module named 'app.security'`
+
+- [ ] **Step 3: 寫最小實作**
+
+```bash
+mkdir -p app/security
+touch app/security/__init__.py
+```
+
+`app/security/password.py`:
+
+```python
+from argon2 import PasswordHasher
+from argon2.exceptions import Argon2Error, InvalidHashError
+
+_hasher = PasswordHasher()
+
+
+def hash_password(password: str) -> str:
+    return _hasher.hash(password)
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    try:
+        return _hasher.verify(password_hash, password)
+    except (Argon2Error, InvalidHashError):
+        return False
+```
+
+- [ ] **Step 4: 執行測試，確認通過**
+
+Run: `pytest tests/test_password.py -v`
+Expected: `5 passed`
+
+- [ ] **Step 5: 建立測試資料產生器**
+
+後面每個需要使用者的測試都會用到它。集中在一處，避免每個測試各自手刻。
+
+`tests/factories.py`:
+
+```python
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.user import User, UserRole
+from app.security.password import hash_password
+
+DEFAULT_PASSWORD = "correct-horse-battery"
+
+_counter = {"n": 0}
+
+
+def _next_email() -> str:
+    _counter["n"] += 1
+    return f"user{_counter['n']}@example.com"
+
+
+async def create_user(
+    db_session: AsyncSession,
+    *,
+    email: str | None = None,
+    password: str = DEFAULT_PASSWORD,
+    display_name: str = "測試使用者",
+    role: UserRole = UserRole.USER,
+) -> User:
+    user = User(
+        email=email or _next_email(),
+        password_hash=hash_password(password),
+        display_name=display_name,
+        role=role,
+    )
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+    return user
+```
+
+Run: `pytest -v`
+Expected: 全部通過（`factories.py` 目前還沒有測試用到，只需確認 import 不出錯）
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add app/security tests/test_password.py tests/factories.py
+git commit -m "feat: 新增 Argon2 密碼雜湊"
+```
+
+---
+
+### Task 9: JWT token
+
+**Files:**
+- Create: `app/security/tokens.py`
+- Test: `tests/test_tokens.py`
+
+- [ ] **Step 1: 寫失敗的測試**
+
+`tests/test_tokens.py`:
+
+```python
+import pytest
+
+from app.security.tokens import TokenError, create_token, decode_token
+
+
+def test_access_token_round_trip():
+    token = create_token(user_id=42, token_type="access")
+    assert decode_token(token, expected_type="access") == 42
+
+
+def test_refresh_token_round_trip():
+    token = create_token(user_id=7, token_type="refresh")
+    assert decode_token(token, expected_type="refresh") == 7
+
+
+def test_refresh_token_is_rejected_where_an_access_token_is_expected():
+    """這是重要的安全性質：長效的 refresh token 不可以拿來直接存取 API。"""
+    token = create_token(user_id=1, token_type="refresh")
+    with pytest.raises(TokenError):
+        decode_token(token, expected_type="access")
+
+
+def test_access_token_is_rejected_where_a_refresh_token_is_expected():
+    token = create_token(user_id=1, token_type="access")
+    with pytest.raises(TokenError):
+        decode_token(token, expected_type="refresh")
+
+
+def test_tampered_token_is_rejected():
+    token = create_token(user_id=1, token_type="access")
+    tampered = token[:-4] + "AAAA"
+    with pytest.raises(TokenError):
+        decode_token(tampered, expected_type="access")
+
+
+def test_garbage_is_rejected():
+    with pytest.raises(TokenError):
+        decode_token("this-is-not-a-token", expected_type="access")
+
+
+def test_expired_token_is_rejected(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "access_token_ttl_minutes", -1)
+    token = create_token(user_id=1, token_type="access")
+
+    with pytest.raises(TokenError):
+        decode_token(token, expected_type="access")
+```
+
+- [ ] **Step 2: 執行測試，確認失敗**
+
+Run: `pytest tests/test_tokens.py -v`
+Expected: FAIL，`ModuleNotFoundError: No module named 'app.security.tokens'`
+
+- [ ] **Step 3: 寫最小實作**
+
+`app/security/tokens.py`:
+
+```python
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal
+
+import jwt
+
+from app.config import settings
+
+TokenType = Literal["access", "refresh"]
+
+
+class TokenError(Exception):
+    """token 無效、過期，或類型不符。"""
+
+
+def create_token(user_id: int, token_type: TokenType) -> str:
+    now = datetime.now(UTC)
+    ttl = (
+        timedelta(minutes=settings.access_token_ttl_minutes)
+        if token_type == "access"
+        else timedelta(days=settings.refresh_token_ttl_days)
+    )
+    payload = {
+        "sub": str(user_id),
+        "type": token_type,
+        "iat": now,
+        "exp": now + ttl,
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def decode_token(token: str, expected_type: TokenType) -> int:
+    try:
+        payload: dict[str, Any] = jwt.decode(
+            token, settings.jwt_secret, algorithms=[settings.jwt_algorithm]
+        )
+    except jwt.PyJWTError as exc:
+        raise TokenError("token 無效或已過期") from exc
+
+    if payload.get("type") != expected_type:
+        raise TokenError("token 類型不正確")
+
+    return int(payload["sub"])
+```
+
+- [ ] **Step 4: 執行測試，確認通過**
+
+Run: `pytest tests/test_tokens.py -v`
+Expected: `7 passed`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add app/security/tokens.py tests/test_tokens.py
+git commit -m "feat: 新增 JWT token 建立與驗證"
+```
+
+> **已知限制：** refresh token 是無狀態的，無法在到期前撤銷。若日後需要「登出所有裝置」
+> 功能，要另建 refresh token 資料表。這在 P1 範圍外，但要知道這個限制存在。
+
+---
+
+### Task 10: 統一錯誤格式
+
+**Files:**
+- Create: `app/errors.py`
+- Modify: `app/main.py`
+- Test: `tests/test_errors.py`
+
+- [ ] **Step 1: 寫失敗的測試**
+
+`tests/test_errors.py`:
+
+```python
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
+from pydantic import BaseModel
+
+from app.errors import ConflictError, NotFoundError, register_error_handlers
+
+
+class Payload(BaseModel):
+    count: int
+
+
+def build_app() -> FastAPI:
+    test_app = FastAPI()
+    register_error_handlers(test_app)
+
+    @test_app.get("/missing")
+    async def missing() -> None:
+        raise NotFoundError("FOOD_NOT_FOUND", "找不到該食物")
+
+    @test_app.post("/conflict")
+    async def conflict(payload: Payload) -> None:
+        raise ConflictError("EMAIL_TAKEN", "這個 email 已經註冊過了")
+
+    return test_app
+
+
+async def request(method: str, path: str, **kwargs):
+    transport = ASGITransport(app=build_app())
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.request(method, path, **kwargs)
+
+
+async def test_app_error_uses_the_standard_envelope():
+    response = await request("GET", "/missing")
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "error": {"code": "FOOD_NOT_FOUND", "message": "找不到該食物", "details": {}}
+    }
+
+
+async def test_conflict_error_returns_409():
+    response = await request("POST", "/conflict", json={"count": 1})
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "EMAIL_TAKEN"
+
+
+async def test_validation_error_uses_the_same_envelope():
+    response = await request("POST", "/conflict", json={"count": "not-a-number"})
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error"]["code"] == "VALIDATION_ERROR"
+    assert "errors" in body["error"]["details"]
+```
+
+- [ ] **Step 2: 執行測試，確認失敗**
+
+Run: `pytest tests/test_errors.py -v`
+Expected: FAIL，`ModuleNotFoundError: No module named 'app.errors'`
+
+- [ ] **Step 3: 寫最小實作**
+
+`app/errors.py`:
+
+```python
+from typing import Any
+
+from fastapi import FastAPI, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+
+class AppError(Exception):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        status_code: int,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+        self.details = details or {}
+        super().__init__(message)
+
+
+class NotFoundError(AppError):
+    def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(code, message, status.HTTP_404_NOT_FOUND, details)
+
+
+class ConflictError(AppError):
+    def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(code, message, status.HTTP_409_CONFLICT, details)
+
+
+class UnauthorizedError(AppError):
+    def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(code, message, status.HTTP_401_UNAUTHORIZED, details)
+
+
+class ForbiddenError(AppError):
+    def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(code, message, status.HTTP_403_FORBIDDEN, details)
+
+
+def _envelope(code: str, message: str, details: dict[str, Any]) -> dict[str, Any]:
+    return {"error": {"code": code, "message": message, "details": details}}
+
+
+def register_error_handlers(app: FastAPI) -> None:
+    @app.exception_handler(AppError)
+    async def handle_app_error(_: Request, exc: AppError) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=_envelope(exc.code, exc.message, exc.details),
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def handle_validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content=_envelope(
+                "VALIDATION_ERROR",
+                "輸入資料格式錯誤",
+                {"errors": jsonable_encoder(exc.errors())},
+            ),
+        )
+```
+
+- [ ] **Step 4: 在主 app 註冊**
+
+`app/main.py` 改為：
+
+```python
+from fastapi import FastAPI
+
+from app.api.routes import health
+from app.errors import register_error_handlers
+
+app = FastAPI(title="飲食紀錄 API", version="0.1.0")
+register_error_handlers(app)
+app.include_router(health.router, prefix="/api")
+```
+
+- [ ] **Step 5: 執行測試，確認通過**
+
+Run: `pytest tests/test_errors.py -v`
+Expected: `3 passed`
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add app/errors.py app/main.py tests/test_errors.py
+git commit -m "feat: 新增統一錯誤回應格式"
+```
+
+---
+
+### Task 11: 註冊 API
+
+**Files:**
+- Create: `app/schemas/__init__.py`, `app/schemas/auth.py`
+- Create: `app/api/routes/auth.py`
+- Modify: `app/main.py`
+- Test: `tests/test_auth_register.py`
+
+- [ ] **Step 1: 寫失敗的測試**
+
+`tests/test_auth_register.py`:
+
+```python
+from sqlalchemy import select
+
+from app.models.user import User, UserRole
+from tests.factories import create_user
+
+
+async def test_register_creates_a_user(client, db_session):
+    response = await client.post(
+        "/api/auth/register",
+        json={"email": "new@example.com", "password": "a-good-password", "display_name": "阿明"},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["email"] == "new@example.com"
+    assert body["display_name"] == "阿明"
+    assert body["role"] == "user"
+
+    user = await db_session.scalar(select(User).where(User.email == "new@example.com"))
+    assert user is not None
+    assert user.role is UserRole.USER
+
+
+async def test_register_never_returns_the_password(client):
+    response = await client.post(
+        "/api/auth/register",
+        json={"email": "new@example.com", "password": "a-good-password", "display_name": "阿明"},
+    )
+
+    assert "password" not in response.text
+    assert "password_hash" not in response.json()
+
+
+async def test_register_stores_a_hash_not_the_plain_password(client, db_session):
+    await client.post(
+        "/api/auth/register",
+        json={"email": "new@example.com", "password": "a-good-password", "display_name": "阿明"},
+    )
+
+    user = await db_session.scalar(select(User).where(User.email == "new@example.com"))
+    assert user is not None
+    assert user.password_hash != "a-good-password"
+
+
+async def test_register_rejects_a_duplicate_email(client, db_session):
+    await create_user(db_session, email="taken@example.com")
+
+    response = await client.post(
+        "/api/auth/register",
+        json={"email": "taken@example.com", "password": "a-good-password", "display_name": "阿明"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "EMAIL_TAKEN"
+
+
+async def test_register_treats_email_case_insensitively(client, db_session):
+    """citext 讓 Taken@example.com 與 taken@example.com 視為同一個帳號。"""
+    await create_user(db_session, email="taken@example.com")
+
+    response = await client.post(
+        "/api/auth/register",
+        json={"email": "TAKEN@example.com", "password": "a-good-password", "display_name": "阿明"},
+    )
+
+    assert response.status_code == 409
+
+
+async def test_register_rejects_a_short_password(client):
+    response = await client.post(
+        "/api/auth/register",
+        json={"email": "new@example.com", "password": "short", "display_name": "阿明"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+async def test_register_rejects_an_invalid_email(client):
+    response = await client.post(
+        "/api/auth/register",
+        json={"email": "not-an-email", "password": "a-good-password", "display_name": "阿明"},
+    )
+
+    assert response.status_code == 422
+```
+
+- [ ] **Step 2: 執行測試，確認失敗**
+
+Run: `pytest tests/test_auth_register.py -v`
+Expected: FAIL，全部 404（路由不存在）
+
+- [ ] **Step 3: 寫 schema**
+
+```bash
+mkdir -p app/schemas
+touch app/schemas/__init__.py
+```
+
+`app/schemas/auth.py`:
+
+```python
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
+    display_name: str = Field(min_length=1, max_length=50)
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    email: str
+    display_name: str
+    role: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+```
+
+- [ ] **Step 4: 寫路由**
+
+`app/api/routes/auth.py`:
+
+```python
+from fastapi import APIRouter, Depends, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db import get_db
+from app.errors import ConflictError
+from app.models.user import User
+from app.schemas.auth import RegisterRequest, UserResponse
+from app.security.password import hash_password
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+@router.post("/register", status_code=status.HTTP_201_CREATED, response_model=UserResponse)
+async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)) -> User:
+    existing = await db.scalar(select(User).where(User.email == payload.email))
+    if existing is not None:
+        raise ConflictError("EMAIL_TAKEN", "這個 email 已經註冊過了")
+
+    user = User(
+        email=payload.email,
+        password_hash=hash_password(payload.password),
+        display_name=payload.display_name,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
+```
+
+- [ ] **Step 5: 掛上路由**
+
+`app/main.py` 改為：
+
+```python
+from fastapi import FastAPI
+
+from app.api.routes import auth, health
+from app.errors import register_error_handlers
+
+app = FastAPI(title="飲食紀錄 API", version="0.1.0")
+register_error_handlers(app)
+app.include_router(health.router, prefix="/api")
+app.include_router(auth.router, prefix="/api")
+```
+
+- [ ] **Step 6: 執行測試，確認通過**
+
+Run: `pytest tests/test_auth_register.py -v`
+Expected: `7 passed`
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add app/schemas app/api/routes/auth.py app/main.py tests/test_auth_register.py
+git commit -m "feat: 新增使用者註冊 API"
+```
+
+---
+
+### Task 12: 登入 API
+
+**Files:**
+- Modify: `app/api/routes/auth.py`
+- Test: `tests/test_auth_login.py`
+
+- [ ] **Step 1: 寫失敗的測試**
+
+`tests/test_auth_login.py`:
+
+```python
+from app.security.tokens import decode_token
+from tests.factories import DEFAULT_PASSWORD, create_user
+
+
+async def test_login_returns_tokens(client, db_session):
+    user = await create_user(db_session, email="me@example.com")
+
+    response = await client.post(
+        "/api/auth/login",
+        json={"email": "me@example.com", "password": DEFAULT_PASSWORD},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["token_type"] == "bearer"
+    assert decode_token(body["access_token"], expected_type="access") == user.id
+    assert decode_token(body["refresh_token"], expected_type="refresh") == user.id
+
+
+async def test_login_rejects_a_wrong_password(client, db_session):
+    await create_user(db_session, email="me@example.com")
+
+    response = await client.post(
+        "/api/auth/login",
+        json={"email": "me@example.com", "password": "wrong-password"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "INVALID_CREDENTIALS"
+
+
+async def test_login_rejects_an_unknown_email(client):
+    response = await client.post(
+        "/api/auth/login",
+        json={"email": "nobody@example.com", "password": "any-password"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "INVALID_CREDENTIALS"
+
+
+async def test_login_does_not_reveal_whether_an_email_exists(client, db_session):
+    """帳號不存在與密碼錯誤必須回完全相同的訊息。
+
+    否則攻擊者可以用不同的錯誤訊息，逐一測出系統裡有哪些 email 註冊過。
+    """
+    await create_user(db_session, email="me@example.com")
+
+    wrong_password = await client.post(
+        "/api/auth/login",
+        json={"email": "me@example.com", "password": "wrong-password"},
+    )
+    unknown_email = await client.post(
+        "/api/auth/login",
+        json={"email": "nobody@example.com", "password": "wrong-password"},
+    )
+
+    assert wrong_password.status_code == unknown_email.status_code
+    assert wrong_password.json() == unknown_email.json()
+
+
+async def test_login_is_case_insensitive_on_email(client, db_session):
+    await create_user(db_session, email="me@example.com")
+
+    response = await client.post(
+        "/api/auth/login",
+        json={"email": "ME@EXAMPLE.COM", "password": DEFAULT_PASSWORD},
+    )
+
+    assert response.status_code == 200
+```
+
+- [ ] **Step 2: 執行測試，確認失敗**
+
+Run: `pytest tests/test_auth_login.py -v`
+Expected: FAIL，全部 404
+
+- [ ] **Step 3: 寫實作**
+
+在 `app/api/routes/auth.py` 的 import 區加入：
+
+```python
+from app.errors import ConflictError, UnauthorizedError
+from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserResponse
+from app.security.password import hash_password, verify_password
+from app.security.tokens import create_token
+```
+
+並在檔案末端加入：
+
+```python
+@router.post("/login", response_model=TokenResponse)
+async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
+    user = await db.scalar(select(User).where(User.email == payload.email))
+
+    # 帳號不存在與密碼錯誤回相同的錯誤，避免洩漏哪些 email 註冊過
+    if user is None or not verify_password(payload.password, user.password_hash):
+        raise UnauthorizedError("INVALID_CREDENTIALS", "email 或密碼不正確")
+
+    return TokenResponse(
+        access_token=create_token(user.id, "access"),
+        refresh_token=create_token(user.id, "refresh"),
+    )
+```
+
+- [ ] **Step 4: 執行測試，確認通過**
+
+Run: `pytest tests/test_auth_login.py -v`
+Expected: `5 passed`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add app/api/routes/auth.py tests/test_auth_login.py
+git commit -m "feat: 新增登入 API"
+```
+
+---
+
+### Task 13: 目前使用者（get_current_user + /api/me）
+
+**Files:**
+- Create: `app/api/deps.py`
+- Create: `app/api/routes/me.py`
+- Modify: `app/main.py`
+- Test: `tests/test_auth_me.py`
+
+- [ ] **Step 1: 寫失敗的測試**
+
+`tests/test_auth_me.py`:
+
+```python
+from app.security.tokens import create_token
+from tests.factories import create_user
+
+
+async def test_me_returns_the_current_user(client, db_session):
+    user = await create_user(db_session, email="me@example.com", display_name="阿明")
+    token = create_token(user.id, "access")
+
+    response = await client.get("/api/me", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == user.id
+    assert body["email"] == "me@example.com"
+    assert body["display_name"] == "阿明"
+
+
+async def test_me_requires_a_token(client):
+    response = await client.get("/api/me")
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "NOT_AUTHENTICATED"
+
+
+async def test_me_rejects_a_refresh_token(client, db_session):
+    """refresh token 是長效憑證，不可以拿來直接存取 API。"""
+    user = await create_user(db_session)
+    token = create_token(user.id, "refresh")
+
+    response = await client.get("/api/me", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "INVALID_TOKEN"
+
+
+async def test_me_rejects_garbage(client):
+    response = await client.get("/api/me", headers={"Authorization": "Bearer not-a-token"})
+
+    assert response.status_code == 401
+
+
+async def test_me_rejects_a_token_for_a_deleted_user(client):
+    """token 簽章有效，但使用者已不存在。"""
+    token = create_token(999_999, "access")
+
+    response = await client.get("/api/me", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 401
+```
+
+- [ ] **Step 2: 執行測試，確認失敗**
+
+Run: `pytest tests/test_auth_me.py -v`
+Expected: FAIL，全部 404
+
+- [ ] **Step 3: 寫依賴**
+
+`app/api/deps.py`:
+
+```python
+from fastapi import Depends
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db import get_db
+from app.errors import ForbiddenError, UnauthorizedError
+from app.models.user import User, UserRole
+from app.security.tokens import TokenError, decode_token
+
+_bearer = HTTPBearer(auto_error=False)
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    if credentials is None:
+        raise UnauthorizedError("NOT_AUTHENTICATED", "需要登入")
+
+    try:
+        user_id = decode_token(credentials.credentials, expected_type="access")
+    except TokenError as exc:
+        raise UnauthorizedError("INVALID_TOKEN", "token 無效或已過期") from exc
+
+    user = await db.get(User, user_id)
+    if user is None:
+        raise UnauthorizedError("INVALID_TOKEN", "token 無效或已過期")
+
+    return user
+
+
+async def require_admin(user: User = Depends(get_current_user)) -> User:
+    if user.role is not UserRole.ADMIN:
+        raise ForbiddenError("FORBIDDEN", "需要管理員權限")
+    return user
+```
+
+- [ ] **Step 4: 寫路由**
+
+`app/api/routes/me.py`:
+
+```python
+from fastapi import APIRouter, Depends
+
+from app.api.deps import get_current_user
+from app.models.user import User
+from app.schemas.auth import UserResponse
+
+router = APIRouter(tags=["me"])
+
+
+@router.get("/me", response_model=UserResponse)
+async def read_me(user: User = Depends(get_current_user)) -> User:
+    return user
+```
+
+- [ ] **Step 5: 掛上路由**
+
+`app/main.py` 改為：
+
+```python
+from fastapi import FastAPI
+
+from app.api.routes import auth, health, me
+from app.errors import register_error_handlers
+
+app = FastAPI(title="飲食紀錄 API", version="0.1.0")
+register_error_handlers(app)
+app.include_router(health.router, prefix="/api")
+app.include_router(auth.router, prefix="/api")
+app.include_router(me.router, prefix="/api")
+```
+
+- [ ] **Step 6: 執行測試，確認通過**
+
+Run: `pytest tests/test_auth_me.py -v`
+Expected: `5 passed`
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add app/api/deps.py app/api/routes/me.py app/main.py tests/test_auth_me.py
+git commit -m "feat: 新增目前使用者端點與 JWT 驗證依賴"
+```
+
+---
+
+### Task 14: 換發 token
+
+**Files:**
+- Modify: `app/api/routes/auth.py`
+- Test: `tests/test_auth_refresh.py`
+
+- [ ] **Step 1: 寫失敗的測試**
+
+`tests/test_auth_refresh.py`:
+
+```python
+from app.security.tokens import create_token, decode_token
+from tests.factories import create_user
+
+
+async def test_refresh_returns_a_new_access_token(client, db_session):
+    user = await create_user(db_session)
+    refresh_token = create_token(user.id, "refresh")
+
+    response = await client.post("/api/auth/refresh", json={"refresh_token": refresh_token})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert decode_token(body["access_token"], expected_type="access") == user.id
+
+
+async def test_refresh_rejects_an_access_token(client, db_session):
+    """拿 access token 來換發，必須被擋下。"""
+    user = await create_user(db_session)
+    access_token = create_token(user.id, "access")
+
+    response = await client.post("/api/auth/refresh", json={"refresh_token": access_token})
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "INVALID_TOKEN"
+
+
+async def test_refresh_rejects_garbage(client):
+    response = await client.post("/api/auth/refresh", json={"refresh_token": "nope"})
+
+    assert response.status_code == 401
+
+
+async def test_refresh_rejects_a_token_for_a_deleted_user(client):
+    refresh_token = create_token(999_999, "refresh")
+
+    response = await client.post("/api/auth/refresh", json={"refresh_token": refresh_token})
+
+    assert response.status_code == 401
+```
+
+- [ ] **Step 2: 執行測試，確認失敗**
+
+Run: `pytest tests/test_auth_refresh.py -v`
+Expected: FAIL，全部 404
+
+- [ ] **Step 3: 寫實作**
+
+在 `app/api/routes/auth.py` 的 import 區補上：
+
+```python
+from app.schemas.auth import LoginRequest, RefreshRequest, RegisterRequest, TokenResponse, UserResponse
+from app.security.tokens import TokenError, create_token, decode_token
+```
+
+並在檔案末端加入：
+
+```python
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
+    try:
+        user_id = decode_token(payload.refresh_token, expected_type="refresh")
+    except TokenError as exc:
+        raise UnauthorizedError("INVALID_TOKEN", "token 無效或已過期") from exc
+
+    user = await db.get(User, user_id)
+    if user is None:
+        raise UnauthorizedError("INVALID_TOKEN", "token 無效或已過期")
+
+    return TokenResponse(
+        access_token=create_token(user.id, "access"),
+        refresh_token=create_token(user.id, "refresh"),
+    )
+```
+
+- [ ] **Step 4: 執行測試，確認通過**
+
+Run: `pytest tests/test_auth_refresh.py -v`
+Expected: `4 passed`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add app/api/routes/auth.py tests/test_auth_refresh.py
+git commit -m "feat: 新增 token 換發 API"
+```
+
+---
+
+### Task 15: 管理員權限依賴
+
+`require_admin` 已在 Task 13 寫好，這個 Task 只補測試。
+
+不建立正式的測試用端點 —— 那會在正式程式碼裡留下只為測試存在的路由。改為在測試檔內
+組一個小 app 來驗證這個依賴。
+
+**Files:**
+- Test: `tests/test_deps_admin.py`
+
+- [ ] **Step 1: 寫失敗的測試**
+
+`tests/test_deps_admin.py`:
+
+```python
+from fastapi import Depends, FastAPI
+from httpx import ASGITransport, AsyncClient
+
+from app.api.deps import require_admin
+from app.db import get_db
+from app.errors import register_error_handlers
+from app.models.user import User, UserRole
+from app.security.tokens import create_token
+from tests.factories import create_user
+
+
+def build_admin_app(db_session) -> FastAPI:
+    test_app = FastAPI()
+    register_error_handlers(test_app)
+
+    @test_app.get("/admin-only")
+    async def admin_only(user: User = Depends(require_admin)) -> dict[str, int]:
+        return {"user_id": user.id}
+
+    async def override_get_db():
+        yield db_session
+
+    test_app.dependency_overrides[get_db] = override_get_db
+    return test_app
+
+
+async def call_admin_endpoint(db_session, token: str | None):
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    transport = ASGITransport(app=build_admin_app(db_session))
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.get("/admin-only", headers=headers)
+
+
+async def test_admin_can_access(db_session):
+    admin = await create_user(db_session, role=UserRole.ADMIN)
+
+    response = await call_admin_endpoint(db_session, create_token(admin.id, "access"))
+
+    assert response.status_code == 200
+    assert response.json() == {"user_id": admin.id}
+
+
+async def test_normal_user_is_forbidden(db_session):
+    user = await create_user(db_session, role=UserRole.USER)
+
+    response = await call_admin_endpoint(db_session, create_token(user.id, "access"))
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "FORBIDDEN"
+
+
+async def test_anonymous_is_unauthenticated(db_session):
+    response = await call_admin_endpoint(db_session, token=None)
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "NOT_AUTHENTICATED"
+```
+
+- [ ] **Step 2: 執行測試**
+
+Run: `pytest tests/test_deps_admin.py -v`
+Expected: `3 passed`（`require_admin` 已存在，這裡是補測試，測試應直接通過）
+
+若失敗，代表 Task 13 的 `require_admin` 有問題，回頭修正。
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add tests/test_deps_admin.py
+git commit -m "test: 新增管理員權限依賴的測試"
+```
+
+---
+
+### Task 16: 建立管理員帳號的命令
+
+解決規格第 12 節待決問題 #1。計畫 2 的審核 API 需要有管理員帳號才能測試。
+
+**Files:**
+- Create: `app/cli.py`
+- Test: `tests/test_cli.py`
+
+- [ ] **Step 1: 寫失敗的測試**
+
+`tests/test_cli.py`:
+
+```python
+import pytest
+from sqlalchemy import select
+
+from app.cli import create_admin
+from app.models.user import User, UserRole
+from app.security.password import verify_password
+from tests.factories import create_user
+
+
+async def test_create_admin_creates_an_admin_user(db_session):
+    await create_admin(db_session, "boss@example.com", "a-good-password", "老闆")
+
+    user = await db_session.scalar(select(User).where(User.email == "boss@example.com"))
+    assert user is not None
+    assert user.role is UserRole.ADMIN
+    assert verify_password("a-good-password", user.password_hash)
+
+
+async def test_create_admin_promotes_an_existing_user(db_session):
+    existing = await create_user(db_session, email="boss@example.com", role=UserRole.USER)
+
+    await create_admin(db_session, "boss@example.com", "a-new-password", "老闆")
+
+    await db_session.refresh(existing)
+    assert existing.role is UserRole.ADMIN
+
+
+async def test_create_admin_rejects_a_short_password(db_session):
+    with pytest.raises(ValueError, match="密碼至少 8 個字元"):
+        await create_admin(db_session, "boss@example.com", "short", "老闆")
+```
+
+- [ ] **Step 2: 執行測試，確認失敗**
+
+Run: `pytest tests/test_cli.py -v`
+Expected: FAIL，`ModuleNotFoundError: No module named 'app.cli'`
+
+- [ ] **Step 3: 寫實作**
+
+`app/cli.py`:
+
+```python
+import argparse
+import asyncio
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db import SessionLocal
+from app.models.user import User, UserRole
+from app.security.password import hash_password
+
+MIN_PASSWORD_LENGTH = 8
+
+
+async def create_admin(
+    db: AsyncSession, email: str, password: str, display_name: str
+) -> User:
+    """建立管理員帳號；若 email 已存在則提升為管理員並更新密碼。"""
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"密碼至少 {MIN_PASSWORD_LENGTH} 個字元")
+
+    user = await db.scalar(select(User).where(User.email == email))
+    if user is None:
+        user = User(email=email, password_hash=hash_password(password), display_name=display_name)
+        db.add(user)
+
+    user.password_hash = hash_password(password)
+    user.display_name = display_name
+    user.role = UserRole.ADMIN
+
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+async def _main(email: str, password: str, display_name: str) -> None:
+    async with SessionLocal() as db:
+        user = await create_admin(db, email, password, display_name)
+        print(f"管理員帳號已建立：{user.email} (id={user.id})")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="建立管理員帳號")
+    parser.add_argument("email")
+    parser.add_argument("password")
+    parser.add_argument("display_name")
+    args = parser.parse_args()
+    asyncio.run(_main(args.email, args.password, args.display_name))
+```
+
+- [ ] **Step 4: 執行測試，確認通過**
+
+Run: `pytest tests/test_cli.py -v`
+Expected: `3 passed`
+
+- [ ] **Step 5: 對開發資料庫實際跑一次**
+
+Run:
+```bash
+python -m app.cli admin@example.com admin-password-123 管理員
+```
+Expected: `管理員帳號已建立：admin@example.com (id=…)`
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add app/cli.py tests/test_cli.py
+git commit -m "feat: 新增建立管理員帳號的命令"
+```
+
+---
+
+### Task 17: CI
+
+**Files:**
+- Create: `.github/workflows/ci.yml`
+- Create: `README.md`
+
+- [ ] **Step 1: 建立 CI 設定**
+
+`.github/workflows/ci.yml`:
+
+```yaml
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: wallet
+          POSTGRES_PASSWORD: wallet
+          POSTGRES_DB: wallet
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U wallet"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://wallet:wallet@localhost:5432/wallet
+      TEST_DATABASE_URL: postgresql+asyncpg://wallet:wallet@localhost:5432/wallet_test
+      JWT_SECRET: ci-secret
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安裝依賴
+        run: pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check .
+
+      - name: 型別檢查
+        run: mypy app
+
+      - name: 測試
+        run: pytest --cov=app --cov-report=term-missing
+```
+
+- [ ] **Step 2: 本機跑一次完整檢查**
+
+Run: `ruff check .`
+Expected: `All checks passed!`
+
+Run: `mypy app`
+Expected: `Success: no issues found`
+
+Run: `pytest --cov=app --cov-report=term-missing`
+Expected: 全部通過
+
+- [ ] **Step 3: 建立 README**
+
+`README.md`:
+
+```markdown
+# 飲食紀錄系統
+
+記錄每日三大營養素與補劑攝取，支援拍照與 AI 營養素分析。
+
+## 開發環境
+
+需求：Docker Desktop、Python 3.12
+
+```bash
+python -m venv .venv
+.venv/Scripts/activate          # Windows；macOS/Linux 用 source .venv/bin/activate
+pip install -e ".[dev]"
+
+cp .env.example .env
+docker compose up -d db
+alembic upgrade head
+```
+
+啟動 API：
+
+```bash
+docker compose up -d
+```
+
+開 http://localhost:8000/docs 看 API 文件。
+
+## 測試
+
+測試跑**真的 PostgreSQL**，不用 SQLite 代替 —— 因為專案用到 `EXCLUDE` 約束、
+`citext`、`pg_trgm`，SQLite 都沒有，用它測等於測了一個跟正式環境不同的系統。
+
+```bash
+docker compose up -d db
+pytest
+```
+
+每個測試包在資料庫交易內、跑完 rollback，因此測試之間完全隔離，也不需要手動清資料。
+
+## 建立管理員帳號
+
+```bash
+python -m app.cli <email> <password> <顯示名稱>
+```
+
+## 設計文件
+
+- [P1 設計規格](docs/superpowers/specs/2026-09-02-diet-tracker-p1-design.md)
+```
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add .github README.md
+git commit -m "chore: 新增 CI 與 README"
+```
+
+---
+
+## 完成驗收
+
+計畫 1 完成時，以下每一項都要親自跑過並看到預期結果：
+
+- [ ] `docker compose up -d --build` 後，`curl http://localhost:8000/api/health` 回 `{"status":"ok"}`
+- [ ] `http://localhost:8000/docs` 打得開，列出 register / login / refresh / me
+- [ ] `alembic downgrade base` 後再 `alembic upgrade head`，兩次都成功
+- [ ] `pytest` 全部通過
+- [ ] `ruff check .` 無錯誤
+- [ ] `mypy app` 無錯誤
+- [ ] `python -m app.cli admin@example.com admin-password-123 管理員` 成功建立管理員
+
+## 下一步
+
+計畫 2（食物主檔 + 版本化 + 審核流程）在本計畫完成後撰寫。屆時要處理的核心問題：
+
+- `foods` 與 `food_revisions` 的循環外鍵，需要 `DEFERRABLE INITIALLY DEFERRED`
+- 私人食物編輯直接生效、全域食物編輯進入待審，兩條路徑共用同一張 revision 表
+- 「待審版本不得出現在正式查詢結果」的測試
