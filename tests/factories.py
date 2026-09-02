@@ -1,3 +1,5 @@
+from itertools import count
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User, UserRole
@@ -5,12 +7,11 @@ from app.security.password import hash_password
 
 DEFAULT_PASSWORD = "correct-horse-battery"
 
-_counter = {"n": 0}
+_email_counter = count(1)
 
 
 def _next_email() -> str:
-    _counter["n"] += 1
-    return f"user{_counter['n']}@example.com"
+    return f"user{next(_email_counter)}@example.com"
 
 
 async def create_user(

@@ -1215,6 +1215,8 @@ Expected: `5 passed`
 `tests/factories.py`:
 
 ```python
+from itertools import count
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User, UserRole
@@ -1222,12 +1224,11 @@ from app.security.password import hash_password
 
 DEFAULT_PASSWORD = "correct-horse-battery"
 
-_counter = {"n": 0}
+_email_counter = count(1)
 
 
 def _next_email() -> str:
-    _counter["n"] += 1
-    return f"user{_counter['n']}@example.com"
+    return f"user{next(_email_counter)}@example.com"
 
 
 async def create_user(
@@ -1793,6 +1794,7 @@ git commit -m "feat: 新增使用者註冊 API"
 
 **Files:**
 - Modify: `app/api/routes/auth.py`
+- Modify: `app/security/password.py`（加一個假雜湊常數，見下方時間側通道說明）
 - Test: `tests/test_auth_login.py`
 
 - [ ] **Step 1: 寫失敗的測試**
@@ -1884,19 +1886,37 @@ Expected: FAIL，全部 404
 ```python
 from app.errors import ConflictError, UnauthorizedError
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserResponse
-from app.security.password import hash_password, verify_password
+from app.security.password import DUMMY_PASSWORD_HASH, hash_password, verify_password
 from app.security.tokens import create_token
 ```
 
 並在檔案末端加入：
+
+先在 `app/security/password.py` 末端加一個常數：
+
+```python
+# 登入時「帳號不存在」的分支也要跑一次完整的 Argon2 驗證，讓兩條路徑耗時一致。
+# 放在這裡而不是路由裡，是因為它跟 _hasher 的參數綁在一起 ——
+# 日後調整 Argon2 參數時，這個假雜湊會自動跟著更新。
+DUMMY_PASSWORD_HASH = _hasher.hash("no-such-account-dummy-password")
+```
+
+然後在 `app/api/routes/auth.py` 加入：
 
 ```python
 @router.post("/login", response_model=TokenResponse)
 async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
     user = await db.scalar(select(User).where(User.email == payload.email))
 
+    # 帳號不存在時，拿假雜湊跑一次驗證。
+    # 不能寫成 `user is None or not verify_password(...)` —— Python 會短路，
+    # 帳號不存在的請求根本不會跑 Argon2，回應快 70 毫秒（實測 0.0002ms vs 73.8ms）。
+    # 那個時間差就能測出哪些 email 註冊過，而這正是下面「回相同錯誤」要防的事。
+    password_hash = user.password_hash if user is not None else DUMMY_PASSWORD_HASH
+    password_ok = verify_password(payload.password, password_hash)
+
     # 帳號不存在與密碼錯誤回相同的錯誤，避免洩漏哪些 email 註冊過
-    if user is None or not verify_password(payload.password, user.password_hash):
+    if user is None or not password_ok:
         raise UnauthorizedError("INVALID_CREDENTIALS", "email 或密碼不正確")
 
     return TokenResponse(
@@ -1904,6 +1924,9 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> To
         refresh_token=create_token(user.id, "refresh"),
     )
 ```
+
+> **不要為這件事寫時間斷言測試。** 時間相關的測試在 CI 上必然不穩定。
+> 程式碼加上那段註解就夠了 —— 註解才是防止有人「順手」把它改回短路寫法的東西。
 
 - [ ] **Step 4: 執行測試，確認通過**
 
