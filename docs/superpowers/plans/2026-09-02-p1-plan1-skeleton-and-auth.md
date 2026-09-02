@@ -1793,16 +1793,28 @@ async def test_register_treats_email_case_insensitively(client, db_session):
 async def test_register_rejects_a_short_password(client):
     response = await client.post(
         "/api/auth/register",
-        json={"email": "new@example.com", "password": "short", "display_name": "阿明"},
+        json={"email": "new@example.com", "password": "zqxjv", "display_name": "阿明"},
     )
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
     # 錯誤回應不能把使用者送進來的密碼回吐 —— 4xx 的 body 會進到反向代理的存取紀錄、
     # 瀏覽器開發者工具、前端的錯誤回報服務。Task 10 的 handler 會把 input 欄位拿掉。
-    assert "short" not in response.text
+    assert "zqxjv" not in response.text
+```
 
+> **測試密碼不能隨便取。** 第一次寫這個測試時用的是 `"short"`，結果永遠失敗 ——
+> 因為 `"short"` 是 Pydantic 錯誤型別標籤 `"string_too_short"` 的子字串，
+> 而那個標籤是**應該**留在回應裡的診斷資訊。
+>
+> 看起來像修正沒生效，實際上是測試設計有問題。`"zqxjv"` 跟 Pydantic / FastAPI
+> 會吐出的任何字串都不相交（`string_too_short`、
+> `String should have at least 8 characters`、`{"min_length": 8}`）。
+>
+> **這類「用子字串比對來斷言某個東西不存在」的測試都有這個風險**，取值時要避開
+> 對方詞彙表裡的字。
 
+```python
 async def test_register_rejects_an_invalid_email(client):
     response = await client.post(
         "/api/auth/register",
@@ -1894,6 +1906,18 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
     await db.refresh(user)
     return user
 ```
+
+> **已知的競態，本 task 不處理：** 這裡是「先 SELECT 查有沒有、再 INSERT」。
+> 兩個同時進來的相同 email 註冊請求，兩邊的 SELECT 都會查不到，然後第二個 INSERT
+> 撞上 `uq_users_email`，拋 `IntegrityError` —— 現在會變成
+> `500 INTERNAL_ERROR`，而不是預期的 `409 EMAIL_TAKEN`。
+>
+> 對單人使用的 NAS 部署來說幾乎不可能發生，而且順序執行的測試套件也測不到它。
+> 真要處理的話，要在 `commit()` 外面包 `except IntegrityError`，並且**記得先
+> `await db.rollback()`**（見 Task 7 的第四個邊界）—— 漏掉 rollback 會讓同一個
+> 測試後面所有的資料庫操作全部爆掉。
+>
+> 留給日後的併發強化，不是現在。
 
 - [ ] **Step 5: 掛上路由**
 
