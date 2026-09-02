@@ -550,12 +550,40 @@ touch app/models/__init__.py
 `app/models/base.py`:
 
 ```python
+from sqlalchemy import MetaData
 from sqlalchemy.orm import DeclarativeBase
+
+# 不設命名慣例的話，PostgreSQL 會自己幫 CHECK 約束取名（food_revisions_check、
+# food_revisions_check1…），編號依約束加入的順序決定，從模型讀不出來。
+# 後果不只是名字醜：alembic revision --autogenerate 會因為對不上名字，
+# 對「完全沒改過」的 CHECK 約束產生 remove_constraint，照著跑就真的把約束刪掉。
+NAMING_CONVENTION = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_N_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
 
 
 class Base(DeclarativeBase):
-    pass
+    metadata = MetaData(naming_convention=NAMING_CONVENTION)
 ```
+
+> **這是本計畫裡「現在做很便宜、以後做很貴」最極端的例子。**
+>
+> 實測：把 spec 裡的 `foods` / `food_revisions` 用模型建出來，資料庫跟模型**完全同步**
+> 的情況下跑 Alembic 的 `compare_metadata`，它照樣吐出 **2 個 `remove_constraint`**。
+> 相信 autogenerate 的人跑下去，就真的刪掉了正確的約束。P1 的 spec 有 15 個以上的
+> CHECK 約束。
+>
+> 現在做：10 行。等到十幾張表、幾十個 migration 之後再做：要對每個實際存在的資料庫
+> 查 `pg_constraint` 問出 PostgreSQL 到底取了什麼名字（因為推不出來），再逐一寫
+> `ALTER TABLE ... RENAME CONSTRAINT`。
+>
+> **代價：`ck` 用了 `%(constraint_name)s`，所以每個 `CheckConstraint` 都必須明確給
+> `name=`**，否則 SQLAlchemy 在定義表的當下就拋 `InvalidRequestError`。這是刻意的 ——
+> 逼你把名字當成一個決定來下，而不是交給資料庫亂取。
 
 - [ ] **Step 2: 建立資料庫連線模組**
 
@@ -600,8 +628,18 @@ target_metadata = Base.metadata
 並在 `config = context.config` 之後加入一行，讓連線字串來自環境變數而非 `alembic.ini`：
 
 ```python
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# ConfigParser 會把 % 當成字串插值的起頭，密碼裡的 %40 之類會讓它直接崩。
+# 這裡先跳脫，讀取時 ConfigParser 會還原成單一個 %。
+config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 ```
+
+> **為什麼要 `.replace("%", "%%")`：** Alembic 的 `Config` 用的是開啟插值的
+> `ConfigParser`（它需要 `%(here)s`），而 `set_main_option` 是寫進那個 parser。
+> 密碼含 `%` 就會拋 `ValueError: invalid interpolation syntax`，而且是**每一個**
+> Alembic 指令都崩。
+>
+> 開發密碼是 `wallet`，沒有 `%`，所以這個 bug 會一路潛伏到 P4 換上真正的隨機密碼
+> （`%40` 是 `@` 的 URL 編碼）才爆 —— 而且爆的時候錯誤訊息完全不會指向密碼。
 
 - [ ] **Step 5: 驗證 Alembic 可執行**
 
@@ -665,14 +703,43 @@ class User(Base):
 
 - [ ] **Step 2: 讓 Alembic 認得這個 model**
 
-在 `migrations/env.py` 的 `from app.models.base import Base` 下面加一行：
+不要在 `migrations/env.py` 裡逐一 import 每個 model。改成集中在 `app/models/__init__.py`：
+
+`app/models/__init__.py`（原本是空的）：
 
 ```python
-from app.models.user import User  # noqa: F401  讓 Base.metadata 含有 users
+from app.models.base import Base
+from app.models.user import User
+
+__all__ = ["Base", "User"]
 ```
 
-> 之後每新增一個 model 都要在這裡 import，否則 `alembic revision --autogenerate`
-> 會以為那張表該被刪掉。這是 Alembic 最常見的坑。
+然後把 `migrations/env.py` 裡的
+
+```python
+from app.models.base import Base
+```
+
+改成
+
+```python
+from app.models import Base
+```
+
+> **為什麼要這樣，而不是在 `env.py` 裡逐一 import：**
+>
+> Alembic 的 `--autogenerate` 只看得到已經被 import 進 `Base.metadata` 的 model。
+> 漏掉一個，它不會報錯 —— 它會**認為那張表該被刪掉**，然後產生一個 `drop_table`。
+> 這是 Alembic 最常見也最危險的坑。
+>
+> 接下來三個計畫會再加十張以上的表。把註冊點放在 `app/models/__init__.py`，
+> 新增 model 的人就是在同一個目錄裡工作，順手就會加上；放在三層目錄外的
+> `migrations/env.py`，遲早會漏。
+>
+> **`__all__` 是必要的，不是裝飾。** `mypy` 開了 `strict`，其中的
+> `no_implicit_reexport` 會讓 `from app.models import Base` 報
+> `Module "app.models" does not explicitly export attribute "Base"`。
+> 列進 `__all__` 才算顯式匯出。
 
 - [ ] **Step 3: 手寫第一個 migration**
 
@@ -710,7 +777,7 @@ def upgrade() -> None:
 
     op.create_table(
         "users",
-        sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
+        sa.Column("id", sa.BigInteger, autoincrement=True),
         sa.Column("email", CITEXT(), nullable=False),
         sa.Column("password_hash", sa.Text, nullable=False),
         sa.Column("display_name", sa.Text, nullable=False),
@@ -721,6 +788,7 @@ def upgrade() -> None:
         sa.Column(
             "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
         ),
+        sa.PrimaryKeyConstraint("id", name="pk_users"),
     )
     op.create_unique_constraint("uq_users_email", "users", ["email"])
 
@@ -729,6 +797,15 @@ def downgrade() -> None:
     op.drop_table("users")
     sa.Enum(name="user_role").drop(op.get_bind())
 ```
+
+> **手寫 migration 的約束名稱要跟 `NAMING_CONVENTION` 對齊。**
+>
+> `op.create_table` 用的是 Alembic 自己的 metadata，**不會**套用我們在
+> `app/models/base.py` 設的命名慣例。所以主鍵要明確寫 `name="pk_users"`，
+> 否則 PostgreSQL 會取名 `users_pkey`，跟模型端算出來的 `pk_users` 對不上。
+>
+> `uq_users_email` 剛好就是慣例算出來的名字（`uq_%(table_name)s_%(column_0_N_name)s`），
+> 不用另外處理。
 
 - [ ] **Step 4: 對開發資料庫執行 migration**
 
@@ -757,7 +834,8 @@ Expected: 成功
 - [ ] **Step 7: Commit**
 
 ```bash
-git add app/models/user.py migrations/env.py migrations/versions/0001_create_users.py
+git add app/models/user.py app/models/__init__.py migrations/env.py \
+        migrations/versions/0001_create_users.py
 git commit -m "feat: 新增 users 資料表與必要的 PostgreSQL 擴充"
 ```
 
