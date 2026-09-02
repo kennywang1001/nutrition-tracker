@@ -12,7 +12,9 @@ from app.models.base import Base
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# ConfigParser 會把 % 當成字串插值的起頭，密碼裡的 %40 之類會讓它直接崩。
+# 這裡先跳脫，讀取時 ConfigParser 會還原成單一個 %。
+config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
