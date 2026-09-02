@@ -961,18 +961,31 @@ TEST_DATABASE_URL = os.environ.get(
 )
 
 
-async def _ensure_test_database_exists() -> None:
-    """連到 postgres 這個預設資料庫，建立測試資料庫（若不存在）。"""
+async def _recreate_test_database() -> None:
+    """砍掉重建測試資料庫。
+
+    為什麼是「每次砍掉重建」而不是「不存在才建」：
+
+    `alembic upgrade head` 只看 revision id，不看檔案內容。開發中原地修改某個
+    migration（這個專案已經改過 0001 兩次）不會改變 revision id，所以對一個
+    舊的測試資料庫來說，upgrade head 什麼都不做、直接成功。
+
+    而 `alembic check` 救不了這一種：它對「被 owned sequence 支撐的整數欄位」
+    有一個內建啟發式，會當成 SERIAL 直接略過比對（log 會印
+    `assuming SERIAL and omitting`），所以「serial 改成 GENERATED ALWAYS AS
+    IDENTITY」這種漂移它看不見 —— 而那正好是這個專案真的發生過的改動。
+
+    每次從零重建就沒有這個問題：根本不存在舊狀態可以比對錯。
+    """
     base, db_name = TEST_DATABASE_URL.rsplit("/", 1)
     admin_dsn = base.replace("postgresql+asyncpg://", "postgresql://") + "/postgres"
 
     connection = await asyncpg.connect(admin_dsn)
     try:
-        exists = await connection.fetchval(
-            "SELECT 1 FROM pg_database WHERE datname = $1", db_name
-        )
-        if not exists:
-            await connection.execute(f'CREATE DATABASE "{db_name}"')
+        # WITH (FORCE) 會踢掉殘留連線（PostgreSQL 13+）。
+        # 前一次測試異常中斷留下的連線，否則會讓 DROP 卡住。
+        await connection.execute(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)')
+        await connection.execute(f'CREATE DATABASE "{db_name}"')
     finally:
         await connection.close()
 
@@ -980,7 +993,7 @@ async def _ensure_test_database_exists() -> None:
 @pytest.fixture(scope="session")
 def migrated_database() -> None:
     """整個測試 session 只跑一次：建立測試資料庫並套用所有 migration。"""
-    asyncio.run(_ensure_test_database_exists())
+    asyncio.run(_recreate_test_database())
     env = {**os.environ, "DATABASE_URL": TEST_DATABASE_URL}
 
     # 用 sys.executable -m alembic 而不是裸的 "alembic"：
@@ -992,11 +1005,11 @@ def migrated_database() -> None:
         env=env,
     )
 
-    # upgrade head 只看 revision id，不看檔案內容。
-    # 開發中原地修改某個 migration（很常見）時，revision id 沒變，
-    # upgrade head 就什麼都不做、直接成功 —— 然後整套測試在舊 schema 上跑，
-    # 而且完全沒有跡象。
-    # alembic check 比對的是「實際 schema vs Base.metadata」，抓得到這種漂移。
+    # alembic check 比對「實際 schema vs Base.metadata」，抓得到一般的漂移
+    # （欄位增減、型別、約束）。
+    # 但它有一個盲區：owned sequence 支撐的整數欄位會被當成 SERIAL 略過比對，
+    # 所以 serial ↔ IDENTITY 這類改動它看不見。真正的保證是上面的「砍掉重建」，
+    # 這一行是額外的第二道防線。
     subprocess.run(
         [sys.executable, "-m", "alembic", "check"],
         check=True,
