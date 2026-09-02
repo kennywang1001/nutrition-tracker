@@ -6,7 +6,7 @@ def test_settings_have_sensible_defaults():
 
     assert settings.jwt_algorithm == "HS256"
     assert settings.access_token_ttl_minutes == 15
-    assert settings.refresh_token_ttl_days == 30
+    assert settings.refresh_token_ttl_days == 14
 
 
 def test_settings_can_be_overridden():

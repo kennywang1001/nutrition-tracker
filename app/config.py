@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-secret-change-me-in-production"
     jwt_algorithm: str = "HS256"
     access_token_ttl_minutes: int = 15
-    refresh_token_ttl_days: int = 30
+    refresh_token_ttl_days: int = 14
     photo_dir: str = "data/photos"
 
 

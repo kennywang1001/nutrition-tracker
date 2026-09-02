@@ -31,7 +31,11 @@ def create_token(user_id: int, token_type: TokenType) -> str:
 def decode_token(token: str, expected_type: TokenType) -> int:
     try:
         payload: dict[str, Any] = jwt.decode(
-            token, settings.jwt_secret, algorithms=[settings.jwt_algorithm]
+            token,
+            settings.jwt_secret,
+            algorithms=[settings.jwt_algorithm],
+            # 預設只在 exp 存在時才驗證它 —— 少了 exp 的偽造 token 會永遠有效。
+            options={"require": ["exp", "iat", "sub", "type"]},
         )
     except jwt.PyJWTError as exc:
         raise TokenError("token 無效或已過期") from exc
@@ -39,4 +43,7 @@ def decode_token(token: str, expected_type: TokenType) -> int:
     if payload.get("type") != expected_type:
         raise TokenError("token 類型不正確")
 
-    return int(payload["sub"])
+    try:
+        return int(payload["sub"])
+    except (KeyError, ValueError, TypeError) as exc:
+        raise TokenError("token payload 格式不正確") from exc

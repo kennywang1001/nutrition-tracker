@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from app.security.tokens import TokenError, create_token, decode_token
@@ -46,3 +48,39 @@ def test_expired_token_is_rejected(monkeypatch):
 
     with pytest.raises(TokenError):
         decode_token(token, expected_type="access")
+
+
+def _forge(payload: dict[str, object]) -> str:
+    """繞過 create_token，直接用同一把密鑰簽一個任意 payload 的 token。"""
+    import jwt as pyjwt
+
+    from app.config import settings
+
+    return pyjwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def test_forged_token_with_non_numeric_sub_raises_token_error():
+    """簽章有效但 payload 形狀不對，也必須是 TokenError，不能是 ValueError。
+
+    呼叫端（get_current_user）只接 TokenError，其他例外會變成 500。
+    """
+    now = datetime.now(UTC)
+    forged = _forge(
+        {"sub": "not-a-number", "type": "access", "iat": now, "exp": now + timedelta(minutes=15)}
+    )
+    with pytest.raises(TokenError):
+        decode_token(forged, expected_type="access")
+
+
+def test_forged_token_without_sub_raises_token_error():
+    now = datetime.now(UTC)
+    forged = _forge({"type": "access", "iat": now, "exp": now + timedelta(minutes=15)})
+    with pytest.raises(TokenError):
+        decode_token(forged, expected_type="access")
+
+
+def test_forged_token_without_exp_is_rejected():
+    """沒有 exp 的 token 不能被接受 —— 否則它永遠不會過期。"""
+    forged = _forge({"sub": "1", "type": "access", "iat": datetime.now(UTC)})
+    with pytest.raises(TokenError):
+        decode_token(forged, expected_type="access")
