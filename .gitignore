@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# 環境設定
+.env
+.env.*
+!.env.example
+
+# 使用者上傳的照片（存在 Docker volume / NAS 資料夾，不進版控）
+data/photos/
+
+# 編輯器與作業系統
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
