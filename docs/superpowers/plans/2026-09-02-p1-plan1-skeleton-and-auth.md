@@ -17,7 +17,8 @@
 實作完成後的專案長相：
 
 ```
-pyproject.toml            依賴、ruff / mypy / pytest 設定
+pyproject.toml            依賴範圍、ruff / mypy / pytest 設定
+requirements-lock.txt     實際鎖定的版本（CI 與新 clone 用）
 Dockerfile                API 容器
 docker-compose.yml        api + db 服務
 alembic.ini               Alembic 設定
@@ -82,6 +83,7 @@ tests/
 **Files:**
 - Create: `pyproject.toml`
 - Create: `.env.example`
+- Create: `requirements-lock.txt`
 - Create: `app/__init__.py`
 - Create: `tests/__init__.py`
 
@@ -130,6 +132,17 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "SIM", "ASYNC"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI 的依賴注入就是把 Depends() 寫在參數預設值，B008 會誤判
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.params.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Security",
+]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
@@ -141,10 +154,25 @@ plugins = ["pydantic.mypy"]
 module = ["tests.*"]
 disallow_untyped_defs = false
 
+[[tool.mypy.overrides]]
+# asyncpg 沒有型別標記；之後攔截 IntegrityError.orig 時會需要
+module = ["asyncpg.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 ```
+
+> **三個非顯而易見的設定，各自擋掉一個之後才會爆的問題：**
+>
+> - `extend-immutable-calls`：不加的話，Task 11 寫下第一個 `Depends(get_db)` 時
+>   `ruff check` 就會失敗（B008 規則認為不該在參數預設值裡呼叫函式），而 CI 是綁定
+>   lint 的，等於整條線斷掉。
+> - `asyncio_default_fixture_loop_scope`：pytest-asyncio 1.x 沒設這個會每次跳警告，
+>   而且 Task 7 的交易隔離 fixture 會踩到 event loop 不一致的問題。
+> - `asyncpg` 的 mypy override：`strict` 模式下 import 沒有型別標記的套件會直接報錯。
 
 - [ ] **Step 2: 建立 `.env.example`**
 
@@ -178,12 +206,35 @@ Run: `ruff check .`
 Expected: `All checks passed!`
 
 Run: `pytest`
-Expected: `collected 0 items` / `no tests ran`
+Expected: `collected 0 items` / `no tests ran`（`pytest` 沒有測試時 exit code 是 5，這是正常的）
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: 鎖定依賴版本**
 
 ```bash
-git add pyproject.toml .env.example app/__init__.py tests/__init__.py
+pip freeze --exclude-editable > requirements-lock.txt
+```
+
+`--exclude-editable` 是必要的：constraints 檔不能包含 editable 安裝的 `wallet` 自己，
+含進去整個檔案就不能用。
+
+驗證它真的能當 constraints 檔用：
+
+```bash
+pip install --dry-run -c requirements-lock.txt -e ".[dev]"
+```
+
+> **為什麼要 lockfile：** `pyproject.toml` 只寫下限（`mypy>=1.13`），實際解析出來的是
+> mypy **2.3.1** —— 跨了一個大版本。pytest 8.3→9.1、pytest-asyncio 0.24→1.4 也一樣。
+> 這個專案是要放上 GitHub 讓別人 clone 的，半年後重新解析會得到完全不同的版本組合，
+> 然後跑不起來。
+>
+> 分工是：`pyproject.toml` 負責「相容範圍」，`requirements-lock.txt` 負責
+> 「CI 跟新 clone 實際拿到什麼」。
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add pyproject.toml .env.example app/__init__.py tests/__init__.py requirements-lock.txt
 git commit -m "chore: 建立專案骨架與工具設定"
 ```
 
@@ -2135,7 +2186,8 @@ jobs:
           cache: pip
 
       - name: 安裝依賴
-        run: pip install -e ".[dev]"
+        # 用 lockfile 當 constraints，確保 CI 跟本機拿到完全相同的版本
+        run: pip install -c requirements-lock.txt -e ".[dev]"
 
       - name: Lint
         run: ruff check .
@@ -2174,7 +2226,7 @@ Expected: 全部通過
 ```bash
 python -m venv .venv
 .venv/Scripts/activate          # Windows；macOS/Linux 用 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -c requirements-lock.txt -e ".[dev]"
 
 cp .env.example .env
 docker compose up -d db
