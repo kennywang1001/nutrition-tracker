@@ -334,7 +334,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 COPY pyproject.toml requirements-lock.txt ./
-COPY app ./app
+COPY app/__init__.py ./app/__init__.py
 RUN pip install --no-cache-dir -c requirements-lock.txt -e ".[dev]"
 
 COPY . .
@@ -345,8 +345,15 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 > **三個設計決定：**
 >
-> 1. **先 COPY `app/` 再 `pip install -e .`** —— editable 安裝需要套件目錄存在。
->    犧牲一點 layer 快取效率換設定簡單，專案還小，值得。
+> 1. **只 COPY `app/__init__.py`，不是整個 `app/`** —— 這是 layer 快取的關鍵。
+>
+>    editable 安裝需要 setuptools 找得到套件，但它只需要一個標記檔就夠
+>    （安裝產生的 finder 裡只存一筆 `{'app': '/app/app'}`，submodule 是 import
+>    當下才即時解析的）。
+>
+>    如果照直覺 `COPY app ./app`，那麼**每次改任何一行程式碼都會讓下面那個
+>    pip install layer 失效** —— 在這台機器上是 950 秒。而且完全白花，因為
+>    compose 用 `./app:/app/app` 把它整個蓋掉了，執行時根本沒用到 build 時複製的那份。
 >
 > 2. **用 `-c requirements-lock.txt`** —— 容器裡的版本跟本機、CI 完全一致。
 >    lockfile 是在 Windows 上凍結的，但它只是版本約束，pip 會自己抓 Linux 的 wheel。
@@ -360,24 +367,45 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 ```
 .venv/
-__pycache__/
-*.pyc
 .git/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
+**/__pycache__/
+*.pyc
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+*.egg-info/
 htmlcov/
 .coverage
 data/photos/
 docs/
+.env
+.env.*
+!.env.example
 ```
+
+> **兩個容易寫錯的地方：**
+>
+> 1. **`.env` 必須排除。** `Dockerfile` 最後是 `COPY . .`，會把整個目錄複製進 image。
+>    `.gitignore` 已經排除 `.env`（只保留 `.env.example`），代表每個開發者本機都會有
+>    一份填了真實密鑰的 `.env`。沒排除的話，那份檔案會被烤進 image 的某一層，
+>    之後任何人 `docker run wallet-api cat /app/.env` 就看得到 —— 而這個 repo 是公開的。
+>    `.env.*` 會連 `.env.example` 一起吃掉，所以要用 `!.env.example` 撈回來，
+>    而且順序不能反（後面的樣式優先）。
+>
+> 2. **`.dockerignore` 的目錄樣式不會遞迴比對。** 跟 `.gitignore` 不同，
+>    寫 `__pycache__/` 只會比對根目錄那一個，`app/api/routes/__pycache__` 不會被排除。
+>    要寫 `**/__pycache__/`。不加的話，主機 Python 3.13 產生的 `.pyc` 會被烤進
+>    3.12 的 image 裡。
 
 - [ ] **Step 3: 建立 `docker-compose.yml`**
 
 ```yaml
 services:
   db:
-    image: postgres:16
+    # 釘死 patch 版本：後面會用到 PostgreSQL 16 特有的 NULLS NOT DISTINCT 與
+    # btree_gist EXCLUDE 約束，而且資料目錄放在具名 volume 裡，不該讓它悄悄漂移。
+    # （Dockerfile 的 python:3.12-slim 則刻意保持浮動，基底 image 要能持續收到安全更新。）
+    image: postgres:16.15
     environment:
       POSTGRES_USER: wallet
       POSTGRES_PASSWORD: wallet
@@ -2305,6 +2333,20 @@ git commit -m "chore: 新增 CI 與 README"
 - [ ] `ruff check .` 無錯誤
 - [ ] `mypy app` 無錯誤
 - [ ] `python -m app.cli admin@example.com admin-password-123 管理員` 成功建立管理員
+
+## 延後到 P4 的部署議題（審查過程中記錄，本計畫不處理）
+
+- **密鑰硬編在 `docker-compose.yml` 裡。** `JWT_SECRET` 跟 PostgreSQL 密碼目前是明文字面值，
+  不是 `${VAR}` 也沒有 `env_file:`。對開發用的 compose 這是合理的（`docker compose up`
+  免設定就能跑），但 P4 必須改成：production 用獨立的 compose override，密鑰由
+  Compose `secrets:` 或 NAS Container Manager 注入，而且 **production 不提供
+  `JWT_SECRET` 預設值** —— 沒設就啟動失敗，而不是悄悄用開發密鑰跑起來。
+- **兩個服務都沒有 `restart:` 政策。** 開發時無所謂，P4 要明確決定（例如
+  `restart: unless-stopped`）。
+- **`api` 服務沒有 healthcheck。** `/api/health` 目前只有手動 curl 在用。
+  P4 若要接 NAS 的容器健康檢查，考慮另開 `/api/health/ready` 做 `SELECT 1`，
+  而不要改動 `/api/health` —— liveness 跟 readiness 混在一起，會讓資料庫短暫抖動
+  觸發容器重啟，而重啟並不能解決資料庫的問題。
 
 ## 下一步
 
