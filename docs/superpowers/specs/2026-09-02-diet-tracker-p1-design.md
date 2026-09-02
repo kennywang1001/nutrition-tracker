@@ -359,7 +359,7 @@ CREATE TABLE food_portions (
 ### 6.3 meals / meal_items
 
 ```sql
--- meal_type 刻意用 text + CHECK 而非原生 enum，理由見 5.7
+-- meal_type 刻意用 text + CHECK 而非原生 enum，理由見決策 7
 
 CREATE TABLE meals (
   id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -392,7 +392,6 @@ CREATE TABLE meal_items (
 ### 6.4 supplements / supplement_plans / supplement_intakes
 
 ```sql
-
 CREATE TABLE supplements (
   id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   name         text NOT NULL,
@@ -414,7 +413,7 @@ CREATE TABLE supplement_plans (
   user_id        bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   supplement_id  bigint NOT NULL REFERENCES supplements(id),
   dose           numeric(8,2) NOT NULL CHECK (dose > 0),
-  -- time_of_day 刻意用 text + CHECK 而非原生 enum，理由見 5.7
+  -- time_of_day 刻意用 text + CHECK 而非原生 enum，理由見決策 7
   time_of_day    text NOT NULL,
   effective_from date NOT NULL,
   effective_to   date,
