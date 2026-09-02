@@ -1073,7 +1073,7 @@ async def client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
 
 Run: `docker compose up -d db`
 Run: `pytest tests/test_infra.py -v`
-Expected: `3 passed`
+Expected: `7 passed`
 
 特別確認 `test_each_test_starts_with_a_clean_database` 通過 —— 它證明了交易隔離真的有效。
 
@@ -1447,9 +1447,12 @@ def decode_token(token: str, expected_type: TokenType) -> int:
 > 這個字面字串，而 repo 是公開的。加上 P4 那條（沒設環境變數會靜默用預設值），
 > 任何知道這個公開字串的人都能簽出一個 `sub` 不是數字的合法 token。
 >
-> 而 Task 13 的 `get_current_user` 只接 `TokenError`，`app/errors.py` 也只註冊了
-> `AppError` 跟 `RequestValidationError` 的處理器 —— 所以那個 `ValueError` 會直接
-> 變成 500 加堆疊追蹤，而且是未經認證就能觸發的。
+> 而 Task 13 的 `get_current_user` 只接 `TokenError` —— 所以那個 `ValueError`
+> 會逃逸出去變成 500，而且是未經認證就能觸發的。
+>
+> （更正一個常見的誤解：Starlette 在 `debug=False` 下**不會**把堆疊追蹤送給客戶端，
+> 實測回的是 `text/plain` 的 `Internal Server Error`。所以這不是資訊洩漏，
+> 是可遠端觸發的錯誤 —— 嚴重性低一級，但仍然不該存在。）
 >
 > **「以目前的呼叫端來看不可達」，對一個作為整個 API 安全邊界的模組來說是錯的標準。**
 > 正確的標準是：對外只拋一種例外，因為所有呼叫端都是照那個假設寫的。
@@ -1550,12 +1553,16 @@ Expected: FAIL，`ModuleNotFoundError: No module named 'app.errors'`
 `app/errors.py`:
 
 ```python
+import logging
 from typing import Any
 
 from fastapi import FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+logger = logging.getLogger(__name__)
 
 
 class AppError(Exception):
@@ -1597,25 +1604,81 @@ def _envelope(code: str, message: str, details: dict[str, Any]) -> dict[str, Any
     return {"error": {"code": code, "message": message, "details": details}}
 
 
+def _sanitize_validation_errors(errors: list[Any]) -> list[Any]:
+    """移除 Pydantic 回傳的 input 欄位。
+
+    Pydantic v2 預設會把使用者送進來的原始值一起放進錯誤裡，而 FastAPI 沒有提供
+    關掉它的設定。密碼太短時，那個密碼就會出現在 422 的回應 body 裡 ——
+    而 4xx 的 body 會進到反向代理的存取紀錄、瀏覽器開發者工具、
+    以及前端的錯誤回報服務。
+    loc / type / msg 都保留，診斷資訊已經足夠。
+    """
+    return [{key: value for key, value in error.items() if key != "input"} for error in errors]
+
+
 def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def handle_app_error(_: Request, exc: AppError) -> JSONResponse:
         return JSONResponse(
             status_code=exc.status_code,
-            content=_envelope(exc.code, exc.message, exc.details),
+            content=jsonable_encoder(_envelope(exc.code, exc.message, exc.details)),
         )
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
         return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content=_envelope(
                 "VALIDATION_ERROR",
                 "輸入資料格式錯誤",
-                {"errors": jsonable_encoder(exc.errors())},
+                {"errors": _sanitize_validation_errors(jsonable_encoder(exc.errors()))},
             ),
         )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def handle_http_exception(_: Request, exc: StarletteHTTPException) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=_envelope("HTTP_ERROR", str(exc.detail), {}),
+            headers=exc.headers,
+        )
+
+    @app.exception_handler(Exception)
+    async def handle_unexpected_error(_: Request, exc: Exception) -> JSONResponse:
+        logger.exception("未預期的錯誤")
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content=_envelope("INTERNAL_ERROR", "系統發生未預期的錯誤", {}),
+        )
 ```
+
+> **四個 handler，各自堵一個洞：**
+>
+> 1. **`AppError` 的 content 要包 `jsonable_encoder`。** `JSONResponse` 內部用的是
+>    原生 `json.dumps`，沒有 `default=` —— `details` 裡放 `date`、`Decimal` 或 enum
+>    就會在渲染中途拋 `TypeError`，而那個例外不在任何 handler 的守備範圍，
+>    變成 500。而規格第 9 節的「期間重疊 → 409」情境，本來就要把日期範圍放進
+>    `details` 才講得清楚是哪一段衝突。
+>
+> 2. **`_sanitize_validation_errors` 拿掉 `input` 欄位。** Pydantic v2 預設會把
+>    使用者送進來的原始值放進錯誤裡。密碼太短時，那個密碼就出現在 422 的 body。
+>    FastAPI 寫死了 `include_url=False` 卻沒開放 `include_input`，而且 handler 拿到
+>    的已經是展開好的 dict list —— 所以只能在這裡後處理，沒有上游的解法。
+>    （`ctx` 實測是安全的，只有 `{"min_length": 8}` 之類的靜態資訊。）
+>
+> 3. **`StarletteHTTPException` 的 handler。** 沒有它，任何不存在的路徑會回
+>    FastAPI 原本的 `{"detail": "Not Found"}`，不是我們的信封 —— 一個號稱
+>    「統一錯誤格式」的 API，最容易被外面探測到的回應反而是不統一的那個。
+>    `headers=exc.headers` 要保留，否則將來有依賴拋 401 帶 `WWW-Authenticate`
+>    會掉header。
+>
+> 4. **catch-all `Exception` handler。** 沒有它，未預期的例外回的是 `text/plain`
+>    的 `Internal Server Error`，前端不能假設「所有非 2xx 都是 JSON」。
+>
+>    **這個不會讓測試看不到真正的錯誤** —— Starlette 的 `ServerErrorMiddleware`
+>    呼叫完 handler 之後仍然會把原例外重新拋出，而 `conftest.py` 的
+>    `ASGITransport` 用預設的 `raise_app_exceptions=True`，所以 pytest 看到的
+>    還是真的例外，不是被吞掉的 500。這件事實測確認過。
 
 - [ ] **Step 4: 在主 app 註冊**
 
@@ -1635,7 +1698,7 @@ app.include_router(health.router, prefix="/api")
 - [ ] **Step 5: 執行測試，確認通過**
 
 Run: `pytest tests/test_errors.py -v`
-Expected: `3 passed`
+Expected: `7 passed`
 
 - [ ] **Step 6: Commit**
 
@@ -1735,6 +1798,9 @@ async def test_register_rejects_a_short_password(client):
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    # 錯誤回應不能把使用者送進來的密碼回吐 —— 4xx 的 body 會進到反向代理的存取紀錄、
+    # 瀏覽器開發者工具、前端的錯誤回報服務。Task 10 的 handler 會把 input 欄位拿掉。
+    assert "short" not in response.text
 
 
 async def test_register_rejects_an_invalid_email(client):
@@ -2466,7 +2532,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: 執行測試，確認通過**
 
 Run: `pytest tests/test_cli.py -v`
-Expected: `3 passed`
+Expected: `7 passed`
 
 - [ ] **Step 5: 對開發資料庫實際跑一次**
 
