@@ -482,7 +482,7 @@ def test_settings_have_sensible_defaults():
 
     assert settings.jwt_algorithm == "HS256"
     assert settings.access_token_ttl_minutes == 15
-    assert settings.refresh_token_ttl_days == 30
+    assert settings.refresh_token_ttl_days == 14
 
 
 def test_settings_can_be_overridden():
@@ -512,7 +512,7 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-secret-change-me-in-production"
     jwt_algorithm: str = "HS256"
     access_token_ttl_minutes: int = 15
-    refresh_token_ttl_days: int = 30
+    refresh_token_ttl_days: int = 14
     photo_dir: str = "data/photos"
 
 
@@ -1329,7 +1329,52 @@ def test_expired_token_is_rejected(monkeypatch):
 
     with pytest.raises(TokenError):
         decode_token(token, expected_type="access")
+
+
+def _forge(payload: dict[str, object]) -> str:
+    """繞過 create_token，直接用同一把密鑰簽一個任意 payload 的 token。"""
+    import jwt as pyjwt
+
+    from app.config import settings
+
+    return pyjwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def test_forged_token_with_non_numeric_sub_raises_token_error():
+    """簽章有效但 payload 形狀不對，也必須是 TokenError，不能是 ValueError。
+
+    呼叫端（get_current_user）只接 TokenError，其他例外會變成 500。
+    """
+    now = datetime.now(UTC)
+    forged = _forge(
+        {"sub": "not-a-number", "type": "access", "iat": now, "exp": now + timedelta(minutes=15)}
+    )
+    with pytest.raises(TokenError):
+        decode_token(forged, expected_type="access")
+
+
+def test_forged_token_without_sub_raises_token_error():
+    now = datetime.now(UTC)
+    forged = _forge({"type": "access", "iat": now, "exp": now + timedelta(minutes=15)})
+    with pytest.raises(TokenError):
+        decode_token(forged, expected_type="access")
+
+
+def test_forged_token_without_exp_is_rejected():
+    """沒有 exp 的 token 不能被接受 —— 否則它永遠不會過期。"""
+    forged = _forge({"sub": "1", "type": "access", "iat": datetime.now(UTC)})
+    with pytest.raises(TokenError):
+        decode_token(forged, expected_type="access")
 ```
+
+檔案開頭的 import 要加上：
+
+```python
+from datetime import UTC, datetime, timedelta
+```
+
+> **這三個測試用 `_forge` 繞過 `create_token`，是刻意的。**
+> 它們要模擬的正是「攻擊者拿到密鑰之後能做什麼」，所以不能經過正常的簽發路徑。
 
 - [ ] **Step 2: 執行測試，確認失敗**
 
@@ -1374,7 +1419,11 @@ def create_token(user_id: int, token_type: TokenType) -> str:
 def decode_token(token: str, expected_type: TokenType) -> int:
     try:
         payload: dict[str, Any] = jwt.decode(
-            token, settings.jwt_secret, algorithms=[settings.jwt_algorithm]
+            token,
+            settings.jwt_secret,
+            algorithms=[settings.jwt_algorithm],
+            # 預設只在 exp 存在時才驗證它 —— 少了 exp 的偽造 token 會永遠有效。
+            options={"require": ["exp", "iat", "sub", "type"]},
         )
     except jwt.PyJWTError as exc:
         raise TokenError("token 無效或已過期") from exc
@@ -1382,13 +1431,33 @@ def decode_token(token: str, expected_type: TokenType) -> int:
     if payload.get("type") != expected_type:
         raise TokenError("token 類型不正確")
 
-    return int(payload["sub"])
+    try:
+        return int(payload["sub"])
+    except (KeyError, ValueError, TypeError) as exc:
+        raise TokenError("token payload 格式不正確") from exc
 ```
+
+> **這個模組唯一對外可見的失敗方式，必須是 `TokenError`。**
+>
+> 直覺會覺得 `int(payload["sub"])` 不可能拋 `ValueError` —— 因為 `create_token`
+> 是唯一的簽發者，而它永遠寫 `str(user_id)`。這個推理有一個致命前提：
+> **簽發需要密鑰，而密鑰是私密的。**
+>
+> 但這個專案的 `jwt_secret` 預設值是 `"dev-secret-change-me-in-production"`
+> 這個字面字串，而 repo 是公開的。加上 P4 那條（沒設環境變數會靜默用預設值），
+> 任何知道這個公開字串的人都能簽出一個 `sub` 不是數字的合法 token。
+>
+> 而 Task 13 的 `get_current_user` 只接 `TokenError`，`app/errors.py` 也只註冊了
+> `AppError` 跟 `RequestValidationError` 的處理器 —— 所以那個 `ValueError` 會直接
+> 變成 500 加堆疊追蹤，而且是未經認證就能觸發的。
+>
+> **「以目前的呼叫端來看不可達」，對一個作為整個 API 安全邊界的模組來說是錯的標準。**
+> 正確的標準是：對外只拋一種例外，因為所有呼叫端都是照那個假設寫的。
 
 - [ ] **Step 4: 執行測試，確認通過**
 
 Run: `pytest tests/test_tokens.py -v`
-Expected: `7 passed`
+Expected: `10 passed`
 
 - [ ] **Step 5: Commit**
 
@@ -2577,6 +2646,34 @@ git commit -m "chore: 新增 CI 與 README"
 - `.dockerignore` 的 `*.egg-info/` 少了 `**/` 前綴，跟原本 `__pycache__/` 是同一類錯誤。
   目前零影響 —— setuptools 只會在專案根目錄產生 egg-info，不會有巢狀的，而且
   image 裡那份是 `pip install -e .` 在容器內重新產生的，不是從主機複製進去的。
+
+## 後續任務：session 撤銷（不是 P4 的事，要自己一個 task）
+
+**這一項刻意不放進下面的 P4 清單。** 那份清單是部署維運的雜項（compose 密鑰、
+restart 政策、healthcheck），氛圍是「記錄一下、不急」。session 撤銷是應用層的
+安全功能，放進去會被那個氛圍吃掉。
+
+**問題：手機掉了怎麼辦。**
+
+Task 14 的 `/api/auth/refresh` 每次呼叫都會發一張全新的 14 天 refresh token，
+而且沒有重用偵測。所以 14 天不是上限，是一個**只要裝置持續使用就永遠不會關上的
+滑動視窗**。撿到手機的人只要 app 正常運作，就能一直續下去。
+
+而目前唯一的止血方式是**換掉 `JWT_SECRET`**，那會把所有使用者一起登出。
+對「幾個使用者」的規模來說勉強可以接受，但這件事現在沒有寫在任何地方，
+也沒有「只登出這一台」的能力。
+
+**現在就該做的（零程式碼）：** 把「換掉 `JWT_SECRET` 可以強制登出所有 session」
+寫進 README 的維運段落，當作緊急處置程序。
+
+**真正的解法（獨立 task，建議排在 P2 或 P3，不要拖到 P4）：**
+
+在 `users` 加一個 `tokens_valid_after timestamptz` 欄位，`get_current_user` 跟
+refresh 端點都比對 token 的 `iat` 是否晚於它，再開一個 `POST /api/auth/logout-all`
+把它設成 `now()`。
+
+`iat` 現在就已經寫進 token 了（而且 PyJWT 2.13 本來就會驗證它不能是未來時間），
+所以這個機制不需要改動 token 格式 —— 只要加一個欄位跟一個比對。
 
 ## 延後到 P4 的部署議題（審查過程中記錄，本計畫不處理）
 
