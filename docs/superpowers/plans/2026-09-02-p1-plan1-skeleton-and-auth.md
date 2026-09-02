@@ -872,6 +872,19 @@ Expected: `3 passed`
 
 特別確認 `test_each_test_starts_with_a_clean_database` 通過 —— 它證明了交易隔離真的有效。
 
+> **不要把 `tests/test_health.py` 改成用這裡的 `client` fixture。**
+>
+> 本 Task 之後，`test_health.py` 跟 `test_infra.py::test_client_can_reach_the_api`
+> 看起來在測同一件事，很容易讓人想「順手合併掉重複」。不可以。
+>
+> `client` fixture 相依於 `db_session` → `db_connection` → `migrated_database`，
+> 需要一個活著的 PostgreSQL。`test_health.py` 目前是**整個測試套件裡唯一不需要
+> 任何基礎設施就能跑的測試** —— 它的用途正是在資料庫還沒接上時，證明
+> FastAPI 本身是活的。合併掉就失去這個診斷能力了。
+>
+> 在 `test_health.py` 加一行註解說明它為什麼不用 `client` fixture，避免日後有人
+> （或某個 agent）反射性地又想合併。
+
 - [ ] **Step 5: Commit**
 
 ```bash
