@@ -943,6 +943,7 @@ Expected: FAIL，`fixture 'db_session' not found`
 import asyncio
 import os
 import subprocess
+import sys
 from collections.abc import AsyncIterator
 
 import asyncpg
@@ -980,8 +981,11 @@ async def _ensure_test_database_exists() -> None:
 def migrated_database() -> None:
     """整個測試 session 只跑一次：建立測試資料庫並套用所有 migration。"""
     asyncio.run(_ensure_test_database_exists())
+    # 用 sys.executable -m alembic 而不是裸的 "alembic"：
+    # 本機開發時 venv 不一定有 activate，裸指令不保證找得到。
+    # 這樣寫在 Windows 本機跟 Linux CI 上行為一致。
     subprocess.run(
-        ["alembic", "upgrade", "head"],
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
         check=True,
         env={**os.environ, "DATABASE_URL": TEST_DATABASE_URL},
     )
@@ -1036,6 +1040,17 @@ Expected: `3 passed`
 
 特別確認 `test_each_test_starts_with_a_clean_database` 通過 —— 它證明了交易隔離真的有效。
 
+> **這組 fixture 的三個已知邊界，後續 task 要記得：**
+>
+> 1. **`client` 只覆寫 `get_db`。** 之後如果有哪個依賴自己另外開資料庫連線
+>    （沒有走 `get_db`），它的寫入就跑在交易隔離外面，測試之間會互相污染。
+>    **所有資料庫存取都必須經過 `get_db`。**
+> 2. **`app.dependency_overrides.clear()` 會清掉全部覆寫**，不只 `get_db`。
+>    目前只有一個覆寫所以沒差；哪天有 fixture 想在 `client` 之上再疊一層覆寫，
+>    要記得這件事。
+> 3. **每個測試都會新建一個 engine。** 正確但不省，測試數量長到幾百個時
+>    會感覺得出來。那時再改成 session 級 engine，現在不用。
+>
 > **不要把 `tests/test_health.py` 改成用這裡的 `client` fixture。**
 >
 > 本 Task 之後，`test_health.py` 跟 `test_infra.py::test_client_can_reach_the_api`
