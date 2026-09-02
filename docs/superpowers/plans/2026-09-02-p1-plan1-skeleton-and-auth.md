@@ -756,7 +756,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
-from sqlalchemy.dialects.postgresql import CITEXT
+from sqlalchemy.dialects.postgresql import CITEXT, ENUM
 
 revision: str = "0001"
 down_revision: str | None = None
@@ -781,7 +781,13 @@ def upgrade() -> None:
         sa.Column("email", CITEXT(), nullable=False),
         sa.Column("password_hash", sa.Text, nullable=False),
         sa.Column("display_name", sa.Text, nullable=False),
-        sa.Column("role", user_role, nullable=False, server_default="user"),
+        # 注意：這裡不能直接用上面的 user_role，見下方說明
+        sa.Column(
+            "role",
+            ENUM("user", "admin", name="user_role", create_type=False),
+            nullable=False,
+            server_default="user",
+        ),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
         ),
@@ -798,6 +804,29 @@ def downgrade() -> None:
     sa.Enum(name="user_role").drop(op.get_bind())
 ```
 
+> **PostgreSQL enum 在 migration 裡的陷阱（後面每個 enum 都會遇到）：**
+>
+> 直覺寫法是先 `user_role.create(op.get_bind())` 建好型別，再把同一個 `user_role`
+> 物件當成欄位型別丟進 `op.create_table`。這樣會失敗：
+>
+> ```
+> asyncpg.exceptions.DuplicateObjectError: type "user_role" already exists
+> [SQL: CREATE TYPE user_role AS ENUM ('user', 'admin')]
+> ```
+>
+> 原因是**沒有綁定到 `MetaData` 的 `sa.Enum`，在建表時會自己再發一次
+> `CREATE TYPE`，而且 `checkfirst=False` 是寫死的**（見 SQLAlchemy 的
+> `named_types.py` 中 `_on_table_create`）。兩道 `CREATE TYPE` 在同一個交易裡撞在一起。
+>
+> 陷阱裡還有陷阱：`sa.Enum(..., create_type=False)` **會被靜默忽略** ——
+> `create_type` 只存在於 `postgresql.ENUM`，泛型的 `sa.Enum` 連這個屬性都沒有。
+>
+> 正解：型別的建立與刪除交給 `sa.Enum(...).create()` / `.drop()` 明確管理，
+> **欄位型別則用 `postgresql.ENUM(..., create_type=False)`**。
+>
+> **計畫 2～4 的每一個 enum 都要這樣處理** —— `meal_type`、`revision_status`、
+> `base_unit`、`time_of_day`。
+>
 > **手寫 migration 的約束名稱要跟 `NAMING_CONVENTION` 對齊。**
 >
 > `op.create_table` 用的是 Alembic 自己的 metadata，**不會**套用我們在
