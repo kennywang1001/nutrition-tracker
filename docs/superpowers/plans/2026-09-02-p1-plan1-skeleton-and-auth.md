@@ -981,13 +981,26 @@ async def _ensure_test_database_exists() -> None:
 def migrated_database() -> None:
     """整個測試 session 只跑一次：建立測試資料庫並套用所有 migration。"""
     asyncio.run(_ensure_test_database_exists())
+    env = {**os.environ, "DATABASE_URL": TEST_DATABASE_URL}
+
     # 用 sys.executable -m alembic 而不是裸的 "alembic"：
     # 本機開發時 venv 不一定有 activate，裸指令不保證找得到。
     # 這樣寫在 Windows 本機跟 Linux CI 上行為一致。
     subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "head"],
         check=True,
-        env={**os.environ, "DATABASE_URL": TEST_DATABASE_URL},
+        env=env,
+    )
+
+    # upgrade head 只看 revision id，不看檔案內容。
+    # 開發中原地修改某個 migration（很常見）時，revision id 沒變，
+    # upgrade head 就什麼都不做、直接成功 —— 然後整套測試在舊 schema 上跑，
+    # 而且完全沒有跡象。
+    # alembic check 比對的是「實際 schema vs Base.metadata」，抓得到這種漂移。
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "check"],
+        check=True,
+        env=env,
     )
 
 
@@ -1011,7 +1024,13 @@ async def db_connection(migrated_database: None) -> AsyncIterator[AsyncConnectio
 
 @pytest_asyncio.fixture
 async def db_session(db_connection: AsyncConnection) -> AsyncIterator[AsyncSession]:
-    session = AsyncSession(bind=db_connection, join_transaction_mode="create_savepoint")
+    session = AsyncSession(
+        bind=db_connection,
+        join_transaction_mode="create_savepoint",
+        # 跟 app/db.py 的 SessionLocal 一致。少了這個，commit 之後物件屬性會過期，
+        # 下次同步存取就炸 MissingGreenlet，而錯誤訊息完全看不出是這個原因。
+        expire_on_commit=False,
+    )
     try:
         yield session
     finally:
@@ -1022,14 +1041,19 @@ async def db_session(db_connection: AsyncConnection) -> AsyncIterator[AsyncSessi
 async def client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
     """讓 API 使用測試的 session，這樣 API 寫入的資料也會被 rollback。"""
 
+    # 這裡是刻意「不」模仿 app/db.py 的 `async with SessionLocal() as session:` 寫法。
+    # session 是 fixture 擁有的，必須活過整個測試，不能被 FastAPI 的依賴清理關掉 ——
+    # 否則任何一個「請求失敗後繼續斷言」的測試都會壞掉（例如註冊重複 email 那組）。
     async def override_get_db() -> AsyncIterator[AsyncSession]:
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as async_client:
-        yield async_client
-    app.dependency_overrides.clear()
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as async_client:
+            yield async_client
+    finally:
+        app.dependency_overrides.clear()
 ```
 
 - [ ] **Step 4: 執行測試，確認通過**
@@ -1048,8 +1072,14 @@ Expected: `3 passed`
 > 2. **`app.dependency_overrides.clear()` 會清掉全部覆寫**，不只 `get_db`。
 >    目前只有一個覆寫所以沒差；哪天有 fixture 想在 `client` 之上再疊一層覆寫，
 >    要記得這件事。
-> 3. **每個測試都會新建一個 engine。** 正確但不省，測試數量長到幾百個時
->    會感覺得出來。那時再改成 session 級 engine，現在不用。
+> 3. **每個測試都會新建一個 engine。** 正確但不省 —— 實測每個測試約 52ms 的
+>    基礎設施成本，150 個測試約 7.7 秒。現在不痛，等到真的痛了再改成
+>    session 級 engine（連線與交易仍維持每測試一份）。
+> 4. **`db.commit()` 失敗之後，一定要 `await db.rollback()` 才能再用那個 session。**
+>    `IntegrityError` 之後任何操作都會拋 `PendingRollbackError`。
+>    正式環境的 session 是每請求一份，壞掉就算了；但**測試的 session 是整個測試共用的**，
+>    所以某個 handler 漏掉 rollback，會讓同一個測試後面所有的 `client` 呼叫跟
+>    `db_session` 查詢全部爆掉，而且錯誤訊息看起來跟真正的原因完全無關。
 >
 > **不要把 `tests/test_health.py` 改成用這裡的 `client` fixture。**
 >
