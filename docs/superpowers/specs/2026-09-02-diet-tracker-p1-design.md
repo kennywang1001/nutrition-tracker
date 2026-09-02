@@ -233,6 +233,43 @@ ALTER TABLE user_targets ADD CONSTRAINT no_overlapping_targets
 
 `supplement_plans` 同樣採用有效期間制（決策 5 的第二次應用）。
 
+### 決策 7：哪些列舉用原生 enum，哪些用 text + CHECK
+
+PostgreSQL 的原生 `enum` 型別很好用，但它有兩個實測確認過的硬限制：
+
+- `ALTER TYPE ... ADD VALUE` 可以在交易裡執行，但**同一個交易裡不能使用那個新值**
+  （`unsafe use of new value`）。而 Alembic 預設會把所有待跑的 migration 包在
+  同一個交易裡，所以「加一個值並且用它」的 migration 會整批失敗。
+- **`ALTER TYPE ... DROP VALUE` 根本不存在。** 要移除或重新排序，只能重建型別
+  並改寫所有相依欄位。
+
+所以判準不是「這是不是一組固定選項」，而是：**這組值以後有沒有可能增加？**
+
+| 列舉 | 選擇 | 理由 |
+|---|---|---|
+| `user_role` | 原生 enum | 新增角色是罕見的、跟權限程式碼綁在一起的部署事件 |
+| `revision_status` | 原生 enum | 封閉的三態流程，直接決定 `current_revision_id` 的可見性邏輯 |
+| `base_unit` | 原生 enum | 只有 g / ml 兩種，跟「每 100 單位」的正規化邏輯綁死 |
+| **`meal_type`** | **text + CHECK** | 使用者面對的標籤。用了幾個月之後想加「早午餐」是很合理的事 |
+| **`time_of_day`** | **text + CHECK** | 服用時段因人而異，六個值已經像是一個開放集合 |
+
+前三個是**程式邏輯的一部分**，加一個值本來就要改程式；後兩個是**使用者的詞彙**，
+應該能靠一次 migration 改掉，而不是重建型別。
+
+同樣的道理，`supplements.serving_unit` 本來就是 `text` —— 單位是開放集合。
+
+> **所有 CHECK 約束都必須明確命名**（`ck_<表名>_<用途>`）。
+> 這是 `app/models/base.py` 的 `NAMING_CONVENTION` 強制的：`ck` 樣式用了
+> `%(constraint_name)s`，沒給名字 SQLAlchemy 會直接拋 `InvalidRequestError`。
+> 這是刻意的 —— 讓 PostgreSQL 自動命名的後果，是 `alembic` 的漂移檢查會對
+> 完全沒改過的約束產生假的 drop + create。
+>
+> **注意：下面第 6 節的 DDL 為了可讀性，仍把大部分 CHECK 寫成欄位內嵌形式
+> （`kcal numeric(8,2) NOT NULL CHECK (kcal >= 0)`）。**
+> 寫實作計畫時要把它們改成具名的表層級約束：
+> `CONSTRAINT ck_food_revisions_kcal_non_negative CHECK (kcal >= 0)`，
+> 並在對應的 SQLAlchemy 模型用同一個名字。名字對不上，`alembic check` 就會紅。
+
 ---
 
 ## 6. 資料模型
@@ -243,7 +280,7 @@ ALTER TABLE user_targets ADD CONSTRAINT no_overlapping_targets
 CREATE TYPE user_role AS ENUM ('user', 'admin');
 
 CREATE TABLE users (
-  id            bigserial PRIMARY KEY,
+  id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   email         citext NOT NULL UNIQUE,
   password_hash text   NOT NULL,
   display_name  text   NOT NULL,
@@ -263,7 +300,7 @@ CREATE TYPE revision_status AS ENUM ('pending', 'approved', 'rejected');
 CREATE TYPE base_unit AS ENUM ('g', 'ml');
 
 CREATE TABLE foods (
-  id                  bigserial PRIMARY KEY,
+  id                  bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   name                text NOT NULL,
   brand               text,
   owner_id            bigint REFERENCES users(id) ON DELETE CASCADE,  -- NULL = 全域
@@ -274,7 +311,7 @@ CREATE TABLE foods (
 );
 
 CREATE TABLE food_revisions (
-  id            bigserial PRIMARY KEY,
+  id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   food_id       bigint NOT NULL REFERENCES foods(id) ON DELETE CASCADE,
   base_unit     base_unit NOT NULL DEFAULT 'g',   -- 營養素基準：每 100g 或每 100ml
   kcal          numeric(8,2) NOT NULL CHECK (kcal >= 0),
@@ -301,7 +338,7 @@ ALTER TABLE foods
   DEFERRABLE INITIALLY DEFERRED;
 
 CREATE TABLE food_portions (
-  id         bigserial PRIMARY KEY,
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   food_id    bigint NOT NULL REFERENCES foods(id) ON DELETE CASCADE,
   label      text NOT NULL,                    -- '1 碗'、'1 顆'
   grams      numeric(8,2) NOT NULL CHECK (grams > 0),
@@ -322,20 +359,22 @@ CREATE TABLE food_portions (
 ### 6.3 meals / meal_items
 
 ```sql
-CREATE TYPE meal_type AS ENUM ('breakfast', 'lunch', 'dinner', 'snack');
+-- meal_type 刻意用 text + CHECK 而非原生 enum，理由見 5.7
 
 CREATE TABLE meals (
-  id         bigserial PRIMARY KEY,
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   user_id    bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   eaten_at   timestamptz NOT NULL,
-  meal_type  meal_type NOT NULL,
+  meal_type  text NOT NULL,
   photo_path text,
   note       text,
-  created_at timestamptz NOT NULL DEFAULT now()
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT ck_meals_meal_type
+    CHECK (meal_type IN ('breakfast', 'lunch', 'dinner', 'snack'))
 );
 
 CREATE TABLE meal_items (
-  id               bigserial PRIMARY KEY,
+  id               bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   meal_id          bigint NOT NULL REFERENCES meals(id) ON DELETE CASCADE,
   food_revision_id bigint NOT NULL REFERENCES food_revisions(id),
   portion_id       bigint REFERENCES food_portions(id),  -- 使用者選了「1 碗」則記錄
@@ -353,11 +392,9 @@ CREATE TABLE meal_items (
 ### 6.4 supplements / supplement_plans / supplement_intakes
 
 ```sql
-CREATE TYPE time_of_day AS ENUM
-  ('morning', 'noon', 'evening', 'bedtime', 'preworkout', 'postworkout');
 
 CREATE TABLE supplements (
-  id           bigserial PRIMARY KEY,
+  id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   name         text NOT NULL,
   brand        text,
   owner_id     bigint REFERENCES users(id) ON DELETE CASCADE,  -- NULL = 全域（管理員維護）
@@ -373,18 +410,23 @@ CREATE TABLE supplements (
 );
 
 CREATE TABLE supplement_plans (
-  id             bigserial PRIMARY KEY,
+  id             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   user_id        bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   supplement_id  bigint NOT NULL REFERENCES supplements(id),
   dose           numeric(8,2) NOT NULL CHECK (dose > 0),
-  time_of_day    time_of_day NOT NULL,
+  -- time_of_day 刻意用 text + CHECK 而非原生 enum，理由見 5.7
+  time_of_day    text NOT NULL,
   effective_from date NOT NULL,
   effective_to   date,
-  CHECK (effective_to IS NULL OR effective_to > effective_from)
+  CONSTRAINT ck_supplement_plans_time_of_day
+    CHECK (time_of_day IN ('morning', 'noon', 'evening', 'bedtime',
+                           'preworkout', 'postworkout')),
+  CONSTRAINT ck_supplement_plans_effective_range
+    CHECK (effective_to IS NULL OR effective_to > effective_from)
 );
 
 CREATE TABLE supplement_intakes (
-  id            bigserial PRIMARY KEY,
+  id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   user_id       bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   supplement_id bigint NOT NULL REFERENCES supplements(id),
   plan_id       bigint REFERENCES supplement_plans(id),  -- NULL = 臨時吃的
@@ -410,7 +452,7 @@ CREATE TABLE supplement_intakes (
 
 ```sql
 CREATE TABLE user_targets (
-  id             bigserial PRIMARY KEY,
+  id             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   user_id        bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   kcal           numeric(8,2) CHECK (kcal >= 0),
   protein_g      numeric(8,2) CHECK (protein_g >= 0),

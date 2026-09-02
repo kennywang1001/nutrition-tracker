@@ -669,7 +669,7 @@ git commit -m "feat: 新增資料庫連線與 Alembic 設定"
 import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, Text, func
+from sqlalchemy import BigInteger, DateTime, Enum, Identity, Text, func
 from sqlalchemy.dialects.postgresql import CITEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -684,7 +684,7 @@ class UserRole(enum.StrEnum):
 class User(Base):
     __tablename__ = "users"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     email: Mapped[str] = mapped_column(CITEXT(), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     display_name: Mapped[str] = mapped_column(Text, nullable=False)
@@ -777,7 +777,7 @@ def upgrade() -> None:
 
     op.create_table(
         "users",
-        sa.Column("id", sa.BigInteger, autoincrement=True),
+        sa.Column("id", sa.BigInteger, sa.Identity(always=True), nullable=False),
         sa.Column("email", CITEXT(), nullable=False),
         sa.Column("password_hash", sa.Text, nullable=False),
         sa.Column("display_name", sa.Text, nullable=False),
@@ -860,14 +860,13 @@ Expected: 成功
 
 > 這一步很重要。migration 只能往前跑、不能回退的專案，日後改 schema 會很痛。
 
-- [ ] **Step 7: 用 autogenerate 驗證命名真的對齊**
+- [ ] **Step 7: 驗證模型與 migration 沒有漂移**
 
 ```bash
-alembic revision --autogenerate -m "should-be-empty"
+alembic check
 ```
 
-打開產生出來的檔案，`upgrade()` 跟 `downgrade()` 裡面**必須都是 `pass`**。
-確認之後把這個檔案刪掉。
+Expected: `No new upgrade operations detected.`
 
 > **這是防呆，不是儀式。** 手寫 migration 時，`op.create_unique_constraint` 之類的
 > 操作都強制要給名字，所以不會退回 PostgreSQL 自動命名 —— 但沒有任何機制擋住你
@@ -876,8 +875,11 @@ alembic revision --autogenerate -m "should-be-empty"
 > 名字對不上的後果，就是前面那個 CHECK 約束的 bug：autogenerate 會產生一組
 > 假的 drop + create。
 >
-> 跑一次 autogenerate 看它有沒有話說，是唯一能機械化檢查這件事的方法。
-> **之後每個手寫 migration 的 task 都要做這一步。**
+> `alembic check` 做的就是「產生一個 autogenerate revision，看它是不是空的」，
+> 但不會真的產生檔案 —— 不用記得去刪。
+>
+> **之後每個手寫 migration 的 task 都要做這一步**，而且 Task 17 會把它放進 CI，
+> 讓它從「要記得做的習慣」變成「跳不過的關卡」。
 
 - [ ] **Step 8: Commit**
 
@@ -2369,6 +2371,13 @@ jobs:
 
       - name: 型別檢查
         run: mypy app
+
+      # 模型與 migration 漂移檢查：跑完所有 migration 後，模型不該再產生任何差異。
+      # 手寫 migration 的約束名稱只要跟 NAMING_CONVENTION 差一個字，這裡就會紅。
+      - name: Migration 漂移檢查
+        run: |
+          alembic upgrade head
+          alembic check
 
       - name: 測試
         run: pytest --cov=app --cov-report=term-missing
