@@ -2334,13 +2334,35 @@ git commit -m "chore: 新增 CI 與 README"
 - [ ] `mypy app` 無錯誤
 - [ ] `python -m app.cli admin@example.com admin-password-123 管理員` 成功建立管理員
 
+## 已知的小問題（不阻擋，下次動到該檔案時順手修）
+
+- `.dockerignore` 的 `*.egg-info/` 少了 `**/` 前綴，跟原本 `__pycache__/` 是同一類錯誤。
+  目前零影響 —— setuptools 只會在專案根目錄產生 egg-info，不會有巢狀的，而且
+  image 裡那份是 `pip install -e .` 在容器內重新產生的，不是從主機複製進去的。
+
 ## 延後到 P4 的部署議題（審查過程中記錄，本計畫不處理）
 
 - **密鑰硬編在 `docker-compose.yml` 裡。** `JWT_SECRET` 跟 PostgreSQL 密碼目前是明文字面值，
   不是 `${VAR}` 也沒有 `env_file:`。對開發用的 compose 這是合理的（`docker compose up`
   免設定就能跑），但 P4 必須改成：production 用獨立的 compose override，密鑰由
-  Compose `secrets:` 或 NAS Container Manager 注入，而且 **production 不提供
-  `JWT_SECRET` 預設值** —— 沒設就啟動失敗，而不是悄悄用開發密鑰跑起來。
+  Compose `secrets:` 或 NAS Container Manager 注入。
+
+  **注意一個陷阱：把 `JWT_SECRET` 從 compose 拿掉，並不會讓它啟動失敗。**
+  `app/config.py` 的 `jwt_secret` 欄位自己就有預設值
+  （`"dev-secret-change-me-in-production"`），pydantic 會直接用它，然後 production
+  就悄悄跑在開發密鑰上 —— 這比沒改還糟，因為你以為改好了。
+
+  要真的 fail closed，必須動 `app/config.py`：把該欄位的預設值拿掉（變成必填，
+  沒給就在 `Settings()` 建立時拋 `ValidationError`，也就是 import 時就崩），
+  或加一個「production 模式下不得等於開發預設值」的驗證。
+
+- **`extra="ignore"` 讓拼錯的環境變數被靜默吞掉。** 打成 `JWT_SECERT=...` 不會有任何
+  警告，程式就用預設值跑起來。改成 `forbid` 不可行 —— `.env.example` 裡有
+  `TEST_DATABASE_URL`，那是刻意不放進 `Settings` 的（測試直接讀 `os.environ`），
+  `forbid` 會讓它直接炸掉。
+
+  所以這一項的解法跟上一項是同一個：**只要密鑰沒有可用的預設值，拼錯就會變成
+  大聲的啟動失敗，而不是安靜的錯誤行為。** 兩項要一起修，分開修會兩邊都不完整。
 - **兩個服務都沒有 `restart:` 政策。** 開發時無所謂，P4 要明確決定（例如
   `restart: unless-stopped`）。
 - **`api` 服務沒有 healthcheck。** `/api/health` 目前只有手動 curl 在用。
