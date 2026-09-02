@@ -29,7 +29,7 @@ def upgrade() -> None:
 
     op.create_table(
         "users",
-        sa.Column("id", sa.BigInteger, autoincrement=True),
+        sa.Column("id", sa.BigInteger, sa.Identity(always=True), nullable=False),
         sa.Column("email", CITEXT(), nullable=False),
         sa.Column("password_hash", sa.Text, nullable=False),
         sa.Column("display_name", sa.Text, nullable=False),
