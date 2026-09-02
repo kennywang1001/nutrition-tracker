@@ -333,13 +333,9 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY pyproject.toml ./
+COPY pyproject.toml requirements-lock.txt ./
 COPY app ./app
-RUN pip install --no-cache-dir -e ".[dev]"
+RUN pip install --no-cache-dir -c requirements-lock.txt -e ".[dev]"
 
 COPY . .
 
@@ -347,8 +343,18 @@ EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
-> 註：先 COPY `app/` 再 `pip install -e .` 是因為 editable 安裝需要套件目錄存在。
-> 這犧牲了一點 layer 快取效率，換來設定簡單 —— 專案還小，值得。
+> **三個設計決定：**
+>
+> 1. **先 COPY `app/` 再 `pip install -e .`** —— editable 安裝需要套件目錄存在。
+>    犧牲一點 layer 快取效率換設定簡單，專案還小，值得。
+>
+> 2. **用 `-c requirements-lock.txt`** —— 容器裡的版本跟本機、CI 完全一致。
+>    lockfile 是在 Windows 上凍結的，但它只是版本約束，pip 會自己抓 Linux 的 wheel。
+>
+> 3. **沒有 `build-essential`** —— 所有依賴（asyncpg、argon2-cffi、pydantic-core、
+>    ruff、mypy）在 PyPI 上都有 Linux 預編譯的 wheel，不需要編譯器。省下約 200MB
+>    的 apt 下載，image 也小得多 —— 這對要部到 NAS 的專案是實質差別。
+>    如果 pip 真的因為缺編譯器而失敗，再把它加回來（並記錄是哪個套件需要）。
 
 - [ ] **Step 2: 建立 `.dockerignore`**
 
