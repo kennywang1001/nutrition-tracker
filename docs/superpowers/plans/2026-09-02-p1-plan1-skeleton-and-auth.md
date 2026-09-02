@@ -831,7 +831,26 @@ Expected: 成功
 
 > 這一步很重要。migration 只能往前跑、不能回退的專案，日後改 schema 會很痛。
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 7: 用 autogenerate 驗證命名真的對齊**
+
+```bash
+alembic revision --autogenerate -m "should-be-empty"
+```
+
+打開產生出來的檔案，`upgrade()` 跟 `downgrade()` 裡面**必須都是 `pass`**。
+確認之後把這個檔案刪掉。
+
+> **這是防呆，不是儀式。** 手寫 migration 時，`op.create_unique_constraint` 之類的
+> 操作都強制要給名字，所以不會退回 PostgreSQL 自動命名 —— 但沒有任何機制擋住你
+> 打錯字，或是取一個「看起來很合理但跟慣例算出來的不一樣」的名字。
+>
+> 名字對不上的後果，就是前面那個 CHECK 約束的 bug：autogenerate 會產生一組
+> 假的 drop + create。
+>
+> 跑一次 autogenerate 看它有沒有話說，是唯一能機械化檢查這件事的方法。
+> **之後每個手寫 migration 的 task 都要做這一步。**
+
+- [ ] **Step 8: Commit**
 
 ```bash
 git add app/models/user.py app/models/__init__.py migrations/env.py \
