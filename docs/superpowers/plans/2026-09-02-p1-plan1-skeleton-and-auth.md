@@ -177,8 +177,8 @@ testpaths = ["tests"]
 - [ ] **Step 2: 建立 `.env.example`**
 
 ```
-DATABASE_URL=postgresql+asyncpg://wallet:wallet@localhost:5432/wallet
-TEST_DATABASE_URL=postgresql+asyncpg://wallet:wallet@localhost:5432/wallet_test
+DATABASE_URL=postgresql+asyncpg://wallet:wallet@localhost:5433/wallet
+TEST_DATABASE_URL=postgresql+asyncpg://wallet:wallet@localhost:5433/wallet_test
 JWT_SECRET=dev-secret-change-me-in-production
 PHOTO_DIR=data/photos
 ```
@@ -383,7 +383,9 @@ services:
       POSTGRES_PASSWORD: wallet
       POSTGRES_DB: wallet
     ports:
-      - "5432:5432"
+      # 主機用 5433，避免跟開發機上其他專案的 PostgreSQL 撞埠。
+      # 容器之間仍走 5432（見下面 api 的 DATABASE_URL），CI 也用 5432（runner 是乾淨的）。
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -478,7 +480,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = "postgresql+asyncpg://wallet:wallet@localhost:5432/wallet"
+    database_url: str = "postgresql+asyncpg://wallet:wallet@localhost:5433/wallet"
     jwt_secret: str = "dev-secret-change-me-in-production"
     jwt_algorithm: str = "HS256"
     access_token_ttl_minutes: int = 15
@@ -798,7 +800,7 @@ from app.main import app
 
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
-    "postgresql+asyncpg://wallet:wallet@localhost:5432/wallet_test",
+    "postgresql+asyncpg://wallet:wallet@localhost:5433/wallet_test",
 )
 
 
