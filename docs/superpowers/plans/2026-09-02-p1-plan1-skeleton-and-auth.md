@@ -1188,6 +1188,21 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 ```
 
+> **兩個例外都要列，不是多寫的。** 直覺會以為 `InvalidHashError` 是
+> `Argon2Error` 的子類，可以省掉一個。實測（argon2-cffi 25.1.0）不是：
+>
+> ```
+> InvalidHashError    → ValueError          （不是 Argon2Error 的子類）
+> VerifyMismatchError → Argon2Error 的子類
+> ```
+>
+> 兩者走的是不同路徑：**密碼錯誤**拋 `VerifyMismatchError`，**雜湊字串格式壞掉**
+> 拋 `InvalidHashError`。少寫 `InvalidHashError`，遇到壞掉的雜湊值會直接往外拋，
+> 而不是回傳 `False` —— 也就是資料庫裡有一筆髒資料，就會讓登入端點回 500 而非 401。
+>
+> 另外，`_hasher.verify()` 只會回傳 `True` 或拋例外，永遠不會回 `False`。
+> 所以 `return _hasher.verify(...)` 這個寫法看起來有點怪，但是正確的。
+
 - [ ] **Step 4: 執行測試，確認通過**
 
 Run: `pytest tests/test_password.py -v`
@@ -1231,9 +1246,16 @@ async def create_user(
     )
     db_session.add(user)
     await db_session.commit()
+    # 嚴格來說這行是多餘的：測試 session 設了 expire_on_commit=False，屬性不會過期，
+    # 而 PostgreSQL 的 INSERT 走 RETURNING，id / created_at 在 commit 當下就填好了。
+    # 保留是為了穩健 —— 日後若有欄位是靠 trigger 或 generated column 產生的，
+    # RETURNING 不一定涵蓋得到，那時這行就有意義了。測試工廠寧可多一次查詢。
     await db_session.refresh(user)
     return user
 ```
+
+> `_counter` 是模組層級的可變狀態，跨整個測試 session 共用。這是安全的：
+> 測試序列執行，而且 rollback 不會回捲計數器 —— 最多產生跳號，不會撞名。
 
 Run: `pytest -v`
 Expected: 全部通過（`factories.py` 目前還沒有測試用到，只需確認 import 不出錯）
