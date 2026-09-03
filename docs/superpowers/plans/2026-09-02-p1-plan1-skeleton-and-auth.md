@@ -2282,6 +2282,21 @@ async def require_admin(user: User = Depends(get_current_user)) -> User:
     return user
 ```
 
+> **`auto_error=False` 不是隨手寫的，是這組測試能過的關鍵。**
+>
+> 用 `HTTPBearer(auto_error=True)`（預設）的話，缺少 `Authorization` 標頭時
+> FastAPI 會拋一個**裸的 `HTTPException`** —— 那會被 Task 10 的
+> `StarletteHTTPException` handler 接住，產生
+> `{"code": "HTTP_ERROR", "message": "Not authenticated"}`，
+> 而不是我們要的 `NOT_AUTHENTICATED`。
+>
+> 改成 `auto_error=False` 之後，它在標頭缺少或格式不對時回傳 `None`，
+> 讓 `get_current_user` 自己決定要拋什麼錯。
+>
+> **順帶一個實測結果：** 帶 `Authorization: Basic ...`（錯的認證方案）時，
+> `HTTPBearer` 同樣回傳 `None`，所以會走到 `NOT_AUTHENTICATED` 而不是
+> `INVALID_TOKEN`。這是對的語意 —— **用錯認證方案不等於帶了一個壞掉的 token。**
+
 - [ ] **Step 4: 寫路由**
 
 `app/api/routes/me.py`:
