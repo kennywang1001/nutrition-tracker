@@ -340,11 +340,17 @@ ALTER TABLE foods
 CREATE TABLE food_portions (
   id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   food_id    bigint NOT NULL REFERENCES foods(id) ON DELETE CASCADE,
+  owner_id   bigint REFERENCES users(id) ON DELETE CASCADE,  -- NULL = 全域（管理員維護）
   label      text NOT NULL,                    -- '1 碗'、'1 顆'
   grams      numeric(8,2) NOT NULL CHECK (grams > 0),
   is_default boolean NOT NULL DEFAULT false,
-  UNIQUE (food_id, label)
+  UNIQUE NULLS NOT DISTINCT (food_id, owner_id, label)
 );
+
+-- 同一個食物同時只能有一筆待審編輯。
+-- 交給資料庫擋，不是靠程式檢查 —— 跟決策 4、決策 5 是同一個原則。
+CREATE UNIQUE INDEX uq_food_revisions_one_pending
+  ON food_revisions (food_id) WHERE status = 'pending';
 ```
 
 **營養素一律以「每 100g / 100ml」為基準儲存。** 不這樣做的話，「半碗」「一碗半」
@@ -355,6 +361,26 @@ CREATE TABLE food_portions (
 
 私人食物的編輯直接生效（建立 revision 時即 `approved` 並更新指標）；
 全域食物的編輯進入 `pending`，等待管理員審核。
+
+**`food_portions` 也採分層（決策 2 的第二次應用）。**
+`owner_id = NULL` 是全域份量（管理員維護），其他是使用者自己的。
+任何人都可以在任何食物上加自己的份量 —— 包含全域食物。
+
+理由：**「一碗」本來就因人而異。** 你的碗跟我的碗不一樣，這不是需要協作校正的
+共用事實，而是個人量測。硬要走審核流程，等於逼管理員仲裁「誰的碗才算數」。
+而讓任何人直接改全域份量，又會讓別人的歷史紀錄跟著變 —— 那正是決策 2 要防的事。
+
+分層同時避開兩邊：全域份量受保護，個人份量不需要許可。
+而且不需要為它再寫一套審核狀態機。
+
+（份量沒有版本化，所以 `meal_items` 存下當下換算的克數 —— 見 6.3。）
+
+**同一個食物同時只能有一筆待審編輯。** 第二個人提交會得到 409。
+
+理由：允許多筆的話，管理員先核准新版本、再核准舊版本，指標就會被往回移到過期
+資料，而且沒有任何東西會阻止。要處理就得寫「核准一筆時自動駁回其他」的邏輯。
+以幾個使用者的規模，撞在一起的機率近乎零 —— 用一個部分唯一索引擋掉，
+比寫那套邏輯簡單得多，也不會有漏洞。
 
 ### 6.3 meals / meal_items
 
@@ -519,8 +545,8 @@ GET    /api/foods/{id}                 取得食物（含目前生效版本）
 GET    /api/foods/{id}/revisions       版本歷史
 POST   /api/foods/{id}/revisions       提出編輯（私人=直接生效，全域=待審）
 POST   /api/foods/{id}/portions        新增份量換算
-GET    /api/foods/frequent             我最常吃的（供快速紀錄）
-GET    /api/foods/recent               我最近吃的
+GET    /api/foods/frequent             我最常吃的（供快速紀錄）← 需要 meal_items，計畫 3 實作
+GET    /api/foods/recent               我最近吃的                ← 需要 meal_items，計畫 3 實作
 ```
 
 ### 7.3 審核（僅管理員）
