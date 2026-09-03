@@ -1073,7 +1073,7 @@ async def client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
 
 Run: `docker compose up -d db`
 Run: `pytest tests/test_infra.py -v`
-Expected: `7 passed`
+Expected: `11 passed`
 
 特別確認 `test_each_test_starts_with_a_clean_database` 通過 —— 它證明了交易隔離真的有效。
 
@@ -1698,7 +1698,7 @@ app.include_router(health.router, prefix="/api")
 - [ ] **Step 5: 執行測試，確認通過**
 
 Run: `pytest tests/test_errors.py -v`
-Expected: `7 passed`
+Expected: `11 passed`
 
 - [ ] **Step 6: Commit**
 
@@ -1839,18 +1839,50 @@ touch app/schemas/__init__.py
 `app/schemas/auth.py`:
 
 ```python
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+import re
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+
+from app.models.user import UserRole
+
+# C0 控制字元 + DEL + C1。顯示用名稱裡不該出現任何一個。
+# 其中 \x00 特別重要：它通得過 Pydantic，然後被 PostgreSQL 拒收，
+# 變成一個未經認證就能觸發的 500。
+_CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
 class RegisterRequest(BaseModel):
     email: EmailStr
+    # 上限跟 Argon2 無關 —— 實測雜湊耗時與輸入長度無關（8 字元與 100 萬字元都約 70ms），
+    # 因為 Argon2 會先把輸入吸收成固定大小再進記憶體硬化階段。
+    # 這個上限單純是請求體衛生：限制客戶端能讓伺服器解析與複製多少資料。
     password: str = Field(min_length=8, max_length=128)
     display_name: str = Field(min_length=1, max_length=50)
+
+    @field_validator("email")
+    @classmethod
+    def _normalise_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("display_name")
+    @classmethod
+    def _clean_display_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("顯示名稱不能只有空白")
+        if _CONTROL_CHARACTERS.search(value):
+            raise ValueError("顯示名稱不能包含控制字元")
+        return value
 
 
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+
+    @field_validator("email")
+    @classmethod
+    def _normalise_email(cls, value: str) -> str:
+        return value.strip().lower()
 
 
 class RefreshRequest(BaseModel):
@@ -1863,7 +1895,7 @@ class UserResponse(BaseModel):
     id: int
     email: str
     display_name: str
-    role: str
+    role: UserRole
 
 
 class TokenResponse(BaseModel):
@@ -1871,6 +1903,23 @@ class TokenResponse(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
 ```
+
+> **`display_name` 的驗證擋的是一個真實的 bug。**
+>
+> `"A B"` 是合法的 JSON、合法的 Python 字串，通得過 Pydantic 的長度檢查 ——
+> 然後 PostgreSQL 拒收（`invalid byte sequence for encoding "UTF8": 0x00`），
+> 變成一個未經認證、單一請求就能觸發的 500。
+>
+> **這是「跨技術邊界」的典型盲點：兩層各自都對，但它們接受的東西不是同一組。**
+> Pydantic 驗的是「是不是 1 到 50 字元的字串」，PostgreSQL 驗的是「這些位元組
+> 能不能存」—— 中間那個差集沒有人負責。
+>
+> 順帶一提，**現在的測試套件抓不到這種回歸**：`ASGITransport` 預設
+> `raise_app_exceptions=True`，例外會直接拋進測試裡，而不是回傳 500。
+> 所以這個測試失敗的樣子是「測試爆炸」而不是「斷言不符」。
+>
+> （Unicode 的格式字元 —— 例如 RTL 覆寫 U+202E、零寬空格 U+200B —— 沒有擋。
+> 它們是顯示層的偽裝手法，而且擋掉會誤傷某些語言的正常用字，留給 P3 的前端處理。）
 
 - [ ] **Step 4: 寫路由**
 
@@ -1938,7 +1987,7 @@ app.include_router(auth.router, prefix="/api")
 - [ ] **Step 6: 執行測試，確認通過**
 
 Run: `pytest tests/test_auth_register.py -v`
-Expected: `7 passed`
+Expected: `11 passed`
 
 - [ ] **Step 7: Commit**
 
@@ -2556,7 +2605,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: 執行測試，確認通過**
 
 Run: `pytest tests/test_cli.py -v`
-Expected: `7 passed`
+Expected: `11 passed`
 
 - [ ] **Step 5: 對開發資料庫實際跑一次**
 
