@@ -86,3 +86,51 @@ async def test_register_rejects_an_invalid_email(client):
     )
 
     assert response.status_code == 422
+
+
+async def test_register_rejects_a_nul_byte_in_display_name(client):
+    response = await client.post(
+        "/api/auth/register",
+        json={"email": "new@example.com", "password": "a-good-password", "display_name": "A\x00B"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+async def test_register_rejects_a_whitespace_only_display_name(client):
+    response = await client.post(
+        "/api/auth/register",
+        json={"email": "new@example.com", "password": "a-good-password", "display_name": "   "},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+async def test_register_strips_surrounding_whitespace_from_display_name(client):
+    response = await client.post(
+        "/api/auth/register",
+        json={
+            "email": "new@example.com",
+            "password": "a-good-password",
+            "display_name": "  阿明  ",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["display_name"] == "阿明"
+
+
+async def test_register_normalises_email_to_lowercase(client, db_session):
+    response = await client.post(
+        "/api/auth/register",
+        json={"email": "NEW@Example.com", "password": "a-good-password", "display_name": "阿明"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["email"] == "new@example.com"
+
+    user = await db_session.scalar(select(User).where(User.email == "new@example.com"))
+    assert user is not None
+    assert user.email == "new@example.com"
