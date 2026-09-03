@@ -2791,6 +2791,10 @@ pytest
 python -m app.cli <email> <password> <顯示名稱>
 ```
 
+> **注意：對一個已存在的 email 重跑這個指令，會重設那個帳號的密碼並把它變成管理員。**
+> 沒有確認步驟，也沒有復原機制 —— 打錯 email 就是靜默地接管別人的帳號。
+> 指令會印出「已建立」或「已提升」來區分這兩種情況，執行後請確認那行輸出。
+
 ## 緊急處置：強制登出所有 session
 
 目前沒有「登出單一裝置」的機制。若需要立即讓所有既有的 token 失效
@@ -2828,6 +2832,16 @@ git commit -m "chore: 新增 CI 與 README"
 - [ ] `python -m app.cli admin@example.com admin-password-123 管理員` 成功建立管理員
 
 ## 已知的小問題（不阻擋，下次動到該檔案時順手修）
+
+- **`MIN_PASSWORD_LENGTH` 有兩份。** `app/cli.py` 寫死 8，`app/schemas/auth.py` 的
+  `Field(min_length=8)` 也寫死 8 —— 同一條政策兩個來源，而且**權限最高的管理員帳號
+  走的是沒有結構關聯的那一份**，兩邊可以無聲漂移。該把常數放進
+  `app/security/password.py`（`hash_password` / `verify_password` 已經在那裡，
+  兩邊本來就都 import 它），兩處都引用它。
+- **CLI 沒有對 `display_name` 做清理**，而 API 的 `RegisterRequest` 有
+  （去空白、拒絕控制字元）。操作者打了 NUL 位元組會拿到 PostgreSQL 的原始錯誤，
+  而不是乾淨的驗證錯誤。嚴重性低（來源是本機操作者而非網路輸入），
+  但跟 email 那個是同一類缺口。
 
 - **`app/schemas/auth.py` 的 `_CONTROL_CHARACTERS` 該再納入 bidi 覆寫字元**
   （`‪-‮`、`⁦-⁩`）。這跟 ZWJ / ZWNJ 不同 —— 後者在波斯語、
@@ -2935,6 +2949,10 @@ refresh 端點都比對 token 的 `iat` 是否晚於它，再開一個 `POST /ap
   > **實作時的地雷：停用帳號絕對不可以用寫入 `DUMMY_PASSWORD_HASH`（或它的明文
   > `"no-such-account-dummy-password"`）當作標記。** 那兩個值都公開在這個 repo 裡，
   > 這樣做等於幫每個被停用的帳號開一道後門。要用獨立的欄位。
+
+- **P2：沒有辦法列出或撤銷管理員。** 一旦計畫 2 的審核端點完全靠 `require_admin` 把關，
+  就沒有任何受支援的方式可以稽核「誰是管理員」或把某人降級 —— 只能直接下 `psql`。
+  P2 本來就會動到 `users` 與角色，順手加一個列出／降級的路徑最便宜。
 
 - **P3：refresh token 放在回應 body 裡，前端要怎麼存必須先決定。** 現在兩個 token
   一起回在 JSON body，最省事的做法是兩個都塞 `localStorage` —— 那樣一次 XSS 就同時
