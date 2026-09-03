@@ -54,4 +54,4 @@ jobs:
           alembic check
 
       - name: 測試
-        run: pytest --cov=app --cov-report=term-missing
+        run: pytest --cov=app --cov-report=term-missing --cov-fail-under=80

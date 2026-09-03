@@ -159,6 +159,12 @@ disallow_untyped_defs = false
 module = ["asyncpg.*"]
 ignore_missing_imports = true
 
+[tool.coverage.run]
+# SQLAlchemy 的 async ORM 每次 await db.*() 都會經由 greenlet_spawn 橋接到同步程式碼。
+# coverage.py 的預設追蹤器不會跨越 greenlet 切換，於是把「await 之後的每一行」
+# 都算成未覆蓋 —— 那些行其實有測到。少了這個設定，覆蓋率會被低報約 5 個百分點。
+concurrency = ["greenlet"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
@@ -2728,7 +2734,7 @@ jobs:
           alembic check
 
       - name: 測試
-        run: pytest --cov=app --cov-report=term-missing
+        run: pytest --cov=app --cov-report=term-missing --cov-fail-under=80
 ```
 
 - [ ] **Step 2: 本機跑一次完整檢查**
@@ -2832,6 +2838,22 @@ git commit -m "chore: 新增 CI 與 README"
 - [ ] `python -m app.cli admin@example.com admin-password-123 管理員` 成功建立管理員
 
 ## 已知的小問題（不阻擋，下次動到該檔案時順手修）
+
+- **`tests/conftest.py` 的 `TEST_DATABASE_URL` 預設值跟 `.env.example` 是「剛好一樣」，
+  沒有任何機制保證它們同步。** `pytest` 不會載入 `.env` —— README 的測試步驟能運作，
+  純粹是因為那個硬編的 fallback 剛好等於 `.env.example` 裡的值。
+  改掉 `.env.example` 的埠號而沒改 `conftest.py`，文件寫的流程就會靜默失效。
+  `python-dotenv` 已經是 `pydantic-settings` 的相依套件，在 conftest 開頭加一行
+  `load_dotenv()` 即可，硬編值退為「完全沒有 .env 時」的最後手段（CI、新 clone）。
+- **`app/cli.py` 不驗證 email 格式**（只做 `.strip().lower()`），而 API 走的是
+  `EmailStr`。管理員 email 打錯（例如漏了 `@`）會建出一個**永遠無法登入**的帳號 ——
+  因為 `LoginRequest` 的 `EmailStr` 會擋下同一個字串。跟已記錄的
+  「CLI 沒清理 display_name」是同一類缺口。
+- **`requirements-lock.txt` 沒有鎖到 Linux 專屬的套件。** 它是在 Windows 上凍結的，
+  而 `uvicorn[standard]` 在 Linux 會多拉一個 `uvloop` —— lockfile 裡沒有它，
+  所以 CI 安裝時會拿到當下最新版，不受約束。目前無害（測試全部走
+  `ASGITransport`，不經過真正的 uvicorn），但這是 lockfile「CI 拿到跟本機一樣」
+  這個保證的一個缺口。P4 做 Docker build 可重現性檢查時要處理。
 
 - **`MIN_PASSWORD_LENGTH` 有兩份。** `app/cli.py` 寫死 8，`app/schemas/auth.py` 的
   `Field(min_length=8)` 也寫死 8 —— 同一條政策兩個來源，而且**權限最高的管理員帳號

@@ -66,6 +66,12 @@ disallow_untyped_defs = false
 module = ["asyncpg.*"]
 ignore_missing_imports = true
 
+[tool.coverage.run]
+# SQLAlchemy 的 async ORM 每次 await db.*() 都會經由 greenlet_spawn 橋接到同步程式碼。
+# coverage.py 的預設追蹤器不會跨越 greenlet 切換，於是把「await 之後的每一行」
+# 都算成未覆蓋 —— 那些行其實有測到。少了這個設定，覆蓋率會被低報約 5 個百分點。
+concurrency = ["greenlet"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
