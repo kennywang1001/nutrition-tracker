@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: wallet
+          POSTGRES_PASSWORD: wallet
+          POSTGRES_DB: wallet
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U wallet"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://wallet:wallet@localhost:5432/wallet
+      TEST_DATABASE_URL: postgresql+asyncpg://wallet:wallet@localhost:5432/wallet_test
+      JWT_SECRET: ci-secret
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安裝依賴
+        # 用 lockfile 當 constraints，確保 CI 跟本機拿到完全相同的版本
+        run: pip install -c requirements-lock.txt -e ".[dev]"
+
+      - name: Lint
+        run: ruff check .
+
+      - name: 型別檢查
+        run: mypy app
+
+      # 模型與 migration 漂移檢查：跑完所有 migration 後，模型不該再產生任何差異。
+      # 手寫 migration 的約束名稱只要跟 NAMING_CONVENTION 差一個字，這裡就會紅。
+      - name: Migration 漂移檢查
+        run: |
+          alembic upgrade head
+          alembic check
+
+      - name: 測試
+        run: pytest --cov=app --cov-report=term-missing
