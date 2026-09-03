@@ -13,14 +13,21 @@ MIN_PASSWORD_LENGTH = 8
 
 async def create_admin(
     db: AsyncSession, email: str, password: str, display_name: str
-) -> User:
-    """建立管理員帳號；若 email 已存在則提升為管理員並更新密碼。"""
+) -> tuple[User, bool]:
+    """建立管理員帳號；若 email 已存在則提升為管理員並更新密碼。
+
+    回傳 (user, created)，created 為 False 代表是提升既有帳號 —— 打錯 email 時
+    會靜默重設別人的密碼，所以呼叫端必須把這件事講清楚。
+    """
     if len(password) < MIN_PASSWORD_LENGTH:
         raise ValueError(f"密碼至少 {MIN_PASSWORD_LENGTH} 個字元")
 
+    email = email.strip().lower()
+
     user = await db.scalar(select(User).where(User.email == email))
+    created = user is None
     if user is None:
-        user = User(email=email, password_hash=hash_password(password), display_name=display_name)
+        user = User(email=email, display_name=display_name)
         db.add(user)
 
     user.password_hash = hash_password(password)
@@ -29,13 +36,16 @@ async def create_admin(
 
     await db.commit()
     await db.refresh(user)
-    return user
+    return user, created
 
 
 async def _main(email: str, password: str, display_name: str) -> None:
     async with SessionLocal() as db:
-        user = await create_admin(db, email, password, display_name)
-        print(f"管理員帳號已建立：{user.email} (id={user.id})")
+        user, created = await create_admin(db, email, password, display_name)
+        if created:
+            print(f"管理員帳號已建立：{user.email} (id={user.id})")
+        else:
+            print(f"既有帳號已提升為管理員，密碼已重設：{user.email} (id={user.id})")
 
 
 if __name__ == "__main__":
