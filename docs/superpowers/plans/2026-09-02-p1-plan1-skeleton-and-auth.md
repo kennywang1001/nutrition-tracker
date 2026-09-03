@@ -2791,6 +2791,16 @@ pytest
 python -m app.cli <email> <password> <顯示名稱>
 ```
 
+## 緊急處置：強制登出所有 session
+
+目前沒有「登出單一裝置」的機制。若需要立即讓所有既有的 token 失效
+（例如裝置遺失），**更換 `JWT_SECRET` 並重啟服務**即可 —— 所有 access token
+與 refresh token 都會因為簽章驗證失敗而立刻無效。
+
+代價是所有使用者都會被登出，需要重新登入。
+
+（更細緻的作法 —— 只登出單一使用者 —— 見計畫文件的「後續任務：session 撤銷」。）
+
 ## 設計文件
 
 - [P1 設計規格](docs/superpowers/specs/2026-09-02-diet-tracker-p1-design.md)
@@ -2909,6 +2919,11 @@ refresh 端點都比對 token 的 `iat` 是否晚於它，再開一個 `POST /ap
 
 `iat` 現在就已經寫進 token 了（而且 PyJWT 2.13 本來就會驗證它不能是未來時間），
 所以這個機制不需要改動 token 格式 —— 只要加一個欄位跟一個比對。
+
+**同一個機制也要順便解掉另一件事：改密碼之後，舊的 refresh token 還會活滿 14 天。**
+目前沒有改密碼的端點，但後續計畫加上去的時候，那個 handler 必須一併把
+`tokens_valid_after` 推到現在 —— 否則「我覺得密碼外洩了所以改密碼」這個動作
+完全不會把攻擊者踢出去。
 
 ## 記錄給後續計畫的兩件事
 
