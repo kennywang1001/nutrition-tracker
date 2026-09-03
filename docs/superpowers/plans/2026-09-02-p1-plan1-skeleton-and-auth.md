@@ -2136,6 +2136,28 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> To
 > **不要為這件事寫時間斷言測試。** 時間相關的測試在 CI 上必然不穩定。
 > 程式碼加上那段註解就夠了 —— 註解才是防止有人「順手」把它改回短路寫法的東西。
 
+> **實測結果（200 次請求，httpx ASGITransport，不經網路）：**
+>
+> | 路徑 | 修正前 | 修正後 |
+> |---|---|---|
+> | 帳號不存在 | 0.0002 ms | 平均 66.85 ms（中位 63.72、標準差 11.95） |
+> | 密碼錯誤 | 73.8 ms | 平均 68.16 ms（中位 64.52、標準差 11.71） |
+>
+> 差距 1.31 毫秒，比任一分佈的標準差小一個數量級 —— 已經分不出來了。
+>
+> **順帶澄清兩件容易搞錯的事：**
+>
+> 1. `DUMMY_PASSWORD_HASH` 在 import 時算一次 Argon2（約 70ms），但
+>    **Alembic 不會付這個成本** —— `migrations/env.py` 只 import `app.config`
+>    跟 `app.models`，碰不到 `app.security.password`。只有 import `app.main` 的
+>    行程會付（API 伺服器啟動、pytest 每個 session 一次）。
+>
+> 2. `test_login_is_case_insensitive_on_email` 之所以通過，靠的是 `LoginRequest`
+>    的正規化驗證器，**不是 citext** —— 因為到達 SQL 時兩邊都已經是小寫了。
+>    但 citext 仍然在做縱深防禦：任何繞過或忘記那個驗證器的路徑（未來的直接查詢、
+>    別的端點）還是會被它接住。**「什麼讓這個測試通過」跟「什麼在系統裡有作用」
+>    是兩個不同的問題。**
+
 - [ ] **Step 4: 執行測試，確認通過**
 
 Run: `pytest tests/test_auth_login.py -v`
