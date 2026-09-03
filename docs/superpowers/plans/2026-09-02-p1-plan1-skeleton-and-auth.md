@@ -2782,6 +2782,17 @@ git commit -m "chore: 新增 CI 與 README"
 
 ## 已知的小問題（不阻擋，下次動到該檔案時順手修）
 
+- **`app/schemas/auth.py` 的 `_CONTROL_CHARACTERS` 該再納入 bidi 覆寫字元**
+  （`‪-‮`、`⁦-⁩`）。這跟 ZWJ / ZWNJ 不同 —— 後者在波斯語、
+  阿拉伯語、印度語系的正常人名裡有作用，擋掉會誤傷；前者是狹窄、明確的顯示偽裝
+  手法，GitHub 之類的服務就是只擋這一段。
+  而且這不只是前端的事：**決策 4 的管理員審核佇列會顯示提案者身分供信任判斷**，
+  那是 P1/P2 的介面。
+- **`_normalise_email` 在 `RegisterRequest` 跟 `LoginRequest` 重複了兩份。**
+  改成 Pydantic v2 的 annotated 型別別名會比現在更短：
+  `NormalisedEmail = Annotated[EmailStr, AfterValidator(str.strip), AfterValidator(str.lower)]`。
+  兩份還在「rule of three」的容忍範圍內，但後面幾個計畫還會加更多 schema。
+
 - `.dockerignore` 的 `*.egg-info/` 少了 `**/` 前綴，跟原本 `__pycache__/` 是同一類錯誤。
   目前零影響 —— setuptools 只會在專案根目錄產生 egg-info，不會有巢狀的，而且
   image 裡那份是 `pip install -e .` 在容器內重新產生的，不是從主機複製進去的。
