@@ -50,6 +50,22 @@ def test_expired_token_is_rejected(monkeypatch):
         decode_token(token, expected_type="access")
 
 
+def test_expired_refresh_token_is_rejected(monkeypatch):
+    """test_expired_token_is_rejected 只涵蓋 access token。
+
+    兩種型別走的是同一個 jwt.decode，所以今天不可能只有一邊壞掉 ——
+    但「session 撤銷」那個後續任務會把 iat 比對加進 decode_token，
+    那時就會有分支，這個測試才是唯一會發現 refresh 路徑壞掉的東西。
+    """
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "refresh_token_ttl_days", -1)
+    token = create_token(user_id=1, token_type="refresh")
+
+    with pytest.raises(TokenError):
+        decode_token(token, expected_type="refresh")
+
+
 def _forge(payload: dict[str, object]) -> str:
     """繞過 create_token，直接用同一把密鑰簽一個任意 payload 的 token。"""
     import jwt as pyjwt
