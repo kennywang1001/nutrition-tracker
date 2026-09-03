@@ -5,9 +5,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_db
 from app.errors import ConflictError, UnauthorizedError
 from app.models.user import User
-from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserResponse
+from app.schemas.auth import (
+    LoginRequest,
+    RefreshRequest,
+    RegisterRequest,
+    TokenResponse,
+    UserResponse,
+)
 from app.security.password import DUMMY_PASSWORD_HASH, hash_password, verify_password
-from app.security.tokens import create_token
+from app.security.tokens import TokenError, create_token, decode_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -43,6 +49,23 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> To
     # 帳號不存在與密碼錯誤回相同的錯誤，避免洩漏哪些 email 註冊過
     if user is None or not password_ok:
         raise UnauthorizedError("INVALID_CREDENTIALS", "email 或密碼不正確")
+
+    return TokenResponse(
+        access_token=create_token(user.id, "access"),
+        refresh_token=create_token(user.id, "refresh"),
+    )
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
+    try:
+        user_id = decode_token(payload.refresh_token, expected_type="refresh")
+    except TokenError as exc:
+        raise UnauthorizedError("INVALID_TOKEN", "token 無效或已過期") from exc
+
+    user = await db.get(User, user_id)
+    if user is None:
+        raise UnauthorizedError("INVALID_TOKEN", "token 無效或已過期")
 
     return TokenResponse(
         access_token=create_token(user.id, "access"),
