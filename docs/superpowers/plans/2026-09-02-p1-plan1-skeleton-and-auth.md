@@ -2961,6 +2961,28 @@ refresh 端點都比對 token 的 `iat` 是否晚於它，再開一個 `POST /ap
 
 計畫 2（食物主檔 + 版本化 + 審核流程）在本計畫完成後撰寫。屆時要處理的核心問題：
 
+- **先引入一個 `get_owned_or_404` 輔助函式，再寫第一個有擁有權檢查的端點。**
+
+  規格第 9 節要求「存取他人資源回 404 而非 403」，理由是 403 等於告訴對方
+  「這個 ID 存在，只是你不能看」。但 `get_current_user` 只回答「誰在呼叫」，
+  擁有權檢查要在每條路由自己寫。
+
+  問題是：**抄 `require_admin` 的自然直覺會抄錯。** 那個函式是
+  「角色不符 → `ForbiddenError` → 403」，而擁有權不符看起來形狀一模一樣，
+  很容易也寫成 `ForbiddenError` —— 剛好是規格明文禁止的那個。
+
+  接下來三個計畫有 foods、food_revisions、meals、meal_items、user_targets、
+  photos 六種帶擁有權的資源。與其在每條路由重新推導一次這條規則，
+  不如把它集中在一個有測試的地方：
+
+  ```python
+  async def get_owned_or_404(db, model, resource_id, owner_id): ...
+  ```
+
+  規格第 10.3 節本來就把「跨使用者隔離」列為最有價值的測試類別，
+  這個抽象值得在**第一條路由寫下去之前**就先做，而不是等到出現第一個寫錯的實作。
+
+
 - `foods` 與 `food_revisions` 的循環外鍵，需要 `DEFERRABLE INITIALLY DEFERRED`
 - 私人食物編輯直接生效、全域食物編輯進入待審，兩條路徑共用同一張 revision 表
 - 「待審版本不得出現在正式查詢結果」的測試
