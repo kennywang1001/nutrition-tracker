@@ -877,10 +877,28 @@ async def create_portion(
 from datetime import UTC, datetime
 ```
 
-> **`create_food` 用 `flush()` 而不是 `commit()` 建立前兩步，是刻意的。**
-> 它示範了 deferrable 外鍵的用法：先寫 `foods`（`current_revision_id` 是 NULL）、
-> 再寫 `food_revisions`、最後回填指標，全部在同一個交易裡。
-> 如果外鍵不是 deferred，這個順序在 `flush()` 當下就會失敗。
+> **`create_food` 用 `flush()` 而不是 `commit()` 建立前兩步，是刻意的：**
+> 先寫 `foods`（`current_revision_id` 是 NULL）、再寫 `food_revisions`、
+> 最後回填指標，全部在同一個交易裡。
+>
+> **⚠️ 一個我原本寫錯、實測才發現的地方：**
+> 我原本寫「外鍵不是 deferred 的話這個順序會失敗」。**不會。**
+> 實測把外鍵改成 `NOT DEFERRABLE` 之後，這個 factory 照樣跑得過。
+> 實際發出的語句是：
+>
+> ```
+> INSERT INTO foods (... current_revision_id ...)   -- NULL
+> INSERT INTO food_revisions (...)                  -- 交易內已存在
+> UPDATE foods SET current_revision_id=$1           -- 被參照的列早就在了
+> ```
+>
+> 因為**先 flush 了 revision 才回填指標**，到 UPDATE 那一刻被參照的列已經存在，
+> 即時檢查也過得了。
+>
+> **那延後外鍵到底有什麼用？** 它讓這個模式**不依賴語句順序**。
+> 如果哪天有人先設 `food.current_revision_id = revision.id` 再 flush，
+> SQLAlchemy 的工作單元可能把 UPDATE 排在 INSERT 之前 —— 那時就需要延後。
+> 所以它是**防禦性的**，不是這段程式碼嚴格必需的。這兩者不一樣，別混。
 
 - [ ] **Step 2: 驗證 factory 能跑**
 
@@ -1202,11 +1220,15 @@ async def create_food(
 Run: `pytest tests/test_foods_create.py -v`
 Expected: `6 passed`
 
-- [ ] **Step 7: 驗證 deferrable 外鍵真的是關鍵**
+- [ ] **Step 7: 確認語句順序**
 
-暫時把 migration 的 `deferrable=True, initially="DEFERRED"` 拿掉、重建測試資料庫、
-再跑一次這組測試，確認它會失敗。看到失敗後把 migration 改回來、確認測試恢復通過。
-**回報那個失敗訊息** —— 那是循環外鍵為什麼需要 deferrable 的直接證據。
+用 `echo=True` 或資料庫日誌觀察這條路由實際發出的 SQL，確認順序是
+`INSERT foods` → `INSERT food_revisions` → `UPDATE foods`。
+
+> **不要試圖用「拿掉 deferrable 看它壞掉」來驗證。** 實測過了：拿掉也不會壞，
+> 因為指標是在 revision 已經 flush 之後才回填的，即時檢查也過得了。
+> 延後外鍵在這裡是**防禦性**的（讓寫法不依賴語句順序），不是嚴格必需。
+> 詳見 Task 4 的說明。
 
 - [ ] **Step 8: Commit**
 
@@ -2830,6 +2852,20 @@ git commit -m "test: 新增跨使用者隔離的總掃描"
 1. 沒有它就無法驗證份量分層真的有效（全域看得到、自己的看得到、別人的看不到）——
    那是這次新增 `owner_id` 的全部意義。
 2. 計畫 3 記錄餐點時必須先讓使用者選份量，一定會需要它。
+
+## 一個已知的驗證缺口
+
+**CI 跑的是 `mypy app`，不含 `tests/`。**
+
+所以 `tests/factories.py` 裡那些 `Decimal | int` 的型別註記，**在 CI 上完全沒有保護力**。
+未來有人寫 `create_food(db, created_by=u, kcal=99.99)`（float），mypy 不會擋 ——
+而 `Decimal(99.99)` 會產生二進位浮點雜訊（`Decimal('99.9899999999999948...')`）。
+
+實測：直接對那個檔案跑 mypy **會**報 `incompatible type "float"; expected "Decimal | int"`，
+所以註記本身是對的，只是 CI 沒在看。
+
+不在這份計畫處理（把 `tests` 納入 `mypy` 會需要處理既有測試的型別問題），
+但記錄下來 —— 這解釋了為什麼那些註記給人的安全感高於實際。
 
 ## 這份計畫刻意不做的事
 

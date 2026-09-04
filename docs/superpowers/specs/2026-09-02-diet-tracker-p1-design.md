@@ -356,8 +356,13 @@ CREATE UNIQUE INDEX uq_food_revisions_one_pending
 **營養素一律以「每 100g / 100ml」為基準儲存。** 不這樣做的話，「半碗」「一碗半」
 「180g」會讓同一個食物存出無限多種格式，加總時是災難。
 
-`foods` 與 `food_revisions` 互相參照，因此 `current_revision_id` 的外鍵必須是
-`DEFERRABLE INITIALLY DEFERRED`，讓「建立食物 + 建立第一版」能在同一個交易內完成。
+`foods` 與 `food_revisions` 互相參照，`current_revision_id` 的外鍵設成
+`DEFERRABLE INITIALLY DEFERRED`。
+
+**精確地說，它是防禦性的，不是嚴格必需的。** 實測確認：只要「先寫 revision、
+再回填指標」，即時檢查也過得了，因為 UPDATE 執行時被參照的列已經存在。
+延後在這裡的作用是讓寫法**不依賴語句順序** —— 若有人先設指標再 flush，
+SQLAlchemy 可能把 UPDATE 排在 INSERT 之前，那時才真的需要它。
 
 私人食物的編輯直接生效（建立 revision 時即 `approved` 並更新指標）；
 全域食物的編輯進入 `pending`，等待管理員審核。
