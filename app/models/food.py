@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -49,6 +50,12 @@ class Food(Base):
             postgresql_nulls_not_distinct=True,
         ),
         Index("ix_foods_owner_id", "owner_id"),
+        Index(
+            "ix_foods_name_trgm",
+            "name",
+            postgresql_using="gin",
+            postgresql_ops={"name": "gin_trgm_ops"},
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
@@ -87,12 +94,26 @@ class FoodRevision(Base):
             "status <> 'rejected' OR reject_reason IS NOT NULL",
             name="rejected_needs_reason",
         ),
-        # 注意：兩個「部分索引」刻意不宣告在這裡，只寫在 migration 0002 裡 ——
+        # 兩個「部分索引」（帶 WHERE 條件）：
         #   uq_food_revisions_one_pending  同一食物同時只能有一筆待審（唯一）
         #   ix_food_revisions_pending      待審佇列的查詢索引
-        # 原因：alembic 對帶 WHERE 條件的部分索引比對不穩定，宣告在模型層很容易
-        # 讓 alembic check 產生假的漂移警報。它們只影響約束與效能、不影響 ORM 行為，
-        # 所以放在 migration 是安全的取捨。
+        # 曾經假設 alembic 對這種索引的比對不穩定、宣告在模型層會讓 alembic check
+        # 產生假的漂移警報，因此把它們藏在 migration 裡不讓模型知道。
+        # 這個假設沒有實際測過就寫進了計畫 —— 測過之後發現是錯的：模型完全不宣告
+        # 才會讓 alembic check 真的報漂移（DB 有、模型沒有 → 判定成 remove_index）。
+        # 宣告在這裡之後，alembic check 連續多次都乾淨，模型才是可信的單一事實來源。
+        Index(
+            "uq_food_revisions_one_pending",
+            "food_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
+        Index(
+            "ix_food_revisions_pending",
+            "status",
+            "created_at",
+            postgresql_where=text("status = 'pending'"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
