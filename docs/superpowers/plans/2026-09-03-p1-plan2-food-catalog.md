@@ -235,6 +235,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -268,6 +269,12 @@ class Food(Base):
             postgresql_nulls_not_distinct=True,
         ),
         Index("ix_foods_owner_id", "owner_id"),
+        Index(
+            "ix_foods_name_trgm",
+            "name",
+            postgresql_using="gin",
+            postgresql_ops={"name": "gin_trgm_ops"},
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
@@ -306,12 +313,19 @@ class FoodRevision(Base):
             "status <> 'rejected' OR reject_reason IS NOT NULL",
             name="rejected_needs_reason",
         ),
-        # 注意：兩個「部分索引」刻意不宣告在這裡，只寫在 migration 0002 裡 ——
-        #   uq_food_revisions_one_pending  同一食物同時只能有一筆待審（唯一）
-        #   ix_food_revisions_pending      待審佇列的查詢索引
-        # 原因：alembic 對帶 WHERE 條件的部分索引比對不穩定，宣告在模型層很容易
-        # 讓 alembic check 產生假的漂移警報。它們只影響約束與效能、不影響 ORM 行為，
-        # 所以放在 migration 是安全的取捨。
+        # 同一個食物同時只能有一筆待審編輯。交給資料庫擋，不是靠程式檢查。
+        Index(
+            "uq_food_revisions_one_pending",
+            "food_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
+        Index(
+            "ix_food_revisions_pending",
+            "status",
+            "created_at",
+            postgresql_where=text("status = 'pending'"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
@@ -642,19 +656,28 @@ def downgrade() -> None:
     sa.Enum(name="revision_status").drop(op.get_bind())
 ```
 
-> **⚠️ 這裡原本的說明是錯的，實作時已修正 —— 記錄下來因為錯得很有代表性。**
+> **三個索引全部宣告在 model 裡 —— 這是實測之後的結論，值得記下來。**
 >
-> 我原本寫「三個索引只放 migration、不宣告在 model 裡，可以避免假的漂移警報」。
-> **推理整個反了。** Alembic 的 autogenerate 把「資料庫裡有、模型裡沒有」
-> 直接當成**「請刪掉它」**，所以三個索引全部被報成 `remove_index`，
-> `alembic check` 永遠是紅的。
+> 計畫初稿寫「只放 migration、不宣告在 model，可以避免假的漂移警報」。
+> **那個推理是反的**：Alembic 的 autogenerate 把「資料庫裡有、模型裡沒有」
+> 直接當成**「請刪掉它」**，三個索引全被報成 `remove_index`，`alembic check`
+> 永遠紅。
 >
-> 而我當初避開模型宣告的理由（帶 `WHERE` 的部分索引比對不穩）
-> **我從來沒有實測過**。正確的做法不是在幾個方案裡挑，是先去測。
+> 而避開模型宣告的理由（帶 `WHERE` 的部分索引比對不穩）**從來沒被實測過**。
+> 實際測下來：
 >
-> 實測結果見下方的實作註記。原則是：**能乾淨比對的就宣告在模型裡**
-> （模型成為單一真相來源，`alembic check` 才真的在驗證），
-> 只有實測證明比對不穩的才用 `include_object` 排除。
+> | 索引 | 型態 | 比對結果 |
+> |---|---|---|
+> | `ix_foods_name_trgm` | GIN + `gin_trgm_ops` | **乾淨** |
+> | `uq_food_revisions_one_pending` | 部分唯一（`WHERE`） | **乾淨** |
+> | `ix_food_revisions_pending` | 部分（`WHERE`） | **乾淨** |
+>
+> `alembic check` 連跑 7 次（含一次完整 downgrade/upgrade 循環之後）全部乾淨，
+> 沒有不穩定。擔心的那個 `status = 'pending'` vs
+> `(status = 'pending'::revision_status)` 正規化差異，Alembic 有正確處理。
+>
+> **所以不需要 `include_object` hook，`migrations/env.py` 不用動。**
+> 計畫 3、4 遇到同類索引時，預設就宣告在模型裡。
 
 > **`ix_foods_name_trgm` 的 operator class 寫法：**
 > `gin_trgm_ops` 這種 operator class 在 SQLAlchemy 的模型層要用
