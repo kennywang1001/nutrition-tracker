@@ -900,6 +900,16 @@ from datetime import UTC, datetime
 > SQLAlchemy 的工作單元可能把 UPDATE 排在 INSERT 之前 —— 那時就需要延後。
 > 所以它是**防禦性的**，不是這段程式碼嚴格必需的。這兩者不一樣，別混。
 
+> **`Decimal(float)` 跟 Pydantic 的 `Decimal` 轉換是兩回事，不要混。**
+>
+> - 直接呼叫 `Decimal(0.29)` → `Decimal('0.28999999999999998...')`，有浮點雜訊。
+>   所以 factory 的簽章寫 `Decimal | int`，不收 float。
+> - **Pydantic v2 從 JSON 數字轉 `Decimal` 不會有雜訊** —— 它用的是那個 float
+>   的最短往返十進位表示，`0.29` → `Decimal('0.29')`。而 `2.675` 會被
+>   `decimal_places=2` 正確擋下（它的最短表示真的有三位小數）。
+>
+> 所以 **API 的請求收 JSON 數字是安全的，測試工廠收 float 才不安全。**
+
 - [ ] **Step 2: 驗證 factory 能跑**
 
 寫一個暫時的測試檔驗證三個 factory，跑完刪掉：
@@ -1201,8 +1211,18 @@ async def create_food(
         raise ConflictError("FOOD_EXISTS", "你已經建過同名的食物了") from exc
 
     await db.refresh(food)
+    # revision 也要 refresh —— 少了這行，回應會是 payload 傳進來的原始 Decimal
+    # （"180.5"），而不是資料庫 NUMERIC(8,2) 存進去之後的值（"180.50"）。
+    await db.refresh(revision)
     return _to_response(food, revision)
 ```
+
+> **這一行是實作時才發現的。** 計畫初稿只 refresh 了 `food`，但序列化的是
+> `revision` —— 回應直接吐出記憶體裡那個還沒經過資料庫的 `Decimal`。
+> 測試斷言 `"180.50"`，實際拿到 `"180.5"`，當場失敗。
+>
+> **通則：只要回應的數值可能被資料庫的型別（精度、四捨五入、預設值）改變，
+> 就必須從資料庫讀回來再序列化。**
 
 > **`Food.brand.is_not_distinct_from(payload.brand)`** 而不是 `== payload.brand`：
 > `brand` 可以是 NULL，而 SQL 裡 `NULL = NULL` 是 NULL 不是 true。
@@ -2852,6 +2872,18 @@ git commit -m "test: 新增跨使用者隔離的總掃描"
 1. 沒有它就無法驗證份量分層真的有效（全域看得到、自己的看得到、別人的看不到）——
    那是這次新增 `owner_id` 的全部意義。
 2. 計畫 3 記錄餐點時必須先讓使用者選份量，一定會需要它。
+
+## 給 P3 前端的一個型別事實
+
+實測 `/openapi.json`：
+
+- **回應**裡的 `kcal` 等數值是**字串**（`{"type": "string", "pattern": ...}`）——
+  Pydantic v2 預設把 `Decimal` 序列化成字串，避免 JavaScript 的 `Number`
+  在高精度時失真。
+- **請求**則兩種都收（`anyOf: number | string`）。
+
+前端拿到的是 `"180.50"` 不是 `180.5`。做加總時要先轉換，而且**不要 `parseFloat`
+之後直接相加** —— 那正好把後端刻意避開的浮點問題請回來。
 
 ## 一個已知的驗證缺口
 

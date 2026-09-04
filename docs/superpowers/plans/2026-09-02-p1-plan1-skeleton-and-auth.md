@@ -3007,6 +3007,11 @@ refresh 端點都比對 token 的 `iat` 是否晚於它，再開一個 `POST /ap
   大聲的啟動失敗，而不是安靜的錯誤行為。** 兩項要一起修，分開修會兩邊都不完整。
 - **兩個服務都沒有 `restart:` 政策。** 開發時無所謂，P4 要明確決定（例如
   `restart: unless-stopped`）。
+
+  > **這件事在計畫 2 開發期間真的發生了。** 主機的 Docker 引擎重啟之後，
+  > 同一台機器上有設 restart 政策的其他專案容器自己回來了，
+  > **我們的兩個沒有** —— 直到有人手動 `docker start`。
+  > 部到 NAS 之後，這代表「停電或系統更新之後 API 就不見了」，而且不會有通知。
 - **`api` 服務沒有 healthcheck。** `/api/health` 目前只有手動 curl 在用。
   P4 若要接 NAS 的容器健康檢查，考慮另開 `/api/health/ready` 做 `SELECT 1`，
   而不要改動 `/api/health` —— liveness 跟 readiness 混在一起，會讓資料庫短暫抖動
