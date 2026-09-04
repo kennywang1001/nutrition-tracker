@@ -555,19 +555,26 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["reviewed_by"], ["users.id"], name="fk_food_revisions_reviewed_by_users"
         ),
-        sa.CheckConstraint("kcal >= 0", name="ck_food_revisions_kcal_non_negative"),
-        sa.CheckConstraint("protein_g >= 0", name="ck_food_revisions_protein_non_negative"),
-        sa.CheckConstraint("fat_g >= 0", name="ck_food_revisions_fat_non_negative"),
-        sa.CheckConstraint("carb_g >= 0", name="ck_food_revisions_carb_non_negative"),
+        sa.CheckConstraint("kcal >= 0", name="kcal_non_negative"),
+        sa.CheckConstraint("protein_g >= 0", name="protein_non_negative"),
+        sa.CheckConstraint("fat_g >= 0", name="fat_non_negative"),
+        sa.CheckConstraint("carb_g >= 0", name="carb_non_negative"),
         sa.CheckConstraint(
             "ai_confidence IS NULL OR (ai_confidence >= 0 AND ai_confidence <= 1)",
-            name="ck_food_revisions_ai_confidence_in_range",
+            name="ai_confidence_in_range",
         ),
         sa.CheckConstraint(
             "status <> 'rejected' OR reject_reason IS NOT NULL",
-            name="ck_food_revisions_rejected_needs_reason",
+            name="rejected_needs_reason",
         ),
     )
+
+    # 注意：CheckConstraint 的 name 給「短名」就好，不要給完整名稱。
+    # 命名慣例是 ck_%(table_name)s_%(constraint_name)s，你給的名字是那個
+    # %(constraint_name)s 的「輸入」，不是最終名稱 ——
+    # 寫完整名稱會變成 ck_food_revisions_ck_food_revisions_kcal_non_negative。
+    # （PrimaryKeyConstraint / ForeignKeyConstraint / UniqueConstraint 的 name
+    #  則是最終名稱，慣例不會再套一層。只有 CheckConstraint 是這樣。）
 
     # 循環外鍵：foods 先建好才有 food_revisions 可以指，所以這條要最後加，
     # 而且必須 DEFERRABLE INITIALLY DEFERRED —— 否則「建立食物 + 建立第一版
@@ -597,7 +604,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["owner_id"], ["users.id"], name="fk_food_portions_owner_id_users", ondelete="CASCADE"
         ),
-        sa.CheckConstraint("grams > 0", name="ck_food_portions_grams_positive"),
+        sa.CheckConstraint("grams > 0", name="grams_positive"),
     )
 
     # NULLS NOT DISTINCT 讓「兩個全域的同名食物」被視為重複。
@@ -635,19 +642,21 @@ def downgrade() -> None:
     sa.Enum(name="revision_status").drop(op.get_bind())
 ```
 
-> **三個索引刻意只存在於 migration，不宣告在 model 裡：**
-> `ix_foods_name_trgm`、`uq_food_revisions_one_pending`、`ix_food_revisions_pending`。
+> **⚠️ 這裡原本的說明是錯的，實作時已修正 —— 記錄下來因為錯得很有代表性。**
 >
-> 前者是 operator class（`gin_trgm_ops`），後兩者是帶 `WHERE` 的部分索引 ——
-> **alembic 對這兩類的比對都不穩定**，宣告在模型層很容易讓 `alembic check`
-> 產生假的漂移警報。它們只影響約束與效能、不影響 ORM 行為，放在 migration 是安全的。
+> 我原本寫「三個索引只放 migration、不宣告在 model 裡，可以避免假的漂移警報」。
+> **推理整個反了。** Alembic 的 autogenerate 把「資料庫裡有、模型裡沒有」
+> 直接當成**「請刪掉它」**，所以三個索引全部被報成 `remove_index`，
+> `alembic check` 永遠是紅的。
 >
-> **如果 `alembic check` 因為其中任何一個而抱怨，回報實際訊息，
-> 不要自己刪索引或改模型。**
+> 而我當初避開模型宣告的理由（帶 `WHERE` 的部分索引比對不穩）
+> **我從來沒有實測過**。正確的做法不是在幾個方案裡挑，是先去測。
 >
-> （原本的說明保留於下）
->
-> **`ix_foods_name_trgm` 不在 model 的 `__table_args__` 裡。**
+> 實測結果見下方的實作註記。原則是：**能乾淨比對的就宣告在模型裡**
+> （模型成為單一真相來源，`alembic check` 才真的在驗證），
+> 只有實測證明比對不穩的才用 `include_object` 排除。
+
+> **`ix_foods_name_trgm` 的 operator class 寫法：**
 > `gin_trgm_ops` 這種 operator class 在 SQLAlchemy 的模型層要用
 > `Index(..., postgresql_ops=...)` 表達，而 `alembic check` 對它的比對不穩定。
 > 這個索引只影響搜尋效能、不影響正確性，所以刻意只放在 migration 裡。
