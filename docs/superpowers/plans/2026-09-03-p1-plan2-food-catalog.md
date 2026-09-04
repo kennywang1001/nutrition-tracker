@@ -142,8 +142,6 @@ Expected: FAIL，`ImportError: cannot import name 'get_owned_or_404'`
 在 `app/api/deps.py` 的 import 區補上：
 
 ```python
-from typing import TypeVar
-
 from sqlalchemy.orm import DeclarativeBase
 
 from app.errors import ForbiddenError, NotFoundError, UnauthorizedError
@@ -152,17 +150,14 @@ from app.errors import ForbiddenError, NotFoundError, UnauthorizedError
 並在檔案末端加入：
 
 ```python
-_Model = TypeVar("_Model", bound=DeclarativeBase)
-
-
-async def get_owned_or_404(
+async def get_owned_or_404[Model: DeclarativeBase](
     db: AsyncSession,
-    model: type[_Model],
+    model: type[Model],
     resource_id: int,
     *,
     owner_id: int,
     owner_field: str = "owner_id",
-) -> _Model:
+) -> Model:
     """取出資源，若不存在或不屬於 owner_id 則拋 NotFoundError。
 
     規格第 9 節：存取他人資源要回 404 而非 403 —— 403 等於告訴對方
@@ -175,6 +170,23 @@ async def get_owned_or_404(
         raise NotFoundError("NOT_FOUND", "找不到該資源")
     return resource
 ```
+
+> **`"NOT_FOUND"` 這個泛用代碼是刻意的，不是偷懶。**
+> 若之後某條路由想要 `FOOD_NOT_FOUND`，那必須發生在這個函式**外面**
+> （呼叫端接住再重拋）。**絕對不能**在函式裡依「是哪一種失敗」來分岔代碼 ——
+> 那個分岔本身就是這個函式存在要防止的洩漏。
+
+> **泛型用 PEP 695 的行內語法（`[Model: DeclarativeBase]`），不是 `TypeVar`。**
+> 這個專案的 ruff 開了 `UP` 規則、`target-version = "py312"`，
+> 舊的 `TypeVar` 寫法會被 `UP047` 擋下來。
+>
+> 型別窄化是有效的：呼叫端拿到的是具體的 `Food`，不是 `DeclarativeBase`
+> （用 `reveal_type` 驗證過）。
+
+> **`owner_field` 打錯字會拋 `AttributeError`，這是對的。**
+> 它在**每一次**呼叫都會炸，而不是只在擁有權真的不符時 —— 所以第一次跑到那條路由
+> 就會發現。不要加 `hasattr` 防護：那會把一個大聲的呼叫端 bug
+> 變成一個安靜的、錯誤的 404。
 
 > **為什麼要有 `owner_field` 參數：** `foods` 的擁有者欄位叫 `owner_id`，
 > 但 `users` 自己的「擁有者」就是 `id`。之後 `meals` 用的是 `user_id`。
