@@ -220,6 +220,7 @@ git commit -m "feat: 新增 get_owned_or_404 擁有權檢查輔助函式"
 import enum
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -342,7 +343,7 @@ class FoodRevision(Base):
     # P2 階段（AI 分析）預留，本計畫不使用
     source: Mapped[str] = mapped_column(Text, nullable=False, server_default="user")
     ai_confidence: Mapped[Decimal | None] = mapped_column(Numeric(3, 2))
-    ai_raw_response: Mapped[dict | None] = mapped_column(JSONB)
+    ai_raw_response: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
 
 class FoodPortion(Base):
@@ -431,6 +432,31 @@ Expected: 輸出的 DDL 裡有 `UNIQUE NULLS NOT DISTINCT`。
 git add app/models/food.py app/models/__init__.py
 git commit -m "feat: 新增 foods / food_revisions / food_portions 的 model"
 ```
+
+> **這個 task 結束時測試套件是紅的，這是必然的，不是做錯了。**
+>
+> `tests/conftest.py` 的 `migrated_database` fixture 每個 session 都會跑
+> `alembic check`。model 加了、migration 還沒加，它就會正確地偵測到漂移，
+> 於是**所有碰資料庫的測試都會在 fixture 階段失敗**（不是斷言失敗）。
+>
+> 實測：26 過 / 41 錯。Task 3 的 migration 一落地就會恢復。
+>
+> 這是計畫 1 那道漂移檢查的直接代價 —— 它是載重的防護，代價就是
+> **model 與 migration 之間存在一個必然為紅的中間狀態**。
+> 不要為了讓它變綠而動 conftest。
+
+> **`ai_raw_response` 要寫 `Mapped[dict[str, Any] | None]`。**
+> 裸的 `dict` 在 `mypy --strict` 下會報 `Missing type arguments for generic type "dict"`。
+> `app/errors.py` 與 `app/security/tokens.py` 已經是這個寫法。
+
+> **循環外鍵讓 `Base.metadata.sorted_tables` 發出警告：**
+> `Cannot correctly sort tables; there are unresolvable cycles between tables
+> "food_revisions, foods"`，而且它會**直接放棄考慮那些外鍵的順序**。
+>
+> 目前沒有東西呼叫 `sorted_tables`（測試跑的是真的 Alembic migration，不是
+> `create_all`），所以不會觸發。但這證實了 Task 3 的做法是必要的：
+> **兩張表要先各自建好、`current_revision_id` 的外鍵最後用
+> `op.create_foreign_key` 單獨加**，不能指望自動排序。
 
 ---
 
