@@ -2008,7 +2008,30 @@ async def propose_revision(
 import 補上 `from datetime import UTC, datetime` 與 `RevisionCreateRequest`。
 
 > **這裡沒有用 `get_owned_or_404`。** 編輯的可見範圍跟讀取一樣是
-> 「全域的或自己的」，只是**後續行為**依擁有權分岔。`_load_visible_food`
+> 「全域的或自己的」，只是**後續行為**依擁有權分岔。
+
+> **`test_the_session_still_works_after_a_rejected_second_edit` 有個陷阱：
+> 必須在 POST 之前先把 `food.id` 取出來。**
+>
+> 那個 POST 內部會 `rollback()`，而 rollback 會讓 identity map 裡**所有**物件失效
+> —— 包含測試自己持有的 `food`。之後在 f-string 裡讀 `food.id` 是同步存取，
+> 會觸發 lazy reload，跑在 greenlet 橋接之外，拋 `MissingGreenlet`。
+>
+> **失敗的樣子跟 rollback 對不對完全無關**，很容易誤判成實作有問題。
+> 詳見計畫 1 Task 7 的第五個邊界。
+
+> **`await db.refresh(revision)` 是必要的，即使測試沒有直接抓到。**
+> 實測：拿掉它，`test_editing_own_private_food_takes_effect_immediately` 仍然通過
+> —— 因為它是透過另一個 GET 請求驗證數值的，那次查詢會重新從資料庫讀。
+> 但 **POST 自己的回應** 會變成 `"123"` 而不是 `"123.00"`。
+> 端點的契約要求後者，所以 refresh 不能省。
+
+> **私人食物永遠不會有待審版本 —— 這是結構上保證的，不是巧合。**
+> `create_food` 建的第一版一律 `APPROVED`；而這個端點只有在
+> `food.owner_id != user.id` 時才產生 `PENDING`，但 `_assert_food_visible`
+> 的可見性條件已經把「別人的私人食物」擋成 404 了。
+> 所以走到 pending 分支時 `owner_id` 必然是 NULL。
+> 這也代表**單一待審的唯一索引只會在全域食物上被觸發**。`_load_visible_food`
 > 已經處理了「別人的私人食物 → 404」。
 
 - [ ] **Step 4: 執行測試，確認通過**

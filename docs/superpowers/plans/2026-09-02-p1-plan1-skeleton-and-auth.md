@@ -1083,7 +1083,7 @@ Expected: `11 passed`
 
 特別確認 `test_each_test_starts_with_a_clean_database` 通過 —— 它證明了交易隔離真的有效。
 
-> **這組 fixture 的三個已知邊界，後續 task 要記得：**
+> **這組 fixture 的五個已知邊界，後續 task 要記得：**
 >
 > 1. **`client` 只覆寫 `get_db`。** 之後如果有哪個依賴自己另外開資料庫連線
 >    （沒有走 `get_db`），它的寫入就跑在交易隔離外面，測試之間會互相污染。
@@ -1094,6 +1094,24 @@ Expected: `11 passed`
 > 3. **每個測試都會新建一個 engine。** 正確但不省 —— 實測每個測試約 52ms 的
 >    基礎設施成本，150 個測試約 7.7 秒。現在不痛，等到真的痛了再改成
 >    session 級 engine（連線與交易仍維持每測試一份）。
+> 5. **`rollback()` 會讓 identity map 裡的**每一個**物件失效，不只是這次請求碰過的。**
+>    SQLAlchemy 的 `_restore_snapshot(dirty_only=transaction.nested)` 在
+>    `nested=False`（我們沒用 `begin_nested()`）時會全部展開。
+>
+>    因為 `client` fixture 把**測試自己持有的那個 session** 交給 app，
+>    所以**應用程式端的 rollback 會連帶讓測試變數裡的 ORM 物件全部失效**。
+>    接著測試裡任何一個**同步**的屬性讀取（例如 f-string 裡的 `food.id`）
+>    都會觸發 lazy reload，跑在 greenlet 橋接之外 → `MissingGreenlet`。
+>
+>    **寫法：在會觸發 rollback 的請求之前，先把需要的值取出來成區域變數。**
+>    ```python
+>    food_id = food.id          # 先取
+>    headers = auth(bob)
+>    await client.post(...)     # 這個請求內部會 rollback
+>    await client.get(f"/api/foods/{food_id}", headers=headers)   # 用區域變數
+>    ```
+>    重新查詢（`await db.scalar(...)`）不受影響 —— 只有既有物件的同步屬性讀取會壞。
+
 > 4. **`db.commit()` 失敗之後，一定要 `await db.rollback()` 才能再用那個 session。**
 >    `IntegrityError` 之後任何操作都會拋 `PendingRollbackError`。
 >    正式環境的 session 是每請求一份，壞掉就算了；但**測試的 session 是整個測試共用的**，
