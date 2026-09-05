@@ -1,3 +1,4 @@
+from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 
@@ -45,3 +46,22 @@ class FoodResponse(BaseModel):
     is_global: bool
     # 沒有生效版本時為 None —— 全域食物的初版被駁回就會是這個狀態
     nutrition: NutritionResponse | None
+
+
+class RevisionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    base_unit: BaseUnit
+    kcal: Decimal
+    protein_g: Decimal
+    fat_g: Decimal
+    carb_g: Decimal
+    status: str
+    change_note: str | None
+    created_by: int
+    created_at: datetime
+    reviewed_by: int | None
+    reviewed_at: datetime | None
+    reject_reason: str | None
+    is_current: bool = False

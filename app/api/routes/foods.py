@@ -9,7 +9,13 @@ from app.db import get_db
 from app.errors import ConflictError, NotFoundError
 from app.models.food import Food, FoodRevision, RevisionStatus
 from app.models.user import User
-from app.schemas.food import FoodCreateRequest, FoodResponse, FoodScope, NutritionResponse
+from app.schemas.food import (
+    FoodCreateRequest,
+    FoodResponse,
+    FoodScope,
+    NutritionResponse,
+    RevisionResponse,
+)
 
 router = APIRouter(prefix="/foods", tags=["foods"])
 
@@ -143,3 +149,27 @@ async def read_food(
 ) -> FoodResponse:
     food, revision = await _load_visible_food(db, food_id, user)
     return _to_response(food, revision)
+
+
+@router.get("/{food_id}/revisions", response_model=list[RevisionResponse])
+async def list_revisions(
+    food_id: ResourceId,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[RevisionResponse]:
+    food, _ = await _load_visible_food(db, food_id, user)
+
+    revisions = (
+        await db.scalars(
+            select(FoodRevision)
+            .where(FoodRevision.food_id == food.id)
+            .order_by(FoodRevision.created_at.desc(), FoodRevision.id.desc())
+        )
+    ).all()
+
+    result = []
+    for revision in revisions:
+        item = RevisionResponse.model_validate(revision)
+        item.is_current = revision.id == food.current_revision_id
+        result.append(item)
+    return result
