@@ -4,7 +4,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.food import BaseUnit
+from app.models.food import BaseUnit, RevisionStatus
 
 
 class FoodScope(StrEnum):
@@ -57,7 +57,7 @@ class RevisionResponse(BaseModel):
     protein_g: Decimal
     fat_g: Decimal
     carb_g: Decimal
-    status: str
+    status: RevisionStatus
     change_note: str | None
     created_by: int
     created_at: datetime
