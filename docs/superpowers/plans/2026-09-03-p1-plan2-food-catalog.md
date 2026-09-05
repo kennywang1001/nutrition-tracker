@@ -1741,7 +1741,7 @@ class RevisionResponse(BaseModel):
     protein_g: Decimal
     fat_g: Decimal
     carb_g: Decimal
-    status: str
+    status: RevisionStatus
     change_note: str | None
     created_by: int
     created_at: datetime
@@ -1780,10 +1780,26 @@ async def list_revisions(
 
 import 補上 `from app.schemas.food import ..., RevisionResponse`。
 
+> **`status` 用 `RevisionStatus` 而不是 `str`。** StrEnum 序列化出來一樣是
+> `"pending"`，但 OpenAPI 會產出帶三個合法值的 `$ref`，而不是無資訊的
+> `{"type": "string"}`。P3 的前端從這份 schema 產生 TypeScript 時，
+> 差別是 `string` 跟 `"pending" | "approved" | "rejected"`。
+
 > **排序用 `created_at DESC, id DESC` 兩個鍵。** `created_at` 的預設值是
 > `now()`，而 PostgreSQL 的 `now()` 是**交易開始時間** —— 同一個交易裡建立的
 > 多筆版本會有一模一樣的時間戳。只用 `created_at` 排序的話，順序是不確定的，
 > 測試會間歇性失敗。`id` 是遞增的 identity，可以當穩定的第二排序鍵。
+>
+> **這個第二排序鍵在測試裡真的會用到 —— 實測確認過，而且原因不直觀。**
+>
+> 直覺會以為 `create_food` 跟 `create_pending_revision` 各自呼叫了 `commit()`，
+> 所以是兩個不同交易、時間戳會不同。**不是。**
+> `conftest.py` 用 `join_transaction_mode="create_savepoint"` 綁定 session，
+> 所以測試裡的每個 `commit()` 都只是釋放 savepoint，**整個測試跑在同一個
+> PostgreSQL 交易裡**。實測印出兩筆的 `created_at`：完全相同。
+>
+> 沒有 `id DESC` 的話，這個測試會間歇性失敗 —— 而且是那種「本機一直過、
+> CI 偶爾紅」的失敗。
 
 - [ ] **Step 4: 執行測試，確認通過**
 
@@ -2362,7 +2378,7 @@ class PendingRevisionResponse(BaseModel):
     protein_g: Decimal
     fat_g: Decimal
     carb_g: Decimal
-    status: str
+    status: RevisionStatus
     change_note: str | None
     created_by: int
     created_at: datetime
@@ -2418,7 +2434,7 @@ async def list_pending_revisions(
             protein_g=revision.protein_g,
             fat_g=revision.fat_g,
             carb_g=revision.carb_g,
-            status=revision.status.value,
+            status=revision.status,
             change_note=revision.change_note,
             created_by=revision.created_by,
             created_at=revision.created_at,
@@ -2932,6 +2948,20 @@ git commit -m "test: 新增跨使用者隔離的總掃描"
 1. 沒有它就無法驗證份量分層真的有效（全域看得到、自己的看得到、別人的看不到）——
    那是這次新增 `owner_id` 的全部意義。
 2. 計畫 3 記錄餐點時必須先讓使用者選份量，一定會需要它。
+
+## 兩個記錄下來、本計畫不處理的項目
+
+- **版本歷史會暴露原始的 `created_by` / `reviewed_by` 使用者 ID。**
+  全域食物對所有登入使用者可見，所以任何人都看得到「哪些 ID 提過案、哪些 ID 審過」。
+  ID 是連號整數，所以這洩漏了帳號建立的相對順序，也確認了某些 ID（含管理員）
+  正在使用中。目前沒有「用 ID 查身分」的端點，所以實際曝險有限。
+  但規格決策 4 提到審核佇列要顯示提案者身分供信任判斷 —— 做那件事的時候，
+  應該一併決定是要顯示 `display_name` 還是繼續露 ID。
+
+- **`_load_visible_food` 會 outer join 取出目前版本，但 Task 8、9、10 都把它丟掉。**
+  正確性沒問題（LEFT JOIN 不會濾掉 food 那一列），但每個請求多做一次 join。
+  若要清掉，做法是拆一個只做可見性檢查的輕量輔助函式。
+  三個呼叫點才值得抽，現在不動。
 
 ## 給 P3 前端的一個型別事實
 
