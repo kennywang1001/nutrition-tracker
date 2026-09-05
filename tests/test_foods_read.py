@@ -76,3 +76,34 @@ async def test_read_requires_authentication(client, db_session):
     response = await client.get(f"/api/foods/{food.id}")
 
     assert response.status_code == 401
+
+
+async def test_an_oversized_food_id_is_rejected_as_422_not_500(client, db_session):
+    """超過 int64 的 id 會讓 asyncpg 在驅動層拋 DataError。
+
+    沒有這個上限的話，那個例外不會被任何 handler 接住，變成 500 ——
+    一個格式錯誤的路徑參數不該是伺服器錯誤。
+    """
+    user = await create_user(db_session)
+
+    response = await client.get("/api/foods/99999999999999999999", headers=auth(user))
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+async def test_a_non_numeric_food_id_is_rejected(client, db_session):
+    user = await create_user(db_session)
+
+    response = await client.get("/api/foods/abc", headers=auth(user))
+
+    assert response.status_code == 422
+
+
+async def test_a_zero_or_negative_food_id_is_rejected(client, db_session):
+    """主鍵是 GENERATED ALWAYS AS IDENTITY，不會有 0 或負數。"""
+    user = await create_user(db_session)
+
+    for bad_id in ("0", "-1"):
+        response = await client.get(f"/api/foods/{bad_id}", headers=auth(user))
+        assert response.status_code == 422, bad_id

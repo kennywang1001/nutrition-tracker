@@ -4,6 +4,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.params import ResourceId
 from app.db import get_db
 from app.errors import ConflictError, NotFoundError
 from app.models.food import Food, FoodRevision, RevisionStatus
@@ -106,7 +107,7 @@ async def _load_visible_food(
 
 @router.get("/{food_id}", response_model=FoodResponse)
 async def read_food(
-    food_id: int,
+    food_id: ResourceId,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> FoodResponse:
