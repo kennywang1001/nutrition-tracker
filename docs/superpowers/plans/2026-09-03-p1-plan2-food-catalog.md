@@ -1386,7 +1386,7 @@ async def _load_visible_food(
 
 @router.get("/{food_id}", response_model=FoodResponse)
 async def read_food(
-    food_id: int,
+    food_id: ResourceId,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> FoodResponse:
@@ -1410,6 +1410,25 @@ import 區還要加上 `from sqlalchemy import or_, select`。
 > （順帶一提：因為 join 在 `food_revisions` 的主鍵上，結構上最多只可能有一列，
 > 所以 `.first()` 是安全的。若要更嚴格，`.one_or_none()` 會在「不知為何回了多列」
 > 時大聲失敗，而不是安靜地挑一個 —— 那是更好的意圖表達，成本為零。）
+
+> **路徑參數一律用 `app/api/params.py` 的 `ResourceId`，不要用裸的 `int`。**
+>
+> ```python
+> ResourceId = Annotated[int, Path(gt=0, lt=2**63)]
+> ```
+>
+> Python 的 `int` 沒有上限，FastAPI 會照收，然後 asyncpg 在驅動層拋
+> `DataError: value out of int64 range` —— **那個例外沒有任何 handler 接住，
+> 變成 500**。一個格式錯誤的路徑參數不該是伺服器錯誤。
+>
+> `gt=0` 是因為所有主鍵都是 `GENERATED ALWAYS AS IDENTITY`，不會有 0 或負數。
+>
+> **附帶的測試基礎設施特性（會一再遇到）：** 這一類「會變成 500」的缺陷
+> **沒辦法寫成 `assert response.status_code == 500`**。`conftest.py` 的
+> `ASGITransport` 用預設的 `raise_app_exceptions=True`，Starlette 送出 500 回應
+> 之後仍然會把原例外重新拋出，於是它穿過 httpx 直接炸進測試裡 ——
+> 測試的失敗樣子是「例外」而不是「斷言不符」。
+> 修好之後才有 response 可以斷言。
 
 > **這裡沒有用 Task 1 的 `get_owned_or_404`，是刻意的。**
 > 那個函式處理的是「只有擁有者看得到」，但食物的可見範圍是
@@ -1711,7 +1730,7 @@ class RevisionResponse(BaseModel):
 ```python
 @router.get("/{food_id}/revisions", response_model=list[RevisionResponse])
 async def list_revisions(
-    food_id: int,
+    food_id: ResourceId,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[RevisionResponse]:
@@ -1897,7 +1916,7 @@ class RevisionCreateRequest(BaseModel):
     "/{food_id}/revisions", status_code=status.HTTP_201_CREATED, response_model=RevisionResponse
 )
 async def propose_revision(
-    food_id: int,
+    food_id: ResourceId,
     payload: RevisionCreateRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -2137,7 +2156,7 @@ class PortionResponse(BaseModel):
 ```python
 @router.get("/{food_id}/portions", response_model=list[PortionResponse])
 async def list_portions(
-    food_id: int,
+    food_id: ResourceId,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[PortionResponse]:
@@ -2166,7 +2185,7 @@ async def list_portions(
     "/{food_id}/portions", status_code=status.HTTP_201_CREATED, response_model=PortionResponse
 )
 async def create_portion(
-    food_id: int,
+    food_id: ResourceId,
     payload: PortionCreateRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -2543,7 +2562,7 @@ async def _load_pending(db: AsyncSession, revision_id: int) -> tuple[FoodRevisio
 
 @router.post("/{revision_id}/approve", response_model=RevisionResponse)
 async def approve_revision(
-    revision_id: int,
+    revision_id: ResourceId,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> RevisionResponse:
@@ -2701,7 +2720,7 @@ class RevisionRejectRequest(BaseModel):
 ```python
 @router.post("/{revision_id}/reject", response_model=RevisionResponse)
 async def reject_revision(
-    revision_id: int,
+    revision_id: ResourceId,
     payload: RevisionRejectRequest,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
