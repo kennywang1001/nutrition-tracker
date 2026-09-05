@@ -1396,6 +1396,21 @@ async def read_food(
 
 import 區還要加上 `from sqlalchemy import or_, select`。
 
+> **`test_pending_revisions_do_not_leak_into_the_response` 通過，並不能證明
+> 這件事是對的 —— 證明它的是 join 寫在指標上。**
+>
+> 實測：把 join 改成 `FoodRevision.food_id == Food.id`（錯誤版本），
+> 一個有 approved + pending 兩版的食物會回傳 **2 列**，而 `.first()` 剛好選中
+> approved 那筆 —— 純粹因為 PostgreSQL 在沒有 `ORDER BY` 時先回傳它。
+> VACUUM 之後、查詢計畫變了、或版本更多，它可能選中 pending。
+>
+> **那個測試在錯誤版本下也會通過。** 所以不要靠它來確認 join 寫對了；
+> 要確認的是 join 的條件本身。
+>
+> （順帶一提：因為 join 在 `food_revisions` 的主鍵上，結構上最多只可能有一列，
+> 所以 `.first()` 是安全的。若要更嚴格，`.one_or_none()` 會在「不知為何回了多列」
+> 時大聲失敗，而不是安靜地挑一個 —— 那是更好的意圖表達，成本為零。）
+
 > **這裡沒有用 Task 1 的 `get_owned_or_404`，是刻意的。**
 > 那個函式處理的是「只有擁有者看得到」，但食物的可見範圍是
 > 「全域的 **或** 自己的」—— 條件不同。`get_owned_or_404` 會用在
