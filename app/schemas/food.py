@@ -1,8 +1,15 @@
 from decimal import Decimal
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.food import BaseUnit
+
+
+class FoodScope(StrEnum):
+    ALL = "all"
+    GLOBAL = "global"
+    MINE = "mine"
 
 
 class NutritionInput(BaseModel):

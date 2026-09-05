@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, status
-from sqlalchemy import or_, select
+from fastapi import APIRouter, Depends, Query, status
+from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,7 +9,7 @@ from app.db import get_db
 from app.errors import ConflictError, NotFoundError
 from app.models.food import Food, FoodRevision, RevisionStatus
 from app.models.user import User
-from app.schemas.food import FoodCreateRequest, FoodResponse, NutritionResponse
+from app.schemas.food import FoodCreateRequest, FoodResponse, FoodScope, NutritionResponse
 
 router = APIRouter(prefix="/foods", tags=["foods"])
 
@@ -103,6 +103,36 @@ async def _load_visible_food(
         raise NotFoundError("FOOD_NOT_FOUND", "找不到該食物")
     food, revision = row
     return food, revision
+
+
+@router.get("", response_model=list[FoodResponse])
+async def search_foods(
+    q: str | None = None,
+    scope: FoodScope = FoodScope.ALL,
+    limit: int = Query(default=50, ge=1, le=200),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[FoodResponse]:
+    visibility: ColumnElement[bool]
+    if scope is FoodScope.GLOBAL:
+        visibility = Food.owner_id.is_(None)
+    elif scope is FoodScope.MINE:
+        visibility = Food.owner_id == user.id
+    else:
+        visibility = or_(Food.owner_id.is_(None), Food.owner_id == user.id)
+
+    stmt = (
+        select(Food, FoodRevision)
+        .outerjoin(FoodRevision, Food.current_revision_id == FoodRevision.id)
+        .where(visibility)
+        .order_by(Food.name)
+        .limit(limit)
+    )
+    if q:
+        stmt = stmt.where(Food.name.ilike(f"%{q}%"))
+
+    rows = (await db.execute(stmt)).all()
+    return [_to_response(food, revision) for food, revision in rows]
 
 
 @router.get("/{food_id}", response_model=FoodResponse)
