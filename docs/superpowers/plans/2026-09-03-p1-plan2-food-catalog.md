@@ -1578,6 +1578,9 @@ async def search_foods(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[FoodResponse]:
+    # 型別註記是必要的：mypy 會從第一個分支推斷成 BinaryExpression[bool]，
+    # 然後拒絕後兩個分支的 ColumnElement[bool]。
+    visibility: ColumnElement[bool]
     if scope is FoodScope.GLOBAL:
         visibility = Food.owner_id.is_(None)
     elif scope is FoodScope.MINE:
@@ -1607,6 +1610,29 @@ import 區補上 `from fastapi import APIRouter, Depends, Query, status` 與
 > （實際上因為前者路徑是空字串、後者有 `/`，這裡不會衝突 ——
 > 但把清單端點放前面是通則，別依賴巧合。）
 >
+> **`test_search_without_a_query_returns_everything_visible` 抓不到
+> 「可見性過濾被拿掉」—— 實測確認過。**
+>
+> 把 `.where(visibility)` 註解掉重跑，那個測試照樣通過：每個測試在自己的交易裡
+> 只有那兩筆食物，拿掉過濾之後回傳的還是同樣兩筆。
+>
+> 真正抓到的是另外三個測試（別人的食物搜不到、`scope=global`、`scope=mine`）。
+>
+> **所以那個「剛好 2 筆」的斷言，實際作用是偵測測試隔離有沒有壞掉**
+> （別的測試殘留資料會讓數字超過 2），不是守可見性。套件整體有覆蓋到，
+> 但別誤以為是那一個測試在守。
+
+> **兩個給 P3 前端的事實（實測）：**
+>
+> 1. **LIKE 的萬用字元沒有跳脫。** 使用者搜尋 `100%` 或 `a_b` 時，
+>    `%` 和 `_` 會被當成萬用字元 —— 搜 `a_b` 也會找到 `aXb`。
+>    參數綁定是安全的（確認過編譯出來的 SQL 是 `LIKE :name_1`，不是字串串接），
+>    所以這是使用體驗問題不是資安問題。
+> 2. **中文名稱的排序是原始碼點順序**（資料庫 collation 是 `en_US.utf8`）。
+>    芭樂 → 葡萄 → 蘋果 → 西瓜 → 香蕉 → 鳳梨，既不是拼音也不是筆畫。
+>    穩定且確定，但對中文使用者來說沒有「按順序找」的意義。
+>    前端列表不要假設這個順序有意義。
+
 > **搜尋用 `ILIKE` 而不是 pg_trgm 的相似度排序。** `ix_foods_name_trgm` 這個
 > GIN 索引會讓 `ILIKE '%...%'` 走索引而不是全表掃描 —— 這正是 pg_trgm 的主要用途。
 > 相似度排序（`ORDER BY name <-> :q`）是另一回事，等有真實資料量、
