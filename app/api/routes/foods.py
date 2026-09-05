@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -14,6 +16,7 @@ from app.schemas.food import (
     FoodResponse,
     FoodScope,
     NutritionResponse,
+    RevisionCreateRequest,
     RevisionResponse,
 )
 
@@ -88,6 +91,23 @@ async def create_food(
     return _to_response(food, revision)
 
 
+async def _assert_food_visible(db: AsyncSession, food_id: int, user: User) -> Food:
+    """取出使用者看得到的食物本身：全域的，或自己的。
+
+    跟 _load_visible_food 的差別只在不 join 目前版本 —— 給不需要營養素的呼叫端用。
+    可見性判斷完全來自 WHERE 條件，那個 outer join 對它沒有任何影響。
+    """
+    food = await db.scalar(
+        select(Food).where(
+            Food.id == food_id,
+            or_(Food.owner_id.is_(None), Food.owner_id == user.id),
+        )
+    )
+    if food is None:
+        raise NotFoundError("FOOD_NOT_FOUND", "找不到該食物")
+    return food
+
+
 async def _load_visible_food(
     db: AsyncSession, food_id: int, user: User
 ) -> tuple[Food, FoodRevision | None]:
@@ -157,7 +177,7 @@ async def list_revisions(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[RevisionResponse]:
-    food, _ = await _load_visible_food(db, food_id, user)
+    food = await _assert_food_visible(db, food_id, user)
 
     revisions = (
         await db.scalars(
@@ -172,4 +192,55 @@ async def list_revisions(
         item = RevisionResponse.model_validate(revision)
         item.is_current = revision.id == food.current_revision_id
         result.append(item)
+    return result
+
+
+@router.post(
+    "/{food_id}/revisions", status_code=status.HTTP_201_CREATED, response_model=RevisionResponse
+)
+async def propose_revision(
+    food_id: ResourceId,
+    payload: RevisionCreateRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> RevisionResponse:
+    food = await _assert_food_visible(db, food_id, user)
+
+    is_own_private_food = food.owner_id == user.id
+    now = datetime.now(UTC)
+
+    revision = FoodRevision(
+        food_id=food.id,
+        base_unit=payload.nutrition.base_unit,
+        kcal=payload.nutrition.kcal,
+        protein_g=payload.nutrition.protein_g,
+        fat_g=payload.nutrition.fat_g,
+        carb_g=payload.nutrition.carb_g,
+        change_note=payload.change_note,
+        created_by=user.id,
+        # 自己的私人食物直接生效；全域食物要等管理員審核
+        status=RevisionStatus.APPROVED if is_own_private_food else RevisionStatus.PENDING,
+        reviewed_by=user.id if is_own_private_food else None,
+        reviewed_at=now if is_own_private_food else None,
+    )
+    db.add(revision)
+
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        # uq_food_revisions_one_pending：同一個食物已經有待審編輯。
+        # rollback 是必要的，否則這個 session 之後全部會拋 PendingRollbackError。
+        await db.rollback()
+        raise ConflictError(
+            "REVISION_PENDING", "這個食物已經有一筆待審的編輯，請等審核完成"
+        ) from exc
+
+    if is_own_private_food:
+        food.current_revision_id = revision.id
+
+    await db.commit()
+    await db.refresh(revision)
+
+    result = RevisionResponse.model_validate(revision)
+    result.is_current = revision.id == food.current_revision_id
     return result

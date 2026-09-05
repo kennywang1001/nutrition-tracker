@@ -48,6 +48,11 @@ class FoodResponse(BaseModel):
     nutrition: NutritionResponse | None
 
 
+class RevisionCreateRequest(BaseModel):
+    nutrition: NutritionInput
+    change_note: str | None = Field(default=None, max_length=500)
+
+
 class RevisionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
