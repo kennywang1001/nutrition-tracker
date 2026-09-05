@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Depends, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.db import get_db
-from app.errors import ConflictError
+from app.errors import ConflictError, NotFoundError
 from app.models.food import Food, FoodRevision, RevisionStatus
 from app.models.user import User
 from app.schemas.food import FoodCreateRequest, FoodResponse, NutritionResponse
@@ -78,4 +78,37 @@ async def create_food(
     # kcal 等欄位在記憶體裡還是使用者傳進來的原始精度（例如 "180.5"），
     # 要 refresh 才能拿到 NUMERIC(8, 2) 實際存的精度（"180.50"）。
     await db.refresh(revision)
+    return _to_response(food, revision)
+
+
+async def _load_visible_food(
+    db: AsyncSession, food_id: int, user: User
+) -> tuple[Food, FoodRevision | None]:
+    """取出使用者看得到的食物：全域的，或自己的。
+
+    看不到的一律 404 —— 「不存在」與「不屬於你」必須無法區分。
+    """
+    row = (
+        await db.execute(
+            select(Food, FoodRevision)
+            .outerjoin(FoodRevision, Food.current_revision_id == FoodRevision.id)
+            .where(
+                Food.id == food_id,
+                or_(Food.owner_id.is_(None), Food.owner_id == user.id),
+            )
+        )
+    ).first()
+    if row is None:
+        raise NotFoundError("FOOD_NOT_FOUND", "找不到該食物")
+    food, revision = row
+    return food, revision
+
+
+@router.get("/{food_id}", response_model=FoodResponse)
+async def read_food(
+    food_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FoodResponse:
+    food, revision = await _load_visible_food(db, food_id, user)
     return _to_response(food, revision)
