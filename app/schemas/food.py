@@ -85,6 +85,7 @@ class PendingRevisionResponse(BaseModel):
     status: RevisionStatus
     change_note: str | None
     created_by: int
+    created_by_name: str
     created_at: datetime
     # 目前生效的數值，供審核者比對
     current_kcal: Decimal | None

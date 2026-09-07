@@ -18,11 +18,13 @@ async def list_pending_revisions(
     db: AsyncSession = Depends(get_db),
 ) -> list[PendingRevisionResponse]:
     current = aliased(FoodRevision)
+    proposer = aliased(User)
 
     rows = (
         await db.execute(
-            select(FoodRevision, Food, current)
+            select(FoodRevision, Food, current, proposer)
             .join(Food, FoodRevision.food_id == Food.id)
+            .join(proposer, FoodRevision.created_by == proposer.id)
             .outerjoin(current, Food.current_revision_id == current.id)
             .where(FoodRevision.status == RevisionStatus.PENDING)
             .order_by(FoodRevision.created_at, FoodRevision.id)
@@ -43,11 +45,12 @@ async def list_pending_revisions(
             status=revision.status,
             change_note=revision.change_note,
             created_by=revision.created_by,
+            created_by_name=proposer_row.display_name,
             created_at=revision.created_at,
             current_kcal=cur.kcal if cur else None,
             current_protein_g=cur.protein_g if cur else None,
             current_fat_g=cur.fat_g if cur else None,
             current_carb_g=cur.carb_g if cur else None,
         )
-        for revision, food, cur in rows
+        for revision, food, cur, proposer_row in rows
     ]
