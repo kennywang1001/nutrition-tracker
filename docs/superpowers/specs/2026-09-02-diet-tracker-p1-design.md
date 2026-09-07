@@ -168,6 +168,15 @@ meal_items      (…, food_revision_id)   ← 指向記錄當下那一版
 **注意：** 快照法不是壞設計，電商訂單明細幾乎都這樣做。差別在於商品價格改了
 不需要溯源，而維基需要。
 
+**編輯歷史的可見範圍（P1 實作時確認）：** `GET /api/foods/{id}/revisions` 不依
+提案者或角色過濾 —— 看得到該食物的人，就看得到它完整的編輯歷史，包含被駁回的提案
+和管理員寫的 `reject_reason`。這跟「編輯歷史是共用稽核軌跡」的定位一致
+（維基的歷史頁面本來就是公開的），而且公開的駁回理由能擋掉別人重複送同一筆被拒的編輯。
+
+殘留風險是內容層的：駁回理由是自由文字，若管理員寫的是針對**提案者**而非
+針對**資料**的評論，那段話對所有看得到該食物的人可見。P3 做管理介面時，
+在駁回理由的輸入框旁加提示（「請描述資料哪裡不對，而非評論提案者」）。
+
 ### 決策 4：用 `current_revision_id` 指標，而非 `WHERE status = 'approved'`
 
 `foods.current_revision_id` 指向目前生效的版本。**只有審核通過時才更新這個指標。**
@@ -356,8 +365,13 @@ CREATE UNIQUE INDEX uq_food_revisions_one_pending
 **營養素一律以「每 100g / 100ml」為基準儲存。** 不這樣做的話，「半碗」「一碗半」
 「180g」會讓同一個食物存出無限多種格式，加總時是災難。
 
-`foods` 與 `food_revisions` 互相參照，因此 `current_revision_id` 的外鍵必須是
-`DEFERRABLE INITIALLY DEFERRED`，讓「建立食物 + 建立第一版」能在同一個交易內完成。
+`foods` 與 `food_revisions` 互相參照，`current_revision_id` 的外鍵設成
+`DEFERRABLE INITIALLY DEFERRED`。
+
+**精確地說，它是防禦性的，不是嚴格必需的。** 實測確認：只要「先寫 revision、
+再回填指標」，即時檢查也過得了，因為 UPDATE 執行時被參照的列已經存在。
+延後在這裡的作用是讓寫法**不依賴語句順序** —— 若有人先設指標再 flush，
+SQLAlchemy 可能把 UPDATE 排在 INSERT 之前，那時才真的需要它。
 
 私人食物的編輯直接生效（建立 revision 時即 `approved` 並更新指標）；
 全域食物的編輯進入 `pending`，等待管理員審核。

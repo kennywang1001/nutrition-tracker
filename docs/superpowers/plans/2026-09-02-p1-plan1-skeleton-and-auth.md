@@ -1083,7 +1083,7 @@ Expected: `11 passed`
 
 特別確認 `test_each_test_starts_with_a_clean_database` 通過 —— 它證明了交易隔離真的有效。
 
-> **這組 fixture 的三個已知邊界，後續 task 要記得：**
+> **這組 fixture 的五個已知邊界，後續 task 要記得：**
 >
 > 1. **`client` 只覆寫 `get_db`。** 之後如果有哪個依賴自己另外開資料庫連線
 >    （沒有走 `get_db`），它的寫入就跑在交易隔離外面，測試之間會互相污染。
@@ -1094,6 +1094,28 @@ Expected: `11 passed`
 > 3. **每個測試都會新建一個 engine。** 正確但不省 —— 實測每個測試約 52ms 的
 >    基礎設施成本，150 個測試約 7.7 秒。現在不痛，等到真的痛了再改成
 >    session 級 engine（連線與交易仍維持每測試一份）。
+> 5. **`rollback()` 會讓 identity map 裡的**每一個**物件失效，不只是這次請求碰過的。**
+>    SQLAlchemy 的 `_restore_snapshot(dirty_only=transaction.nested)` 在
+>    `nested=False`（我們沒用 `begin_nested()`）時會全部展開。
+>
+>    因為 `client` fixture 把**測試自己持有的那個 session** 交給 app，
+>    所以**應用程式端的 rollback 會連帶讓測試變數裡的 ORM 物件全部失效**。
+>    接著測試裡任何一個**同步**的屬性讀取（例如 f-string 裡的 `food.id`）
+>    都會觸發 lazy reload，跑在 greenlet 橋接之外 → `MissingGreenlet`。
+>
+>    **寫法：在會觸發 rollback 的請求之前，先把需要的值取出來成區域變數。**
+>    ```python
+>    food_id = food.id          # 先取
+>    headers = auth(bob)
+>    await client.post(...)     # 這個請求內部會 rollback
+>    await client.get(f"/api/foods/{food_id}", headers=headers)   # 用區域變數
+>    ```
+>    重新查詢（`await db.scalar(...)`）不受影響 —— 只有既有物件的同步屬性讀取會壞。
+>
+>    **精確的觸發條件是「在那個請求**之後**才讀取」，不是「f-string 裡有 ORM 屬性」。**
+>    `f"/api/foods/{food.id}"` 寫在 `await client.post(...)` 的引數位置是安全的 ——
+>    Python 在發出請求**之前**就把它求值完了。會出事的是請求結束後的另一行。
+
 > 4. **`db.commit()` 失敗之後，一定要 `await db.rollback()` 才能再用那個 session。**
 >    `IntegrityError` 之後任何操作都會拋 `PendingRollbackError`。
 >    正式環境的 session 是每請求一份，壞掉就算了；但**測試的 session 是整個測試共用的**，
@@ -2839,6 +2861,18 @@ git commit -m "chore: 新增 CI 與 README"
 
 ## 已知的小問題（不阻擋，下次動到該檔案時順手修）
 
+- **這份文件本身含有 1 個 NUL byte（在記錄 `display_name` NUL byte 測試的那一段），
+  會讓 `grep` 把整份文件當成二進位檔。** 後果不是報錯，是**靜默吞掉所有結果** ——
+  只印一行 `Binary file ... matches`。
+
+  這在計畫 2 收尾時真的造成了一次錯誤結論：用 `grep -n "^## "` 找章節，
+  只回了 2 行，於是判定「延後到 P4 的部署議題」那一節不存在、交叉引用是空的。
+  實際上那一節有完整的 12 個章節在後面，內容也遠比預期完整。
+  加 `-a`（或 `git grep -I`）之後才看得到。
+
+  **教訓：`grep` 回傳「Binary file matches」時，你拿到的不是零結果，是未知結果。**
+  兩者在終端機上長得幾乎一樣，但意義相反。搜這份文件一律加 `-a`。
+
 - **`tests/conftest.py` 的 `TEST_DATABASE_URL` 預設值跟 `.env.example` 是「剛好一樣」，
   沒有任何機制保證它們同步。** `pytest` 不會載入 `.env` —— README 的測試步驟能運作，
   純粹是因為那個硬編的 fallback 剛好等於 `.env.example` 裡的值。
@@ -3007,6 +3041,11 @@ refresh 端點都比對 token 的 `iat` 是否晚於它，再開一個 `POST /ap
   大聲的啟動失敗，而不是安靜的錯誤行為。** 兩項要一起修，分開修會兩邊都不完整。
 - **兩個服務都沒有 `restart:` 政策。** 開發時無所謂，P4 要明確決定（例如
   `restart: unless-stopped`）。
+
+  > **這件事在計畫 2 開發期間真的發生了。** 主機的 Docker 引擎重啟之後，
+  > 同一台機器上有設 restart 政策的其他專案容器自己回來了，
+  > **我們的兩個沒有** —— 直到有人手動 `docker start`。
+  > 部到 NAS 之後，這代表「停電或系統更新之後 API 就不見了」，而且不會有通知。
 - **`api` 服務沒有 healthcheck。** `/api/health` 目前只有手動 curl 在用。
   P4 若要接 NAS 的容器健康檢查，考慮另開 `/api/health/ready` 做 `SELECT 1`，
   而不要改動 `/api/health` —— liveness 跟 readiness 混在一起，會讓資料庫短暫抖動

@@ -142,8 +142,6 @@ Expected: FAIL，`ImportError: cannot import name 'get_owned_or_404'`
 在 `app/api/deps.py` 的 import 區補上：
 
 ```python
-from typing import TypeVar
-
 from sqlalchemy.orm import DeclarativeBase
 
 from app.errors import ForbiddenError, NotFoundError, UnauthorizedError
@@ -152,17 +150,14 @@ from app.errors import ForbiddenError, NotFoundError, UnauthorizedError
 並在檔案末端加入：
 
 ```python
-_Model = TypeVar("_Model", bound=DeclarativeBase)
-
-
-async def get_owned_or_404(
+async def get_owned_or_404[Model: DeclarativeBase](
     db: AsyncSession,
-    model: type[_Model],
+    model: type[Model],
     resource_id: int,
     *,
     owner_id: int,
     owner_field: str = "owner_id",
-) -> _Model:
+) -> Model:
     """取出資源，若不存在或不屬於 owner_id 則拋 NotFoundError。
 
     規格第 9 節：存取他人資源要回 404 而非 403 —— 403 等於告訴對方
@@ -175,6 +170,23 @@ async def get_owned_or_404(
         raise NotFoundError("NOT_FOUND", "找不到該資源")
     return resource
 ```
+
+> **`"NOT_FOUND"` 這個泛用代碼是刻意的，不是偷懶。**
+> 若之後某條路由想要 `FOOD_NOT_FOUND`，那必須發生在這個函式**外面**
+> （呼叫端接住再重拋）。**絕對不能**在函式裡依「是哪一種失敗」來分岔代碼 ——
+> 那個分岔本身就是這個函式存在要防止的洩漏。
+
+> **泛型用 PEP 695 的行內語法（`[Model: DeclarativeBase]`），不是 `TypeVar`。**
+> 這個專案的 ruff 開了 `UP` 規則、`target-version = "py312"`，
+> 舊的 `TypeVar` 寫法會被 `UP047` 擋下來。
+>
+> 型別窄化是有效的：呼叫端拿到的是具體的 `Food`，不是 `DeclarativeBase`
+> （用 `reveal_type` 驗證過）。
+
+> **`owner_field` 打錯字會拋 `AttributeError`，這是對的。**
+> 它在**每一次**呼叫都會炸，而不是只在擁有權真的不符時 —— 所以第一次跑到那條路由
+> 就會發現。不要加 `hasattr` 防護：那會把一個大聲的呼叫端 bug
+> 變成一個安靜的、錯誤的 404。
 
 > **為什麼要有 `owner_field` 參數：** `foods` 的擁有者欄位叫 `owner_id`，
 > 但 `users` 自己的「擁有者」就是 `id`。之後 `meals` 用的是 `user_id`。
@@ -208,6 +220,7 @@ git commit -m "feat: 新增 get_owned_or_404 擁有權檢查輔助函式"
 import enum
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -222,6 +235,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -255,6 +269,12 @@ class Food(Base):
             postgresql_nulls_not_distinct=True,
         ),
         Index("ix_foods_owner_id", "owner_id"),
+        Index(
+            "ix_foods_name_trgm",
+            "name",
+            postgresql_using="gin",
+            postgresql_ops={"name": "gin_trgm_ops"},
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
@@ -293,12 +313,19 @@ class FoodRevision(Base):
             "status <> 'rejected' OR reject_reason IS NOT NULL",
             name="rejected_needs_reason",
         ),
-        # 注意：兩個「部分索引」刻意不宣告在這裡，只寫在 migration 0002 裡 ——
-        #   uq_food_revisions_one_pending  同一食物同時只能有一筆待審（唯一）
-        #   ix_food_revisions_pending      待審佇列的查詢索引
-        # 原因：alembic 對帶 WHERE 條件的部分索引比對不穩定，宣告在模型層很容易
-        # 讓 alembic check 產生假的漂移警報。它們只影響約束與效能、不影響 ORM 行為，
-        # 所以放在 migration 是安全的取捨。
+        # 同一個食物同時只能有一筆待審編輯。交給資料庫擋，不是靠程式檢查。
+        Index(
+            "uq_food_revisions_one_pending",
+            "food_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
+        Index(
+            "ix_food_revisions_pending",
+            "status",
+            "created_at",
+            postgresql_where=text("status = 'pending'"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
@@ -330,7 +357,7 @@ class FoodRevision(Base):
     # P2 階段（AI 分析）預留，本計畫不使用
     source: Mapped[str] = mapped_column(Text, nullable=False, server_default="user")
     ai_confidence: Mapped[Decimal | None] = mapped_column(Numeric(3, 2))
-    ai_raw_response: Mapped[dict | None] = mapped_column(JSONB)
+    ai_raw_response: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
 
 class FoodPortion(Base):
@@ -419,6 +446,31 @@ Expected: 輸出的 DDL 裡有 `UNIQUE NULLS NOT DISTINCT`。
 git add app/models/food.py app/models/__init__.py
 git commit -m "feat: 新增 foods / food_revisions / food_portions 的 model"
 ```
+
+> **這個 task 結束時測試套件是紅的，這是必然的，不是做錯了。**
+>
+> `tests/conftest.py` 的 `migrated_database` fixture 每個 session 都會跑
+> `alembic check`。model 加了、migration 還沒加，它就會正確地偵測到漂移，
+> 於是**所有碰資料庫的測試都會在 fixture 階段失敗**（不是斷言失敗）。
+>
+> 實測：26 過 / 41 錯。Task 3 的 migration 一落地就會恢復。
+>
+> 這是計畫 1 那道漂移檢查的直接代價 —— 它是載重的防護，代價就是
+> **model 與 migration 之間存在一個必然為紅的中間狀態**。
+> 不要為了讓它變綠而動 conftest。
+
+> **`ai_raw_response` 要寫 `Mapped[dict[str, Any] | None]`。**
+> 裸的 `dict` 在 `mypy --strict` 下會報 `Missing type arguments for generic type "dict"`。
+> `app/errors.py` 與 `app/security/tokens.py` 已經是這個寫法。
+
+> **循環外鍵讓 `Base.metadata.sorted_tables` 發出警告：**
+> `Cannot correctly sort tables; there are unresolvable cycles between tables
+> "food_revisions, foods"`，而且它會**直接放棄考慮那些外鍵的順序**。
+>
+> 目前沒有東西呼叫 `sorted_tables`（測試跑的是真的 Alembic migration，不是
+> `create_all`），所以不會觸發。但這證實了 Task 3 的做法是必要的：
+> **兩張表要先各自建好、`current_revision_id` 的外鍵最後用
+> `op.create_foreign_key` 單獨加**，不能指望自動排序。
 
 ---
 
@@ -517,19 +569,26 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["reviewed_by"], ["users.id"], name="fk_food_revisions_reviewed_by_users"
         ),
-        sa.CheckConstraint("kcal >= 0", name="ck_food_revisions_kcal_non_negative"),
-        sa.CheckConstraint("protein_g >= 0", name="ck_food_revisions_protein_non_negative"),
-        sa.CheckConstraint("fat_g >= 0", name="ck_food_revisions_fat_non_negative"),
-        sa.CheckConstraint("carb_g >= 0", name="ck_food_revisions_carb_non_negative"),
+        sa.CheckConstraint("kcal >= 0", name="kcal_non_negative"),
+        sa.CheckConstraint("protein_g >= 0", name="protein_non_negative"),
+        sa.CheckConstraint("fat_g >= 0", name="fat_non_negative"),
+        sa.CheckConstraint("carb_g >= 0", name="carb_non_negative"),
         sa.CheckConstraint(
             "ai_confidence IS NULL OR (ai_confidence >= 0 AND ai_confidence <= 1)",
-            name="ck_food_revisions_ai_confidence_in_range",
+            name="ai_confidence_in_range",
         ),
         sa.CheckConstraint(
             "status <> 'rejected' OR reject_reason IS NOT NULL",
-            name="ck_food_revisions_rejected_needs_reason",
+            name="rejected_needs_reason",
         ),
     )
+
+    # 注意：CheckConstraint 的 name 給「短名」就好，不要給完整名稱。
+    # 命名慣例是 ck_%(table_name)s_%(constraint_name)s，你給的名字是那個
+    # %(constraint_name)s 的「輸入」，不是最終名稱 ——
+    # 寫完整名稱會變成 ck_food_revisions_ck_food_revisions_kcal_non_negative。
+    # （PrimaryKeyConstraint / ForeignKeyConstraint / UniqueConstraint 的 name
+    #  則是最終名稱，慣例不會再套一層。只有 CheckConstraint 是這樣。）
 
     # 循環外鍵：foods 先建好才有 food_revisions 可以指，所以這條要最後加，
     # 而且必須 DEFERRABLE INITIALLY DEFERRED —— 否則「建立食物 + 建立第一版
@@ -559,7 +618,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["owner_id"], ["users.id"], name="fk_food_portions_owner_id_users", ondelete="CASCADE"
         ),
-        sa.CheckConstraint("grams > 0", name="ck_food_portions_grams_positive"),
+        sa.CheckConstraint("grams > 0", name="grams_positive"),
     )
 
     # NULLS NOT DISTINCT 讓「兩個全域的同名食物」被視為重複。
@@ -597,19 +656,30 @@ def downgrade() -> None:
     sa.Enum(name="revision_status").drop(op.get_bind())
 ```
 
-> **三個索引刻意只存在於 migration，不宣告在 model 裡：**
-> `ix_foods_name_trgm`、`uq_food_revisions_one_pending`、`ix_food_revisions_pending`。
+> **三個索引全部宣告在 model 裡 —— 這是實測之後的結論，值得記下來。**
 >
-> 前者是 operator class（`gin_trgm_ops`），後兩者是帶 `WHERE` 的部分索引 ——
-> **alembic 對這兩類的比對都不穩定**，宣告在模型層很容易讓 `alembic check`
-> 產生假的漂移警報。它們只影響約束與效能、不影響 ORM 行為，放在 migration 是安全的。
+> 計畫初稿寫「只放 migration、不宣告在 model，可以避免假的漂移警報」。
+> **那個推理是反的**：Alembic 的 autogenerate 把「資料庫裡有、模型裡沒有」
+> 直接當成**「請刪掉它」**，三個索引全被報成 `remove_index`，`alembic check`
+> 永遠紅。
 >
-> **如果 `alembic check` 因為其中任何一個而抱怨，回報實際訊息，
-> 不要自己刪索引或改模型。**
+> 而避開模型宣告的理由（帶 `WHERE` 的部分索引比對不穩）**從來沒被實測過**。
+> 實際測下來：
 >
-> （原本的說明保留於下）
+> | 索引 | 型態 | 比對結果 |
+> |---|---|---|
+> | `ix_foods_name_trgm` | GIN + `gin_trgm_ops` | **乾淨** |
+> | `uq_food_revisions_one_pending` | 部分唯一（`WHERE`） | **乾淨** |
+> | `ix_food_revisions_pending` | 部分（`WHERE`） | **乾淨** |
 >
-> **`ix_foods_name_trgm` 不在 model 的 `__table_args__` 裡。**
+> `alembic check` 連跑 7 次（含一次完整 downgrade/upgrade 循環之後）全部乾淨，
+> 沒有不穩定。擔心的那個 `status = 'pending'` vs
+> `(status = 'pending'::revision_status)` 正規化差異，Alembic 有正確處理。
+>
+> **所以不需要 `include_object` hook，`migrations/env.py` 不用動。**
+> 計畫 3、4 遇到同類索引時，預設就宣告在模型裡。
+
+> **`ix_foods_name_trgm` 的 operator class 寫法：**
 > `gin_trgm_ops` 這種 operator class 在 SQLAlchemy 的模型層要用
 > `Index(..., postgresql_ops=...)` 表達，而 `alembic check` 對它的比對不穩定。
 > 這個索引只影響搜尋效能、不影響正確性，所以刻意只放在 migration 裡。
@@ -807,10 +877,38 @@ async def create_portion(
 from datetime import UTC, datetime
 ```
 
-> **`create_food` 用 `flush()` 而不是 `commit()` 建立前兩步，是刻意的。**
-> 它示範了 deferrable 外鍵的用法：先寫 `foods`（`current_revision_id` 是 NULL）、
-> 再寫 `food_revisions`、最後回填指標，全部在同一個交易裡。
-> 如果外鍵不是 deferred，這個順序在 `flush()` 當下就會失敗。
+> **`create_food` 用 `flush()` 而不是 `commit()` 建立前兩步，是刻意的：**
+> 先寫 `foods`（`current_revision_id` 是 NULL）、再寫 `food_revisions`、
+> 最後回填指標，全部在同一個交易裡。
+>
+> **⚠️ 一個我原本寫錯、實測才發現的地方：**
+> 我原本寫「外鍵不是 deferred 的話這個順序會失敗」。**不會。**
+> 實測把外鍵改成 `NOT DEFERRABLE` 之後，這個 factory 照樣跑得過。
+> 實際發出的語句是：
+>
+> ```
+> INSERT INTO foods (... current_revision_id ...)   -- NULL
+> INSERT INTO food_revisions (...)                  -- 交易內已存在
+> UPDATE foods SET current_revision_id=$1           -- 被參照的列早就在了
+> ```
+>
+> 因為**先 flush 了 revision 才回填指標**，到 UPDATE 那一刻被參照的列已經存在，
+> 即時檢查也過得了。
+>
+> **那延後外鍵到底有什麼用？** 它讓這個模式**不依賴語句順序**。
+> 如果哪天有人先設 `food.current_revision_id = revision.id` 再 flush，
+> SQLAlchemy 的工作單元可能把 UPDATE 排在 INSERT 之前 —— 那時就需要延後。
+> 所以它是**防禦性的**，不是這段程式碼嚴格必需的。這兩者不一樣，別混。
+
+> **`Decimal(float)` 跟 Pydantic 的 `Decimal` 轉換是兩回事，不要混。**
+>
+> - 直接呼叫 `Decimal(0.29)` → `Decimal('0.28999999999999998...')`，有浮點雜訊。
+>   所以 factory 的簽章寫 `Decimal | int`，不收 float。
+> - **Pydantic v2 從 JSON 數字轉 `Decimal` 不會有雜訊** —— 它用的是那個 float
+>   的最短往返十進位表示，`0.29` → `Decimal('0.29')`。而 `2.675` 會被
+>   `decimal_places=2` 正確擋下（它的最短表示真的有三位小數）。
+>
+> 所以 **API 的請求收 JSON 數字是安全的，測試工廠收 float 才不安全。**
 
 - [ ] **Step 2: 驗證 factory 能跑**
 
@@ -1113,8 +1211,18 @@ async def create_food(
         raise ConflictError("FOOD_EXISTS", "你已經建過同名的食物了") from exc
 
     await db.refresh(food)
+    # revision 也要 refresh —— 少了這行，回應會是 payload 傳進來的原始 Decimal
+    # （"180.5"），而不是資料庫 NUMERIC(8,2) 存進去之後的值（"180.50"）。
+    await db.refresh(revision)
     return _to_response(food, revision)
 ```
+
+> **這一行是實作時才發現的。** 計畫初稿只 refresh 了 `food`，但序列化的是
+> `revision` —— 回應直接吐出記憶體裡那個還沒經過資料庫的 `Decimal`。
+> 測試斷言 `"180.50"`，實際拿到 `"180.5"`，當場失敗。
+>
+> **通則：只要回應的數值可能被資料庫的型別（精度、四捨五入、預設值）改變，
+> 就必須從資料庫讀回來再序列化。**
 
 > **`Food.brand.is_not_distinct_from(payload.brand)`** 而不是 `== payload.brand`：
 > `brand` 可以是 NULL，而 SQL 裡 `NULL = NULL` 是 NULL 不是 true。
@@ -1132,11 +1240,15 @@ async def create_food(
 Run: `pytest tests/test_foods_create.py -v`
 Expected: `6 passed`
 
-- [ ] **Step 7: 驗證 deferrable 外鍵真的是關鍵**
+- [ ] **Step 7: 確認語句順序**
 
-暫時把 migration 的 `deferrable=True, initially="DEFERRED"` 拿掉、重建測試資料庫、
-再跑一次這組測試，確認它會失敗。看到失敗後把 migration 改回來、確認測試恢復通過。
-**回報那個失敗訊息** —— 那是循環外鍵為什麼需要 deferrable 的直接證據。
+用 `echo=True` 或資料庫日誌觀察這條路由實際發出的 SQL，確認順序是
+`INSERT foods` → `INSERT food_revisions` → `UPDATE foods`。
+
+> **不要試圖用「拿掉 deferrable 看它壞掉」來驗證。** 實測過了：拿掉也不會壞，
+> 因為指標是在 revision 已經 flush 之後才回填的，即時檢查也過得了。
+> 延後外鍵在這裡是**防禦性**的（讓寫法不依賴語句順序），不是嚴格必需。
+> 詳見 Task 4 的說明。
 
 - [ ] **Step 8: Commit**
 
@@ -1274,7 +1386,7 @@ async def _load_visible_food(
 
 @router.get("/{food_id}", response_model=FoodResponse)
 async def read_food(
-    food_id: int,
+    food_id: ResourceId,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> FoodResponse:
@@ -1283,6 +1395,40 @@ async def read_food(
 ```
 
 import 區還要加上 `from sqlalchemy import or_, select`。
+
+> **`test_pending_revisions_do_not_leak_into_the_response` 通過，並不能證明
+> 這件事是對的 —— 證明它的是 join 寫在指標上。**
+>
+> 實測：把 join 改成 `FoodRevision.food_id == Food.id`（錯誤版本），
+> 一個有 approved + pending 兩版的食物會回傳 **2 列**，而 `.first()` 剛好選中
+> approved 那筆 —— 純粹因為 PostgreSQL 在沒有 `ORDER BY` 時先回傳它。
+> VACUUM 之後、查詢計畫變了、或版本更多，它可能選中 pending。
+>
+> **那個測試在錯誤版本下也會通過。** 所以不要靠它來確認 join 寫對了；
+> 要確認的是 join 的條件本身。
+>
+> （順帶一提：因為 join 在 `food_revisions` 的主鍵上，結構上最多只可能有一列，
+> 所以 `.first()` 是安全的。若要更嚴格，`.one_or_none()` 會在「不知為何回了多列」
+> 時大聲失敗，而不是安靜地挑一個 —— 那是更好的意圖表達，成本為零。）
+
+> **路徑參數一律用 `app/api/params.py` 的 `ResourceId`，不要用裸的 `int`。**
+>
+> ```python
+> ResourceId = Annotated[int, Path(gt=0, lt=2**63)]
+> ```
+>
+> Python 的 `int` 沒有上限，FastAPI 會照收，然後 asyncpg 在驅動層拋
+> `DataError: value out of int64 range` —— **那個例外沒有任何 handler 接住，
+> 變成 500**。一個格式錯誤的路徑參數不該是伺服器錯誤。
+>
+> `gt=0` 是因為所有主鍵都是 `GENERATED ALWAYS AS IDENTITY`，不會有 0 或負數。
+>
+> **附帶的測試基礎設施特性（會一再遇到）：** 這一類「會變成 500」的缺陷
+> **沒辦法寫成 `assert response.status_code == 500`**。`conftest.py` 的
+> `ASGITransport` 用預設的 `raise_app_exceptions=True`，Starlette 送出 500 回應
+> 之後仍然會把原例外重新拋出，於是它穿過 httpx 直接炸進測試裡 ——
+> 測試的失敗樣子是「例外」而不是「斷言不符」。
+> 修好之後才有 response 可以斷言。
 
 > **這裡沒有用 Task 1 的 `get_owned_or_404`，是刻意的。**
 > 那個函式處理的是「只有擁有者看得到」，但食物的可見範圍是
@@ -1432,6 +1578,9 @@ async def search_foods(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[FoodResponse]:
+    # 型別註記是必要的：mypy 會從第一個分支推斷成 BinaryExpression[bool]，
+    # 然後拒絕後兩個分支的 ColumnElement[bool]。
+    visibility: ColumnElement[bool]
     if scope is FoodScope.GLOBAL:
         visibility = Food.owner_id.is_(None)
     elif scope is FoodScope.MINE:
@@ -1461,6 +1610,29 @@ import 區補上 `from fastapi import APIRouter, Depends, Query, status` 與
 > （實際上因為前者路徑是空字串、後者有 `/`，這裡不會衝突 ——
 > 但把清單端點放前面是通則，別依賴巧合。）
 >
+> **`test_search_without_a_query_returns_everything_visible` 抓不到
+> 「可見性過濾被拿掉」—— 實測確認過。**
+>
+> 把 `.where(visibility)` 註解掉重跑，那個測試照樣通過：每個測試在自己的交易裡
+> 只有那兩筆食物，拿掉過濾之後回傳的還是同樣兩筆。
+>
+> 真正抓到的是另外三個測試（別人的食物搜不到、`scope=global`、`scope=mine`）。
+>
+> **所以那個「剛好 2 筆」的斷言，實際作用是偵測測試隔離有沒有壞掉**
+> （別的測試殘留資料會讓數字超過 2），不是守可見性。套件整體有覆蓋到，
+> 但別誤以為是那一個測試在守。
+
+> **兩個給 P3 前端的事實（實測）：**
+>
+> 1. **LIKE 的萬用字元沒有跳脫。** 使用者搜尋 `100%` 或 `a_b` 時，
+>    `%` 和 `_` 會被當成萬用字元 —— 搜 `a_b` 也會找到 `aXb`。
+>    參數綁定是安全的（確認過編譯出來的 SQL 是 `LIKE :name_1`，不是字串串接），
+>    所以這是使用體驗問題不是資安問題。
+> 2. **中文名稱的排序是原始碼點順序**（資料庫 collation 是 `en_US.utf8`）。
+>    芭樂 → 葡萄 → 蘋果 → 西瓜 → 香蕉 → 鳳梨，既不是拼音也不是筆畫。
+>    穩定且確定，但對中文使用者來說沒有「按順序找」的意義。
+>    前端列表不要假設這個順序有意義。
+
 > **搜尋用 `ILIKE` 而不是 pg_trgm 的相似度排序。** `ix_foods_name_trgm` 這個
 > GIN 索引會讓 `ILIKE '%...%'` 走索引而不是全表掃描 —— 這正是 pg_trgm 的主要用途。
 > 相似度排序（`ORDER BY name <-> :q`）是另一回事，等有真實資料量、
@@ -1569,7 +1741,7 @@ class RevisionResponse(BaseModel):
     protein_g: Decimal
     fat_g: Decimal
     carb_g: Decimal
-    status: str
+    status: RevisionStatus
     change_note: str | None
     created_by: int
     created_at: datetime
@@ -1584,7 +1756,7 @@ class RevisionResponse(BaseModel):
 ```python
 @router.get("/{food_id}/revisions", response_model=list[RevisionResponse])
 async def list_revisions(
-    food_id: int,
+    food_id: ResourceId,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[RevisionResponse]:
@@ -1608,10 +1780,26 @@ async def list_revisions(
 
 import 補上 `from app.schemas.food import ..., RevisionResponse`。
 
+> **`status` 用 `RevisionStatus` 而不是 `str`。** StrEnum 序列化出來一樣是
+> `"pending"`，但 OpenAPI 會產出帶三個合法值的 `$ref`，而不是無資訊的
+> `{"type": "string"}`。P3 的前端從這份 schema 產生 TypeScript 時，
+> 差別是 `string` 跟 `"pending" | "approved" | "rejected"`。
+
 > **排序用 `created_at DESC, id DESC` 兩個鍵。** `created_at` 的預設值是
 > `now()`，而 PostgreSQL 的 `now()` 是**交易開始時間** —— 同一個交易裡建立的
 > 多筆版本會有一模一樣的時間戳。只用 `created_at` 排序的話，順序是不確定的，
 > 測試會間歇性失敗。`id` 是遞增的 identity，可以當穩定的第二排序鍵。
+>
+> **這個第二排序鍵在測試裡真的會用到 —— 實測確認過，而且原因不直觀。**
+>
+> 直覺會以為 `create_food` 跟 `create_pending_revision` 各自呼叫了 `commit()`，
+> 所以是兩個不同交易、時間戳會不同。**不是。**
+> `conftest.py` 用 `join_transaction_mode="create_savepoint"` 綁定 session，
+> 所以測試裡的每個 `commit()` 都只是釋放 savepoint，**整個測試跑在同一個
+> PostgreSQL 交易裡**。實測印出兩筆的 `created_at`：完全相同。
+>
+> 沒有 `id DESC` 的話，這個測試會間歇性失敗 —— 而且是那種「本機一直過、
+> CI 偶爾紅」的失敗。
 
 - [ ] **Step 4: 執行測試，確認通過**
 
@@ -1770,7 +1958,7 @@ class RevisionCreateRequest(BaseModel):
     "/{food_id}/revisions", status_code=status.HTTP_201_CREATED, response_model=RevisionResponse
 )
 async def propose_revision(
-    food_id: int,
+    food_id: ResourceId,
     payload: RevisionCreateRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -1820,7 +2008,30 @@ async def propose_revision(
 import 補上 `from datetime import UTC, datetime` 與 `RevisionCreateRequest`。
 
 > **這裡沒有用 `get_owned_or_404`。** 編輯的可見範圍跟讀取一樣是
-> 「全域的或自己的」，只是**後續行為**依擁有權分岔。`_load_visible_food`
+> 「全域的或自己的」，只是**後續行為**依擁有權分岔。
+
+> **`test_the_session_still_works_after_a_rejected_second_edit` 有個陷阱：
+> 必須在 POST 之前先把 `food.id` 取出來。**
+>
+> 那個 POST 內部會 `rollback()`，而 rollback 會讓 identity map 裡**所有**物件失效
+> —— 包含測試自己持有的 `food`。之後在 f-string 裡讀 `food.id` 是同步存取，
+> 會觸發 lazy reload，跑在 greenlet 橋接之外，拋 `MissingGreenlet`。
+>
+> **失敗的樣子跟 rollback 對不對完全無關**，很容易誤判成實作有問題。
+> 詳見計畫 1 Task 7 的第五個邊界。
+
+> **`await db.refresh(revision)` 是必要的，即使測試沒有直接抓到。**
+> 實測：拿掉它，`test_editing_own_private_food_takes_effect_immediately` 仍然通過
+> —— 因為它是透過另一個 GET 請求驗證數值的，那次查詢會重新從資料庫讀。
+> 但 **POST 自己的回應** 會變成 `"123"` 而不是 `"123.00"`。
+> 端點的契約要求後者，所以 refresh 不能省。
+
+> **私人食物永遠不會有待審版本 —— 這是結構上保證的，不是巧合。**
+> `create_food` 建的第一版一律 `APPROVED`；而這個端點只有在
+> `food.owner_id != user.id` 時才產生 `PENDING`，但 `_assert_food_visible`
+> 的可見性條件已經把「別人的私人食物」擋成 404 了。
+> 所以走到 pending 分支時 `owner_id` 必然是 NULL。
+> 這也代表**單一待審的唯一索引只會在全域食物上被觸發**。`_load_visible_food`
 > 已經處理了「別人的私人食物 → 404」。
 
 - [ ] **Step 4: 執行測試，確認通過**
@@ -2010,7 +2221,7 @@ class PortionResponse(BaseModel):
 ```python
 @router.get("/{food_id}/portions", response_model=list[PortionResponse])
 async def list_portions(
-    food_id: int,
+    food_id: ResourceId,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[PortionResponse]:
@@ -2039,7 +2250,7 @@ async def list_portions(
     "/{food_id}/portions", status_code=status.HTTP_201_CREATED, response_model=PortionResponse
 )
 async def create_portion(
-    food_id: int,
+    food_id: ResourceId,
     payload: PortionCreateRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -2082,6 +2293,16 @@ import 補上 `FoodPortion`、`UserRole`、`ForbiddenError`、`PortionCreateRequ
 >
 > 判準是：**403 會不會透露出「有一個你原本不知道的東西存在」？**
 > 會就用 404，不會就用 403。
+
+> **順序也很重要：`_assert_food_visible` 必須在管理員檢查之前。**
+> 實測確認：非管理員對**別人的私人食物**要求建立全域份量，得到的是 404 而不是 403。
+> 這是對的 —— 回 403 等於說「這個食物存在，你只是不夠格」，
+> 那就洩漏了一個他本來不該知道存在的東西。
+
+> **個人份量可以跟全域份量同名，這是刻意的。**
+> 唯一約束是 `(food_id, owner_id, label)`，全域是 `owner_id = NULL`、
+> 個人是具體的 id，所以兩者不衝突。使用者因此可以用自己的「1 碗」
+> 覆蓋掉全域的「1 碗」定義 —— 正是分層設計要達成的效果。
 
 - [ ] **Step 4: 執行測試，確認通過**
 
@@ -2190,7 +2411,7 @@ class PendingRevisionResponse(BaseModel):
     protein_g: Decimal
     fat_g: Decimal
     carb_g: Decimal
-    status: str
+    status: RevisionStatus
     change_note: str | None
     created_by: int
     created_at: datetime
@@ -2246,7 +2467,7 @@ async def list_pending_revisions(
             protein_g=revision.protein_g,
             fat_g=revision.fat_g,
             carb_g=revision.carb_g,
-            status=revision.status.value,
+            status=revision.status,
             change_note=revision.change_note,
             created_by=revision.created_by,
             created_at=revision.created_at,
@@ -2259,9 +2480,33 @@ async def list_pending_revisions(
     ]
 ```
 
+> **防禦性過濾在這裡是錯的：不要加 `Food.owner_id IS NULL`。**
+>
+> Task 9 證明了私人食物結構上不可能有待審版本，所以佇列今天只會有全域食物的提案。
+> 直覺上「那就加個過濾條件保險一下」聽起來很負責 —— **但那是拿一個大聲的 bug
+> 換一個安靜的 bug。**
+>
+> 如果那個不變式哪天被打破，**沒有過濾**的查詢會把私人食物的提案顯示在佇列裡，
+> 管理員一眼就看到不該出現的東西。**加了過濾**則會讓那筆待審版本永遠躺在資料庫裡、
+> 沒有任何路徑可以核准或駁回，而且沒有人會發現。
+>
+> **判準：這個防禦措施是讓錯誤更容易被看見，還是更容易被藏起來？**
+
+> **`current` 用 LEFT OUTER JOIN 而不是 INNER，這點也是必要的。**
+> 實測建了一個 `current_revision_id` 是 NULL 的食物：INNER JOIN 會把它
+> **從佇列裡整個消失** —— 等於把一筆待審提案藏起來不讓人審。
+> 這比前一項的失敗模式更糟，因為它連症狀都沒有。
+
 > **`aliased(FoodRevision)` 是必要的。** 這個查詢要同時取「待審的那一版」跟
-> 「目前生效的那一版」，兩者都來自 `food_revisions`。不做別名的話，SQLAlchemy
-> 無法區分兩次 join 指的是哪一個，產生的 SQL 會是錯的。
+> 「目前生效的那一版」，兩者都來自 `food_revisions`。
+>
+> **精確地說，失敗發生在哪一層值得知道：** SQLAlchemy 在建構查詢時**不會報錯**，
+> 它會安靜地產生 `FROM food_revisions ... LEFT JOIN food_revisions ON ...`
+> （同一個表名出現兩次），然後把重複的實體從 SELECT 欄位裡去掉。
+> 一直到送去 PostgreSQL 才炸：
+> `DuplicateAliasError: table name "food_revisions" specified more than once`。
+>
+> 所以不是「安靜地產生錯誤結果」，是「安靜地產生錯誤 SQL，等到碰資料庫才大聲失敗」。
 >
 > **佇列按 `created_at, id` 正序（最舊的在前）**，跟版本歷史相反 ——
 > 待審清單要先處理最久沒人理的那一筆。
@@ -2416,7 +2661,7 @@ async def _load_pending(db: AsyncSession, revision_id: int) -> tuple[FoodRevisio
 
 @router.post("/{revision_id}/approve", response_model=RevisionResponse)
 async def approve_revision(
-    revision_id: int,
+    revision_id: ResourceId,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> RevisionResponse:
@@ -2441,7 +2686,7 @@ import 補上 `from datetime import UTC, datetime`、`ConflictError`、`NotFound
 - [ ] **Step 4: 執行測試，確認通過**
 
 Run: `pytest tests/test_admin_review.py -v`
-Expected: `10 passed`
+Expected: `11 passed`（實測修正：原本寫 10，少算一筆）
 
 - [ ] **Step 5: Commit**
 
@@ -2574,7 +2819,7 @@ class RevisionRejectRequest(BaseModel):
 ```python
 @router.post("/{revision_id}/reject", response_model=RevisionResponse)
 async def reject_revision(
-    revision_id: int,
+    revision_id: ResourceId,
     payload: RevisionRejectRequest,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
@@ -2602,7 +2847,7 @@ async def reject_revision(
 - [ ] **Step 4: 執行測試，確認通過**
 
 Run: `pytest tests/test_admin_review.py -v`
-Expected: `15 passed`
+Expected: `16 passed`（實測修正：原本寫 15，承接上面少算的那一筆）
 
 - [ ] **Step 5: Commit**
 
@@ -2610,6 +2855,59 @@ Expected: `15 passed`
 git add app/schemas/food.py app/api/routes/admin_foods.py tests/test_admin_review.py
 git commit -m "feat: 新增駁回編輯提案的 API"
 ```
+
+#### Task 13 實測發現
+
+**1. CHECK 約束是真的，跟 Pydantic 是兩層不同的東西。**
+用 asyncpg 直接對 `wallet_test` 下原始 INSERT（不經過 SQLAlchemy，交易最後 rollback），
+插一列 `status='rejected'` 且 `reject_reason=NULL`：
+
+```
+sqlstate: 23514
+new row for relation "food_revisions" violates check constraint
+  "ck_food_revisions_rejected_needs_reason"
+```
+
+對照組（有理由的 rejected 列）插得進去。所以這兩層各自守不同的東西：
+`RevisionRejectRequest.reason` 的 `min_length=1` 只擋得住 API 這條路（空字串在碰到
+資料庫之前就 422 了），CHECK 擋的是**任何寫入者** —— 未來的直接 SQL 腳本、
+資料修補、或別的 handler 寫錯。少了任一層都會留下缺口。
+
+順帶確認：約束的實際名稱是 `ck_food_revisions_rejected_needs_reason`，
+沒有重複前綴。代表 Task 4 發現的那個 `CheckConstraint(name=)` 陷阱
+（`name=` 是 `%(constraint_name)s` 的**輸入**）已經套用到全部七個約束，
+不是只修了當時踩到的那一個。
+
+**2. 駁回一樣會釋放待審名額，而且一樣不是靠程式碼。**
+`reject_revision` 只賦值四個欄位，沒有任何一行提到名額或索引。
+`status` 一離開 `'pending'`，部分唯一索引就不再涵蓋這一列 —— 跟核准同一個機制。
+實測：駁回後對同一個食物再提一筆，`201`。
+
+**3. 指標確實沒動（正面驗證，不是靠沒有壞掉）。**
+駁回後用裸欄位查詢 `SELECT current_revision_id FROM foods WHERE id = :id`
+繞過 identity map 真的往資料庫跑一趟，讀回來仍然是原本那筆已核准的 revision（1），
+不是被駁回的那筆（2）。這裡不能讀 ORM 物件的屬性 —— 那只會把記憶體裡的值回音給你。
+
+**4. `is_current` 的三個寫法不一致，功能上都對，但值得記一筆。**
+`approve_revision` 寫死 `True`、`reject_revision` 用算的、`list_revisions` 也用算的。
+駁回這裡算出來**恆為 `False`**：`_load_pending` 只收 pending 的列，而 pending 的列
+不可能是 `current_revision_id` 的目標（只有 `approve_revision` 會寫那個指標，
+而且寫的同時就把狀態改成 approved）。所以算跟寫死在語意上等價。
+
+三個呼叫點混用兩種寫法沒有錯，但也沒有理由。**如果之後要統一，往「用算的」收斂** ——
+它跟 `list_revisions` 已經在用的形式一致，而且萬一未來指標的計算方式改了，
+寫死的那個會無聲地說謊。本計畫不動它，記在這裡。
+
+**5. 被駁回的 revision（含 `reject_reason`）對所有看得到該食物的人都可見。**
+`list_revisions` 只過 `_assert_food_visible`，沒有依 `created_by` 或角色過濾。
+這是設計如此，不是漏網：編輯歷史的定位是**共用的稽核軌跡／wiki 歷史**，
+能看到食物的人本來就看得到每一筆歷史數值、提案者、修改說明，
+單獨把駁回理由藏起來反而不一致；而且公開的理由能擋掉別人重複送同一筆被拒的編輯。
+
+**殘留風險（內容層，不是結構層）：** 駁回理由是管理員手寫的自由文字。
+如果管理員寫的是針對**提案者**而非針對**資料**的評論，那段話會讓所有看得到
+這個食物的人看到，不只提案者。這是管理員撰寫規範的問題，不是這個端點的 bug ——
+記在這裡，等 P3 做管理介面時在輸入框旁邊放提示。
 
 ---
 
@@ -2735,22 +3033,82 @@ git add tests/test_cross_user_isolation.py
 git commit -m "test: 新增跨使用者隔離的總掃描"
 ```
 
+#### Task 14 實測發現
+
+**1. 計畫原本指定的單一突變點不夠，會漏掉一半的測試。**
+可見性其實有**四個**互相獨立的執行點，不是一個：
+
+| 執行點 | 走這條路的端點 |
+|---|---|
+| `_load_visible_food`（會 join current revision） | `GET /foods/{id}`、`GET /foods/{id}/portions`、`POST /foods/{id}/portions` |
+| `_assert_food_visible`（不 join，給丟棄結果的呼叫者用） | `GET /foods/{id}/revisions`、`POST /foods/{id}/revisions` |
+| `search_foods` 自己的行內過濾 | `GET /foods` |
+| `list_portions` 裡的**分項**過濾 | 全域食物上的私人分量 |
+
+只突變 `_load_visible_food`（計畫原本寫的）只會讓 4 個隔離測試失敗，
+另外 4 個（revisions 兩個、search、分項過濾）**全程保持綠燈、完全沒被驗證過**。
+分項過濾那個尤其重要：那個情境裡食物本身是全域的，所以**任何食物層級的檢查都抓不到它**。
+
+四個突變各自的捕捉結果（每次都跑全套，改完立刻還原）：
+
+| 隔離測試 | M1 load | M2 assert | M3 search | M4 portion |
+|---|:-:|:-:|:-:|:-:|
+| read_alices_food | ✅ | | | |
+| list_alices_revisions | | ✅ | | |
+| edit_alices_food | | ✅ | | |
+| list_alices_portions | ✅ | | | |
+| add_a_portion | ✅ | | | |
+| find_by_search | | | ✅ | |
+| portion_on_a_global_food | | | | ✅ |
+| every_failure_looks_identical | ✅ | | | |
+
+沒有任何突變存活。每個測試剛好對到一個執行點，沒有重疊。
+
+**2. 但這 8 個測試「多抓到的東西」是零 —— 要誠實記下來。**
+四個突變**全部也都被既有的 per-task 測試抓到**（M1 另有 3 個、M2 另有 2 個、
+M3 和 M4 各另有 1 個）。也就是說：**把整個 `test_cross_user_isolation.py` 刪掉，
+四個突變依然會被抓出來。**
+
+所以這個檔案的價值不在偵測力，而在另外兩件事，寫清楚免得日後誤解：
+
+- 它把「所有會碰使用者資料的端點」列成**一份集中清單**。之後新增端點時，
+  這裡少一行是看得出來的；散在各個 per-task 檔案裡則看不出來。
+- `test_every_isolation_failure_looks_identical` 斷言了**沒有任何舊測試斷言過**的事：
+  「不是你的」和「不存在」的回應必須連 body 都逐字相同。這是它唯一獨有的覆蓋。
+
+**3. 一開始就是綠的測試，在被弄壞之前不算證據。**
+這是本 task 的方法論重點：這 8 個測試寫完就通過，沒有紅轉綠可以佐證。
+Step 3 才是真正的交付物，測試檔只是它的前置。
+（對照 Task 9 的反例：那次**拿掉正確的 `rollback()` 也會讓測試通過** ——
+綠燈本身從來不告訴你它為什麼綠。）
+
 ---
 
 ## 完成驗收
 
 每一項都要親自跑過並看到預期結果：
 
-- [ ] `alembic downgrade 0001` 後再 `alembic upgrade head`，兩次都成功
-- [ ] `alembic check` → `No new upgrade operations detected.`
-- [ ] `pytest -v -W error` 全部通過，且測試數 ≥ 110
-- [ ] `ruff check .` 無錯誤
-- [ ] `mypy app` 無錯誤
-- [ ] `pytest --cov=app --cov-fail-under=80` 通過
-- [ ] `docker compose up -d` 後 `/docs` 打得開，列出所有新端點
-- [ ] `pg_constraint` 裡 `foods` / `food_revisions` / `food_portions` 的約束名稱
-      全部是 `pk_` / `uq_` / `fk_` / `ck_` 開頭，沒有 PostgreSQL 自動命名的
-- [ ] Task 14 的突變測試確實讓多個隔離測試失敗
+- [x] `alembic downgrade 0001` 後再 `alembic upgrade head`，兩次都成功
+      （對 `wallet_test` 跑，不動 dev 的 `wallet`）
+- [x] `alembic check` → `No new upgrade operations detected.`
+- [x] `pytest -v -W error` → **130 passed**（門檻 110）
+- [x] `ruff check .` → `All checks passed!`
+- [x] `mypy app` → `Success: no issues found in 25 source files`
+- [x] `pytest --cov=app --cov-fail-under=80` → **97.30%**
+- [x] `docker compose` 的容器在跑，`/docs` 回 200，`/openapi.json` 列出 **15 個操作**，
+      含三個 admin 端點。容器 `Up 3 days` 卻服務著當天才寫的端點 ——
+      代表原始碼是掛載進去且 `--reload` 有效，dev 迴圈通的。
+- [x] `pg_constraint` 裡三張表共 **20 個約束、0 個違規**，全部是
+      `pk_` / `uq_` / `fk_` / `ck_` 開頭。另外確認
+      `fk_foods_current_revision_id_food_revisions` 在真實資料庫裡
+      `condeferrable=True condeferred=True`。
+- [x] Task 14 的突變測試確實讓多個隔離測試失敗（四個突變全部被抓，無存活）
+
+> **驗收腳本自己踩到的一個坑：** 查 `pg_constraint` 時，asyncpg 把 `contype`
+> 這個 `"char"` 欄位回傳成 **bytes**（`b'c'` 而非 `'c'`），害第一版腳本把
+> 20 個完全正確的名稱全部誤判成違規。查詢裡加 `con.contype::text` 就對了。
+> 值得記一筆：**驗證腳本本身也會說謊**，看到「全部都壞了」時，
+> 先懷疑量測工具，再懷疑受測對象。
 
 ## 超出規格的一個新增
 
@@ -2760,6 +3118,57 @@ git commit -m "test: 新增跨使用者隔離的總掃描"
 1. 沒有它就無法驗證份量分層真的有效（全域看得到、自己的看得到、別人的看不到）——
    那是這次新增 `owner_id` 的全部意義。
 2. 計畫 3 記錄餐點時必須先讓使用者選份量，一定會需要它。
+
+## 兩個記錄下來、本計畫不處理的項目
+
+- **`is_default` 沒有唯一性保證。** 同一個使用者可以把同一個食物的三個份量
+  全部標成預設（實測確認會成功）。影響有限 —— 消費端（P3 前端）會任選一個，
+  是使用體驗瑕疵而非資料完整性問題。真要修，最便宜的做法是照抄
+  `uq_food_revisions_one_pending` 的模式：部分唯一索引
+  `(food_id, owner_id) WHERE is_default = true`。
+
+- **份量清單裡全域與個人是混在一起按名稱排的**，沒有分組。加上排序是原始碼點順序，
+  使用者看到的會是「Apple、一小碗、一碗、半碗」這種順序，而且看不出哪些是自己的
+  （只能靠 `is_global` 欄位）。P3 的前端應該分區顯示。
+
+
+- **版本歷史會暴露原始的 `created_by` / `reviewed_by` 使用者 ID。**
+  全域食物對所有登入使用者可見，所以任何人都看得到「哪些 ID 提過案、哪些 ID 審過」。
+  ID 是連號整數，所以這洩漏了帳號建立的相對順序，也確認了某些 ID（含管理員）
+  正在使用中。目前沒有「用 ID 查身分」的端點，所以實際曝險有限。
+  但規格決策 4 提到審核佇列要顯示提案者身分供信任判斷 —— 做那件事的時候，
+  應該一併決定是要顯示 `display_name` 還是繼續露 ID。
+
+- **`_load_visible_food` 會 outer join 取出目前版本，但 Task 8、9、10 都把它丟掉。**
+  正確性沒問題（LEFT JOIN 不會濾掉 food 那一列），但每個請求多做一次 join。
+  若要清掉，做法是拆一個只做可見性檢查的輕量輔助函式。
+  三個呼叫點才值得抽，現在不動。
+
+## 給 P3 前端的一個型別事實
+
+實測 `/openapi.json`：
+
+- **回應**裡的 `kcal` 等數值是**字串**（`{"type": "string", "pattern": ...}`）——
+  Pydantic v2 預設把 `Decimal` 序列化成字串，避免 JavaScript 的 `Number`
+  在高精度時失真。
+- **請求**則兩種都收（`anyOf: number | string`）。
+
+前端拿到的是 `"180.50"` 不是 `180.5`。做加總時要先轉換，而且**不要 `parseFloat`
+之後直接相加** —— 那正好把後端刻意避開的浮點問題請回來。
+
+## 一個已知的驗證缺口
+
+**CI 跑的是 `mypy app`，不含 `tests/`。**
+
+所以 `tests/factories.py` 裡那些 `Decimal | int` 的型別註記，**在 CI 上完全沒有保護力**。
+未來有人寫 `create_food(db, created_by=u, kcal=99.99)`（float），mypy 不會擋 ——
+而 `Decimal(99.99)` 會產生二進位浮點雜訊（`Decimal('99.9899999999999948...')`）。
+
+實測：直接對那個檔案跑 mypy **會**報 `incompatible type "float"; expected "Decimal | int"`，
+所以註記本身是對的，只是 CI 沒在看。
+
+不在這份計畫處理（把 `tests` 納入 `mypy` 會需要處理既有測試的型別問題），
+但記錄下來 —— 這解釋了為什麼那些註記給人的安全感高於實際。
 
 ## 這份計畫刻意不做的事
 
