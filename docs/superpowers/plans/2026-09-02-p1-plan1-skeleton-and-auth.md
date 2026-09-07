@@ -1111,6 +1111,10 @@ Expected: `11 passed`
 >    await client.get(f"/api/foods/{food_id}", headers=headers)   # 用區域變數
 >    ```
 >    重新查詢（`await db.scalar(...)`）不受影響 —— 只有既有物件的同步屬性讀取會壞。
+>
+>    **精確的觸發條件是「在那個請求**之後**才讀取」，不是「f-string 裡有 ORM 屬性」。**
+>    `f"/api/foods/{food.id}"` 寫在 `await client.post(...)` 的引數位置是安全的 ——
+>    Python 在發出請求**之前**就把它求值完了。會出事的是請求結束後的另一行。
 
 > 4. **`db.commit()` 失敗之後，一定要 `await db.rollback()` 才能再用那個 session。**
 >    `IntegrityError` 之後任何操作都會拋 `PendingRollbackError`。
