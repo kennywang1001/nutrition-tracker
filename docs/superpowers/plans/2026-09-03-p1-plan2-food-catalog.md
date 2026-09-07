@@ -3033,22 +3033,82 @@ git add tests/test_cross_user_isolation.py
 git commit -m "test: 新增跨使用者隔離的總掃描"
 ```
 
+#### Task 14 實測發現
+
+**1. 計畫原本指定的單一突變點不夠，會漏掉一半的測試。**
+可見性其實有**四個**互相獨立的執行點，不是一個：
+
+| 執行點 | 走這條路的端點 |
+|---|---|
+| `_load_visible_food`（會 join current revision） | `GET /foods/{id}`、`GET /foods/{id}/portions`、`POST /foods/{id}/portions` |
+| `_assert_food_visible`（不 join，給丟棄結果的呼叫者用） | `GET /foods/{id}/revisions`、`POST /foods/{id}/revisions` |
+| `search_foods` 自己的行內過濾 | `GET /foods` |
+| `list_portions` 裡的**分項**過濾 | 全域食物上的私人分量 |
+
+只突變 `_load_visible_food`（計畫原本寫的）只會讓 4 個隔離測試失敗，
+另外 4 個（revisions 兩個、search、分項過濾）**全程保持綠燈、完全沒被驗證過**。
+分項過濾那個尤其重要：那個情境裡食物本身是全域的，所以**任何食物層級的檢查都抓不到它**。
+
+四個突變各自的捕捉結果（每次都跑全套，改完立刻還原）：
+
+| 隔離測試 | M1 load | M2 assert | M3 search | M4 portion |
+|---|:-:|:-:|:-:|:-:|
+| read_alices_food | ✅ | | | |
+| list_alices_revisions | | ✅ | | |
+| edit_alices_food | | ✅ | | |
+| list_alices_portions | ✅ | | | |
+| add_a_portion | ✅ | | | |
+| find_by_search | | | ✅ | |
+| portion_on_a_global_food | | | | ✅ |
+| every_failure_looks_identical | ✅ | | | |
+
+沒有任何突變存活。每個測試剛好對到一個執行點，沒有重疊。
+
+**2. 但這 8 個測試「多抓到的東西」是零 —— 要誠實記下來。**
+四個突變**全部也都被既有的 per-task 測試抓到**（M1 另有 3 個、M2 另有 2 個、
+M3 和 M4 各另有 1 個）。也就是說：**把整個 `test_cross_user_isolation.py` 刪掉，
+四個突變依然會被抓出來。**
+
+所以這個檔案的價值不在偵測力，而在另外兩件事，寫清楚免得日後誤解：
+
+- 它把「所有會碰使用者資料的端點」列成**一份集中清單**。之後新增端點時，
+  這裡少一行是看得出來的；散在各個 per-task 檔案裡則看不出來。
+- `test_every_isolation_failure_looks_identical` 斷言了**沒有任何舊測試斷言過**的事：
+  「不是你的」和「不存在」的回應必須連 body 都逐字相同。這是它唯一獨有的覆蓋。
+
+**3. 一開始就是綠的測試，在被弄壞之前不算證據。**
+這是本 task 的方法論重點：這 8 個測試寫完就通過，沒有紅轉綠可以佐證。
+Step 3 才是真正的交付物，測試檔只是它的前置。
+（對照 Task 9 的反例：那次**拿掉正確的 `rollback()` 也會讓測試通過** ——
+綠燈本身從來不告訴你它為什麼綠。）
+
 ---
 
 ## 完成驗收
 
 每一項都要親自跑過並看到預期結果：
 
-- [ ] `alembic downgrade 0001` 後再 `alembic upgrade head`，兩次都成功
-- [ ] `alembic check` → `No new upgrade operations detected.`
-- [ ] `pytest -v -W error` 全部通過，且測試數 ≥ 110
-- [ ] `ruff check .` 無錯誤
-- [ ] `mypy app` 無錯誤
-- [ ] `pytest --cov=app --cov-fail-under=80` 通過
-- [ ] `docker compose up -d` 後 `/docs` 打得開，列出所有新端點
-- [ ] `pg_constraint` 裡 `foods` / `food_revisions` / `food_portions` 的約束名稱
-      全部是 `pk_` / `uq_` / `fk_` / `ck_` 開頭，沒有 PostgreSQL 自動命名的
-- [ ] Task 14 的突變測試確實讓多個隔離測試失敗
+- [x] `alembic downgrade 0001` 後再 `alembic upgrade head`，兩次都成功
+      （對 `wallet_test` 跑，不動 dev 的 `wallet`）
+- [x] `alembic check` → `No new upgrade operations detected.`
+- [x] `pytest -v -W error` → **130 passed**（門檻 110）
+- [x] `ruff check .` → `All checks passed!`
+- [x] `mypy app` → `Success: no issues found in 25 source files`
+- [x] `pytest --cov=app --cov-fail-under=80` → **97.30%**
+- [x] `docker compose` 的容器在跑，`/docs` 回 200，`/openapi.json` 列出 **15 個操作**，
+      含三個 admin 端點。容器 `Up 3 days` 卻服務著當天才寫的端點 ——
+      代表原始碼是掛載進去且 `--reload` 有效，dev 迴圈通的。
+- [x] `pg_constraint` 裡三張表共 **20 個約束、0 個違規**，全部是
+      `pk_` / `uq_` / `fk_` / `ck_` 開頭。另外確認
+      `fk_foods_current_revision_id_food_revisions` 在真實資料庫裡
+      `condeferrable=True condeferred=True`。
+- [x] Task 14 的突變測試確實讓多個隔離測試失敗（四個突變全部被抓，無存活）
+
+> **驗收腳本自己踩到的一個坑：** 查 `pg_constraint` 時，asyncpg 把 `contype`
+> 這個 `"char"` 欄位回傳成 **bytes**（`b'c'` 而非 `'c'`），害第一版腳本把
+> 20 個完全正確的名稱全部誤判成違規。查詢裡加 `con.contype::text` 就對了。
+> 值得記一筆：**驗證腳本本身也會說謊**，看到「全部都壞了」時，
+> 先懷疑量測工具，再懷疑受測對象。
 
 ## 超出規格的一個新增
 
