@@ -2686,7 +2686,7 @@ import 補上 `from datetime import UTC, datetime`、`ConflictError`、`NotFound
 - [ ] **Step 4: 執行測試，確認通過**
 
 Run: `pytest tests/test_admin_review.py -v`
-Expected: `10 passed`
+Expected: `11 passed`（實測修正：原本寫 10，少算一筆）
 
 - [ ] **Step 5: Commit**
 
@@ -2847,7 +2847,7 @@ async def reject_revision(
 - [ ] **Step 4: 執行測試，確認通過**
 
 Run: `pytest tests/test_admin_review.py -v`
-Expected: `15 passed`
+Expected: `16 passed`（實測修正：原本寫 15，承接上面少算的那一筆）
 
 - [ ] **Step 5: Commit**
 
@@ -2855,6 +2855,59 @@ Expected: `15 passed`
 git add app/schemas/food.py app/api/routes/admin_foods.py tests/test_admin_review.py
 git commit -m "feat: 新增駁回編輯提案的 API"
 ```
+
+#### Task 13 實測發現
+
+**1. CHECK 約束是真的，跟 Pydantic 是兩層不同的東西。**
+用 asyncpg 直接對 `wallet_test` 下原始 INSERT（不經過 SQLAlchemy，交易最後 rollback），
+插一列 `status='rejected'` 且 `reject_reason=NULL`：
+
+```
+sqlstate: 23514
+new row for relation "food_revisions" violates check constraint
+  "ck_food_revisions_rejected_needs_reason"
+```
+
+對照組（有理由的 rejected 列）插得進去。所以這兩層各自守不同的東西：
+`RevisionRejectRequest.reason` 的 `min_length=1` 只擋得住 API 這條路（空字串在碰到
+資料庫之前就 422 了），CHECK 擋的是**任何寫入者** —— 未來的直接 SQL 腳本、
+資料修補、或別的 handler 寫錯。少了任一層都會留下缺口。
+
+順帶確認：約束的實際名稱是 `ck_food_revisions_rejected_needs_reason`，
+沒有重複前綴。代表 Task 4 發現的那個 `CheckConstraint(name=)` 陷阱
+（`name=` 是 `%(constraint_name)s` 的**輸入**）已經套用到全部七個約束，
+不是只修了當時踩到的那一個。
+
+**2. 駁回一樣會釋放待審名額，而且一樣不是靠程式碼。**
+`reject_revision` 只賦值四個欄位，沒有任何一行提到名額或索引。
+`status` 一離開 `'pending'`，部分唯一索引就不再涵蓋這一列 —— 跟核准同一個機制。
+實測：駁回後對同一個食物再提一筆，`201`。
+
+**3. 指標確實沒動（正面驗證，不是靠沒有壞掉）。**
+駁回後用裸欄位查詢 `SELECT current_revision_id FROM foods WHERE id = :id`
+繞過 identity map 真的往資料庫跑一趟，讀回來仍然是原本那筆已核准的 revision（1），
+不是被駁回的那筆（2）。這裡不能讀 ORM 物件的屬性 —— 那只會把記憶體裡的值回音給你。
+
+**4. `is_current` 的三個寫法不一致，功能上都對，但值得記一筆。**
+`approve_revision` 寫死 `True`、`reject_revision` 用算的、`list_revisions` 也用算的。
+駁回這裡算出來**恆為 `False`**：`_load_pending` 只收 pending 的列，而 pending 的列
+不可能是 `current_revision_id` 的目標（只有 `approve_revision` 會寫那個指標，
+而且寫的同時就把狀態改成 approved）。所以算跟寫死在語意上等價。
+
+三個呼叫點混用兩種寫法沒有錯，但也沒有理由。**如果之後要統一，往「用算的」收斂** ——
+它跟 `list_revisions` 已經在用的形式一致，而且萬一未來指標的計算方式改了，
+寫死的那個會無聲地說謊。本計畫不動它，記在這裡。
+
+**5. 被駁回的 revision（含 `reject_reason`）對所有看得到該食物的人都可見。**
+`list_revisions` 只過 `_assert_food_visible`，沒有依 `created_by` 或角色過濾。
+這是設計如此，不是漏網：編輯歷史的定位是**共用的稽核軌跡／wiki 歷史**，
+能看到食物的人本來就看得到每一筆歷史數值、提案者、修改說明，
+單獨把駁回理由藏起來反而不一致；而且公開的理由能擋掉別人重複送同一筆被拒的編輯。
+
+**殘留風險（內容層，不是結構層）：** 駁回理由是管理員手寫的自由文字。
+如果管理員寫的是針對**提案者**而非針對**資料**的評論，那段話會讓所有看得到
+這個食物的人看到，不只提案者。這是管理員撰寫規範的問題，不是這個端點的 bug ——
+記在這裡，等 P3 做管理介面時在輸入框旁邊放提示。
 
 ---
 
