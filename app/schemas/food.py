@@ -94,6 +94,10 @@ class PendingRevisionResponse(BaseModel):
     current_carb_g: Decimal | None
 
 
+class RevisionRejectRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+
+
 class PortionCreateRequest(BaseModel):
     label: str = Field(min_length=1, max_length=50)
     grams: Decimal = Field(gt=0, le=10000, max_digits=8, decimal_places=2)

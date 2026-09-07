@@ -11,7 +11,7 @@ from app.db import get_db
 from app.errors import ConflictError, NotFoundError
 from app.models.food import Food, FoodRevision, RevisionStatus
 from app.models.user import User
-from app.schemas.food import PendingRevisionResponse, RevisionResponse
+from app.schemas.food import PendingRevisionResponse, RevisionRejectRequest, RevisionResponse
 
 router = APIRouter(prefix="/admin/food-revisions", tags=["admin"])
 
@@ -96,4 +96,27 @@ async def approve_revision(
 
     result = RevisionResponse.model_validate(revision)
     result.is_current = True
+    return result
+
+
+@router.post("/{revision_id}/reject", response_model=RevisionResponse)
+async def reject_revision(
+    revision_id: ResourceId,
+    payload: RevisionRejectRequest,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> RevisionResponse:
+    revision, food = await _load_pending(db, revision_id)
+
+    revision.status = RevisionStatus.REJECTED
+    revision.reviewed_by = admin.id
+    revision.reviewed_at = datetime.now(UTC)
+    revision.reject_reason = payload.reason
+    # 指標不動 —— 駁回的提案從來沒有生效過
+
+    await db.commit()
+    await db.refresh(revision)
+
+    result = RevisionResponse.model_validate(revision)
+    result.is_current = revision.id == food.current_revision_id
     return result

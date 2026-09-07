@@ -157,3 +157,95 @@ async def test_the_queue_only_contains_pending_revisions(client, db_session):
 
     assert len(response.json()) == 1
     assert response.json()[0]["status"] == "pending"
+
+
+async def test_rejecting_records_the_reason_and_leaves_the_pointer_alone(client, db_session):
+    admin = await create_user(db_session, role=UserRole.ADMIN)
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=admin, kcal=70)
+    revision = await create_pending_revision(db_session, food=food, created_by=user, kcal=700)
+
+    response = await client.post(
+        f"/api/admin/food-revisions/{revision.id}/reject",
+        headers=auth(admin),
+        json={"reason": "熱量對不上三大營養素"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "rejected"
+    assert body["reject_reason"] == "熱量對不上三大營養素"
+    assert body["is_current"] is False
+
+    read = await client.get(f"/api/foods/{food.id}", headers=auth(user))
+    assert read.json()["nutrition"]["kcal"] == "70.00"
+
+
+async def test_rejecting_requires_a_reason(client, db_session):
+    admin = await create_user(db_session, role=UserRole.ADMIN)
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=admin)
+    revision = await create_pending_revision(db_session, food=food, created_by=user)
+
+    response = await client.post(
+        f"/api/admin/food-revisions/{revision.id}/reject",
+        headers=auth(admin),
+        json={"reason": ""},
+    )
+
+    assert response.status_code == 422
+
+
+async def test_a_normal_user_cannot_reject(client, db_session):
+    admin = await create_user(db_session, role=UserRole.ADMIN)
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=admin)
+    revision = await create_pending_revision(db_session, food=food, created_by=user)
+
+    response = await client.post(
+        f"/api/admin/food-revisions/{revision.id}/reject",
+        headers=auth(user),
+        json={"reason": "不行"},
+    )
+
+    assert response.status_code == 403
+
+
+async def test_rejecting_frees_the_slot_for_a_new_pending_edit(client, db_session):
+    admin = await create_user(db_session, role=UserRole.ADMIN)
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=admin)
+    revision = await create_pending_revision(db_session, food=food, created_by=user)
+
+    await client.post(
+        f"/api/admin/food-revisions/{revision.id}/reject",
+        headers=auth(admin),
+        json={"reason": "數值不對"},
+    )
+
+    response = await client.post(
+        f"/api/foods/{food.id}/revisions",
+        headers=auth(user),
+        json={"nutrition": {"kcal": "1", "protein_g": "1", "fat_g": "1", "carb_g": "1"}},
+    )
+
+    assert response.status_code == 201
+
+
+async def test_the_rejected_revision_stays_in_the_history(client, db_session):
+    """駁回不是刪除 —— 誰提了什麼、為什麼被拒，都要留著。"""
+    admin = await create_user(db_session, role=UserRole.ADMIN)
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=admin)
+    revision = await create_pending_revision(db_session, food=food, created_by=user)
+
+    await client.post(
+        f"/api/admin/food-revisions/{revision.id}/reject",
+        headers=auth(admin),
+        json={"reason": "數值不對"},
+    )
+
+    history = await client.get(f"/api/foods/{food.id}/revisions", headers=auth(user))
+    rejected = [r for r in history.json() if r["id"] == revision.id]
+    assert len(rejected) == 1
+    assert rejected[0]["reject_reason"] == "數值不對"
