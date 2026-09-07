@@ -2480,9 +2480,33 @@ async def list_pending_revisions(
     ]
 ```
 
+> **防禦性過濾在這裡是錯的：不要加 `Food.owner_id IS NULL`。**
+>
+> Task 9 證明了私人食物結構上不可能有待審版本，所以佇列今天只會有全域食物的提案。
+> 直覺上「那就加個過濾條件保險一下」聽起來很負責 —— **但那是拿一個大聲的 bug
+> 換一個安靜的 bug。**
+>
+> 如果那個不變式哪天被打破，**沒有過濾**的查詢會把私人食物的提案顯示在佇列裡，
+> 管理員一眼就看到不該出現的東西。**加了過濾**則會讓那筆待審版本永遠躺在資料庫裡、
+> 沒有任何路徑可以核准或駁回，而且沒有人會發現。
+>
+> **判準：這個防禦措施是讓錯誤更容易被看見，還是更容易被藏起來？**
+
+> **`current` 用 LEFT OUTER JOIN 而不是 INNER，這點也是必要的。**
+> 實測建了一個 `current_revision_id` 是 NULL 的食物：INNER JOIN 會把它
+> **從佇列裡整個消失** —— 等於把一筆待審提案藏起來不讓人審。
+> 這比前一項的失敗模式更糟，因為它連症狀都沒有。
+
 > **`aliased(FoodRevision)` 是必要的。** 這個查詢要同時取「待審的那一版」跟
-> 「目前生效的那一版」，兩者都來自 `food_revisions`。不做別名的話，SQLAlchemy
-> 無法區分兩次 join 指的是哪一個，產生的 SQL 會是錯的。
+> 「目前生效的那一版」，兩者都來自 `food_revisions`。
+>
+> **精確地說，失敗發生在哪一層值得知道：** SQLAlchemy 在建構查詢時**不會報錯**，
+> 它會安靜地產生 `FROM food_revisions ... LEFT JOIN food_revisions ON ...`
+> （同一個表名出現兩次），然後把重複的實體從 SELECT 欄位裡去掉。
+> 一直到送去 PostgreSQL 才炸：
+> `DuplicateAliasError: table name "food_revisions" specified more than once`。
+>
+> 所以不是「安靜地產生錯誤結果」，是「安靜地產生錯誤 SQL，等到碰資料庫才大聲失敗」。
 >
 > **佇列按 `created_at, id` 正序（最舊的在前）**，跟版本歷史相反 ——
 > 待審清單要先處理最久沒人理的那一筆。
