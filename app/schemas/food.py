@@ -72,6 +72,27 @@ class RevisionResponse(BaseModel):
     is_current: bool = False
 
 
+class PendingRevisionResponse(BaseModel):
+    id: int
+    food_id: int
+    food_name: str
+    food_brand: str | None
+    base_unit: BaseUnit
+    kcal: Decimal
+    protein_g: Decimal
+    fat_g: Decimal
+    carb_g: Decimal
+    status: RevisionStatus
+    change_note: str | None
+    created_by: int
+    created_at: datetime
+    # 目前生效的數值，供審核者比對
+    current_kcal: Decimal | None
+    current_protein_g: Decimal | None
+    current_fat_g: Decimal | None
+    current_carb_g: Decimal | None
+
+
 class PortionCreateRequest(BaseModel):
     label: str = Field(min_length=1, max_length=50)
     grams: Decimal = Field(gt=0, le=10000, max_digits=8, decimal_places=2)
