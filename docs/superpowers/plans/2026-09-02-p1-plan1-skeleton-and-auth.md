@@ -2861,6 +2861,18 @@ git commit -m "chore: 新增 CI 與 README"
 
 ## 已知的小問題（不阻擋，下次動到該檔案時順手修）
 
+- **這份文件本身含有 1 個 NUL byte（在記錄 `display_name` NUL byte 測試的那一段），
+  會讓 `grep` 把整份文件當成二進位檔。** 後果不是報錯，是**靜默吞掉所有結果** ——
+  只印一行 `Binary file ... matches`。
+
+  這在計畫 2 收尾時真的造成了一次錯誤結論：用 `grep -n "^## "` 找章節，
+  只回了 2 行，於是判定「延後到 P4 的部署議題」那一節不存在、交叉引用是空的。
+  實際上那一節有完整的 12 個章節在後面，內容也遠比預期完整。
+  加 `-a`（或 `git grep -I`）之後才看得到。
+
+  **教訓：`grep` 回傳「Binary file matches」時，你拿到的不是零結果，是未知結果。**
+  兩者在終端機上長得幾乎一樣，但意義相反。搜這份文件一律加 `-a`。
+
 - **`tests/conftest.py` 的 `TEST_DATABASE_URL` 預設值跟 `.env.example` 是「剛好一樣」，
   沒有任何機制保證它們同步。** `pytest` 不會載入 `.env` —— README 的測試步驟能運作，
   純粹是因為那個硬編的 fallback 剛好等於 `.env.example` 裡的值。
