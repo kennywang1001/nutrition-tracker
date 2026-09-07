@@ -7,6 +7,94 @@ def auth(user):
     return {"Authorization": f"Bearer {create_token(user.id, 'access')}"}
 
 
+async def test_approving_moves_the_pointer_and_changes_what_users_see(client, db_session):
+    admin = await create_user(db_session, role=UserRole.ADMIN)
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=admin, kcal=70)
+    revision = await create_pending_revision(db_session, food=food, created_by=user, kcal=75)
+
+    response = await client.post(
+        f"/api/admin/food-revisions/{revision.id}/approve", headers=auth(admin)
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "approved"
+    assert response.json()["reviewed_by"] == admin.id
+
+    read = await client.get(f"/api/foods/{food.id}", headers=auth(user))
+    assert read.json()["nutrition"]["kcal"] == "75.00"
+
+
+async def test_approving_does_not_change_history(client, db_session):
+    """核准新版本之後，舊版本仍然在歷史裡，而且數值沒有被改動。"""
+    admin = await create_user(db_session, role=UserRole.ADMIN)
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=admin, kcal=70)
+    revision = await create_pending_revision(db_session, food=food, created_by=user, kcal=75)
+
+    await client.post(f"/api/admin/food-revisions/{revision.id}/approve", headers=auth(admin))
+
+    history = await client.get(f"/api/foods/{food.id}/revisions", headers=auth(user))
+    values = {item["kcal"] for item in history.json()}
+    assert values == {"70.00", "75.00"}
+
+
+async def test_a_normal_user_cannot_approve(client, db_session):
+    admin = await create_user(db_session, role=UserRole.ADMIN)
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=admin)
+    revision = await create_pending_revision(db_session, food=food, created_by=user)
+
+    response = await client.post(
+        f"/api/admin/food-revisions/{revision.id}/approve", headers=auth(user)
+    )
+
+    assert response.status_code == 403
+
+
+async def test_approving_an_already_reviewed_revision_returns_409(client, db_session):
+    admin = await create_user(db_session, role=UserRole.ADMIN)
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=admin)
+    revision = await create_pending_revision(db_session, food=food, created_by=user)
+
+    await client.post(f"/api/admin/food-revisions/{revision.id}/approve", headers=auth(admin))
+    again = await client.post(
+        f"/api/admin/food-revisions/{revision.id}/approve", headers=auth(admin)
+    )
+
+    assert again.status_code == 409
+    assert again.json()["error"]["code"] == "REVISION_NOT_PENDING"
+
+
+async def test_approving_a_nonexistent_revision_returns_404(client, db_session):
+    admin = await create_user(db_session, role=UserRole.ADMIN)
+
+    response = await client.post(
+        "/api/admin/food-revisions/999999/approve", headers=auth(admin)
+    )
+
+    assert response.status_code == 404
+
+
+async def test_approving_frees_the_slot_for_a_new_pending_edit(client, db_session):
+    """核准之後，同一個食物才能再接受新的待審編輯。"""
+    admin = await create_user(db_session, role=UserRole.ADMIN)
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=admin)
+    revision = await create_pending_revision(db_session, food=food, created_by=user)
+
+    await client.post(f"/api/admin/food-revisions/{revision.id}/approve", headers=auth(admin))
+
+    response = await client.post(
+        f"/api/foods/{food.id}/revisions",
+        headers=auth(user),
+        json={"nutrition": {"kcal": "1", "protein_g": "1", "fat_g": "1", "carb_g": "1"}},
+    )
+
+    assert response.status_code == 201
+
+
 async def test_admin_sees_the_pending_queue(client, db_session):
     admin = await create_user(db_session, role=UserRole.ADMIN)
     user = await create_user(db_session, display_name="提案的人")
