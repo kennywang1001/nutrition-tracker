@@ -70,3 +70,19 @@ class RevisionResponse(BaseModel):
     reviewed_at: datetime | None
     reject_reason: str | None
     is_current: bool = False
+
+
+class PortionCreateRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=50)
+    grams: Decimal = Field(gt=0, le=10000, max_digits=8, decimal_places=2)
+    is_default: bool = False
+    # 只有管理員能建立全域份量
+    is_global: bool = False
+
+
+class PortionResponse(BaseModel):
+    id: int
+    label: str
+    grams: Decimal
+    is_default: bool
+    is_global: bool

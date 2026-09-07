@@ -8,14 +8,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.api.params import ResourceId
 from app.db import get_db
-from app.errors import ConflictError, NotFoundError
-from app.models.food import Food, FoodRevision, RevisionStatus
-from app.models.user import User
+from app.errors import ConflictError, ForbiddenError, NotFoundError
+from app.models.food import Food, FoodPortion, FoodRevision, RevisionStatus
+from app.models.user import User, UserRole
 from app.schemas.food import (
     FoodCreateRequest,
     FoodResponse,
     FoodScope,
     NutritionResponse,
+    PortionCreateRequest,
+    PortionResponse,
     RevisionCreateRequest,
     RevisionResponse,
 )
@@ -244,3 +246,67 @@ async def propose_revision(
     result = RevisionResponse.model_validate(revision)
     result.is_current = revision.id == food.current_revision_id
     return result
+
+
+@router.get("/{food_id}/portions", response_model=list[PortionResponse])
+async def list_portions(
+    food_id: ResourceId,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[PortionResponse]:
+    food, _ = await _load_visible_food(db, food_id, user)
+
+    portions = (
+        await db.scalars(
+            select(FoodPortion)
+            .where(
+                FoodPortion.food_id == food.id,
+                or_(FoodPortion.owner_id.is_(None), FoodPortion.owner_id == user.id),
+            )
+            .order_by(FoodPortion.label)
+        )
+    ).all()
+    return [
+        PortionResponse(
+            id=p.id, label=p.label, grams=p.grams,
+            is_default=p.is_default, is_global=p.owner_id is None,
+        )
+        for p in portions
+    ]
+
+
+@router.post(
+    "/{food_id}/portions", status_code=status.HTTP_201_CREATED, response_model=PortionResponse
+)
+async def create_portion(
+    food_id: ResourceId,
+    payload: PortionCreateRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> PortionResponse:
+    food, _ = await _load_visible_food(db, food_id, user)
+
+    if payload.is_global and user.role is not UserRole.ADMIN:
+        # 這是角色不符，不是擁有權不符 —— 所以是 403 而不是 404。
+        # 資源存在、使用者也看得到，只是不能做這個動作。
+        raise ForbiddenError("FORBIDDEN", "只有管理員能建立全域份量")
+
+    portion = FoodPortion(
+        food_id=food.id,
+        owner_id=None if payload.is_global else user.id,
+        label=payload.label,
+        grams=payload.grams,
+        is_default=payload.is_default,
+    )
+    db.add(portion)
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise ConflictError("PORTION_EXISTS", "你已經為這個食物建過同名的份量了") from exc
+
+    await db.refresh(portion)
+    return PortionResponse(
+        id=portion.id, label=portion.label, grams=portion.grams,
+        is_default=portion.is_default, is_global=portion.owner_id is None,
+    )
