@@ -1,9 +1,11 @@
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query, status
-from sqlalchemy import ColumnElement, or_, select
+from sqlalchemy import ColumnElement, Select, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.api.deps import get_current_user
 from app.api.params import ResourceId
@@ -11,6 +13,7 @@ from app.db import get_db
 from app.errors import ConflictError, ForbiddenError
 from app.food_visibility import assert_food_visible, load_visible_food
 from app.models.food import Food, FoodPortion, FoodRevision, RevisionStatus
+from app.models.meal import Meal, MealItem
 from app.models.user import User, UserRole
 from app.schemas.food import (
     FoodCreateRequest,
@@ -120,6 +123,77 @@ async def search_foods(
     if q:
         stmt = stmt.where(Food.name.ilike(f"%{q}%"))
 
+    rows = (await db.execute(stmt)).all()
+    return [_to_response(food, revision) for food, revision in rows]
+
+
+# `/frequent` 與 `/recent` 必須宣告在 `/{food_id}` 之前 ——
+# FastAPI／Starlette 依宣告順序比對路由，`/{food_id}` 會先比對到
+# `/foods/frequent`，把 "frequent" 當成 food_id 去解析成 int，
+# 因為 ResourceId 解析失敗而回 422（而不是 404 或正確路由到這裡）。
+# 這是實測過的：把這兩個端點放在 `/{food_id}` 之後會讓
+# tests/test_foods_frequent.py 全部收到 422 VALIDATION_ERROR。
+_CurrentRevision = aliased(FoodRevision)
+
+
+def _my_recorded_foods_stmt(
+    user: User, limit: int, order_by: ColumnElement[Any]
+) -> Select[tuple[Food, FoodRevision]]:
+    """`frequent` 與 `recent` 共用的查詢：使用者記錄過的食物，join 回食物「目前」
+    生效的版本（不是項目當時釘住的版本 —— 那是 `GET /api/meals/{id}` 的事，
+    這裡刻意相反：這個端點是要再記一筆，必須看到今天的營養素資料）。
+
+    可見性過濾（`Food.owner_id IS NULL OR owner_id = :me`）今天是空轉的 ——
+    `POST /api/meals` 已經擋住「記錄看不到的食物」，所以自己的餐裡不可能有
+    看不到的食物。保留它純粹是防禦性：日後若加上「刪除食物」或「取消分享」，
+    這裡會是唯一會漏的地方。這件事今天測不出來，因為沒有任何突變能讓它失守。
+
+    規格第 6.6 節：P1 用查詢 + 索引解決，不建快取表。
+    實測過 `EXPLAIN (ANALYZE, BUFFERS)`（10,500 與 610,500 筆 meal_items 兩種規模）：
+    `ix_meals_user_id_eaten_at` 確實被用來過濾 `Meal.user_id`（Bitmap Index Scan），
+    資料量大時 `meal_items -> meals` 這段 join 用的是既有的 `ix_meal_items_meal_id`
+    （Index Scan，nested loop）。`ix_meal_items_food_revision_id` 在兩種規模下
+    都沒有出現在計畫裡 —— 這個查詢的篩選力來自 `user_id`，不是 `food_revision_id`，
+    所以規格原本設想「這個索引就是為 frequent/recent 而存在」並不成立，
+    是先前沒有實測就寫進計畫的假設。
+    """
+    return (
+        select(Food, _CurrentRevision)
+        .select_from(MealItem)
+        .join(Meal, MealItem.meal_id == Meal.id)
+        .join(FoodRevision, MealItem.food_revision_id == FoodRevision.id)
+        .join(Food, FoodRevision.food_id == Food.id)
+        .outerjoin(_CurrentRevision, Food.current_revision_id == _CurrentRevision.id)
+        .where(
+            Meal.user_id == user.id,
+            or_(Food.owner_id.is_(None), Food.owner_id == user.id),
+        )
+        .group_by(Food.id, _CurrentRevision.id)
+        .order_by(order_by, Food.id)
+        .limit(limit)
+    )
+
+
+@router.get("/frequent", response_model=list[FoodResponse])
+async def list_frequent_foods(
+    limit: int = Query(default=10, ge=1, le=50),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[FoodResponse]:
+    """使用者最常吃的食物，依吃過的次數多到少排序（規格第 11 節：每天走最多次的路徑）。"""
+    stmt = _my_recorded_foods_stmt(user, limit, func.count().desc())
+    rows = (await db.execute(stmt)).all()
+    return [_to_response(food, revision) for food, revision in rows]
+
+
+@router.get("/recent", response_model=list[FoodResponse])
+async def list_recent_foods(
+    limit: int = Query(default=10, ge=1, le=50),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[FoodResponse]:
+    """使用者最近吃過的食物，依最後一次吃的時間新到舊排序。"""
+    stmt = _my_recorded_foods_stmt(user, limit, func.max(Meal.eaten_at).desc())
     rows = (await db.execute(stmt)).all()
     return [_to_response(food, revision) for food, revision in rows]
 
