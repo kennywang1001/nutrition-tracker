@@ -1,8 +1,17 @@
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
+from app.days import day_bounds
+from app.models.meal import MealType
 from app.models.user import UserRole
 from app.security.tokens import create_token
-from tests.factories import create_food, create_pending_revision, create_portion, create_user
+from tests.factories import (
+    create_food,
+    create_meal,
+    create_pending_revision,
+    create_portion,
+    create_user,
+)
 
 
 def auth(user):
@@ -202,3 +211,164 @@ async def test_get_meal_uses_pinned_revision_not_foods_current_revision(client, 
     body = response.json()
     assert body["items"][0]["kcal"] == "200.00"
     assert body["kcal"] == "200.00"
+
+
+# ---------------------------------------------------------------------------
+# Task 9: GET /api/meals?date= —— 時區在這裡發揮作用
+# ---------------------------------------------------------------------------
+#
+# 下面三個測試（07:00 早餐、23:00 宵夜、不同時區使用者）是「時區存在 users
+# 表」這個計畫決定唯一的實證：如果拿掉它們，一個把 day_bounds() 換成
+# 「UTC 當天 00:00-24:00」的實作會全部通過。
+
+
+async def test_get_by_date_returns_that_days_meals_ordered_by_eaten_at(client, db_session):
+    user = await create_user(db_session)  # 預設時區 Asia/Taipei
+    # 2026-09-04（台北）的 UTC 範圍是 [2026-09-03T16:00, 2026-09-04T16:00)
+    later = await create_meal(
+        db_session, user=user, eaten_at=datetime(2026, 9, 4, 10, 0, tzinfo=UTC)
+    )
+    earlier = await create_meal(
+        db_session, user=user, eaten_at=datetime(2026, 9, 3, 20, 0, tzinfo=UTC)
+    )
+    # 落在這一天範圍外的一餐，確認不會被誤收進來
+    await create_meal(db_session, user=user, eaten_at=datetime(2026, 9, 3, 10, 0, tzinfo=UTC))
+
+    response = await client.get("/api/meals", headers=auth(user), params={"date": "2026-09-04"})
+
+    assert response.status_code == 200
+    ids = [meal["id"] for meal in response.json()]
+    assert ids == [earlier.id, later.id]
+
+
+async def test_taipei_breakfast_at_07_00_appears_on_its_own_day_not_the_day_before(
+    client, db_session
+):
+    """台北時間早上 7 點的早餐，UTC 時刻是前一天 23:00 —— 這是整個時區設計
+    存在的理由：拿掉這個測試，寫死 UTC 的實作也會通過其他所有測試。
+    """
+    user = await create_user(db_session)  # 預設時區 Asia/Taipei
+    # 2026-09-04 07:00 台北 == 2026-09-03 23:00 UTC
+    breakfast = await create_meal(
+        db_session,
+        user=user,
+        eaten_at=datetime(2026, 9, 3, 23, 0, tzinfo=UTC),
+        meal_type=MealType.BREAKFAST,
+    )
+
+    that_day = await client.get("/api/meals", headers=auth(user), params={"date": "2026-09-04"})
+    day_before = await client.get("/api/meals", headers=auth(user), params={"date": "2026-09-03"})
+
+    assert [meal["id"] for meal in that_day.json()] == [breakfast.id]
+    assert day_before.json() == []
+
+
+async def test_late_night_snack_appears_that_day_not_the_next(client, db_session):
+    """晚間吃的宵夜要留在當天，不能被算到隔天。
+
+    刻意用 America/New_York（UTC-4，夏令時）而不是 Asia/Taipei 來寫這個測試 ——
+    這是實測發現：Taipei 是 UTC+8，「當地晚一點」換算成 UTC 只會往回退到
+    同一個 UTC 日期（23:00 - 8h = 15:00，還是同一天），所以拿 Taipei 23:00 當
+    測資的話，就算把實作寫死成 UTC，這筆宵夜換算後**照樣**落在同一個 UTC 日期、
+    測試照樣通過 —— 抓不到「忘記讀使用者時區」這個突變。
+    只有時區在 UTC**之後**（America/New_York 這種負偏移）的深夜時刻，
+    加上偏移換算成 UTC 才會**進位到隔天**，才是「宵夜被誤判成隔天」這個
+    風險真正會發生的方向，也才是這個測試真正該守住的案例。
+    """
+    user = await create_user(db_session)
+    patch_response = await client.patch(
+        "/api/me", headers=auth(user), json={"timezone": "America/New_York"}
+    )
+    assert patch_response.status_code == 200
+    # 2026-09-04 23:30 紐約（夏令時 UTC-4） == 2026-09-05 03:30 UTC（隔天！）
+    snack = await create_meal(
+        db_session,
+        user=user,
+        eaten_at=datetime(2026, 9, 5, 3, 30, tzinfo=UTC),
+        meal_type=MealType.SNACK,
+    )
+
+    that_day = await client.get("/api/meals", headers=auth(user), params={"date": "2026-09-04"})
+    next_day = await client.get("/api/meals", headers=auth(user), params={"date": "2026-09-05"})
+
+    assert [meal["id"] for meal in that_day.json()] == [snack.id]
+    assert next_day.json() == []
+
+
+async def test_other_users_meals_do_not_appear(client, db_session):
+    alice = await create_user(db_session)
+    bob = await create_user(db_session)
+    await create_meal(db_session, user=alice, eaten_at=datetime(2026, 9, 4, 4, 0, tzinfo=UTC))
+    bobs_meal = await create_meal(
+        db_session, user=bob, eaten_at=datetime(2026, 9, 4, 4, 0, tzinfo=UTC)
+    )
+
+    response = await client.get("/api/meals", headers=auth(bob), params={"date": "2026-09-04"})
+
+    assert [meal["id"] for meal in response.json()] == [bobs_meal.id]
+
+
+async def test_same_utc_instant_lands_on_different_dates_for_different_timezones(
+    client, db_session
+):
+    """同一個 UTC 時刻，落在台北使用者跟紐約使用者手上是不同的日期 ——
+    這是「時區存在 users 表」而不是「伺服器寫死一個時區」的直接證明。
+    """
+    taipei_user = await create_user(db_session)  # 預設時區 Asia/Taipei
+    ny_user = await create_user(db_session)
+    patch_response = await client.patch(
+        "/api/me", headers=auth(ny_user), json={"timezone": "America/New_York"}
+    )
+    assert patch_response.status_code == 200
+
+    # 2026-09-04T02:00:00Z：
+    #   台北（UTC+8）：2026-09-04 10:00 -> 日期是 2026-09-04
+    #   紐約（夏令時 UTC-4）：2026-09-03 22:00 -> 日期是 2026-09-03
+    instant = datetime(2026, 9, 4, 2, 0, tzinfo=UTC)
+    taipei_meal = await create_meal(db_session, user=taipei_user, eaten_at=instant)
+    ny_meal = await create_meal(db_session, user=ny_user, eaten_at=instant)
+
+    taipei_response = await client.get(
+        "/api/meals", headers=auth(taipei_user), params={"date": "2026-09-04"}
+    )
+    ny_wrong_date = await client.get(
+        "/api/meals", headers=auth(ny_user), params={"date": "2026-09-04"}
+    )
+    ny_correct_date = await client.get(
+        "/api/meals", headers=auth(ny_user), params={"date": "2026-09-03"}
+    )
+
+    assert [meal["id"] for meal in taipei_response.json()] == [taipei_meal.id]
+    assert ny_wrong_date.json() == []
+    assert [meal["id"] for meal in ny_correct_date.json()] == [ny_meal.id]
+
+
+async def test_no_date_param_defaults_to_today_in_users_timezone(client, db_session, monkeypatch):
+    """省略 date 時預設「使用者時區的今天」。
+
+    用固定日期取代真正的系統時鐘，而不是依賴 datetime.now() 的真實回傳值 ——
+    monkeypatch 的對象是 app/days.py 的 today_in_timezone()（一個為了這個
+    目的特別留的接縫），不是 datetime.datetime.now（那是不可變的 C 型別，
+    沒辦法直接替換）。這樣測試在任何時刻執行結果都一樣，不會有「剛好卡在
+    午夜附近跑測試」這種機率極低但確實存在的 flaky 來源。
+    """
+    user = await create_user(db_session)  # 預設時區 Asia/Taipei
+    fixed_today = date(2026, 5, 10)
+    monkeypatch.setattr("app.api.routes.meals.today_in_timezone", lambda _tz: fixed_today)
+
+    start, _end = day_bounds(fixed_today, "Asia/Taipei")
+    todays_meal = await create_meal(db_session, user=user, eaten_at=start + timedelta(hours=1))
+    await create_meal(db_session, user=user, eaten_at=start - timedelta(hours=1))
+
+    response = await client.get("/api/meals", headers=auth(user))
+
+    assert response.status_code == 200
+    assert [meal["id"] for meal in response.json()] == [todays_meal.id]
+
+
+async def test_invalid_date_format_is_rejected(client, db_session):
+    user = await create_user(db_session)
+
+    response = await client.get("/api/meals", headers=auth(user), params={"date": "not-a-date"})
+
+    assert response.status_code == 422

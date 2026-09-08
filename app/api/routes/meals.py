@@ -1,13 +1,16 @@
+from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import Row, Select, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.api.params import ResourceId
+from app.days import day_bounds, today_in_timezone
 from app.db import get_db
 from app.errors import ConflictError, NotFoundError, UnprocessableEntityError
 from app.food_visibility import load_visible_food
@@ -250,3 +253,52 @@ async def read_meal(
         )
     ).all()
     return _build_meal_response(meal, rows)
+
+
+@router.get("", response_model=list[MealResponse])
+async def list_meals(
+    date: date | None = Query(default=None),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[MealResponse]:
+    """依「使用者當地的一天」列出當天吃的餐（計畫 3 決定 1）。
+
+    `day_bounds()` 把使用者的時區換算成 UTC 的半開區間 `[start, end)`——
+    用 `<`，不是 `<=`：`<=` 會讓恰好落在當地午夜的一餐同時屬於兩天。
+    省略 `date` 時預設「使用者時區的今天」，靠 `today_in_timezone()` 算，
+    不是伺服器所在時區的今天，也不是 UTC 的今天。
+
+    兩次查詢，跟這一天有幾筆餐、每筆餐有幾個項目都無關：
+    第一次查出這天的所有 Meal，第二次用 `meal_id IN (...)` 一次把所有
+    Meal 的項目、revision、food 都 join 回來，在記憶體裡依 meal_id 分組——
+    不是對每筆 Meal 各查一次項目（那會是「這天吃了幾餐」次的往返）。
+    """
+    day = date or today_in_timezone(user.timezone)
+    start, end = day_bounds(day, user.timezone)
+
+    meals = (
+        await db.scalars(
+            select(Meal)
+            .where(
+                Meal.user_id == user.id,
+                Meal.eaten_at >= start,
+                Meal.eaten_at < end,
+            )
+            .order_by(Meal.eaten_at)
+        )
+    ).all()
+    if not meals:
+        return []
+
+    meal_ids = [meal.id for meal in meals]
+    rows = (
+        await db.execute(
+            _item_join_query().where(MealItem.meal_id.in_(meal_ids)).order_by(MealItem.id)
+        )
+    ).all()
+
+    items_by_meal: dict[int, list[Row[tuple[MealItem, FoodRevision, Food]]]] = defaultdict(list)
+    for row in rows:
+        items_by_meal[row[0].meal_id].append(row)
+
+    return [_build_meal_response(meal, items_by_meal.get(meal.id, [])) for meal in meals]
