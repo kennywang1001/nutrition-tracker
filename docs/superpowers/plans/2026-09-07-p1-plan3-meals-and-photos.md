@@ -237,10 +237,31 @@ def _must_be_real_timezone(cls, value: str) -> str:
     return value
 ```
 
-**兩種例外都要接。** `ZoneInfoNotFoundError` 是查無此時區；`ValueError` 是
-key 本身不合法 —— `ZoneInfo("../../etc/passwd")` 走的是 `ValueError` 這條，
-因為 `zoneinfo` 自己會擋含 `..` 或以 `/` 開頭的 key。只接前者的話，
-路徑穿越形狀的輸入會變成未處理的 500。
+**兩種例外都要接**，但原因跟我原本寫的相反 —— 以下是 Task 1 實測後的更正：
+
+```
+ZoneInfoNotFoundError.__mro__ = (ZoneInfoNotFoundError, KeyError, LookupError, ...)
+issubclass(ZoneInfoNotFoundError, ValueError) -> False
+```
+
+| 漏接的那一個 | `"Mars/Olympus"` | `"../../etc/passwd"` |
+|---|---|---|
+| 只接 `ZoneInfoNotFoundError` | 422 ✓ | **422，但洩漏內部訊息** |
+| 只接 `ValueError` | **逃逸成 500** | 422 ✓ |
+
+原本的計畫寫「只接前者會讓路徑穿越變成 500」，**這是錯的**。
+500 的風險在普通的「查無此時區」那一側，因為 `ZoneInfoNotFoundError` 是
+`LookupError` 不是 `ValueError`。
+
+而路徑穿越那一側之所以不會 500，是因為 **Pydantic v2 會自動把任何逃出驗證器的
+`ValueError` 轉成乾淨的 422** —— 不只是我們自己 `raise` 的那些。
+漏接的實際後果因此是**回應裡出現 zoneinfo 的內部訊息**
+（`"ZoneInfo keys must refer to subdirectories of TZPATH, got: ../../etc/passwd"`），
+而不是狀態碼變了。
+
+> **這個機制本身值得記住：** 驗證器裡漏接一個 `ValueError`，從狀態碼上完全看不出來，
+> 只有訊息換人寫。**只斷言 422 的測試抓不到這種漏接。**
+> 本計畫後續凡是驗證器的測試，都要順便斷言訊息是我們自己的那一句。
 
 - [ ] **Step 4: 測試**
 
