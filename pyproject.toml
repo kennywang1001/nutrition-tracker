@@ -14,6 +14,10 @@ dependencies = [
     "pyjwt>=2.10",
     "argon2-cffi>=23.1",
     "python-multipart>=0.0.17",
+    "pillow>=11,<12",
+    # Windows 沒有系統時區資料庫，zoneinfo 完全依賴這個套件；
+    # Linux 有 /usr/share/zoneinfo，所以不宣告的話會變成「CI 綠、本機紅」。
+    "tzdata",
 ]
 
 [project.optional-dependencies]

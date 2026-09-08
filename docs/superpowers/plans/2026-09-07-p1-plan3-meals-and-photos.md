@@ -288,12 +288,29 @@ def test_a_fall_back_day_is_25_hours_long():
     assert end - start == timedelta(hours=25)
 
 
-def test_consecutive_days_tile_the_timeline_with_no_gap_or_overlap():
+@pytest.mark.parametrize(
+    ("tz_name", "day"),
+    [
+        ("America/New_York", date(2026, 3, 7)),
+        ("America/New_York", date(2026, 3, 8)),
+        ("America/New_York", date(2026, 10, 31)),
+        ("America/New_York", date(2026, 11, 1)),
+        # 這兩個時區的日光節約切換點就在午夜，當地的 00:00 根本不存在
+        ("America/Havana", date(2026, 3, 8)),
+        ("America/Santiago", date(2026, 9, 6)),
+    ],
+)
+def test_consecutive_days_tile_the_timeline_with_no_gap_or_overlap(tz_name, day):
     """今天的結束必須恰好等於明天的開始 —— 半開區間才不會漏算或重複算一餐。"""
-    for day in (date(2026, 3, 7), date(2026, 3, 8), date(2026, 10, 31), date(2026, 11, 1)):
-        _, end = day_bounds(day, "America/New_York")
-        next_start, _ = day_bounds(day + timedelta(days=1), "America/New_York")
-        assert end == next_start
+    _, end = day_bounds(day, tz_name)
+    next_start, _ = day_bounds(day + timedelta(days=1), tz_name)
+    assert end == next_start
+
+
+def test_a_day_whose_local_midnight_does_not_exist_still_works():
+    """古巴 2026-03-08 當地沒有 00:00 這一刻，但這一天依然要有明確的起訖。"""
+    start, end = day_bounds(date(2026, 3, 8), "America/Havana")
+    assert end - start == timedelta(hours=23)
 
 
 def test_an_unknown_timezone_raises():
@@ -337,17 +354,28 @@ def day_bounds(day: date, tz_name: str) -> tuple[datetime, datetime]:
 > 區間就必然首尾相接，不會有縫也不會重疊 —— 這一點不依賴任何時區的性質，
 > 因為兩個邊界是同一個運算產生的。
 >
-> **一個待你實測的邊角：** 有些時區的日光節約切換點就在午夜，當地的 00:00
-> 那一刻根本不存在（`America/Santiago` 據說是其中之一，但我寫這份計畫時
-> 環境缺 `tzdata`，**沒能實際驗證，不要當成事實**）。
-> 請在這個 task 順手查一個真的有午夜切換的時區，加進上面的平鋪測試，
-> 並回報 `datetime.combine()` 在那個不存在的時刻上實際的行為
-> （是拋例外、還是依 fold 規則解析成某個 UTC 時刻）。
-> 平鋪性應該仍然成立，但**這是推論不是實測**。
+> **當地午夜不存在的時區（已實測）：** 有些時區的日光節約切換點就在午夜，
+> 那一天當地的 00:00 那一刻**根本不存在**。掃過 tzdata 全部時區後，
+> 2026 年有這種日子的是 4 個（含別名）：
+>
+> | 時區 | 日期 |
+> |---|---|
+> | `America/Havana`（別名 `Cuba`） | 2026-03-08 |
+> | `America/Santiago`（別名 `Chile/Continental`） | 2026-09-06 |
+>
+> `datetime.combine()` **不會拋例外**，它依 fold 規則把那個不存在的當地時刻
+> 解析成一個確定的 UTC 時刻（實測：來回轉換後變成當地 01:00）。
+> 而平鋪性**實測依然成立** —— 因為起訖是同一個運算產生的：
+>
+> ```
+> 2026-03-07  len=24:00:00  end==next_start -> True
+> 2026-03-08  len=23:00:00  end==next_start -> True
+> 2026-03-09  len=24:00:00  end==next_start -> True
+> ```
 
 - [ ] **Step 3: 驗收 + commit**
 
-`pytest -W error`（140）。Commit: `feat: 新增依使用者時區計算單日起訖的函式`
+`pytest -W error`（146）。Commit: `feat: 新增依使用者時區計算單日起訖的函式`
 
 ---
 
