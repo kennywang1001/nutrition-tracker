@@ -99,3 +99,40 @@ async def test_update_me_requires_a_token(client):
 
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "NOT_AUTHENTICATED"
+
+
+async def test_an_explicit_null_timezone_is_rejected_not_a_500(client, db_session):
+    """`{"timezone": null}` 必須是 422。
+
+    這裡曾經是一個真的缺陷：欄位宣告成 `X | None = None`，其中 None 是拿來當
+    「沒帶這個欄位」的哨兵，但 Pydantic 在型別層無法區分「沒帶」和「明確送 null」
+    —— 兩者都通過驗證。而路由用的 `exclude_unset` 正確地保留了明確的 null，
+    於是 None 一路流到 setattr，撞上資料庫的 NOT NULL，變成未認證即可觸發的
+    500（`asyncpg.NotNullViolationError`）。
+
+    修法不是改成 `exclude_none`（那會把明確的 null 悄悄吞掉），
+    而是在 schema 層明講「這兩個欄位不接受 null」。
+    """
+    user = await create_user(db_session)
+    token = create_token(user.id, "access")
+
+    response = await client.patch(
+        "/api/me",
+        json={"timezone": None},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 422
+
+
+async def test_an_explicit_null_display_name_is_rejected_not_a_500(client, db_session):
+    user = await create_user(db_session)
+    token = create_token(user.id, "access")
+
+    response = await client.patch(
+        "/api/me",
+        json={"display_name": None},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 422
