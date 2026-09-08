@@ -1025,6 +1025,42 @@ def save_photo(content: bytes, *, user_id: int) -> str:
 
 `pytest -W error`（202）。Commit: `feat: 新增餐點照片上傳的 API`
 
+#### Task 13 / 14 實測發現
+
+**1. 測試套件的 `-W error` 會遮蔽正式環境缺少防護這件事。**（本計畫最重要的一個發現）
+
+計畫裡預先警告過「不要依賴 `-W error` 幫你擋解壓縮炸彈」，實測把明確的
+`width * height > MAX_IMAGE_PIXELS` 檢查拿掉之後，證實了這件事，而且比預期更尖銳：
+
+| 突變：拿掉明確的像素上限檢查 | 結果 |
+|---|---|
+| `pytest -W error`（套件平常的跑法） | **8 passed，全綠** |
+| `pytest -W "ignore::Warning"`（正式環境的真實條件） | **FAILED** |
+
+Pillow 對超過 `MAX_IMAGE_PIXELS` 的圖只發 `DecompressionBombWarning`。
+`-W error` 把它轉成例外，於是測試**因為錯誤的理由而通過** ——
+它驗證到的是「pytest 的警告設定」，不是「應用程式的防護」。
+
+**推論很嚴重：** 如果那個明確檢查從一開始就沒寫，而且沒有人在不帶 `-W error`
+的情況下跑過，整個套件會一路全綠，而正式環境完全沒有防護。
+**綠燈這次不只是沒告訴你為什麼綠 —— 它是被測試設定本身偽造出來的。**
+
+> 可以帶走的通則：**當一個防護的失敗形式是「發出警告」時，
+> `-W error` 就從測試工具變成了受測系統的一部分。**
+> 這類防護的測試必須在關掉警告轉例外的條件下跑過一次，
+> 否則你測的是 pytest 不是你的程式。
+
+**2. EXIF / GPS 的測試是有鑑別力的（已驗證）。**
+把 `image.save(...)` 改成帶 `exif=image.getexif().tobytes()`
+（模擬未來有人為了保留拍攝時間而加上去），**恰好 1 個測試失敗**：
+`test_gps_exif_does_not_survive_saving`。這正是這個測試存在的理由 ——
+它守的不是今天的行為（Pillow 預設就會丟掉 EXIF），是**那一天**的行為。
+
+**3. ruff 的 `extend-immutable-calls` 要補 `fastapi.File` 與 `fastapi.Form`。**
+跟計畫 1 為 `Depends()` 加的是同一回事。這件事在派工時會卡住 ——
+subagent 被禁止改 `pyproject.toml`，所以只能由主 session 處理。
+**日後任何引入新 FastAPI 參數宣告方式的 task，都要預期這一步。**
+
 ---
 
 ## Task 15: `GET /api/meals/{id}/photo`
