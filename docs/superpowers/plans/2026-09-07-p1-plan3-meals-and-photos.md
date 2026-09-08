@@ -1033,6 +1033,16 @@ DB 有 `photo_path` 但檔案不見了 → 404（不是 500）。
 - `GET /api/meals?date=` 回傳的清單裡不含 Alice 的餐
 - `GET /api/foods/frequent` 不含 Alice 吃過但 Bob 沒吃過的食物
 
+**還要補一筆 `/api/me` 的**（Task 3 實測發現的缺口）：
+建立 Alice 與 Bob 兩個使用者，用 Bob 的 token 打 `PATCH /api/me`，
+然後斷言 **Alice 那一列完全沒變**。
+
+> 這個端點沒有路徑參數，使用者 id 只來自 token，直覺會覺得不可能寫錯。
+> 但 Task 3 實測過：把 handler 改成寫 `user.id - 1` 那一列，
+> **全部 153 個測試照樣通過**，Bob 的請求靜默地覆寫了 Alice 的資料、回 200。
+> 沒有路徑參數消除的是**惡意輸入**這條路，不是**程式寫錯**那條。
+> 隔離測試要守的是後者。
+
 - [ ] **Step 2: 突變測試 —— 這是本 task 真正的交付物**
 
 **這些測試寫完就是綠的，所以在被弄壞之前不算證據。**
@@ -1058,7 +1068,7 @@ DB 有 `photo_path` 但檔案不見了 → 404（不是 500）。
 
 - [ ] **Step 3: 驗收 + commit**
 
-`pytest -W error`（229）。Commit: `test: 餐點與照片端點加入跨使用者隔離掃描`
+`pytest -W error`（232）。Commit: `test: 餐點與照片端點加入跨使用者隔離掃描`
 
 ---
 
