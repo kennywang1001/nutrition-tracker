@@ -364,12 +364,31 @@ def day_bounds(day: date, tz_name: str) -> tuple[datetime, datetime]:
     return start.astimezone(UTC), end.astimezone(UTC)
 ```
 
-> **`end` 必須是「隔天的起點」，絕對不能寫成 `start + timedelta(days=1)`。**
+> **`end` 要在轉成 UTC「之前」算完。**（Task 2 實測更正：這條原本寫成
+> 「絕對不能寫成 `start + timedelta(days=1)`」，**指錯了突變點**。）
 >
-> 看起來一樣，在有日光節約的時區就是錯的：那兩天分別只有 23 小時和 25 小時。
-> 寫成加 24 小時，春天那天會多算隔天的一小時、秋天那天會漏掉一小時 ——
-> 而且台灣沒有日光節約，**用台灣時區寫的測試永遠抓不到這個 bug**。
-> 上面那兩個美東的測試就是為此存在的。
+> 關鍵不是用不用 `timedelta`，而是**加法發生在哪一側**：
+>
+> | 寫法 | 2026-03-08（美東春分）的長度 |
+> |---|---|
+> | `combine(隔天, 00:00, tz)` → UTC | 23 小時 ✓ |
+> | `當地 start + timedelta(days=1)` → UTC | 23 小時 ✓ **等價，不是 bug** |
+> | 先 `.astimezone(UTC)`，**再** `+ timedelta(days=1)` | **24 小時 ✗** |
+>
+> 中間那個之所以也對，是因為 **aware datetime 的加法是掛鐘運算** ——
+> 它只動年月日時分秒欄位，`tzinfo` 與 `fold` 原封不動、不重新正規化
+> （PEP 495 的行為，與 `pytz` 的固定偏移物件不同）。在「當地時間」上加一天，
+> 得到的就是隔天的當地午夜，與 `combine` **逐欄位完全相同**。
+>
+> 錯的是第三種：轉成 UTC 之後，時區資訊已經塌成一個固定偏移，一天就真的是
+> 24 小時，DST 那一小時就永遠找不回來了。
+>
+> 台灣沒有日光節約，**用台灣時區寫的測試對三種寫法一律全綠**。
+> 上面那兩個美東的測試就是為此存在的 —— 而且實測確認它們抓得到第三種。
+>
+> **這件事本身是個教材：** 「不要寫 `+ timedelta(days=1)`」這種以**語法**
+> 描述的規則是靠不住的，同一段文字放在相鄰兩行、意義完全不同。
+> 真正的規則要用**語意**描述：算日界線的運算必須發生在有時區語意的那一側。
 >
 > 「隔天的起點」這個寫法還附帶保證了平鋪性：只要每一天都用同一個函式算，
 > 區間就必然首尾相接，不會有縫也不會重疊 —— 這一點不依賴任何時區的性質，
@@ -397,6 +416,12 @@ def day_bounds(day: date, tz_name: str) -> tuple[datetime, datetime]:
 - [ ] **Step 3: 驗收 + commit**
 
 `pytest -W error`（146）。Commit: `feat: 新增依使用者時區計算單日起訖的函式`
+
+> **一個留給之後順手修的小問題：** `pytest.raises(Exception)` 會觸發 ruff 的
+> `B017`（不要斷言裸的 Exception），Task 2 是用 `# noqa: B017` 壓掉的。
+> 但 Task 1 已經實測出真實型別是 `ZoneInfoNotFoundError`，
+> 所以改成 `pytest.raises(ZoneInfoNotFoundError)` 會**同時**移除這個 lint 抑制
+> 並把真實行為釘住。下次動到這個檔案時順手改。
 
 ---
 
