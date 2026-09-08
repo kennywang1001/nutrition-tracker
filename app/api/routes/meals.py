@@ -303,16 +303,25 @@ async def delete_meal(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    """刪一餐。`meal_items` 靠 `ON DELETE CASCADE` 跟著走，這裡不逐筆刪 ——
-    照片檔案的清理留到 Task 16。
+    """刪一餐。`meal_items` 靠 `ON DELETE CASCADE` 跟著走，這裡不逐筆刪。
 
     擁有權檢查（`_load_owned_meal`）必須在刪除**之前**：先查到、確認是
     自己的，才刪；不能「先刪、再檢查」，那種順序下「回 404」跟「真的沒刪掉」
     會脫鉤 —— 對一個一查就砍的實作，只斷言狀態碼的測試看不出差別。
+
+    照片檔案的清理跟 `DELETE .../photo` 同一個順序原則（計畫 3 Task 16、
+    規格第 8 節）：先讓 DB 正確（`db.delete` + `commit`），檔案清理放在
+    commit 之後、盡力刪除（`delete_photo` 本身是 best-effort，失敗只記警告，
+    不影響這個請求已經成功的事實）。`photo_path` 要在 commit **之前**存進
+    區域變數 —— 物件被刪除後再讀它的屬性不保證還拿得到值。
     """
     meal = await _load_owned_meal(db, meal_id, user)
+    photo_path = meal.photo_path
     await db.delete(meal)
     await db.commit()
+
+    if photo_path is not None:
+        delete_photo(photo_path)
 
 
 @router.get("", response_model=list[MealResponse])
@@ -527,3 +536,37 @@ async def read_meal_photo(
         raise NotFoundError("MEAL_PHOTO_NOT_FOUND", "這一餐沒有照片") from exc
 
     return Response(content=content, media_type="image/jpeg")
+
+
+@router.delete("/{meal_id}/photo", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_meal_photo(
+    meal_id: ResourceId,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """刪掉一餐的照片（計畫 3 Task 16）。
+
+    一律「先 DB、後檔案」（規格第 8 節：兩種孤兒檔案的嚴重性不對稱 ——
+    多一個沒人引用的檔案只是浪費磁碟，少一個被引用的檔案是壞掉的功能，
+    所以要讓 DB 先正確）：
+
+    1. 先把 `photo_path` 清成 NULL 並 commit —— DB 正確是第一優先
+    2. 再盡力刪掉磁碟上的檔案（`delete_photo` 是 best-effort，失敗只記警告，
+       不讓這個請求因此失敗）
+
+    如果顛倒順序：先刪檔案、DB 寫入才發現失敗，`photo_path` 還指著一個
+    已經不存在的檔案 —— 跟 Task 15 要防的「DB 有 photo_path 但檔案不見」
+    是同一種壞狀態，只是這次是自己造成的。
+
+    `old_path` 要在 commit **之前**存進區域變數：`meal.photo_path` 已經被
+    設成 None，commit 之後再讀就拿不到原本的路徑了。
+    """
+    meal = await _load_owned_meal(db, meal_id, user)
+    if meal.photo_path is None:
+        raise NotFoundError("MEAL_PHOTO_NOT_FOUND", "這一餐沒有照片")
+
+    old_path = meal.photo_path
+    meal.photo_path = None
+    await db.commit()
+
+    delete_photo(old_path)

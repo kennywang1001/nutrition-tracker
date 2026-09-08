@@ -412,3 +412,108 @@ async def test_no_static_files_mount_serves_the_photo_directory():
         f"發現 StaticFiles 掛載：{static_mounts} —— "
         "照片一律要經過 /api/meals/{id}/photo 驗證擁有權，不可以被繞過"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 16：DELETE /api/meals/{id}/photo + 刪整餐時的孤兒檔案清理 —— 4 個必要測試
+#
+# 一律「先 DB、後檔案」：檔案刪除失敗只記下來，不讓請求失敗
+# （規格第 8 節：多一個沒人引用的檔案只是浪費磁碟，少一個被引用的檔案是
+# 壞掉的功能，所以要讓 DB 先正確）。
+# ---------------------------------------------------------------------------
+
+
+async def test_deleting_a_photo_returns_204_clears_photo_path_and_deletes_the_file(
+    client, db_session
+):
+    user = await create_user(db_session)
+    meal_id = await _create_meal(client, user)
+    photo_path = await _upload_photo(client, user, meal_id)
+    photo_file = Path(settings.photo_dir) / photo_path
+    assert photo_file.is_file()
+
+    response = await client.delete(f"/api/meals/{meal_id}/photo", headers=auth(user))
+
+    assert response.status_code == 204
+    assert not photo_file.is_file()
+
+    reread = await client.get(f"/api/meals/{meal_id}", headers=auth(user))
+    assert reread.json()["photo_path"] is None
+
+
+async def test_deleting_someone_elses_photo_is_not_found(client, db_session):
+    """『404』和『真的沒刪掉』是兩件事（繼承自 Task 11 的教訓）——
+    這裡連檔案是否還在磁碟上、DB 裡的 photo_path 是否還在，都要真的重查一次。
+    """
+    alice = await create_user(db_session)
+    bob = await create_user(db_session)
+    meal_id = await _create_meal(client, alice)
+    photo_path = await _upload_photo(client, alice, meal_id)
+    photo_file = Path(settings.photo_dir) / photo_path
+
+    response = await client.delete(f"/api/meals/{meal_id}/photo", headers=auth(bob))
+
+    assert response.status_code == 404
+    assert photo_file.is_file(), "別人的照片檔案不能被刪掉"
+
+    reread = await client.get(f"/api/meals/{meal_id}", headers=auth(alice))
+    assert reread.json()["photo_path"] == photo_path
+
+
+async def test_deleting_photo_when_meal_has_none_is_not_found(client, db_session):
+    user = await create_user(db_session)
+    meal_id = await _create_meal(client, user)
+
+    response = await client.delete(f"/api/meals/{meal_id}/photo", headers=auth(user))
+
+    assert response.status_code == 404
+
+
+async def test_deleting_a_meal_also_deletes_its_photo_file(client, db_session):
+    """刪整餐時照片檔案也要被清掉（Task 16 的孤兒檔案清理）。"""
+    user = await create_user(db_session)
+    meal_id = await _create_meal(client, user)
+    photo_path = await _upload_photo(client, user, meal_id)
+    photo_file = Path(settings.photo_dir) / photo_path
+    assert photo_file.is_file()
+
+    response = await client.delete(f"/api/meals/{meal_id}", headers=auth(user))
+
+    assert response.status_code == 204
+    assert not photo_file.is_file(), "刪整餐時照片檔案也要被清掉"
+
+
+async def test_the_file_is_deleted_only_after_the_db_commit_succeeds_on_photo_delete(
+    client, db_session, monkeypatch
+):
+    """跟 Task 14 上傳那個順序測試同構：直接記錄 commit 與刪檔的實際先後順序，
+    不能只看最終結果 —— 最終結果沒辦法分辨『先刪檔案再 commit』跟
+    『先 commit 再刪檔案』，因為兩種順序在沒有任何失敗發生時的最終狀態
+    長得一模一樣（見任務報告：這個順序被實際突變驗證過，`DELETE .../photo`
+    原本並沒有任何測試會因為調換順序而變紅）。
+    """
+    user = await create_user(db_session)
+    meal_id = await _create_meal(client, user)
+    photo_path = await _upload_photo(client, user, meal_id)
+    photo_file = Path(settings.photo_dir) / photo_path
+    assert photo_file.is_file()
+
+    events: list[str] = []
+    original_commit = db_session.commit
+
+    async def spying_commit():
+        await original_commit()
+        events.append("commit")
+
+    def spying_delete(rel_path: str) -> None:
+        events.append("delete")
+        delete_photo(rel_path)  # 呼叫真正的實作，確保檔案真的被清掉
+
+    monkeypatch.setattr(db_session, "commit", spying_commit)
+    monkeypatch.setattr("app.api.routes.meals.delete_photo", spying_delete)
+
+    response = await client.delete(f"/api/meals/{meal_id}/photo", headers=auth(user))
+
+    assert response.status_code == 204
+    assert events == ["commit", "delete"], f"commit 必須先於 delete，實際順序：{events}"
+    assert not photo_file.is_file()
