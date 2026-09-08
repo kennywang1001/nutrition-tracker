@@ -30,6 +30,9 @@ class MealCreateRequest(BaseModel):
 class MealItemResponse(BaseModel):
     id: int
     food_id: int
+    # 顯示用：client 不用為了畫面上的食物名稱另外查一次 GET /api/foods/{id}。
+    # 建立與讀取兩個端點共用同一個 response schema（計畫 3 Task 8）。
+    food_name: str
     portion_id: int | None
     # quantity + portion_id 只用於顯示；quantity_g 才是所有計算的依據，
     # 寫入當下就換算好、之後永不改變（見計畫陷阱 1）。

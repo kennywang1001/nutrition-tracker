@@ -1,15 +1,17 @@
+from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, status
-from sqlalchemy import or_, select
+from sqlalchemy import Row, Select, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.params import ResourceId
 from app.db import get_db
 from app.errors import ConflictError, NotFoundError, UnprocessableEntityError
 from app.food_visibility import load_visible_food
-from app.models.food import FoodPortion, FoodRevision
+from app.models.food import Food, FoodPortion, FoodRevision
 from app.models.meal import Meal, MealItem
 from app.models.user import User
 from app.nutrition import Macros, scale, total
@@ -35,6 +37,7 @@ class _ResolvedItem:
     """
 
     food_id: int
+    food_name: str
     food_revision_id: int
     revision: FoodRevision
     portion_id: int | None
@@ -88,6 +91,7 @@ async def _resolve_item(
 
     return _ResolvedItem(
         food_id=food.id,
+        food_name=food.name,
         food_revision_id=revision.id,
         revision=revision,
         portion_id=portion_id,
@@ -96,10 +100,13 @@ async def _resolve_item(
     )
 
 
-def _item_response(item: MealItem, food_id: int, macros: Macros) -> MealItemResponse:
+def _item_response(
+    item: MealItem, food_id: int, food_name: str, macros: Macros
+) -> MealItemResponse:
     return MealItemResponse(
         id=item.id,
         food_id=food_id,
+        food_name=food_name,
         portion_id=item.portion_id,
         # 用 refresh 過的 item.quantity / item.quantity_g，不是解析階段算出來的
         # Decimal —— 使用者傳進來的 "100" 在記憶體裡還是 1 位精度，要 refresh
@@ -155,7 +162,9 @@ async def create_meal(
         await db.refresh(item)
         macros = scale(resolved.revision, item.quantity_g)
         macros_list.append(macros)
-        items_response.append(_item_response(item, resolved.food_id, macros))
+        items_response.append(
+            _item_response(item, resolved.food_id, resolved.food_name, macros)
+        )
 
     totals = total(macros_list)
     return MealResponse(
@@ -169,3 +178,75 @@ async def create_meal(
         fat_g=totals.fat_g,
         carb_g=totals.carb_g,
     )
+
+
+def _item_join_query() -> Select[tuple[MealItem, FoodRevision, Food]]:
+    """項目 join 它釘住的 revision、再 join 該 revision 當時所屬的食物。
+
+    刻意不用 `selectinload`：本計畫不宣告 `relationship()`（見計畫「刻意不做的
+    事」/程式碼組織限制），selectinload 需要 ORM 關聯屬性才能運作。改用明確的
+    兩層 join，一次查詢就把項目、營養素、食物名稱全部帶回來 —— 讀一餐或列一天
+    的餐，查詢次數都跟項目數無關，不會有「N 個項目 = N+1 次往返」的問題。
+    """
+    return (
+        select(MealItem, FoodRevision, Food)
+        .join(FoodRevision, MealItem.food_revision_id == FoodRevision.id)
+        .join(Food, FoodRevision.food_id == Food.id)
+    )
+
+
+def _build_meal_response(
+    meal: Meal, item_rows: Sequence[Row[tuple[MealItem, FoodRevision, Food]]]
+) -> MealResponse:
+    """把一筆 Meal 與它已經 join 好的項目列組成回應。
+
+    **一律用項目當時釘住的 food_revision_id 換算，不是食物現在的
+    current_revision_id**（`_item_join_query` 的 join 條件本身就保證了這件事：
+    join 的起點是 `MealItem.food_revision_id`，從頭到尾没有碰過
+    `Food.current_revision_id`）。這是版本化的重點：歷史紀錄要看到的是
+    當時的數值，即使食物後來被審核通過新版本，這裡的數字也不能動。
+    """
+    items_response: list[MealItemResponse] = []
+    macros_list: list[Macros] = []
+    for item, revision, food in item_rows:
+        macros = scale(revision, item.quantity_g)
+        macros_list.append(macros)
+        items_response.append(_item_response(item, food.id, food.name, macros))
+
+    totals = total(macros_list)
+    return MealResponse(
+        id=meal.id,
+        eaten_at=meal.eaten_at,
+        meal_type=meal.meal_type,
+        note=meal.note,
+        items=items_response,
+        kcal=totals.kcal,
+        protein_g=totals.protein_g,
+        fat_g=totals.fat_g,
+        carb_g=totals.carb_g,
+    )
+
+
+@router.get("/{meal_id}", response_model=MealResponse)
+async def read_meal(
+    meal_id: ResourceId,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MealResponse:
+    """讀單一餐點：只有 2 次查詢，跟項目數無關（見 `_item_join_query`）。
+
+    擁有權判斷併進第一次查詢的 WHERE 條件裡（`Meal.user_id == user.id`），
+    不是「先查到再檢查擁有者」—— 後者會讓「不存在」跟「不是你的」在查詢層
+    就走不同的路徑，容易一邊改一邊漏。查不到（不管是真的不存在，還是存在但
+    是別人的）一律回同一種 404（繼承規矩第 1 條：權限失敗不回 403）。
+    """
+    meal = await db.scalar(select(Meal).where(Meal.id == meal_id, Meal.user_id == user.id))
+    if meal is None:
+        raise NotFoundError("MEAL_NOT_FOUND", "找不到該餐點")
+
+    rows = (
+        await db.execute(
+            _item_join_query().where(MealItem.meal_id == meal.id).order_by(MealItem.id)
+        )
+    ).all()
+    return _build_meal_response(meal, rows)
