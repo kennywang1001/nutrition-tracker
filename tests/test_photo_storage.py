@@ -5,6 +5,7 @@
 """
 
 import io
+import warnings
 from pathlib import Path
 
 import pytest
@@ -167,18 +168,26 @@ def test_a_declared_decompression_bomb_is_rejected():
     Pillow 內建機制在這個區間只發 `DecompressionBombWarning`（警告，不是
     例外），只有超過兩倍上限才會無條件硬拋 `DecompressionBombError`。
 
-    選在這個區間，確保擋下這個檔案的是 `save_photo()` 裡自己明確的尺寸
-    檢查，不是 Pillow 的內建行為，也不是 pytest 專案設定的 `-W error`
-    （把警告轉成例外）碰巧幫我們擋下來的 —— 這一點在驗收報告裡有額外
-    用「不加 -W error 單獨跑這個測試」與「拿掉明確檢查後重跑」兩次實測
-    驗證過。
+    但光是選對區間還不夠。專案的 pytest 設定帶 `-W error`，它會把那個警告
+    轉成例外，於是這個測試在平常的跑法下**走的是警告那條路，根本碰不到
+    我們的守衛** —— 守衛只有在不帶 `-W error` 時才會被執行到。
+    也就是說：套件平常的跑法從來沒有真的測過它。
+
+    所以這裡主動把那個警告消音，讓 `save_photo()` 裡明確的尺寸檢查成為
+    **唯一可能拋例外的東西**，並且比對錯誤訊息確認是它拋的。這樣一來，
+    `-W error` 是開是關，這個測試驗證的都是同一件事。
+
+    （先前的做法是在驗收時額外手動跑一次不帶 `-W error` 的驗證。
+    那種驗證留不下來 —— 它不在套件裡，就保護不了任何人。）
     """
     bomb_pixels = 9_000 * 7_000
     assert MAX_IMAGE_PIXELS < bomb_pixels < 2 * MAX_IMAGE_PIXELS
     bomb = _solid_color_bomb_png(9_000, 7_000)
 
-    with pytest.raises(InvalidImageError):
-        save_photo(bomb, user_id=1)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+        with pytest.raises(InvalidImageError, match="解壓縮炸彈"):
+            save_photo(bomb, user_id=1)
 
 
 def test_delete_photo_of_a_missing_file_does_not_raise():
