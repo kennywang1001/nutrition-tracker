@@ -469,7 +469,14 @@ class MealType(enum.StrEnum):
 
 class Meal(Base):
     __tablename__ = "meals"
-    __table_args__ = (Index("ix_meals_user_id_eaten_at", "user_id", "eaten_at"),)
+    __table_args__ = (
+        # 不靠 Enum(create_constraint=True) 自動產生，理由見 Task 5 的實測發現
+        CheckConstraint(
+            "meal_type IN ('breakfast', 'lunch', 'dinner', 'snack')",
+            name="meal_type_valid",
+        ),
+        Index("ix_meals_user_id_eaten_at", "user_id", "eaten_at"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     user_id: Mapped[int] = mapped_column(
@@ -477,7 +484,8 @@ class Meal(Base):
     )
     eaten_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     meal_type: Mapped[MealType] = mapped_column(
-        Enum(MealType, name="meal_type", native_enum=False, create_constraint=True,
+        # create_constraint=False —— 見下方 Task 5 的實測發現，這裡不能用 True
+        Enum(MealType, name="meal_type", native_enum=False, create_constraint=False,
              values_callable=lambda e: [m.value for m in e]),
         nullable=False,
     )
@@ -519,11 +527,43 @@ class MealItem(Base):
 > 而是帶 CHECK 的字串欄位。原生 enum 要加一個值就得跑 `ALTER TYPE`，
 > 而餐別未來很可能要加（宵夜、加餐）。
 >
-> **但這裡有一個必須實測、不要照抄我假設的地方：** `native_enum=False` 產生的
-> 是 `VARCHAR(n)` 而不是規格 DDL 寫的 `text`，而且它自動建立的 CHECK 約束
-> 名稱由 `name=` 與命名慣例共同決定。**請在 migration 套用後實際查 `pg_constraint`
-> 與 `information_schema.columns`，把真實的型別與約束名稱回報。**
-> 計畫 2 就是在 `CheckConstraint` 的命名上，因為我沒實測就寫進計畫而踩過一次。
+> **實測結果（Task 5，其中一項推翻了我原本的寫法）：**
+>
+> 型別的部分我猜對了：`native_enum=False` 產生的是 **`VARCHAR(9)`**
+> （9 = 最長的標籤 `"breakfast"`），不是規格 DDL 寫的 `text`。
+>
+> **但 `create_constraint=True` 是錯的，而且錯得很隱蔽：它會讓
+> `alembic check` 永遠報漂移，沒有任何辦法收斂。**
+>
+> ```
+> Detected removed check constraint 'ck_meals_meal_type'
+> ```
+>
+> 每一次都報，重跑幾次都一樣。原因不是不穩定，是結構性的：
+>
+> - Alembic 的 CHECK 比對器（`alembic/util/sqla_compat.py` 的
+>   `all_table_check_constraints`）**刻意把 type-bound 的約束從 model 側排除掉**，
+>   那是 SQLAlchemy issue #3260 的 workaround。
+> - 但從資料庫反射回來的約束，**沒有任何欄位能標記它是 type-bound** ——
+>   在 PostgreSQL 眼中它就是一個普通的 CHECK。
+> - 於是 model 側算出 0 個、DB 側算出 1 個 → 永遠判定成 `remove_constraint`。
+>
+> **為什麼這件事比看起來嚴重：** CI 的漂移閘門就是 `alembic check`。
+> 用了 `create_constraint=True`，這個閘門會從第一天起就是紅的 ——
+> 而它紅的原因跟任何真實的漂移無關。接下來只有兩條路：
+> 把閘門關掉（於是真的漂移也不會被發現了），或是花很久找一個
+> 「明明模型和資料庫一模一樣卻說不一樣」的鬼。
+>
+> **正解：`create_constraint=False`，然後在 `__table_args__` 裡自己宣告一個
+> 普通的 `CheckConstraint`。** 那就跟 `quantity_positive`、`kcal_non_negative`
+> 走同一條路徑，命名慣例照常套用，實測名稱是 `ck_meals_meal_type_valid`，
+> `alembic check` 連續三次乾淨。
+>
+> **可以帶走的通則：** 「讓 ORM 幫你自動產生 schema 物件」和
+> 「讓 autogenerate 比對 schema 物件」這兩個便利功能，
+> 對**同一個**物件的認知可能不一致。宣告在 `__table_args__` 裡的東西是
+> 兩邊都看得見的；作為型別副產品自動長出來的東西不是。
+> 這也再一次印證了繼承規矩第 4 條：**model 要是唯一的事實來源。**
 
 > **索引為什麼是 ASC 而不是規格寫的 `eaten_at DESC`：** 這個索引服務的是
 > 「某使用者某段時間的餐點，時間新到舊」。`user_id` 是等值條件、`eaten_at` 是
