@@ -53,6 +53,10 @@ extend-immutable-calls = [
     "fastapi.Path",
     "fastapi.Body",
     "fastapi.Security",
+    # 計畫 3 Task 14（照片上傳）加入。跟上面幾個同一個理由：
+    # 這些不是「在預設值裡呼叫函式」的那種 bug，而是 FastAPI 宣告參數的方式。
+    "fastapi.File",
+    "fastapi.Form",
 ]
 
 [tool.mypy]

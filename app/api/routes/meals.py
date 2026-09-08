@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, File, Query, UploadFile, status
 from sqlalchemy import Row, Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,7 +12,12 @@ from app.api.deps import get_current_user
 from app.api.params import ResourceId
 from app.days import day_bounds, today_in_timezone
 from app.db import get_db
-from app.errors import ConflictError, NotFoundError, UnprocessableEntityError
+from app.errors import (
+    ConflictError,
+    NotFoundError,
+    PayloadTooLargeError,
+    UnprocessableEntityError,
+)
 from app.food_visibility import load_visible_food, load_visible_portion
 from app.models.food import Food, FoodRevision
 from app.models.meal import Meal, MealItem
@@ -25,10 +30,15 @@ from app.schemas.meal import (
     MealResponse,
     MealUpdateRequest,
 )
+from app.storage.photos import UPLOAD_CHUNK_SIZE, InvalidImageError, delete_photo, save_photo
 
 router = APIRouter(prefix="/meals", tags=["meals"])
 
 _CENTS = Decimal("0.01")
+
+# 10 MiB：涵蓋手機相機拍出來的一般 JPEG（通常幾 MB），同時足夠小，
+# 不會讓一次上傳長時間佔用記憶體或頻寬（計畫 3 Task 14）。
+MAX_PHOTO_BYTES = 10 * 1024 * 1024
 
 
 @dataclass
@@ -161,6 +171,7 @@ async def create_meal(
         eaten_at=meal.eaten_at,
         meal_type=meal.meal_type,
         note=meal.note,
+        photo_path=meal.photo_path,
         items=items_response,
         kcal=totals.kcal,
         protein_g=totals.protein_g,
@@ -208,6 +219,7 @@ def _build_meal_response(
         eaten_at=meal.eaten_at,
         meal_type=meal.meal_type,
         note=meal.note,
+        photo_path=meal.photo_path,
         items=items_response,
         kcal=totals.kcal,
         protein_g=totals.protein_g,
@@ -411,3 +423,72 @@ async def delete_meal_item(
 
     await db.delete(item)
     await db.commit()
+
+
+async def _read_upload_within_limit(file: UploadFile, limit: int) -> bytes:
+    """分塊讀取上傳內容，累積超過 limit 立刻中止。
+
+    絕不對整個檔案先 `await file.read()` 再檢查長度 —— 那樣一個幾 GB 的
+    上傳會在「檢查長度」這一步之前就把記憶體吃光，等於沒有上限
+    （計畫 3 Task 14）。這裡用 walrus 運算子逐塊讀取、逐塊累加，
+    超過 limit 的當下馬上丟例外，剩下沒讀的部分留在 socket 緩衝區，
+    不會被吸進這個函式的記憶體。
+    """
+    chunks: list[bytes] = []
+    total_bytes = 0
+    while chunk := await file.read(UPLOAD_CHUNK_SIZE):
+        total_bytes += len(chunk)
+        if total_bytes > limit:
+            raise PayloadTooLargeError(
+                "PHOTO_TOO_LARGE", f"照片大小超過 {limit} bytes 的上限"
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+@router.post("/{meal_id}/photo", response_model=MealResponse)
+async def upload_meal_photo(
+    meal_id: ResourceId,
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MealResponse:
+    """上傳一餐的照片；已經有照片的話取代舊的。
+
+    取代舊照片的順序不能換（計畫 3 Task 14，規格第 8 節：兩種孤兒檔案的
+    嚴重性不對稱 —— 多一個沒人引用的檔案只是浪費磁碟，少一個被引用的
+    檔案是壞掉的功能，所以要讓 DB 先正確，檔案容許暫時落後）：
+
+    1. 先把新檔案寫到磁碟（`save_photo`）—— 這一步失敗完全不影響 DB 或舊檔
+    2. 再把新的 `photo_path` 寫進 DB 並 commit —— DB 正確是第一優先
+    3. 最後才盡力刪掉舊檔案（`delete_photo` 是 best-effort，失敗只記警告）
+
+    如果顛倒 2、3 的順序：先刪舊檔、DB 寫入才發現失敗，使用者原本的照片
+    已經沒了，新照片卻沒有被登記 —— 兩份都不見。
+
+    擁有權檢查在讀取、解碼上傳內容之前：上傳到別人的餐直接 404，
+    不必先花力氣處理圖片內容。
+    """
+    meal = await _load_owned_meal(db, meal_id, user)
+
+    content = await _read_upload_within_limit(file, MAX_PHOTO_BYTES)
+
+    try:
+        new_path = save_photo(content, user_id=user.id)
+    except InvalidImageError as exc:
+        raise UnprocessableEntityError("INVALID_PHOTO", "無法識別的圖片內容") from exc
+
+    old_path = meal.photo_path
+    meal.photo_path = new_path
+    await db.commit()
+    await db.refresh(meal)
+
+    if old_path is not None:
+        delete_photo(old_path)
+
+    rows = (
+        await db.execute(
+            _item_join_query().where(MealItem.meal_id == meal.id).order_by(MealItem.id)
+        )
+    ).all()
+    return _build_meal_response(meal, rows)

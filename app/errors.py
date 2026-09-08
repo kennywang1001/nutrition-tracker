@@ -55,6 +55,17 @@ class UnprocessableEntityError(AppError):
         super().__init__(code, message, status.HTTP_422_UNPROCESSABLE_CONTENT, details)
 
 
+class PayloadTooLargeError(AppError):
+    """上傳內容超過大小上限（計畫 3 Task 14：照片上傳）。
+
+    在讀進記憶體的過程中一邊累計一邊比對就中止，不是等整個 body 收完才算 ——
+    見 `app/api/routes/meals.py` 的 `_read_upload_within_limit`。
+    """
+
+    def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(code, message, status.HTTP_413_CONTENT_TOO_LARGE, details)
+
+
 def _envelope(code: str, message: str, details: dict[str, Any]) -> dict[str, Any]:
     return {"error": {"code": code, "message": message, "details": details}}
 

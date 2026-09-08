@@ -83,6 +83,9 @@ class MealResponse(BaseModel):
     eaten_at: datetime
     meal_type: MealType
     note: str | None
+    # 相對於 photo_dir 的路徑；沒有照片是 None。計畫 3 Task 14：上傳成功後
+    # 這個端點自己回的、以及之後 GET /api/meals/{id} 回的都要看得到同一個值。
+    photo_path: str | None
     items: list[MealItemResponse]
     # 營養素總計：各項已四捨五入後的和，不是精確總和再四捨五入
     # （見 app/nutrition.py 的 total()）。
