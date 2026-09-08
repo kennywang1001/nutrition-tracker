@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from itertools import count
@@ -5,6 +6,7 @@ from itertools import count
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.food import BaseUnit, Food, FoodPortion, FoodRevision, RevisionStatus
+from app.models.meal import Meal, MealItem, MealType
 from app.models.user import User, UserRole
 from app.security.password import hash_password
 
@@ -139,3 +141,48 @@ async def create_portion(
     await db_session.commit()
     await db_session.refresh(portion)
     return portion
+
+
+# 固定時刻，不用 datetime.now()：依賴日界線的測試會因為「現在幾點」隨機失敗，
+# 而且失敗的樣子像 flaky，不像 bug，很難查（見計畫 3 Task 6）。
+_DEFAULT_EATEN_AT = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+
+
+async def create_meal(
+    db_session: AsyncSession,
+    *,
+    user: User,
+    eaten_at: datetime | None = None,
+    meal_type: MealType = MealType.LUNCH,
+    items: Sequence[tuple[FoodRevision, Decimal | int]] | None = None,
+    note: str | None = None,
+) -> Meal:
+    """建立一餐，items 收 (food_revision, quantity_g) 序列，直接寫入 quantity_g。
+
+    這裡繞過 API 的 food_id -> current_revision_id 解析與份量換算 ——
+    工廠的目的是佈置測試資料，不是重新驗證 POST /api/meals 的安全邏輯。
+    quantity 欄位（只用於顯示）在這裡跟 quantity_g 給同一個值，因為工廠
+    呼叫端關心的是換算結果，不是「使用者當時輸入的份量數字」。
+    """
+    meal = Meal(
+        user_id=user.id,
+        eaten_at=eaten_at or _DEFAULT_EATEN_AT,
+        meal_type=meal_type,
+        note=note,
+    )
+    db_session.add(meal)
+    await db_session.flush()
+
+    for revision, quantity_g in items or []:
+        db_session.add(
+            MealItem(
+                meal_id=meal.id,
+                food_revision_id=revision.id,
+                quantity=Decimal(quantity_g),
+                quantity_g=Decimal(quantity_g),
+            )
+        )
+
+    await db_session.commit()
+    await db_session.refresh(meal)
+    return meal

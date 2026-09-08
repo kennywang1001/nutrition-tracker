@@ -25,6 +25,10 @@ class User(Base):
         nullable=False,
         default=UserRole.USER,
     )
+    # IANA 時區名稱，決定「一天」的起訖（見計畫 3 決定 1）。用 server_default
+    # 而不是 SQLAlchemy 的 default=：既有資料列要能就地補值，直接下 SQL 的
+    # insert 也拿得到預設值 —— default= 只在經過 ORM 的 INSERT 才會生效。
+    timezone: Mapped[str] = mapped_column(Text, nullable=False, server_default="Asia/Taipei")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

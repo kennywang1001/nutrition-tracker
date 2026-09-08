@@ -1,0 +1,572 @@
+from collections import defaultdict
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
+
+from fastapi import APIRouter, Depends, File, Query, Response, UploadFile, status
+from sqlalchemy import Row, Select, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.deps import get_current_user
+from app.api.params import ResourceId
+from app.days import day_bounds, today_in_timezone
+from app.db import get_db
+from app.errors import (
+    ConflictError,
+    NotFoundError,
+    PayloadTooLargeError,
+    UnprocessableEntityError,
+)
+from app.food_visibility import load_visible_food, load_visible_portion
+from app.models.food import Food, FoodRevision
+from app.models.meal import Meal, MealItem
+from app.models.user import User
+from app.nutrition import Macros, scale, total
+from app.schemas.meal import (
+    MealCreateRequest,
+    MealItemCreateRequest,
+    MealItemResponse,
+    MealResponse,
+    MealUpdateRequest,
+)
+from app.storage.photos import (
+    UPLOAD_CHUNK_SIZE,
+    InvalidImageError,
+    delete_photo,
+    read_photo,
+    save_photo,
+)
+
+router = APIRouter(prefix="/meals", tags=["meals"])
+
+_CENTS = Decimal("0.01")
+
+# 10 MiB：涵蓋手機相機拍出來的一般 JPEG（通常幾 MB），同時足夠小，
+# 不會讓一次上傳長時間佔用記憶體或頻寬（計畫 3 Task 14）。
+MAX_PHOTO_BYTES = 10 * 1024 * 1024
+
+
+@dataclass
+class _ResolvedItem:
+    """一個項目「解析後」的結果：食物與份量都驗證過、quantity_g 也算好了。
+
+    刻意跟 MealItem（ORM model）分開：解析階段完全不寫入 DB（只有 SELECT），
+    這樣「處理到第 3 個項目才發現看不到」的情況，前兩個項目不會留下任何
+    已寫入 session 的痕跡 —— 整個建立餐點的動作要嘛全部成功、要嘛什麼都沒發生。
+    """
+
+    food_id: int
+    food_name: str
+    food_revision_id: int
+    revision: FoodRevision
+    portion_id: int | None
+    quantity: Decimal
+    quantity_g: Decimal
+
+
+async def _resolve_item(
+    db: AsyncSession, payload: MealItemCreateRequest, user: User
+) -> _ResolvedItem:
+    """處理一個項目的完整順序 —— 這個順序是安全性的一部分（計畫 3 Task 7）：
+
+    1. 用可見性條件載入 food（不可見 -> 404）
+    2. food.current_revision_id 是 NULL -> 409（防禦性，正常流程不該發生）
+    3. 有 portion_id 的話：載入份量（看不到 -> 404），
+       確認 portion.food_id == food.id（不符 -> 422，這是不同於「看不到」的錯誤）
+    4. quantity_g = portion.grams * quantity，或直接等於 quantity
+    """
+    food, revision = await load_visible_food(db, payload.food_id, user)
+    if revision is None:
+        # 食物存在也看得到，但沒有生效版本 —— 正常流程不會發生（沒有
+        # current_revision_id 的食物本來就查不到），純粹防禦性。
+        raise ConflictError("FOOD_HAS_NO_REVISION", "這個食物目前沒有生效的版本")
+
+    quantity = payload.quantity
+    portion_id = payload.portion_id
+    if portion_id is None:
+        quantity_g = quantity
+    else:
+        portion = await load_visible_portion(db, portion_id, user)
+        if portion.food_id != food.id:
+            raise UnprocessableEntityError(
+                "PORTION_FOOD_MISMATCH", "這個份量不屬於指定的食物"
+            )
+        quantity_g = (portion.grams * quantity).quantize(_CENTS, rounding=ROUND_HALF_UP)
+
+    return _ResolvedItem(
+        food_id=food.id,
+        food_name=food.name,
+        food_revision_id=revision.id,
+        revision=revision,
+        portion_id=portion_id,
+        quantity=quantity,
+        quantity_g=quantity_g,
+    )
+
+
+def _item_response(
+    item: MealItem, food_id: int, food_name: str, macros: Macros
+) -> MealItemResponse:
+    return MealItemResponse(
+        id=item.id,
+        food_id=food_id,
+        food_name=food_name,
+        portion_id=item.portion_id,
+        # 用 refresh 過的 item.quantity / item.quantity_g，不是解析階段算出來的
+        # Decimal —— 使用者傳進來的 "100" 在記憶體裡還是 1 位精度，要 refresh
+        # 才能拿到 NUMERIC(8, 2) 實際存的精度（"100.00"），跟 foods.py 同一個坑。
+        quantity=item.quantity,
+        quantity_g=item.quantity_g,
+        kcal=macros.kcal,
+        protein_g=macros.protein_g,
+        fat_g=macros.fat_g,
+        carb_g=macros.carb_g,
+    )
+
+
+@router.post("", status_code=status.HTTP_201_CREATED, response_model=MealResponse)
+async def create_meal(
+    payload: MealCreateRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MealResponse:
+    # 先把所有項目都解析、驗證完（只有 SELECT，不寫任何東西進 session）。
+    # 任何一個項目失敗都會在這裡就拋出例外 —— 這時候還沒有 Meal、
+    # 也沒有任何 MealItem 被 add() 過，所以「原子性」不需要額外的
+    # try/except + rollback，結構上就不可能留下部分寫入。
+    resolved_items = [await _resolve_item(db, item, user) for item in payload.items]
+
+    meal = Meal(
+        user_id=user.id,
+        eaten_at=payload.eaten_at,
+        meal_type=payload.meal_type,
+        note=payload.note,
+    )
+    db.add(meal)
+    await db.flush()
+
+    item_rows: list[MealItem] = []
+    for resolved in resolved_items:
+        item = MealItem(
+            meal_id=meal.id,
+            food_revision_id=resolved.food_revision_id,
+            portion_id=resolved.portion_id,
+            quantity=resolved.quantity,
+            quantity_g=resolved.quantity_g,
+        )
+        db.add(item)
+        item_rows.append(item)
+
+    await db.commit()
+    await db.refresh(meal)
+
+    items_response: list[MealItemResponse] = []
+    macros_list: list[Macros] = []
+    for item, resolved in zip(item_rows, resolved_items, strict=True):
+        await db.refresh(item)
+        macros = scale(resolved.revision, item.quantity_g)
+        macros_list.append(macros)
+        items_response.append(
+            _item_response(item, resolved.food_id, resolved.food_name, macros)
+        )
+
+    totals = total(macros_list)
+    return MealResponse(
+        id=meal.id,
+        eaten_at=meal.eaten_at,
+        meal_type=meal.meal_type,
+        note=meal.note,
+        photo_path=meal.photo_path,
+        items=items_response,
+        kcal=totals.kcal,
+        protein_g=totals.protein_g,
+        fat_g=totals.fat_g,
+        carb_g=totals.carb_g,
+    )
+
+
+def _item_join_query() -> Select[tuple[MealItem, FoodRevision, Food]]:
+    """項目 join 它釘住的 revision、再 join 該 revision 當時所屬的食物。
+
+    刻意不用 `selectinload`：本計畫不宣告 `relationship()`（見計畫「刻意不做的
+    事」/程式碼組織限制），selectinload 需要 ORM 關聯屬性才能運作。改用明確的
+    兩層 join，一次查詢就把項目、營養素、食物名稱全部帶回來 —— 讀一餐或列一天
+    的餐，查詢次數都跟項目數無關，不會有「N 個項目 = N+1 次往返」的問題。
+    """
+    return (
+        select(MealItem, FoodRevision, Food)
+        .join(FoodRevision, MealItem.food_revision_id == FoodRevision.id)
+        .join(Food, FoodRevision.food_id == Food.id)
+    )
+
+
+def _build_meal_response(
+    meal: Meal, item_rows: Sequence[Row[tuple[MealItem, FoodRevision, Food]]]
+) -> MealResponse:
+    """把一筆 Meal 與它已經 join 好的項目列組成回應。
+
+    **一律用項目當時釘住的 food_revision_id 換算，不是食物現在的
+    current_revision_id**（`_item_join_query` 的 join 條件本身就保證了這件事：
+    join 的起點是 `MealItem.food_revision_id`，從頭到尾没有碰過
+    `Food.current_revision_id`）。這是版本化的重點：歷史紀錄要看到的是
+    當時的數值，即使食物後來被審核通過新版本，這裡的數字也不能動。
+    """
+    items_response: list[MealItemResponse] = []
+    macros_list: list[Macros] = []
+    for item, revision, food in item_rows:
+        macros = scale(revision, item.quantity_g)
+        macros_list.append(macros)
+        items_response.append(_item_response(item, food.id, food.name, macros))
+
+    totals = total(macros_list)
+    return MealResponse(
+        id=meal.id,
+        eaten_at=meal.eaten_at,
+        meal_type=meal.meal_type,
+        note=meal.note,
+        photo_path=meal.photo_path,
+        items=items_response,
+        kcal=totals.kcal,
+        protein_g=totals.protein_g,
+        fat_g=totals.fat_g,
+        carb_g=totals.carb_g,
+    )
+
+
+async def _load_owned_meal(db: AsyncSession, meal_id: int, user: User) -> Meal:
+    """依擁有權載入一筆餐點；不存在或不是自己的，一律回同一種 404
+    （繼承規矩第 1 條：權限失敗不回 403，且跟「真的不存在」逐字相同）。
+
+    擁有權判斷併進查詢的 WHERE 條件裡（`Meal.user_id == user.id`），
+    不是「先查到再檢查擁有者」—— 後者會讓「不存在」跟「不是你的」在查詢層
+    就走不同的路徑，容易一邊改一邊漏。GET / PATCH / DELETE 這一餐、以及
+    項目的增刪，全部共用這一個函式：擁有權規則只寫一次，日後要修只會
+    改到一個地方。
+    """
+    meal = await db.scalar(select(Meal).where(Meal.id == meal_id, Meal.user_id == user.id))
+    if meal is None:
+        raise NotFoundError("MEAL_NOT_FOUND", "找不到該餐點")
+    return meal
+
+
+@router.get("/{meal_id}", response_model=MealResponse)
+async def read_meal(
+    meal_id: ResourceId,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MealResponse:
+    """讀單一餐點：只有 2 次查詢，跟項目數無關（見 `_item_join_query`）。"""
+    meal = await _load_owned_meal(db, meal_id, user)
+
+    rows = (
+        await db.execute(
+            _item_join_query().where(MealItem.meal_id == meal.id).order_by(MealItem.id)
+        )
+    ).all()
+    return _build_meal_response(meal, rows)
+
+
+@router.patch("/{meal_id}", response_model=MealResponse)
+async def update_meal(
+    meal_id: ResourceId,
+    payload: MealUpdateRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MealResponse:
+    """只改餐點本身：`eaten_at` / `meal_type` / `note`（計畫 3 決定 2）。
+    項目不在這個端點的範圍內 —— 那是 `POST/DELETE .../items` 的事。
+
+    用 `exclude_unset` 決定要更新哪些欄位（沒帶的欄位維持原樣），
+    `MealUpdateRequest` 自己的驗證器已經擋掉 `eaten_at` / `meal_type`
+    的顯式 `null`，所以流到這裡的 `None` 只可能是合法的 `note` 清空。
+    """
+    meal = await _load_owned_meal(db, meal_id, user)
+
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(meal, field, value)
+
+    await db.commit()
+    await db.refresh(meal)
+
+    rows = (
+        await db.execute(
+            _item_join_query().where(MealItem.meal_id == meal.id).order_by(MealItem.id)
+        )
+    ).all()
+    return _build_meal_response(meal, rows)
+
+
+@router.delete("/{meal_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_meal(
+    meal_id: ResourceId,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """刪一餐。`meal_items` 靠 `ON DELETE CASCADE` 跟著走，這裡不逐筆刪。
+
+    擁有權檢查（`_load_owned_meal`）必須在刪除**之前**：先查到、確認是
+    自己的，才刪；不能「先刪、再檢查」，那種順序下「回 404」跟「真的沒刪掉」
+    會脫鉤 —— 對一個一查就砍的實作，只斷言狀態碼的測試看不出差別。
+
+    照片檔案的清理跟 `DELETE .../photo` 同一個順序原則（計畫 3 Task 16、
+    規格第 8 節）：先讓 DB 正確（`db.delete` + `commit`），檔案清理放在
+    commit 之後、盡力刪除（`delete_photo` 本身是 best-effort，失敗只記警告，
+    不影響這個請求已經成功的事實）。`photo_path` 要在 commit **之前**存進
+    區域變數 —— 物件被刪除後再讀它的屬性不保證還拿得到值。
+    """
+    meal = await _load_owned_meal(db, meal_id, user)
+    photo_path = meal.photo_path
+    await db.delete(meal)
+    await db.commit()
+
+    if photo_path is not None:
+        delete_photo(photo_path)
+
+
+@router.get("", response_model=list[MealResponse])
+async def list_meals(
+    date: date | None = Query(default=None),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[MealResponse]:
+    """依「使用者當地的一天」列出當天吃的餐（計畫 3 決定 1）。
+
+    `day_bounds()` 把使用者的時區換算成 UTC 的半開區間 `[start, end)`——
+    用 `<`，不是 `<=`：`<=` 會讓恰好落在當地午夜的一餐同時屬於兩天。
+    省略 `date` 時預設「使用者時區的今天」，靠 `today_in_timezone()` 算，
+    不是伺服器所在時區的今天，也不是 UTC 的今天。
+
+    兩次查詢，跟這一天有幾筆餐、每筆餐有幾個項目都無關：
+    第一次查出這天的所有 Meal，第二次用 `meal_id IN (...)` 一次把所有
+    Meal 的項目、revision、food 都 join 回來，在記憶體裡依 meal_id 分組——
+    不是對每筆 Meal 各查一次項目（那會是「這天吃了幾餐」次的往返）。
+    """
+    day = date or today_in_timezone(user.timezone)
+    start, end = day_bounds(day, user.timezone)
+
+    meals = (
+        await db.scalars(
+            select(Meal)
+            .where(
+                Meal.user_id == user.id,
+                Meal.eaten_at >= start,
+                Meal.eaten_at < end,
+            )
+            .order_by(Meal.eaten_at)
+        )
+    ).all()
+    if not meals:
+        return []
+
+    meal_ids = [meal.id for meal in meals]
+    rows = (
+        await db.execute(
+            _item_join_query().where(MealItem.meal_id.in_(meal_ids)).order_by(MealItem.id)
+        )
+    ).all()
+
+    items_by_meal: dict[int, list[Row[tuple[MealItem, FoodRevision, Food]]]] = defaultdict(list)
+    for row in rows:
+        items_by_meal[row[0].meal_id].append(row)
+
+    return [_build_meal_response(meal, items_by_meal.get(meal.id, [])) for meal in meals]
+
+
+@router.post(
+    "/{meal_id}/items", status_code=status.HTTP_201_CREATED, response_model=MealResponse
+)
+async def add_meal_item(
+    meal_id: ResourceId,
+    payload: MealItemCreateRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MealResponse:
+    """加一個項目到一餐（計畫 3 決定 2：項目的增刪走這裡，不是 PATCH）。
+
+    食物與份量的解析完全重用 `_resolve_item`（Task 7 抽出來的那個函式，
+    現在底下呼叫的 `load_visible_portion` 也已經提升到 `app/food_visibility.py`
+    —— 這是它的第二個呼叫者）。不重新驗證一次可見性邏輯：複製一份的話，
+    日後修一個安全性 bug 只會修到一邊，這是計畫在 Task 7 實測發現裡明講的。
+
+    餐點的擁有權查詢在「解析項目」之前 —— 加到別人的餐要 404，不能先驗證
+    完項目才發現餐不是自己的。
+    """
+    meal = await _load_owned_meal(db, meal_id, user)
+
+    resolved = await _resolve_item(db, payload, user)
+
+    item = MealItem(
+        meal_id=meal.id,
+        food_revision_id=resolved.food_revision_id,
+        portion_id=resolved.portion_id,
+        quantity=resolved.quantity,
+        quantity_g=resolved.quantity_g,
+    )
+    db.add(item)
+    await db.commit()
+
+    rows = (
+        await db.execute(
+            _item_join_query().where(MealItem.meal_id == meal.id).order_by(MealItem.id)
+        )
+    ).all()
+    return _build_meal_response(meal, rows)
+
+
+@router.delete("/{meal_id}/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_meal_item(
+    meal_id: ResourceId,
+    item_id: ResourceId,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """刪一個項目。
+
+    擁有權沿著 `meal_items.meal_id -> meals.user_id` 檢查（先用
+    `_load_owned_meal` 確認 `meal_id` 是自己的一餐，再確認這個 `item_id`
+    真的屬於**這一筆** `meal_id`）—— 不能只檢查 `item_id` 存在，那會讓
+    任何登入的使用者都能刪掉別人的項目，只要猜得到 id。
+    """
+    meal = await _load_owned_meal(db, meal_id, user)
+
+    item = await db.scalar(
+        select(MealItem).where(MealItem.id == item_id, MealItem.meal_id == meal.id)
+    )
+    if item is None:
+        raise NotFoundError("MEAL_ITEM_NOT_FOUND", "找不到該項目")
+
+    await db.delete(item)
+    await db.commit()
+
+
+async def _read_upload_within_limit(file: UploadFile, limit: int) -> bytes:
+    """分塊讀取上傳內容，累積超過 limit 立刻中止。
+
+    絕不對整個檔案先 `await file.read()` 再檢查長度 —— 那樣一個幾 GB 的
+    上傳會在「檢查長度」這一步之前就把記憶體吃光，等於沒有上限
+    （計畫 3 Task 14）。這裡用 walrus 運算子逐塊讀取、逐塊累加，
+    超過 limit 的當下馬上丟例外，剩下沒讀的部分留在 socket 緩衝區，
+    不會被吸進這個函式的記憶體。
+    """
+    chunks: list[bytes] = []
+    total_bytes = 0
+    while chunk := await file.read(UPLOAD_CHUNK_SIZE):
+        total_bytes += len(chunk)
+        if total_bytes > limit:
+            raise PayloadTooLargeError(
+                "PHOTO_TOO_LARGE", f"照片大小超過 {limit} bytes 的上限"
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+@router.post("/{meal_id}/photo", response_model=MealResponse)
+async def upload_meal_photo(
+    meal_id: ResourceId,
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MealResponse:
+    """上傳一餐的照片；已經有照片的話取代舊的。
+
+    取代舊照片的順序不能換（計畫 3 Task 14，規格第 8 節：兩種孤兒檔案的
+    嚴重性不對稱 —— 多一個沒人引用的檔案只是浪費磁碟，少一個被引用的
+    檔案是壞掉的功能，所以要讓 DB 先正確，檔案容許暫時落後）：
+
+    1. 先把新檔案寫到磁碟（`save_photo`）—— 這一步失敗完全不影響 DB 或舊檔
+    2. 再把新的 `photo_path` 寫進 DB 並 commit —— DB 正確是第一優先
+    3. 最後才盡力刪掉舊檔案（`delete_photo` 是 best-effort，失敗只記警告）
+
+    如果顛倒 2、3 的順序：先刪舊檔、DB 寫入才發現失敗，使用者原本的照片
+    已經沒了，新照片卻沒有被登記 —— 兩份都不見。
+
+    擁有權檢查在讀取、解碼上傳內容之前：上傳到別人的餐直接 404，
+    不必先花力氣處理圖片內容。
+    """
+    meal = await _load_owned_meal(db, meal_id, user)
+
+    content = await _read_upload_within_limit(file, MAX_PHOTO_BYTES)
+
+    try:
+        new_path = save_photo(content, user_id=user.id)
+    except InvalidImageError as exc:
+        raise UnprocessableEntityError("INVALID_PHOTO", "無法識別的圖片內容") from exc
+
+    old_path = meal.photo_path
+    meal.photo_path = new_path
+    await db.commit()
+    await db.refresh(meal)
+
+    if old_path is not None:
+        delete_photo(old_path)
+
+    rows = (
+        await db.execute(
+            _item_join_query().where(MealItem.meal_id == meal.id).order_by(MealItem.id)
+        )
+    ).all()
+    return _build_meal_response(meal, rows)
+
+
+@router.get("/{meal_id}/photo")
+async def read_meal_photo(
+    meal_id: ResourceId,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """讀一餐的照片（計畫 3 Task 15）。
+
+    規格第 8 節：照片**不**透過靜態檔案服務提供 —— 每一次讀取都要先經過這個
+    端點驗證 JWT 與擁有權，不是靠 UUID 檔名猜不到。掛 `StaticFiles` 在
+    `photo_dir` 上會讓這道檢查形同虛設，一旦網址外流就永久有效；擁有權檢查
+    沿用 `_load_owned_meal`，跟其他所有餐點端點是同一個函式、同一條規則。
+
+    DB 有 `photo_path` 但檔案不在磁碟上是正常操作下可達的狀態（`delete_photo()`
+    是 best-effort 設計），一律用實際讀檔的結果判斷 —— 讀不到就是 404，
+    不能讓 `FileNotFoundError` 逃逸成未處理的 500。
+    """
+    meal = await _load_owned_meal(db, meal_id, user)
+    if meal.photo_path is None:
+        raise NotFoundError("MEAL_PHOTO_NOT_FOUND", "這一餐沒有照片")
+
+    try:
+        content = read_photo(meal.photo_path)
+    except FileNotFoundError as exc:
+        raise NotFoundError("MEAL_PHOTO_NOT_FOUND", "這一餐沒有照片") from exc
+
+    return Response(content=content, media_type="image/jpeg")
+
+
+@router.delete("/{meal_id}/photo", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_meal_photo(
+    meal_id: ResourceId,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """刪掉一餐的照片（計畫 3 Task 16）。
+
+    一律「先 DB、後檔案」（規格第 8 節：兩種孤兒檔案的嚴重性不對稱 ——
+    多一個沒人引用的檔案只是浪費磁碟，少一個被引用的檔案是壞掉的功能，
+    所以要讓 DB 先正確）：
+
+    1. 先把 `photo_path` 清成 NULL 並 commit —— DB 正確是第一優先
+    2. 再盡力刪掉磁碟上的檔案（`delete_photo` 是 best-effort，失敗只記警告，
+       不讓這個請求因此失敗）
+
+    如果顛倒順序：先刪檔案、DB 寫入才發現失敗，`photo_path` 還指著一個
+    已經不存在的檔案 —— 跟 Task 15 要防的「DB 有 photo_path 但檔案不見」
+    是同一種壞狀態，只是這次是自己造成的。
+
+    `old_path` 要在 commit **之前**存進區域變數：`meal.photo_path` 已經被
+    設成 None，commit 之後再讀就拿不到原本的路徑了。
+    """
+    meal = await _load_owned_meal(db, meal_id, user)
+    if meal.photo_path is None:
+        raise NotFoundError("MEAL_PHOTO_NOT_FOUND", "這一餐沒有照片")
+
+    old_path = meal.photo_path
+    meal.photo_path = None
+    await db.commit()
+
+    delete_photo(old_path)

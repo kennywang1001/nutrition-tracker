@@ -134,3 +134,64 @@ async def test_register_normalises_email_to_lowercase(client, db_session):
     user = await db_session.scalar(select(User).where(User.email == "new@example.com"))
     assert user is not None
     assert user.email == "new@example.com"
+
+
+async def test_register_defaults_timezone_to_asia_taipei(client, db_session):
+    response = await client.post(
+        "/api/auth/register",
+        json={"email": "new@example.com", "password": "a-good-password", "display_name": "阿明"},
+    )
+
+    assert response.status_code == 201
+    user = await db_session.scalar(select(User).where(User.email == "new@example.com"))
+    assert user is not None
+    assert user.timezone == "Asia/Taipei"
+
+
+async def test_register_accepts_an_explicit_timezone(client, db_session):
+    response = await client.post(
+        "/api/auth/register",
+        json={
+            "email": "new@example.com",
+            "password": "a-good-password",
+            "display_name": "阿明",
+            "timezone": "America/New_York",
+        },
+    )
+
+    assert response.status_code == 201
+    user = await db_session.scalar(select(User).where(User.email == "new@example.com"))
+    assert user is not None
+    assert user.timezone == "America/New_York"
+
+
+async def test_register_rejects_an_unknown_timezone(client):
+    response = await client.post(
+        "/api/auth/register",
+        json={
+            "email": "new@example.com",
+            "password": "a-good-password",
+            "display_name": "阿明",
+            "timezone": "Mars/Olympus",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+async def test_register_rejects_a_path_traversal_shaped_timezone(client):
+    """ZoneInfo("../../etc/passwd") 走的是 ValueError，不是 ZoneInfoNotFoundError ——
+    只接後者的話，這個輸入會變成未處理的 500 而不是乾淨的 422。"""
+    response = await client.post(
+        "/api/auth/register",
+        json={
+            "email": "new@example.com",
+            "password": "a-good-password",
+            "display_name": "阿明",
+            "timezone": "../../etc/passwd",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"

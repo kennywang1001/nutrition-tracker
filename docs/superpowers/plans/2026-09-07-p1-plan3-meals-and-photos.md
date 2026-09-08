@@ -237,10 +237,31 @@ def _must_be_real_timezone(cls, value: str) -> str:
     return value
 ```
 
-**兩種例外都要接。** `ZoneInfoNotFoundError` 是查無此時區；`ValueError` 是
-key 本身不合法 —— `ZoneInfo("../../etc/passwd")` 走的是 `ValueError` 這條，
-因為 `zoneinfo` 自己會擋含 `..` 或以 `/` 開頭的 key。只接前者的話，
-路徑穿越形狀的輸入會變成未處理的 500。
+**兩種例外都要接**，但原因跟我原本寫的相反 —— 以下是 Task 1 實測後的更正：
+
+```
+ZoneInfoNotFoundError.__mro__ = (ZoneInfoNotFoundError, KeyError, LookupError, ...)
+issubclass(ZoneInfoNotFoundError, ValueError) -> False
+```
+
+| 漏接的那一個 | `"Mars/Olympus"` | `"../../etc/passwd"` |
+|---|---|---|
+| 只接 `ZoneInfoNotFoundError` | 422 ✓ | **422，但洩漏內部訊息** |
+| 只接 `ValueError` | **逃逸成 500** | 422 ✓ |
+
+原本的計畫寫「只接前者會讓路徑穿越變成 500」，**這是錯的**。
+500 的風險在普通的「查無此時區」那一側，因為 `ZoneInfoNotFoundError` 是
+`LookupError` 不是 `ValueError`。
+
+而路徑穿越那一側之所以不會 500，是因為 **Pydantic v2 會自動把任何逃出驗證器的
+`ValueError` 轉成乾淨的 422** —— 不只是我們自己 `raise` 的那些。
+漏接的實際後果因此是**回應裡出現 zoneinfo 的內部訊息**
+（`"ZoneInfo keys must refer to subdirectories of TZPATH, got: ../../etc/passwd"`），
+而不是狀態碼變了。
+
+> **這個機制本身值得記住：** 驗證器裡漏接一個 `ValueError`，從狀態碼上完全看不出來，
+> 只有訊息換人寫。**只斷言 422 的測試抓不到這種漏接。**
+> 本計畫後續凡是驗證器的測試，都要順便斷言訊息是我們自己的那一句。
 
 - [ ] **Step 4: 測試**
 
@@ -343,12 +364,31 @@ def day_bounds(day: date, tz_name: str) -> tuple[datetime, datetime]:
     return start.astimezone(UTC), end.astimezone(UTC)
 ```
 
-> **`end` 必須是「隔天的起點」，絕對不能寫成 `start + timedelta(days=1)`。**
+> **`end` 要在轉成 UTC「之前」算完。**（Task 2 實測更正：這條原本寫成
+> 「絕對不能寫成 `start + timedelta(days=1)`」，**指錯了突變點**。）
 >
-> 看起來一樣，在有日光節約的時區就是錯的：那兩天分別只有 23 小時和 25 小時。
-> 寫成加 24 小時，春天那天會多算隔天的一小時、秋天那天會漏掉一小時 ——
-> 而且台灣沒有日光節約，**用台灣時區寫的測試永遠抓不到這個 bug**。
-> 上面那兩個美東的測試就是為此存在的。
+> 關鍵不是用不用 `timedelta`，而是**加法發生在哪一側**：
+>
+> | 寫法 | 2026-03-08（美東春分）的長度 |
+> |---|---|
+> | `combine(隔天, 00:00, tz)` → UTC | 23 小時 ✓ |
+> | `當地 start + timedelta(days=1)` → UTC | 23 小時 ✓ **等價，不是 bug** |
+> | 先 `.astimezone(UTC)`，**再** `+ timedelta(days=1)` | **24 小時 ✗** |
+>
+> 中間那個之所以也對，是因為 **aware datetime 的加法是掛鐘運算** ——
+> 它只動年月日時分秒欄位，`tzinfo` 與 `fold` 原封不動、不重新正規化
+> （PEP 495 的行為，與 `pytz` 的固定偏移物件不同）。在「當地時間」上加一天，
+> 得到的就是隔天的當地午夜，與 `combine` **逐欄位完全相同**。
+>
+> 錯的是第三種：轉成 UTC 之後，時區資訊已經塌成一個固定偏移，一天就真的是
+> 24 小時，DST 那一小時就永遠找不回來了。
+>
+> 台灣沒有日光節約，**用台灣時區寫的測試對三種寫法一律全綠**。
+> 上面那兩個美東的測試就是為此存在的 —— 而且實測確認它們抓得到第三種。
+>
+> **這件事本身是個教材：** 「不要寫 `+ timedelta(days=1)`」這種以**語法**
+> 描述的規則是靠不住的，同一段文字放在相鄰兩行、意義完全不同。
+> 真正的規則要用**語意**描述：算日界線的運算必須發生在有時區語意的那一側。
 >
 > 「隔天的起點」這個寫法還附帶保證了平鋪性：只要每一天都用同一個函式算，
 > 區間就必然首尾相接，不會有縫也不會重疊 —— 這一點不依賴任何時區的性質，
@@ -376,6 +416,12 @@ def day_bounds(day: date, tz_name: str) -> tuple[datetime, datetime]:
 - [ ] **Step 3: 驗收 + commit**
 
 `pytest -W error`（146）。Commit: `feat: 新增依使用者時區計算單日起訖的函式`
+
+> **一個留給之後順手修的小問題：** `pytest.raises(Exception)` 會觸發 ruff 的
+> `B017`（不要斷言裸的 Exception），Task 2 是用 `# noqa: B017` 壓掉的。
+> 但 Task 1 已經實測出真實型別是 `ZoneInfoNotFoundError`，
+> 所以改成 `pytest.raises(ZoneInfoNotFoundError)` 會**同時**移除這個 lint 抑制
+> 並把真實行為釘住。下次動到這個檔案時順手改。
 
 ---
 
@@ -423,7 +469,14 @@ class MealType(enum.StrEnum):
 
 class Meal(Base):
     __tablename__ = "meals"
-    __table_args__ = (Index("ix_meals_user_id_eaten_at", "user_id", "eaten_at"),)
+    __table_args__ = (
+        # 不靠 Enum(create_constraint=True) 自動產生，理由見 Task 5 的實測發現
+        CheckConstraint(
+            "meal_type IN ('breakfast', 'lunch', 'dinner', 'snack')",
+            name="meal_type_valid",
+        ),
+        Index("ix_meals_user_id_eaten_at", "user_id", "eaten_at"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     user_id: Mapped[int] = mapped_column(
@@ -431,7 +484,8 @@ class Meal(Base):
     )
     eaten_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     meal_type: Mapped[MealType] = mapped_column(
-        Enum(MealType, name="meal_type", native_enum=False, create_constraint=True,
+        # create_constraint=False —— 見下方 Task 5 的實測發現，這裡不能用 True
+        Enum(MealType, name="meal_type", native_enum=False, create_constraint=False,
              values_callable=lambda e: [m.value for m in e]),
         nullable=False,
     )
@@ -473,11 +527,43 @@ class MealItem(Base):
 > 而是帶 CHECK 的字串欄位。原生 enum 要加一個值就得跑 `ALTER TYPE`，
 > 而餐別未來很可能要加（宵夜、加餐）。
 >
-> **但這裡有一個必須實測、不要照抄我假設的地方：** `native_enum=False` 產生的
-> 是 `VARCHAR(n)` 而不是規格 DDL 寫的 `text`，而且它自動建立的 CHECK 約束
-> 名稱由 `name=` 與命名慣例共同決定。**請在 migration 套用後實際查 `pg_constraint`
-> 與 `information_schema.columns`，把真實的型別與約束名稱回報。**
-> 計畫 2 就是在 `CheckConstraint` 的命名上，因為我沒實測就寫進計畫而踩過一次。
+> **實測結果（Task 5，其中一項推翻了我原本的寫法）：**
+>
+> 型別的部分我猜對了：`native_enum=False` 產生的是 **`VARCHAR(9)`**
+> （9 = 最長的標籤 `"breakfast"`），不是規格 DDL 寫的 `text`。
+>
+> **但 `create_constraint=True` 是錯的，而且錯得很隱蔽：它會讓
+> `alembic check` 永遠報漂移，沒有任何辦法收斂。**
+>
+> ```
+> Detected removed check constraint 'ck_meals_meal_type'
+> ```
+>
+> 每一次都報，重跑幾次都一樣。原因不是不穩定，是結構性的：
+>
+> - Alembic 的 CHECK 比對器（`alembic/util/sqla_compat.py` 的
+>   `all_table_check_constraints`）**刻意把 type-bound 的約束從 model 側排除掉**，
+>   那是 SQLAlchemy issue #3260 的 workaround。
+> - 但從資料庫反射回來的約束，**沒有任何欄位能標記它是 type-bound** ——
+>   在 PostgreSQL 眼中它就是一個普通的 CHECK。
+> - 於是 model 側算出 0 個、DB 側算出 1 個 → 永遠判定成 `remove_constraint`。
+>
+> **為什麼這件事比看起來嚴重：** CI 的漂移閘門就是 `alembic check`。
+> 用了 `create_constraint=True`，這個閘門會從第一天起就是紅的 ——
+> 而它紅的原因跟任何真實的漂移無關。接下來只有兩條路：
+> 把閘門關掉（於是真的漂移也不會被發現了），或是花很久找一個
+> 「明明模型和資料庫一模一樣卻說不一樣」的鬼。
+>
+> **正解：`create_constraint=False`，然後在 `__table_args__` 裡自己宣告一個
+> 普通的 `CheckConstraint`。** 那就跟 `quantity_positive`、`kcal_non_negative`
+> 走同一條路徑，命名慣例照常套用，實測名稱是 `ck_meals_meal_type_valid`，
+> `alembic check` 連續三次乾淨。
+>
+> **可以帶走的通則：** 「讓 ORM 幫你自動產生 schema 物件」和
+> 「讓 autogenerate 比對 schema 物件」這兩個便利功能，
+> 對**同一個**物件的認知可能不一致。宣告在 `__table_args__` 裡的東西是
+> 兩邊都看得見的；作為型別副產品自動長出來的東西不是。
+> 這也再一次印證了繼承規矩第 4 條：**model 要是唯一的事實來源。**
 
 > **索引為什麼是 ASC 而不是規格寫的 `eaten_at DESC`：** 這個索引服務的是
 > 「某使用者某段時間的餐點，時間新到舊」。`user_id` 是等值條件、`eaten_at` 是
@@ -656,6 +742,40 @@ def scale(revision: FoodRevision, quantity_g: Decimal) -> Macros:
 
 `pytest -W error`（156）。Commit: `feat: 新增建立餐點的 API`
 
+#### Task 7 實測發現
+
+**1. 原子性靠設計，不靠記得寫 `rollback()`。**
+實作是「先把所有項目解析完（純 `SELECT`，一個 `db.add()` 都沒有），
+全部通過才建立 `Meal` 與 `MealItem` 並 commit 一次」。第 3 個項目失敗時，
+session 裡根本還沒有任何東西，所以**沒有東西需要回滾**。
+
+對照組值得記：如果寫成「逐項解析、逐項 `add()` + `flush()`」，
+那麼在測試環境裡（`db_session` 是整個測試共用的，`override_get_db` 沒有清理），
+前兩個項目的寫入**對同一個 session 的 count 查詢仍然可見** ——
+即使 API 回的是錯誤。於是「回了 404」和「什麼都沒寫進去」會脫鉤，
+而只斷言狀態碼的測試看不出來。這就是為什麼那個測試要真的下 `count()`。
+
+**2. 可見性邏輯抽成 `app/food_visibility.py`。**
+`foods.py` 和 `meals.py` 現在共用同一份。這不是整理癖 ——
+兩份各自演化的可見性檢查，等於日後修一個安全性 bug 只會修到一邊。
+
+**3. 一個誠實回報的突變存活（不是覆蓋缺口）。**
+「把 `quantity_g` 改成讀取時重算」這個突變**無法在本 task 施加**，
+因為 `GET /api/meals/{id}` 是 Task 8 才有的東西。退而求其次施加的近似突變
+（寫入前再查一次份量）**存活了全部 165 個測試**，而且是**正確的存活** ——
+那次重查發生在同一個請求裡，份量還沒被改，算出來必然一樣。
+
+> **真正危險的那個形狀（GET handler 去 join 即時的份量資料而不是信任
+> `quantity_g`）要等 Task 8 才測得到，屆時必須另外寫一個讀取端的凍結測試。**
+> 這裡先記下來，免得看到「Task 7 有凍結測試了」就以為讀取端也被保護了。
+
+**4. 兩處標記為「防禦性但今天沒有測試覆蓋」的程式碼**（誠實勝於假裝）：
+- `schemas/meal.py` 裡 body 層級的 `food_id` / `portion_id` 加了 `le=2**63-1`，
+  比照 `ResourceId` 的理由（超大整數會讓 asyncpg 拋 `DataError` 變 500）。
+  12 個測試裡沒有一個涵蓋它。
+- `_load_visible_portion` 目前留在 `meals.py` 裡，只有一個呼叫者。
+  **Task 12 要重用它，屆時提升到共用模組，不要複製第二份。**
+
 ---
 
 ## Task 8: `GET /api/meals/{id}`
@@ -691,14 +811,39 @@ def scale(revision: FoodRevision, quantity_g: Decimal) -> Macros:
 1. 查某天，回傳該天的餐，依 `eaten_at` 排序
 2. **台北時間早上 7 點的早餐，要出現在「當天」而不是前一天**
    （這一餐的 UTC 時刻是前一天 23:00，是整個時區設計的關鍵測試）
-3. 台北時間晚上 11 點的宵夜，要出現在當天而不是隔天
+3. ~~台北時間晚上 11 點的宵夜，要出現在當天而不是隔天~~
+   **這一條是空測試，實作時發現並更正為「America/New_York 晚上 11:30」。**
 4. 別人的餐不會出現
 5. 換一個時區的使用者（`America/New_York`），同一個 UTC 時刻落在不同的日期
 6. 不給 `date` → 預設今天（用使用者時區的今天）
 7. `date` 格式不合法 → 422
 
-> 第 2、3、5 三個測試，是「時區存在 users 表」這個決定唯一的實證。
+> 這幾個測試是「時區存在 users 表」這個決定唯一的實證。
 > 如果把它們拿掉，寫死 UTC 的實作會全部通過。
+>
+> **但要挑對時區與時刻，否則測試是空的（Task 9 實測發現，我原本寫錯了）：**
+>
+> | 時區 | 情境 | 當地 | UTC | 抓得到「寫死 UTC」嗎 |
+> |---|---|---|---|---|
+> | Taipei (+8) | 早餐 07:00 | 09-04 07:00 | **09-03** 23:00 | ✓ |
+> | Taipei (+8) | 宵夜 23:00 | 09-04 23:00 | 09-04 15:00 | **✗ 空測試** |
+> | NY (−4) | 宵夜 23:30 | 09-04 23:30 | **09-05** 03:30 | ✓ |
+> | NY (−4) | 早餐 07:00 | 09-04 07:00 | 09-04 11:00 | **✗ 空測試** |
+>
+> 通則：**UTC 以東的時區只有清晨有鑑別力，以西的時區只有深夜有鑑別力。**
+> 因為往東是把當地時刻換算成「更早的 UTC」（只可能退回前一天），
+> 往西則是換成「更晚的 UTC」（只可能進到隔天）。要兩個方向都測到，
+> 就必須兩種時區都用 —— 只用台灣時區寫的宵夜測試，
+> 對寫死 UTC 的實作**永遠是綠的**。
+
+**另外補上的一個測試（實作後發現邊界完全沒被釘住）：**
+
+7. **恰好落在午夜零點的一餐，只能屬於一天。**
+   `end` 那一刻同時是「這一天的結束」與「隔天的開始」，
+   實測 `<` 改成 `<=` 時**沒有任何一個測試失敗** —— 這個邊界原本是空的。
+   在計畫 3 它只造成清單多一筆，但到了計畫 4 的每日統計，
+   那一餐的熱量會被**計入兩次**，而且兩天的數字各自看起來都合理，
+   不會有任何東西報錯。
 
 - [ ] **Step 2: 實作**
 
@@ -880,6 +1025,42 @@ def save_photo(content: bytes, *, user_id: int) -> str:
 
 `pytest -W error`（202）。Commit: `feat: 新增餐點照片上傳的 API`
 
+#### Task 13 / 14 實測發現
+
+**1. 測試套件的 `-W error` 會遮蔽正式環境缺少防護這件事。**（本計畫最重要的一個發現）
+
+計畫裡預先警告過「不要依賴 `-W error` 幫你擋解壓縮炸彈」，實測把明確的
+`width * height > MAX_IMAGE_PIXELS` 檢查拿掉之後，證實了這件事，而且比預期更尖銳：
+
+| 突變：拿掉明確的像素上限檢查 | 結果 |
+|---|---|
+| `pytest -W error`（套件平常的跑法） | **8 passed，全綠** |
+| `pytest -W "ignore::Warning"`（正式環境的真實條件） | **FAILED** |
+
+Pillow 對超過 `MAX_IMAGE_PIXELS` 的圖只發 `DecompressionBombWarning`。
+`-W error` 把它轉成例外，於是測試**因為錯誤的理由而通過** ——
+它驗證到的是「pytest 的警告設定」，不是「應用程式的防護」。
+
+**推論很嚴重：** 如果那個明確檢查從一開始就沒寫，而且沒有人在不帶 `-W error`
+的情況下跑過，整個套件會一路全綠，而正式環境完全沒有防護。
+**綠燈這次不只是沒告訴你為什麼綠 —— 它是被測試設定本身偽造出來的。**
+
+> 可以帶走的通則：**當一個防護的失敗形式是「發出警告」時，
+> `-W error` 就從測試工具變成了受測系統的一部分。**
+> 這類防護的測試必須在關掉警告轉例外的條件下跑過一次，
+> 否則你測的是 pytest 不是你的程式。
+
+**2. EXIF / GPS 的測試是有鑑別力的（已驗證）。**
+把 `image.save(...)` 改成帶 `exif=image.getexif().tobytes()`
+（模擬未來有人為了保留拍攝時間而加上去），**恰好 1 個測試失敗**：
+`test_gps_exif_does_not_survive_saving`。這正是這個測試存在的理由 ——
+它守的不是今天的行為（Pillow 預設就會丟掉 EXIF），是**那一天**的行為。
+
+**3. ruff 的 `extend-immutable-calls` 要補 `fastapi.File` 與 `fastapi.Form`。**
+跟計畫 1 為 `Depends()` 加的是同一回事。這件事在派工時會卡住 ——
+subagent 被禁止改 `pyproject.toml`，所以只能由主 session 處理。
+**日後任何引入新 FastAPI 參數宣告方式的 task，都要預期這一步。**
+
 ---
 
 ## Task 15: `GET /api/meals/{id}/photo`
@@ -929,6 +1110,46 @@ DB 有 `photo_path` 但檔案不見了 → 404（不是 500）。
 
 `pytest -W error`（211）。Commit: `feat: 新增照片刪除與餐點刪除時的檔案清理`
 
+#### Task 15 / 16 實測發現
+
+**1. 順序要求需要「觀察順序」的測試，端狀態測試在定義上抓不到。**
+
+把 `DELETE .../photo` 改成「先刪檔、再 commit」（正是規格第 8 節禁止的順序），
+四個功能測試**全部通過**。原因不是覆蓋不足：**在沒有任何一步失敗的情況下，
+兩種順序的最終狀態完全相同** —— 檔案沒了、`photo_path` 是 NULL。
+端狀態測試看不到差別，因為差別根本不在端狀態裡，在「中途失敗時會怎樣」。
+
+抓到它的是一個 monkeypatch `commit` 與 `delete_photo`、記錄呼叫順序的測試：
+`['delete', 'commit'] != ['commit', 'delete']`。
+
+> 這跟 Task 11 的「delete-before-check」是同一族：狀態碼對、最終狀態也對，
+> 錯的是**中間發生了什麼**。凡是規格寫成「先 A 後 B」的要求，
+> 就要有一個測試真的去看 A 和 B 的先後，而不是看做完之後長什麼樣。
+
+**2. 「有沒有第二條無認證的路徑」——端點測試在原理上測不到，但路由表可以。**
+
+如果日後有人為了方便把 `StaticFiles` 掛在 `photo_dir` 上，
+Task 15 的五個測試**全部照樣通過** —— 它們打的是 `/api/meals/{id}/photo`，
+沒有任何一個會去問「是不是還有別條路也拿得到這個檔案」。
+猜路徑去打是個假陰性陷阱：猜不中證明不了什麼，猜中了也只證明那一條。
+
+可行的做法是**路由表內省**：走訪 `app.routes`，斷言沒有任何一個路由的
+`.app` 是 `StaticFiles` 實例。這是針對「計畫描述的那個具體陷阱」的窄守衛，
+不是「未來所有無認證端點」的通則保證 —— 後者是程式碼審查與 Task 18 的事。
+測試的 docstring 要把這個界線寫清楚，不要讓它看起來保證了它沒保證的東西。
+
+**3. 突變測試的還原紀律（同一個坑，兩種形狀，都踩過了）。**
+
+- 形狀 A（Task 13/14）：從**手工副本**還原，而那份副本是在某個修正之前取的，
+  於是還原時把修正靜默地蓋掉了。
+- 形狀 B（Task 15）：用 `git checkout HEAD -- <file>` 還原，但 `HEAD` 早於
+  本 task 的功能提交 —— **這不是還原突變，是把整個功能刪掉**。
+
+**規則：`HEAD` 只有在受測功能「已經提交」之後才是安全的還原目標。**
+還沒提交就要做突變測試時，先 `git add` 把已驗證的實作放進索引，
+然後用 `git checkout -- <file>`（從索引還原）。
+每次還原後都要 `git diff --stat app/` 確認乾淨。
+
 ---
 
 ## Task 17: `GET /api/foods/frequent` 與 `/api/foods/recent`
@@ -956,7 +1177,32 @@ DB 有 `photo_path` 但檔案不見了 → 404（不是 500）。
 `recent`：同樣的 join，改成 `GROUP BY foods.id`、`ORDER BY max(meals.eaten_at) DESC`。
 
 規格第 6.6 節：**P1 用查詢 + 索引解決，不建快取表。** 等實際量到慢再優化。
-`ix_meal_items_food_revision_id` 與 `ix_meals_user_id_eaten_at` 就是為此存在的。
+
+> **實測更正（Task 17）：** 上面原本寫「`ix_meal_items_food_revision_id` 與
+> `ix_meals_user_id_eaten_at` 就是為此存在的」。前者是錯的。
+>
+> `EXPLAIN` 在兩種資料規模下（10,500 與 610,500 筆 `meal_items`）都顯示：
+>
+> - `ix_meals_user_id_eaten_at`：**有用到**，兩種規模都是 Bitmap Index Scan。
+>   選擇性完全來自 `meals.user_id`。
+> - `ix_meal_items_food_revision_id`：**兩種規模都沒用到**。大資料量時
+>   `meal_items` 確實改走索引，但走的是 `ix_meal_items_meal_id`
+>   （原本為 `GET /api/meals/{id}` 建的）。
+>
+> 原因很單純：這個查詢對 `food_revision_id` **沒有任何過濾條件**，
+> 它只是 join key。全 codebase 搜過，`food_revision_id` 一律只出現在
+> `join(...)` 裡，沒有一處是 `WHERE`。
+>
+> **但這個索引不該刪。** 它真正的消費者是規格決策 3 提到的 P2 功能：
+> 「你這筆紀錄引用的食物資料已更新，要套用新版本嗎？」——
+> 那個功能要反查「哪些 `meal_items` 引用了這一版」，正是
+> `WHERE food_revision_id = ?`。
+>
+> 所以結論是**理由要改，索引留著**：它不是為 frequent/recent 建的，
+> 是為版本更新提示建的。留著一個沒有消費者的索引要付寫入成本，
+> 留著一個「消費者還沒寫出來」的索引則是預留 —— 兩者差別只在你說得出理由。
+
+執行時間：小資料 1.8ms、大資料 4.9ms，單一 SQL 語句。
 
 > **一個要誠實記下來的事：** 這兩個查詢裡的可見性過濾（`owner_id IS NULL OR
 > owner_id = :me`）**今天是空轉的** —— 因為 Task 7 已經擋住了「記錄看不到的食物」，
@@ -967,6 +1213,36 @@ DB 有 `photo_path` 但檔案不見了 → 404（不是 500）。
 - [ ] **Step 3: 驗收 + commit**
 
 `pytest -W error`（219）。Commit: `feat: 新增常吃與最近吃的 API`
+
+#### Task 17 實測發現
+
+**1. 兩個過濾器會互相掩護，讓突變測試看起來是綠的。**
+
+隔離測試原本用「Alice 的**私人**食物」來驗證「Bob 的 frequent 不含 Alice 吃過的東西」。
+拿掉 `Meal.user_id == user.id` 這個過濾之後 —— **零個測試失敗**。
+
+原因是防禦性的 `Food.owner_id` 過濾把它遮住了：私人食物 Bob 本來就看不到，
+所以少了 `user_id` 過濾也沒差。**測試驗證到的是錯的那個過濾器。**
+
+改用**全域食物**（Bob 看得到，但沒吃過）之後，同一個突變讓 2 個測試失敗。
+
+> 通則：**要測 A 過濾器，測試資料就必須讓 B 過濾器無效。**
+> 兩個過濾器同時能擋住同一筆資料時，突變任一個都不會變紅。
+> 這比「測試寫錯」更隱蔽 —— 測試的名字、意圖、斷言全都是對的，
+> 只有**測試資料的選擇**讓它失去鑑別力。
+
+**2. 路由宣告順序：`/{food_id}` 在前會讓 `/foods/frequent` 回 422 不是 404。**
+
+Starlette 依宣告順序比對，`ResourceId` 解析 `"frequent"` 失敗，
+吐的是 FastAPI 的標準驗證錯誤（`int_parsing`），不是路由 404 也不是端點的 404。
+**具名路徑一律宣告在 `/{參數}` 之前。**
+
+**3. 防禦性過濾確認是空轉的（誠實記錄，不補假測試）。**
+把 `Food.owner_id` 過濾整個拿掉，**全部 243 個測試通過**。
+因為 `POST /api/meals` 已經擋住「記錄看不到的食物」，所以你的餐裡不可能有
+看不到的食物。保留它是為了日後的「刪除食物 / 取消分享」，
+但**今天它抓不到任何突變，Task 18 也證明不了它**。
+不寫看起來有覆蓋的測試 —— 那會讓缺口變得不可見。
 
 ---
 
@@ -986,6 +1262,16 @@ DB 有 `photo_path` 但檔案不見了 → 404（不是 500）。
 再加兩筆結構性的：
 - `GET /api/meals?date=` 回傳的清單裡不含 Alice 的餐
 - `GET /api/foods/frequent` 不含 Alice 吃過但 Bob 沒吃過的食物
+
+**還要補一筆 `/api/me` 的**（Task 3 實測發現的缺口）：
+建立 Alice 與 Bob 兩個使用者，用 Bob 的 token 打 `PATCH /api/me`，
+然後斷言 **Alice 那一列完全沒變**。
+
+> 這個端點沒有路徑參數，使用者 id 只來自 token，直覺會覺得不可能寫錯。
+> 但 Task 3 實測過：把 handler 改成寫 `user.id - 1` 那一列，
+> **全部 153 個測試照樣通過**，Bob 的請求靜默地覆寫了 Alice 的資料、回 200。
+> 沒有路徑參數消除的是**惡意輸入**這條路，不是**程式寫錯**那條。
+> 隔離測試要守的是後者。
 
 - [ ] **Step 2: 突變測試 —— 這是本 task 真正的交付物**
 
@@ -1012,7 +1298,7 @@ DB 有 `photo_path` 但檔案不見了 → 404（不是 500）。
 
 - [ ] **Step 3: 驗收 + commit**
 
-`pytest -W error`（229）。Commit: `test: 餐點與照片端點加入跨使用者隔離掃描`
+`pytest -W error`（232）。Commit: `test: 餐點與照片端點加入跨使用者隔離掃描`
 
 ---
 
@@ -1020,19 +1306,35 @@ DB 有 `photo_path` 但檔案不見了 → 404（不是 500）。
 
 每一項都要親自跑過並看到預期結果：
 
-- [ ] `alembic downgrade 0002` 後再 `alembic upgrade head`，兩次都成功
-      （對 `wallet_test`，不動 dev 的 `wallet`）
-- [ ] `alembic check` → `No new upgrade operations detected.`
-- [ ] `pytest -v -W error` 全部通過，測試數 ≥ 220
-- [ ] `ruff check .` 無錯誤
-- [ ] `mypy app` 無錯誤
-- [ ] `pytest --cov=app --cov-fail-under=80` 通過
-- [ ] `/openapi.json` 列出 27 個操作（15 + 12）
-- [ ] `pg_constraint` 裡 `meals` / `meal_items` 的約束名稱全部符合命名慣例
-      （查詢記得 `contype::text`）
-- [ ] Task 18 的七個突變全部被抓到，無一存活
-- [ ] **手動走一次**：上傳一張真的手機拍的照片（含 GPS），
-      下載回來確認 EXIF 是空的
+- [x] `alembic downgrade 0002` 後再 `alembic upgrade head`，兩次都成功
+      （對 `wallet_test`，dev 的 `wallet` 全程留在 0002 沒被動）
+- [x] `alembic check` → `No new upgrade operations detected.`
+- [x] `pytest -v -W error` → **254 passed**（門檻 220）
+- [x] `ruff check .` → `All checks passed!`
+- [x] `mypy app` → `Success: no issues found in 35 source files`
+- [x] `pytest --cov=app --cov-fail-under=80` → **97.64%**
+- [x] OpenAPI 列出 **28 個操作**（估 27，多的是超出規格的 `PATCH /api/me`）
+
+      > 內省的坑：這個 FastAPI 版本把 `include_router` 的結果存成
+      > `_IncludedRouter` 包裝物，**不攤平進 `app.routes`**。
+      > 走訪 `app.routes` 只會看到 4 個 docs 路由，看起來像一個端點都沒註冊。
+      > 要數端點就讀 `app.openapi()`，那才是權威來源。
+      >
+      > 這也讓 Task 15 那個「路由表裡沒有 StaticFiles」的守衛有個已知界線：
+      > 它只看得到頂層路由。`app.mount()` 確實會加到頂層，所以那個具體陷阱
+      > 仍然守得住，但掛在被 include 的 router 裡面的 mount 它看不到。
+
+- [x] `pg_constraint` 裡 `meals` / `meal_items` 共 **9 個約束、0 個違規**
+- [x] Task 18 的**八個**突變全部被抓到，**無一存活**
+- [x] **端到端走一次含 GPS 的照片**（上傳與下載都走真實 API）：
+
+      | | 上傳前 | 下載後 |
+      |---|---|---|
+      | 尺寸 | 3000×2000 | **1280×853** |
+      | 位元組 | 94,810 | 17,909 |
+      | EXIF 標籤 | 3 | **0** |
+      | GPS 標籤 | 4（25°02'N, 121°33'E） | **0** |
+      | 相機型號 | `'ACME Phone'` | `None` |
 
 ---
 
