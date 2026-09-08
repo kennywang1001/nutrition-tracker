@@ -8,7 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.api.params import ResourceId
 from app.db import get_db
-from app.errors import ConflictError, ForbiddenError, NotFoundError
+from app.errors import ConflictError, ForbiddenError
+from app.food_visibility import assert_food_visible, load_visible_food
 from app.models.food import Food, FoodPortion, FoodRevision, RevisionStatus
 from app.models.user import User, UserRole
 from app.schemas.food import (
@@ -93,46 +94,6 @@ async def create_food(
     return _to_response(food, revision)
 
 
-async def _assert_food_visible(db: AsyncSession, food_id: int, user: User) -> Food:
-    """取出使用者看得到的食物本身：全域的，或自己的。
-
-    跟 _load_visible_food 的差別只在不 join 目前版本 —— 給不需要營養素的呼叫端用。
-    可見性判斷完全來自 WHERE 條件，那個 outer join 對它沒有任何影響。
-    """
-    food = await db.scalar(
-        select(Food).where(
-            Food.id == food_id,
-            or_(Food.owner_id.is_(None), Food.owner_id == user.id),
-        )
-    )
-    if food is None:
-        raise NotFoundError("FOOD_NOT_FOUND", "找不到該食物")
-    return food
-
-
-async def _load_visible_food(
-    db: AsyncSession, food_id: int, user: User
-) -> tuple[Food, FoodRevision | None]:
-    """取出使用者看得到的食物：全域的，或自己的。
-
-    看不到的一律 404 —— 「不存在」與「不屬於你」必須無法區分。
-    """
-    row = (
-        await db.execute(
-            select(Food, FoodRevision)
-            .outerjoin(FoodRevision, Food.current_revision_id == FoodRevision.id)
-            .where(
-                Food.id == food_id,
-                or_(Food.owner_id.is_(None), Food.owner_id == user.id),
-            )
-        )
-    ).first()
-    if row is None:
-        raise NotFoundError("FOOD_NOT_FOUND", "找不到該食物")
-    food, revision = row
-    return food, revision
-
-
 @router.get("", response_model=list[FoodResponse])
 async def search_foods(
     q: str | None = None,
@@ -169,7 +130,7 @@ async def read_food(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> FoodResponse:
-    food, revision = await _load_visible_food(db, food_id, user)
+    food, revision = await load_visible_food(db, food_id, user)
     return _to_response(food, revision)
 
 
@@ -179,7 +140,7 @@ async def list_revisions(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[RevisionResponse]:
-    food = await _assert_food_visible(db, food_id, user)
+    food = await assert_food_visible(db, food_id, user)
 
     revisions = (
         await db.scalars(
@@ -206,7 +167,7 @@ async def propose_revision(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> RevisionResponse:
-    food = await _assert_food_visible(db, food_id, user)
+    food = await assert_food_visible(db, food_id, user)
 
     is_own_private_food = food.owner_id == user.id
     now = datetime.now(UTC)
@@ -254,7 +215,7 @@ async def list_portions(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[PortionResponse]:
-    food, _ = await _load_visible_food(db, food_id, user)
+    food, _ = await load_visible_food(db, food_id, user)
 
     portions = (
         await db.scalars(
@@ -284,7 +245,7 @@ async def create_portion(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> PortionResponse:
-    food, _ = await _load_visible_food(db, food_id, user)
+    food, _ = await load_visible_food(db, food_id, user)
 
     if payload.is_global and user.role is not UserRole.ADMIN:
         # 這是角色不符，不是擁有權不符 —— 所以是 403 而不是 404。

@@ -45,6 +45,16 @@ class ForbiddenError(AppError):
         super().__init__(code, message, status.HTTP_403_FORBIDDEN, details)
 
 
+class UnprocessableEntityError(AppError):
+    """用於「看得到但不能用」這種業務規則違反 —— 跟看不到（404）是不同的錯誤。
+
+    例：份量存在、也看得到，但屬於另一個食物（計畫 3 Task 7 陷阱 2）。
+    """
+
+    def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(code, message, status.HTTP_422_UNPROCESSABLE_CONTENT, details)
+
+
 def _envelope(code: str, message: str, details: dict[str, Any]) -> dict[str, Any]:
     return {"error": {"code": code, "message": message, "details": details}}
 
