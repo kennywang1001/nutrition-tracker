@@ -1,5 +1,6 @@
 from app.models.base import Base
 from app.models.food import BaseUnit, Food, FoodPortion, FoodRevision, RevisionStatus
+from app.models.meal import Meal, MealItem, MealType
 from app.models.user import User, UserRole
 
 __all__ = [
@@ -8,6 +9,9 @@ __all__ = [
     "Food",
     "FoodPortion",
     "FoodRevision",
+    "Meal",
+    "MealItem",
+    "MealType",
     "RevisionStatus",
     "User",
     "UserRole",
