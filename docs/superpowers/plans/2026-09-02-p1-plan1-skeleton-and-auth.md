@@ -3018,6 +3018,33 @@ refresh 端點都比對 token 的 `iat` 是否晚於它，再開一個 `POST /ap
 
 ## 延後到 P4 的部署議題（審查過程中記錄，本計畫不處理）
 
+- **新增 Python 依賴時，映像必須重建 —— 而失敗方式是「容器看起來活著」。**
+  （計畫 3 收尾時真的發生了。）
+
+  compose 把原始碼掛載進容器並跑 `--reload`，所以**新程式碼會立刻生效，
+  但映像裡的依賴是舊的**。計畫 3 加了 `pillow`，容器隨即進入
+  `ModuleNotFoundError: No module named 'PIL'` 的崩潰迴圈。
+
+  **關鍵在於徵狀有多不明顯：**
+
+  ```
+  $ docker ps
+  wallet-api-1   Up 4 days      <- 看起來完全正常
+  $ curl localhost:8000/api/health
+  (timeout)
+  ```
+
+  `Up 4 days` 是因為 uvicorn 的 reloader **父行程**活得好好的，
+  一直在重啟那個 import 失敗的子行程。只看容器狀態的監控會說一切正常。
+
+  這條跟已經記錄的「`api` 服務沒有 healthcheck」是同一件事的兩面：
+  沒有 healthcheck，容器的存活狀態就跟應用程式的存活狀態脫鉤。
+  P4 要處理的是：
+  1. compose 加 healthcheck（打 `/api/health`），讓容器狀態反映應用程式狀態
+  2. 部署流程明確區分「只改程式碼」（reload 就夠）與「改了依賴」（要重建映像）
+  3. 重建後 `docker compose up -d api` 才會換上新映像 —— `restart` 不會
+
+
 - **密鑰硬編在 `docker-compose.yml` 裡。** `JWT_SECRET` 跟 PostgreSQL 密碼目前是明文字面值，
   不是 `${VAR}` 也沒有 `env_file:`。對開發用的 compose 這是合理的（`docker compose up`
   免設定就能跑），但 P4 必須改成：production 用獨立的 compose override，密鑰由
