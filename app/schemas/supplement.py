@@ -1,9 +1,17 @@
+from datetime import date
 from decimal import Decimal
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from app.models.supplement import TimeOfDay
 
 _ZERO = Decimal("0")
+
+# PostgreSQL 的 BIGINT 上限，同 app/schemas/meal.py 的 _MAX_BIGINT ——
+# supplement_id 是 request body 欄位，不是路徑參數，ResourceId 用不上，
+# 照抄同樣的邊界值：超過的話 asyncpg 會拋 DataError 變成未處理的 500。
+_MAX_BIGINT = 2**63 - 1
 
 
 class SupplementScope(StrEnum):
@@ -40,3 +48,30 @@ class SupplementResponse(BaseModel):
     protein_g: Decimal
     fat_g: Decimal
     carb_g: Decimal
+
+
+class SupplementPlanCreateRequest(BaseModel):
+    supplement_id: int = Field(gt=0, le=_MAX_BIGINT)
+    # 份數，不是公克/毫升 —— 見計畫決定 1：dose 是 serving_size 的倍數，
+    # kcal_total = supplement.kcal * dose，在打卡（Task 8）當下算好存快照。
+    dose: Decimal = Field(gt=0, le=1000, max_digits=8, decimal_places=2)
+    time_of_day: TimeOfDay
+    effective_from: date
+    effective_to: date | None = None
+
+    @model_validator(mode="after")
+    def _validate_effective_range(self) -> "SupplementPlanCreateRequest":
+        # 跟資料庫的 CHECK (effective_to IS NULL OR effective_to > effective_from)
+        # 是同一條規則，這裡先擋一次能給出更明確的錯誤位置；CHECK 是第二道防線。
+        if self.effective_to is not None and self.effective_to <= self.effective_from:
+            raise ValueError("effective_to 必須晚於 effective_from")
+        return self
+
+
+class SupplementPlanResponse(BaseModel):
+    id: int
+    supplement_id: int
+    dose: Decimal
+    time_of_day: TimeOfDay
+    effective_from: date
+    effective_to: date | None
