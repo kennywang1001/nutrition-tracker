@@ -1306,19 +1306,35 @@ Starlette 依宣告順序比對，`ResourceId` 解析 `"frequent"` 失敗，
 
 每一項都要親自跑過並看到預期結果：
 
-- [ ] `alembic downgrade 0002` 後再 `alembic upgrade head`，兩次都成功
-      （對 `wallet_test`，不動 dev 的 `wallet`）
-- [ ] `alembic check` → `No new upgrade operations detected.`
-- [ ] `pytest -v -W error` 全部通過，測試數 ≥ 220
-- [ ] `ruff check .` 無錯誤
-- [ ] `mypy app` 無錯誤
-- [ ] `pytest --cov=app --cov-fail-under=80` 通過
-- [ ] `/openapi.json` 列出 27 個操作（15 + 12）
-- [ ] `pg_constraint` 裡 `meals` / `meal_items` 的約束名稱全部符合命名慣例
-      （查詢記得 `contype::text`）
-- [ ] Task 18 的七個突變全部被抓到，無一存活
-- [ ] **手動走一次**：上傳一張真的手機拍的照片（含 GPS），
-      下載回來確認 EXIF 是空的
+- [x] `alembic downgrade 0002` 後再 `alembic upgrade head`，兩次都成功
+      （對 `wallet_test`，dev 的 `wallet` 全程留在 0002 沒被動）
+- [x] `alembic check` → `No new upgrade operations detected.`
+- [x] `pytest -v -W error` → **254 passed**（門檻 220）
+- [x] `ruff check .` → `All checks passed!`
+- [x] `mypy app` → `Success: no issues found in 35 source files`
+- [x] `pytest --cov=app --cov-fail-under=80` → **97.64%**
+- [x] OpenAPI 列出 **28 個操作**（估 27，多的是超出規格的 `PATCH /api/me`）
+
+      > 內省的坑：這個 FastAPI 版本把 `include_router` 的結果存成
+      > `_IncludedRouter` 包裝物，**不攤平進 `app.routes`**。
+      > 走訪 `app.routes` 只會看到 4 個 docs 路由，看起來像一個端點都沒註冊。
+      > 要數端點就讀 `app.openapi()`，那才是權威來源。
+      >
+      > 這也讓 Task 15 那個「路由表裡沒有 StaticFiles」的守衛有個已知界線：
+      > 它只看得到頂層路由。`app.mount()` 確實會加到頂層，所以那個具體陷阱
+      > 仍然守得住，但掛在被 include 的 router 裡面的 mount 它看不到。
+
+- [x] `pg_constraint` 裡 `meals` / `meal_items` 共 **9 個約束、0 個違規**
+- [x] Task 18 的**八個**突變全部被抓到，**無一存活**
+- [x] **端到端走一次含 GPS 的照片**（上傳與下載都走真實 API）：
+
+      | | 上傳前 | 下載後 |
+      |---|---|---|
+      | 尺寸 | 3000×2000 | **1280×853** |
+      | 位元組 | 94,810 | 17,909 |
+      | EXIF 標籤 | 3 | **0** |
+      | GPS 標籤 | 4（25°02'N, 121°33'E） | **0** |
+      | 相機型號 | `'ACME Phone'` | `None` |
 
 ---
 
