@@ -1177,7 +1177,32 @@ Task 15 的五個測試**全部照樣通過** —— 它們打的是 `/api/meals
 `recent`：同樣的 join，改成 `GROUP BY foods.id`、`ORDER BY max(meals.eaten_at) DESC`。
 
 規格第 6.6 節：**P1 用查詢 + 索引解決，不建快取表。** 等實際量到慢再優化。
-`ix_meal_items_food_revision_id` 與 `ix_meals_user_id_eaten_at` 就是為此存在的。
+
+> **實測更正（Task 17）：** 上面原本寫「`ix_meal_items_food_revision_id` 與
+> `ix_meals_user_id_eaten_at` 就是為此存在的」。前者是錯的。
+>
+> `EXPLAIN` 在兩種資料規模下（10,500 與 610,500 筆 `meal_items`）都顯示：
+>
+> - `ix_meals_user_id_eaten_at`：**有用到**，兩種規模都是 Bitmap Index Scan。
+>   選擇性完全來自 `meals.user_id`。
+> - `ix_meal_items_food_revision_id`：**兩種規模都沒用到**。大資料量時
+>   `meal_items` 確實改走索引，但走的是 `ix_meal_items_meal_id`
+>   （原本為 `GET /api/meals/{id}` 建的）。
+>
+> 原因很單純：這個查詢對 `food_revision_id` **沒有任何過濾條件**，
+> 它只是 join key。全 codebase 搜過，`food_revision_id` 一律只出現在
+> `join(...)` 裡，沒有一處是 `WHERE`。
+>
+> **但這個索引不該刪。** 它真正的消費者是規格決策 3 提到的 P2 功能：
+> 「你這筆紀錄引用的食物資料已更新，要套用新版本嗎？」——
+> 那個功能要反查「哪些 `meal_items` 引用了這一版」，正是
+> `WHERE food_revision_id = ?`。
+>
+> 所以結論是**理由要改，索引留著**：它不是為 frequent/recent 建的，
+> 是為版本更新提示建的。留著一個沒有消費者的索引要付寫入成本，
+> 留著一個「消費者還沒寫出來」的索引則是預留 —— 兩者差別只在你說得出理由。
+
+執行時間：小資料 1.8ms、大資料 4.9ms，單一 SQL 語句。
 
 > **一個要誠實記下來的事：** 這兩個查詢裡的可見性過濾（`owner_id IS NULL OR
 > owner_id = :me`）**今天是空轉的** —— 因為 Task 7 已經擋住了「記錄看不到的食物」，
@@ -1188,6 +1213,36 @@ Task 15 的五個測試**全部照樣通過** —— 它們打的是 `/api/meals
 - [ ] **Step 3: 驗收 + commit**
 
 `pytest -W error`（219）。Commit: `feat: 新增常吃與最近吃的 API`
+
+#### Task 17 實測發現
+
+**1. 兩個過濾器會互相掩護，讓突變測試看起來是綠的。**
+
+隔離測試原本用「Alice 的**私人**食物」來驗證「Bob 的 frequent 不含 Alice 吃過的東西」。
+拿掉 `Meal.user_id == user.id` 這個過濾之後 —— **零個測試失敗**。
+
+原因是防禦性的 `Food.owner_id` 過濾把它遮住了：私人食物 Bob 本來就看不到，
+所以少了 `user_id` 過濾也沒差。**測試驗證到的是錯的那個過濾器。**
+
+改用**全域食物**（Bob 看得到，但沒吃過）之後，同一個突變讓 2 個測試失敗。
+
+> 通則：**要測 A 過濾器，測試資料就必須讓 B 過濾器無效。**
+> 兩個過濾器同時能擋住同一筆資料時，突變任一個都不會變紅。
+> 這比「測試寫錯」更隱蔽 —— 測試的名字、意圖、斷言全都是對的，
+> 只有**測試資料的選擇**讓它失去鑑別力。
+
+**2. 路由宣告順序：`/{food_id}` 在前會讓 `/foods/frequent` 回 422 不是 404。**
+
+Starlette 依宣告順序比對，`ResourceId` 解析 `"frequent"` 失敗，
+吐的是 FastAPI 的標準驗證錯誤（`int_parsing`），不是路由 404 也不是端點的 404。
+**具名路徑一律宣告在 `/{參數}` 之前。**
+
+**3. 防禦性過濾確認是空轉的（誠實記錄，不補假測試）。**
+把 `Food.owner_id` 過濾整個拿掉，**全部 243 個測試通過**。
+因為 `POST /api/meals` 已經擋住「記錄看不到的食物」，所以你的餐裡不可能有
+看不到的食物。保留它是為了日後的「刪除食物 / 取消分享」，
+但**今天它抓不到任何突變，Task 18 也證明不了它**。
+不寫看起來有覆蓋的測試 —— 那會讓缺口變得不可見。
 
 ---
 
