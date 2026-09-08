@@ -372,3 +372,38 @@ async def test_invalid_date_format_is_rejected(client, db_session):
     response = await client.get("/api/meals", headers=auth(user), params={"date": "not-a-date"})
 
     assert response.status_code == 422
+
+
+async def test_a_meal_at_exactly_midnight_belongs_to_one_day_only(client, db_session):
+    """日界線是半開區間 [start, end)，所以恰好落在邊界的一餐只能屬於一天。
+
+    `<=` 而不是 `<` 的話，午夜零點那一餐會同時出現在兩天的結果裡。
+    這在計畫 3 只是「清單多一筆」，但到了計畫 4 的每日統計，
+    那一餐的熱量會被計入兩次 —— 而且兩天的數字各自看起來都很合理，
+    沒有任何東西會報錯。
+    """
+    user = await create_user(db_session)  # server_default 就是 Asia/Taipei
+    day = date(2026, 9, 4)
+    start, end = day_bounds(day, "Asia/Taipei")
+
+    # end 同時是「這一天的結束」與「隔天的開始」—— 它必須只屬於隔天
+    await create_meal(db_session, user=user, eaten_at=end)
+    await db_session.commit()
+
+    today = await client.get("/api/meals", headers=auth(user), params={"date": day.isoformat()})
+    tomorrow = await client.get(
+        "/api/meals",
+        headers=auth(user),
+        params={"date": (day + timedelta(days=1)).isoformat()},
+    )
+
+    assert today.status_code == 200
+    assert tomorrow.status_code == 200
+    assert today.json() == [], "邊界那一刻屬於隔天，不能出現在當天"
+    assert len(tomorrow.json()) == 1
+
+    # 對照：start 那一刻確實屬於這一天
+    await create_meal(db_session, user=user, eaten_at=start)
+    await db_session.commit()
+    again = await client.get("/api/meals", headers=auth(user), params={"date": day.isoformat()})
+    assert len(again.json()) == 1
