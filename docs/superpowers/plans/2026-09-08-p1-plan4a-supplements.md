@@ -20,9 +20,18 @@
    而 `rollback()` 會讓 identity map 裡所有物件過期，包含測試抓著的那些。
 4. **索引與約束全部宣告在 model 的 `__table_args__` 裡。** model 是唯一事實來源。
 5. **`CheckConstraint(name=)` 給的是命名慣例的輸入**，不是最終名稱。
-6. **`Enum(..., native_enum=False)` 一律搭配 `create_constraint=False`**，
-   然後在 `__table_args__` 自己宣告一個普通的 `CheckConstraint` ——
+6. **`Enum(..., native_enum=False)` 一律搭配 `create_constraint=False`，
+   然後在 `__table_args__` 自己宣告一個普通的 `CheckConstraint`。**
    `create_constraint=True` 會讓 `alembic check` **永久報漂移**（計畫 3 Task 5 實測）。
+
+   > **這條規矩有兩半，而漏掉第二半不會有任何徵狀 —— Task 1 實測踩到了。**
+   > 只寫 `create_constraint=False` 而忘了自己宣告 `CheckConstraint`，
+   > 結果不是「約束變弱」，是**完全沒有約束**：欄位變成一個誰都塞得進去的
+   > `varchar(N)`。`alembic check` 乾淨、測試全綠、mypy 與 ruff 都過 ——
+   > 沒有任何一個關卡會提醒你。
+   >
+   > **寫成一句話記：關掉自動產生的那一刻，就欠了一個手寫的約束。**
+   > 驗證方式只有一個：migration 套用後真的去查 `pg_constraint`。
 7. **主鍵用 `Identity(always=True)`**，不用 `serial`。
 8. **綠燈在被觀察到失敗之前不算證據。** 計畫 3 累積了六種不同的「綠燈說謊」機制，
    本計畫每一個守衛都要突變過才能宣稱有覆蓋。
@@ -341,6 +350,46 @@ alembic upgrade head && alembic downgrade 0004 && alembic upgrade head && alembi
 - [ ] **Step 5: 驗收 + commit**
 
 `pytest -W error` 恢復 254 全綠。Commit: `feat: 新增補劑相關的 migration`
+
+#### Task 1 / 2 實測發現
+
+**1. `alembic check` 對 `ExcludeConstraint` 比對乾淨（連續三次）。**
+這是本批唯一的真未知數，結論是好的：計畫 3 那個
+`Enum(create_constraint=True)` 的永久漂移沒有重演。
+EXCLUDE 可以正常宣告在 model 的 `__table_args__` 裡，
+不需要 `op.execute()` 也不需要 `include_object` 例外。
+
+**2. EXCLUDE 的名稱原封不動，`ex_` 前綴確認是手寫的。**
+實際名稱 `ex_supplement_plans_no_overlap`，`contype = 'x'`。
+`app/models/base.py` 的 `NAMING_CONVENTION` 沒有 `"ex"` 這個 key，
+所以慣例完全不介入 —— 跟 `CheckConstraint` 會被包成 `ck_<表>_<名>` 相反。
+
+**3. `time_of_day` 有兩個守衛，錯誤碼不同（實測 5/5）。**
+
+| 輸入 | 被誰擋 | sqlstate |
+|---|---|---|
+| `'morning'` / `'postworkout'` | 通過 | — |
+| `'brunch'`（無效，6 字元） | **CHECK 約束** | `23514` |
+| `''`（空字串） | **CHECK 約束** | `23514` |
+| `'midnight_snack'`（無效，14 字元） | **varchar(11) 長度限制** | `22001` |
+
+`native_enum=False` 產生的是 `varchar(N)`，N 等於最長標籤的長度
+（這裡是 11 = `postworkout`）。**比最長標籤還長的無效值會先撞上長度限制，
+根本走不到 CHECK。**
+
+> 這對測試設計有實際影響：**想驗證 CHECK 有效，就要挑一個「無效但夠短」的值。**
+> 我第一次驗的時候用了 `midnight_snack`，看到它被擋就以為 CHECK 在運作 ——
+> 其實擋它的是長度限制，CHECK 有沒有寫都一樣。
+> 這又是「測試通過了，但驗證到的是別的東西」的一個實例。
+>
+> 對應用程式也有影響：若 handler 只接 `CheckViolationError` 想轉成 422，
+> 過長的值會以 `StringDataRightTruncationError` 逃逸。
+> 實務上 Pydantic 會先擋掉，但這是第二層防護的已知缺口。
+
+**4. `postgresql_nulls_not_distinct=True` 這次直接寫在 `op.create_table` 裡就成功了**，
+不需要 migration 0002 對 `foods` 用的那個原始 SQL 迂迴。
+0002 那個 workaround 可能已經不必要（或是版本差異）——
+**記下來，下次動到 0002 時順手確認**，現在不動它。
 
 ---
 
