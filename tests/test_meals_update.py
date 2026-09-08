@@ -181,3 +181,57 @@ async def test_explicit_null_meal_type_is_rejected_with_422(client, db_session):
     )
 
     assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Task 11: DELETE /api/meals/{id}
+# ---------------------------------------------------------------------------
+
+
+async def test_deleting_own_meal_returns_204_then_404_on_reread(client, db_session):
+    user = await create_user(db_session)
+    create_response = await client.post("/api/meals", headers=auth(user), json=_create_payload())
+    meal_id = create_response.json()["id"]
+
+    response = await client.delete(f"/api/meals/{meal_id}", headers=auth(user))
+    assert response.status_code == 204
+
+    reread = await client.get(f"/api/meals/{meal_id}", headers=auth(user))
+    assert reread.status_code == 404
+
+
+async def test_deleting_someone_elses_meal_is_not_found_and_meal_still_exists(client, db_session):
+    """「回 404」跟「沒有真的刪掉」是兩件事 —— 用真的重查確認，不能只看狀態碼。
+    一個「先刪除、再檢查權限」的實作會通過只斷言狀態碼的測試。
+    """
+    alice = await create_user(db_session)
+    bob = await create_user(db_session)
+    create_response = await client.post(
+        "/api/meals", headers=auth(alice), json=_create_payload(note="愛麗絲的餐點")
+    )
+    meal_id = create_response.json()["id"]
+
+    response = await client.delete(f"/api/meals/{meal_id}", headers=auth(bob))
+    assert response.status_code == 404
+
+    reread = await client.get(f"/api/meals/{meal_id}", headers=auth(alice))
+    assert reread.status_code == 200
+    assert reread.json()["note"] == "愛麗絲的餐點"
+
+
+async def test_deleting_a_nonexistent_meal_is_not_found(client, db_session):
+    user = await create_user(db_session)
+
+    response = await client.delete("/api/meals/999999", headers=auth(user))
+
+    assert response.status_code == 404
+
+
+async def test_delete_meal_requires_authentication(client, db_session):
+    user = await create_user(db_session)
+    create_response = await client.post("/api/meals", headers=auth(user), json=_create_payload())
+    meal_id = create_response.json()["id"]
+
+    response = await client.delete(f"/api/meals/{meal_id}")
+
+    assert response.status_code == 401

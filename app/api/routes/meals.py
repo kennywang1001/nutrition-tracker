@@ -294,6 +294,24 @@ async def update_meal(
     return _build_meal_response(meal, rows)
 
 
+@router.delete("/{meal_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_meal(
+    meal_id: ResourceId,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """刪一餐。`meal_items` 靠 `ON DELETE CASCADE` 跟著走，這裡不逐筆刪 ——
+    照片檔案的清理留到 Task 16。
+
+    擁有權檢查（`_load_owned_meal`）必須在刪除**之前**：先查到、確認是
+    自己的，才刪；不能「先刪、再檢查」，那種順序下「回 404」跟「真的沒刪掉」
+    會脫鉤 —— 對一個一查就砍的實作，只斷言狀態碼的測試看不出差別。
+    """
+    meal = await _load_owned_meal(db, meal_id, user)
+    await db.delete(meal)
+    await db.commit()
+
+
 @router.get("", response_model=list[MealResponse])
 async def list_meals(
     date: date | None = Query(default=None),
