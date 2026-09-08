@@ -23,6 +23,7 @@ from app.schemas.meal import (
     MealItemCreateRequest,
     MealItemResponse,
     MealResponse,
+    MealUpdateRequest,
 )
 
 router = APIRouter(prefix="/meals", tags=["meals"])
@@ -230,22 +231,60 @@ def _build_meal_response(
     )
 
 
+async def _load_owned_meal(db: AsyncSession, meal_id: int, user: User) -> Meal:
+    """依擁有權載入一筆餐點；不存在或不是自己的，一律回同一種 404
+    （繼承規矩第 1 條：權限失敗不回 403，且跟「真的不存在」逐字相同）。
+
+    擁有權判斷併進查詢的 WHERE 條件裡（`Meal.user_id == user.id`），
+    不是「先查到再檢查擁有者」—— 後者會讓「不存在」跟「不是你的」在查詢層
+    就走不同的路徑，容易一邊改一邊漏。GET / PATCH / DELETE 這一餐、以及
+    項目的增刪，全部共用這一個函式：擁有權規則只寫一次，日後要修只會
+    改到一個地方。
+    """
+    meal = await db.scalar(select(Meal).where(Meal.id == meal_id, Meal.user_id == user.id))
+    if meal is None:
+        raise NotFoundError("MEAL_NOT_FOUND", "找不到該餐點")
+    return meal
+
+
 @router.get("/{meal_id}", response_model=MealResponse)
 async def read_meal(
     meal_id: ResourceId,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> MealResponse:
-    """讀單一餐點：只有 2 次查詢，跟項目數無關（見 `_item_join_query`）。
+    """讀單一餐點：只有 2 次查詢，跟項目數無關（見 `_item_join_query`）。"""
+    meal = await _load_owned_meal(db, meal_id, user)
 
-    擁有權判斷併進第一次查詢的 WHERE 條件裡（`Meal.user_id == user.id`），
-    不是「先查到再檢查擁有者」—— 後者會讓「不存在」跟「不是你的」在查詢層
-    就走不同的路徑，容易一邊改一邊漏。查不到（不管是真的不存在，還是存在但
-    是別人的）一律回同一種 404（繼承規矩第 1 條：權限失敗不回 403）。
+    rows = (
+        await db.execute(
+            _item_join_query().where(MealItem.meal_id == meal.id).order_by(MealItem.id)
+        )
+    ).all()
+    return _build_meal_response(meal, rows)
+
+
+@router.patch("/{meal_id}", response_model=MealResponse)
+async def update_meal(
+    meal_id: ResourceId,
+    payload: MealUpdateRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MealResponse:
+    """只改餐點本身：`eaten_at` / `meal_type` / `note`（計畫 3 決定 2）。
+    項目不在這個端點的範圍內 —— 那是 `POST/DELETE .../items` 的事。
+
+    用 `exclude_unset` 決定要更新哪些欄位（沒帶的欄位維持原樣），
+    `MealUpdateRequest` 自己的驗證器已經擋掉 `eaten_at` / `meal_type`
+    的顯式 `null`，所以流到這裡的 `None` 只可能是合法的 `note` 清空。
     """
-    meal = await db.scalar(select(Meal).where(Meal.id == meal_id, Meal.user_id == user.id))
-    if meal is None:
-        raise NotFoundError("MEAL_NOT_FOUND", "找不到該餐點")
+    meal = await _load_owned_meal(db, meal_id, user)
+
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(meal, field, value)
+
+    await db.commit()
+    await db.refresh(meal)
 
     rows = (
         await db.execute(
