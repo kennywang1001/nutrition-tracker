@@ -88,6 +88,11 @@ class SupplementPlan(Base):
             "effective_to IS NULL OR effective_to > effective_from",
             name="effective_range",
         ),
+        CheckConstraint(
+            "time_of_day IN ('morning', 'noon', 'evening', 'bedtime', "
+            "'preworkout', 'postworkout')",
+            name="time_of_day_valid",
+        ),
         # 決定 2：規格第 6.4 節漏掉的 EXCLUDE 不重疊約束。
         # 已實測（見計畫）：字串欄位名 + text() 運算式的組合編譯出正確的 DDL、
         # 語意 6/6 符合預期。命名慣例不會替 ExcludeConstraint 加前綴 ——
