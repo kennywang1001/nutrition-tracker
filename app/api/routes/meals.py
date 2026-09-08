@@ -5,7 +5,7 @@ from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, Query, status
-from sqlalchemy import Row, Select, or_, select
+from sqlalchemy import Row, Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -13,8 +13,8 @@ from app.api.params import ResourceId
 from app.days import day_bounds, today_in_timezone
 from app.db import get_db
 from app.errors import ConflictError, NotFoundError, UnprocessableEntityError
-from app.food_visibility import load_visible_food
-from app.models.food import Food, FoodPortion, FoodRevision
+from app.food_visibility import load_visible_food, load_visible_portion
+from app.models.food import Food, FoodRevision
 from app.models.meal import Meal, MealItem
 from app.models.user import User
 from app.nutrition import Macros, scale, total
@@ -49,21 +49,6 @@ class _ResolvedItem:
     quantity_g: Decimal
 
 
-async def _load_visible_portion(db: AsyncSession, portion_id: int, user: User) -> FoodPortion:
-    """跟 app/food_visibility.py 的 load_visible_food 是同一種可見性判斷，
-    只是換成 FoodPortion。份量沒有 revision 那一層，所以不用抽成共用模組。
-    """
-    portion = await db.scalar(
-        select(FoodPortion).where(
-            FoodPortion.id == portion_id,
-            or_(FoodPortion.owner_id.is_(None), FoodPortion.owner_id == user.id),
-        )
-    )
-    if portion is None:
-        raise NotFoundError("PORTION_NOT_FOUND", "找不到該份量")
-    return portion
-
-
 async def _resolve_item(
     db: AsyncSession, payload: MealItemCreateRequest, user: User
 ) -> _ResolvedItem:
@@ -86,7 +71,7 @@ async def _resolve_item(
     if portion_id is None:
         quantity_g = quantity
     else:
-        portion = await _load_visible_portion(db, portion_id, user)
+        portion = await load_visible_portion(db, portion_id, user)
         if portion.food_id != food.id:
             raise UnprocessableEntityError(
                 "PORTION_FOOD_MISMATCH", "這個份量不屬於指定的食物"
@@ -359,3 +344,70 @@ async def list_meals(
         items_by_meal[row[0].meal_id].append(row)
 
     return [_build_meal_response(meal, items_by_meal.get(meal.id, [])) for meal in meals]
+
+
+@router.post(
+    "/{meal_id}/items", status_code=status.HTTP_201_CREATED, response_model=MealResponse
+)
+async def add_meal_item(
+    meal_id: ResourceId,
+    payload: MealItemCreateRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MealResponse:
+    """加一個項目到一餐（計畫 3 決定 2：項目的增刪走這裡，不是 PATCH）。
+
+    食物與份量的解析完全重用 `_resolve_item`（Task 7 抽出來的那個函式，
+    現在底下呼叫的 `load_visible_portion` 也已經提升到 `app/food_visibility.py`
+    —— 這是它的第二個呼叫者）。不重新驗證一次可見性邏輯：複製一份的話，
+    日後修一個安全性 bug 只會修到一邊，這是計畫在 Task 7 實測發現裡明講的。
+
+    餐點的擁有權查詢在「解析項目」之前 —— 加到別人的餐要 404，不能先驗證
+    完項目才發現餐不是自己的。
+    """
+    meal = await _load_owned_meal(db, meal_id, user)
+
+    resolved = await _resolve_item(db, payload, user)
+
+    item = MealItem(
+        meal_id=meal.id,
+        food_revision_id=resolved.food_revision_id,
+        portion_id=resolved.portion_id,
+        quantity=resolved.quantity,
+        quantity_g=resolved.quantity_g,
+    )
+    db.add(item)
+    await db.commit()
+
+    rows = (
+        await db.execute(
+            _item_join_query().where(MealItem.meal_id == meal.id).order_by(MealItem.id)
+        )
+    ).all()
+    return _build_meal_response(meal, rows)
+
+
+@router.delete("/{meal_id}/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_meal_item(
+    meal_id: ResourceId,
+    item_id: ResourceId,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """刪一個項目。
+
+    擁有權沿著 `meal_items.meal_id -> meals.user_id` 檢查（先用
+    `_load_owned_meal` 確認 `meal_id` 是自己的一餐，再確認這個 `item_id`
+    真的屬於**這一筆** `meal_id`）—— 不能只檢查 `item_id` 存在，那會讓
+    任何登入的使用者都能刪掉別人的項目，只要猜得到 id。
+    """
+    meal = await _load_owned_meal(db, meal_id, user)
+
+    item = await db.scalar(
+        select(MealItem).where(MealItem.id == item_id, MealItem.meal_id == meal.id)
+    )
+    if item is None:
+        raise NotFoundError("MEAL_ITEM_NOT_FOUND", "找不到該項目")
+
+    await db.delete(item)
+    await db.commit()

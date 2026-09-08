@@ -9,7 +9,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import NotFoundError
-from app.models.food import Food, FoodRevision
+from app.models.food import Food, FoodPortion, FoodRevision
 from app.models.user import User
 
 
@@ -51,3 +51,26 @@ async def load_visible_food(
         raise NotFoundError("FOOD_NOT_FOUND", "找不到該食物")
     food, revision = row
     return food, revision
+
+
+async def load_visible_portion(db: AsyncSession, portion_id: int, user: User) -> FoodPortion:
+    """取出使用者看得到的份量：全域的，或自己的。
+
+    原本留在 `app/api/routes/meals.py`（計畫 3 Task 7）裡，當時只有一個
+    呼叫者，計畫刻意記下「等第二個呼叫者出現再提升到共用模組」（見 Task 7
+    實測發現第 4 點）。Task 12 的 `POST /api/meals/{id}/items` 就是那個第二個
+    呼叫者：兩處都要驗證「份量看得到」，複製一份的話，日後修一個安全性 bug
+    只會修到一邊 —— 跟 `load_visible_food` 抽出來的理由一模一樣。
+
+    份量沒有 revision 那一層，所以跟 `load_visible_food` 不共用同一個函式，
+    但共用同一個模組、同一種可見性判斷方式。
+    """
+    portion = await db.scalar(
+        select(FoodPortion).where(
+            FoodPortion.id == portion_id,
+            or_(FoodPortion.owner_id.is_(None), FoodPortion.owner_id == user.id),
+        )
+    )
+    if portion is None:
+        raise NotFoundError("PORTION_NOT_FOUND", "找不到該份量")
+    return portion
