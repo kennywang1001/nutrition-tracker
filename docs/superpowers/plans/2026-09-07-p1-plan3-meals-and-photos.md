@@ -742,6 +742,40 @@ def scale(revision: FoodRevision, quantity_g: Decimal) -> Macros:
 
 `pytest -W error`（156）。Commit: `feat: 新增建立餐點的 API`
 
+#### Task 7 實測發現
+
+**1. 原子性靠設計，不靠記得寫 `rollback()`。**
+實作是「先把所有項目解析完（純 `SELECT`，一個 `db.add()` 都沒有），
+全部通過才建立 `Meal` 與 `MealItem` 並 commit 一次」。第 3 個項目失敗時，
+session 裡根本還沒有任何東西，所以**沒有東西需要回滾**。
+
+對照組值得記：如果寫成「逐項解析、逐項 `add()` + `flush()`」，
+那麼在測試環境裡（`db_session` 是整個測試共用的，`override_get_db` 沒有清理），
+前兩個項目的寫入**對同一個 session 的 count 查詢仍然可見** ——
+即使 API 回的是錯誤。於是「回了 404」和「什麼都沒寫進去」會脫鉤，
+而只斷言狀態碼的測試看不出來。這就是為什麼那個測試要真的下 `count()`。
+
+**2. 可見性邏輯抽成 `app/food_visibility.py`。**
+`foods.py` 和 `meals.py` 現在共用同一份。這不是整理癖 ——
+兩份各自演化的可見性檢查，等於日後修一個安全性 bug 只會修到一邊。
+
+**3. 一個誠實回報的突變存活（不是覆蓋缺口）。**
+「把 `quantity_g` 改成讀取時重算」這個突變**無法在本 task 施加**，
+因為 `GET /api/meals/{id}` 是 Task 8 才有的東西。退而求其次施加的近似突變
+（寫入前再查一次份量）**存活了全部 165 個測試**，而且是**正確的存活** ——
+那次重查發生在同一個請求裡，份量還沒被改，算出來必然一樣。
+
+> **真正危險的那個形狀（GET handler 去 join 即時的份量資料而不是信任
+> `quantity_g`）要等 Task 8 才測得到，屆時必須另外寫一個讀取端的凍結測試。**
+> 這裡先記下來，免得看到「Task 7 有凍結測試了」就以為讀取端也被保護了。
+
+**4. 兩處標記為「防禦性但今天沒有測試覆蓋」的程式碼**（誠實勝於假裝）：
+- `schemas/meal.py` 裡 body 層級的 `food_id` / `portion_id` 加了 `le=2**63-1`，
+  比照 `ResourceId` 的理由（超大整數會讓 asyncpg 拋 `DataError` 變 500）。
+  12 個測試裡沒有一個涵蓋它。
+- `_load_visible_portion` 目前留在 `meals.py` 裡，只有一個呼叫者。
+  **Task 12 要重用它，屆時提升到共用模組，不要複製第二份。**
+
 ---
 
 ## Task 8: `GET /api/meals/{id}`
