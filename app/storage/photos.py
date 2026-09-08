@@ -136,6 +136,20 @@ def save_photo(content: bytes, *, user_id: int) -> str:
     return rel_path
 
 
+def read_photo(rel_path: str) -> bytes:
+    """讀取一張已存的照片內容。
+
+    檔案不存在時讓 `FileNotFoundError` 原樣往外傳，不在這裡吞掉 ——
+    呼叫端（`app/api/routes/meals.py`）負責把它轉成 404。DB 有 `photo_path`
+    但檔案不在磁碟上是正常操作下可達的狀態（`delete_photo()` 是
+    best-effort，容許檔案暫時落後於 DB），所以這不是「不該發生的錯誤」，
+    是呼叫端本來就要處理的一種正常結果，不該讓它變成未處理的 500
+    （計畫 3 Task 15）。
+    """
+    target = _photo_root() / rel_path
+    return target.read_bytes()
+
+
 def delete_photo(rel_path: str) -> None:
     """盡力刪除一張照片；檔案本來就不存在就當作成功（best-effort）。
 

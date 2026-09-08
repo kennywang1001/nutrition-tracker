@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Query, Response, UploadFile, status
 from sqlalchemy import Row, Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,7 +30,13 @@ from app.schemas.meal import (
     MealResponse,
     MealUpdateRequest,
 )
-from app.storage.photos import UPLOAD_CHUNK_SIZE, InvalidImageError, delete_photo, save_photo
+from app.storage.photos import (
+    UPLOAD_CHUNK_SIZE,
+    InvalidImageError,
+    delete_photo,
+    read_photo,
+    save_photo,
+)
 
 router = APIRouter(prefix="/meals", tags=["meals"])
 
@@ -492,3 +498,32 @@ async def upload_meal_photo(
         )
     ).all()
     return _build_meal_response(meal, rows)
+
+
+@router.get("/{meal_id}/photo")
+async def read_meal_photo(
+    meal_id: ResourceId,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """讀一餐的照片（計畫 3 Task 15）。
+
+    規格第 8 節：照片**不**透過靜態檔案服務提供 —— 每一次讀取都要先經過這個
+    端點驗證 JWT 與擁有權，不是靠 UUID 檔名猜不到。掛 `StaticFiles` 在
+    `photo_dir` 上會讓這道檢查形同虛設，一旦網址外流就永久有效；擁有權檢查
+    沿用 `_load_owned_meal`，跟其他所有餐點端點是同一個函式、同一條規則。
+
+    DB 有 `photo_path` 但檔案不在磁碟上是正常操作下可達的狀態（`delete_photo()`
+    是 best-effort 設計），一律用實際讀檔的結果判斷 —— 讀不到就是 404，
+    不能讓 `FileNotFoundError` 逃逸成未處理的 500。
+    """
+    meal = await _load_owned_meal(db, meal_id, user)
+    if meal.photo_path is None:
+        raise NotFoundError("MEAL_PHOTO_NOT_FOUND", "這一餐沒有照片")
+
+    try:
+        content = read_photo(meal.photo_path)
+    except FileNotFoundError as exc:
+        raise NotFoundError("MEAL_PHOTO_NOT_FOUND", "這一餐沒有照片") from exc
+
+    return Response(content=content, media_type="image/jpeg")

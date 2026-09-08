@@ -298,3 +298,117 @@ async def test_read_upload_within_limit_aborts_before_reading_the_whole_body():
         await _read_upload_within_limit(fake_file, limit)
 
     assert fake_file.chunks_served <= 5
+
+
+# ---------------------------------------------------------------------------
+# Task 15：GET /api/meals/{id}/photo —— 5 個必要測試
+#
+# 規格第 8 節：照片不透過靜態檔案服務提供，一律先驗 JWT 與擁有權，
+# 每一次讀取都要經過這個端點。
+# ---------------------------------------------------------------------------
+
+
+async def _upload_photo(client, user, meal_id, *, width=400, height=300) -> str:
+    response = await client.post(
+        f"/api/meals/{meal_id}/photo",
+        headers=auth(user),
+        files={"file": ("food.jpg", _jpeg_bytes(width, height), "image/jpeg")},
+    )
+    photo_path: str = response.json()["photo_path"]
+    return photo_path
+
+
+async def test_getting_own_photo_returns_the_exact_bytes_that_were_saved(client, db_session):
+    """狀態碼、content-type、位元組都要對：不能只驗其中一個。
+
+    位元組比較的對象是 `save_photo` 實際寫到磁碟上的內容，不是上傳時送進去的
+    原始檔案 —— Pillow 重新編碼過（縮放、去 EXIF、轉 JPEG），跟原始上傳內容
+    本來就不會逐位元組相同，那不是這個端點要保證的事。
+    """
+    user = await create_user(db_session)
+    meal_id = await _create_meal(client, user)
+    photo_path = await _upload_photo(client, user, meal_id)
+    saved_bytes = (Path(settings.photo_dir) / photo_path).read_bytes()
+
+    response = await client.get(f"/api/meals/{meal_id}/photo", headers=auth(user))
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/jpeg"
+    assert response.content == saved_bytes
+
+
+async def test_getting_someone_elses_photo_is_not_found(client, db_session):
+    alice = await create_user(db_session)
+    bob = await create_user(db_session)
+    meal_id = await _create_meal(client, alice)
+    await _upload_photo(client, alice, meal_id)
+
+    response = await client.get(f"/api/meals/{meal_id}/photo", headers=auth(bob))
+
+    assert response.status_code == 404
+
+
+async def test_getting_photo_for_a_meal_without_one_is_not_found(client, db_session):
+    user = await create_user(db_session)
+    meal_id = await _create_meal(client, user)
+
+    response = await client.get(f"/api/meals/{meal_id}/photo", headers=auth(user))
+
+    assert response.status_code == 404
+
+
+async def test_get_photo_requires_authentication(client, db_session):
+    user = await create_user(db_session)
+    meal_id = await _create_meal(client, user)
+    await _upload_photo(client, user, meal_id)
+
+    response = await client.get(f"/api/meals/{meal_id}/photo")
+
+    assert response.status_code == 401
+
+
+async def test_missing_photo_file_on_disk_returns_404_not_500(client, db_session):
+    """DB 有 `photo_path` 但檔案不在磁碟上，是正常操作下可達的狀態 ——
+    `delete_photo()` 是 best-effort 設計（規格第 8 節：容許檔案暫時落後於
+    DB），所以「DB 指著一個已經不存在的檔案」不是只存在於理論上的邊界案例。
+
+    這裡直接繞過 API、在檔案系統層面刪掉檔案來重現這個狀態，不依賴任何
+    競態條件或真的讓 delete_photo 失敗。
+    """
+    user = await create_user(db_session)
+    meal_id = await _create_meal(client, user)
+    photo_path = await _upload_photo(client, user, meal_id)
+    (Path(settings.photo_dir) / photo_path).unlink()
+
+    response = await client.get(f"/api/meals/{meal_id}/photo", headers=auth(user))
+
+    assert response.status_code == 404
+
+
+async def test_no_static_files_mount_serves_the_photo_directory():
+    """規格第 8 節的陷阱：如果之後有人為了方便掛 `StaticFiles(directory=photo_dir)`，
+    上面 5 個測試全部打 `/api/meals/{id}/photo` 這條路徑，一個都不會變紅 ——
+    它們從來沒有問過『還有沒有第二條路徑也能拿到這個檔案』。
+
+    這裡誠實地換一種方式測：不透過 HTTP 去『猜』有沒有其他路徑能讀到檔案
+    （猜不到就是假陰性，猜得到也只證明了那一個路徑，不是全部），而是直接
+    檢查 app 的路由表本身——掃過 `app.routes`，斷言沒有任何一個是 `StaticFiles`
+    掛載。這是這個陷阱唯一能被自動化測試釘住的方式。
+
+    範圍要誠實講清楚：這個測試抓得到「掛 StaticFiles 到任何路徑」這個計畫
+    明講的陷阱（已用突變驗證，見任務報告），抓不到「日後有人寫一個全新的、
+    忘記加認證的一般端點去讀檔案再回傳」——那是程式邏輯錯誤，不是路由表
+    能看出來的東西，只能靠程式碼審查或端點層級的隔離掃描守住。
+    """
+    from starlette.staticfiles import StaticFiles
+
+    from app.main import app
+
+    static_mounts = [
+        route.path for route in app.routes if isinstance(getattr(route, "app", None), StaticFiles)
+    ]
+
+    assert static_mounts == [], (
+        f"發現 StaticFiles 掛載：{static_mounts} —— "
+        "照片一律要經過 /api/meals/{id}/photo 驗證擁有權，不可以被繞過"
+    )
