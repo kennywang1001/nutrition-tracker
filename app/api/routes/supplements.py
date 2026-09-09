@@ -4,11 +4,17 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.days import day_bounds, today_in_timezone
 from app.db import get_db
 from app.errors import ConflictError
-from app.models.supplement import Supplement
+from app.models.supplement import Supplement, SupplementIntake, SupplementPlan
 from app.models.user import User
-from app.schemas.supplement import SupplementCreateRequest, SupplementResponse, SupplementScope
+from app.schemas.supplement import (
+    SupplementCreateRequest,
+    SupplementResponse,
+    SupplementScope,
+    TodaySupplementItem,
+)
 
 router = APIRouter(prefix="/supplements", tags=["supplements"])
 
@@ -82,3 +88,94 @@ async def search_supplements(
 
     supplements = (await db.scalars(stmt)).all()
     return [_to_response(s) for s in supplements]
+
+
+@router.get("/today", response_model=list[TodaySupplementItem])
+async def list_today(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[TodaySupplementItem]:
+    """今日待打卡清單：把「計畫」與「實際」對起來（陷阱 2）。
+
+    `supplement_plans.effective_from/to` 是 `date`，`supplement_intakes.taken_at`
+    是 `timestamptz`，兩種型別的「今天」判斷方式不同，但**只算一次**
+    `today_in_timezone()`，同時餵給計畫的日期比較與 `day_bounds()` 的
+    timestamptz 半開區間 —— 不能分開各自算一次，否則使用者當地時區跟 UTC
+    交界的那幾小時，兩者會對到不同的日子（清單顯示昨天的計畫、今天的打卡）。
+
+    `day_bounds()` 回傳半開區間 `[start, end)`，用 `<`，不是 `<=`：
+    `<=` 會讓恰好落在當地午夜的一筆打卡同時屬於兩天，4b 的依從率會把
+    那次攝取算兩次（計畫 3 Task 9 同一個坑）。
+    """
+    today = today_in_timezone(user.timezone)
+    start, end = day_bounds(today, user.timezone)
+
+    plans = (
+        await db.scalars(
+            select(SupplementPlan).where(
+                SupplementPlan.user_id == user.id,
+                SupplementPlan.effective_from <= today,
+                or_(
+                    SupplementPlan.effective_to.is_(None),
+                    SupplementPlan.effective_to > today,
+                ),
+            )
+        )
+    ).all()
+
+    intakes = (
+        await db.scalars(
+            select(SupplementIntake).where(
+                SupplementIntake.user_id == user.id,
+                SupplementIntake.taken_at >= start,
+                SupplementIntake.taken_at < end,
+            )
+        )
+    ).all()
+
+    intakes_by_plan: dict[int, SupplementIntake] = {}
+    ad_hoc: list[SupplementIntake] = []
+    for intake in intakes:
+        plan_id = intake.plan_id
+        if plan_id is None:
+            ad_hoc.append(intake)
+        else:
+            # 同一筆計畫今天打卡超過一次（重複打卡）只需要標示「完成」，
+            # 挑第一筆即可 —— P1 沒有「今天吃了幾次」這種需求（那是 4b 的事）。
+            intakes_by_plan.setdefault(plan_id, intake)
+
+    supplement_ids = {plan.supplement_id for plan in plans} | {
+        intake.supplement_id for intake in ad_hoc
+    }
+    supplements_by_id: dict[int, Supplement] = {}
+    if supplement_ids:
+        rows = (
+            await db.scalars(select(Supplement).where(Supplement.id.in_(supplement_ids)))
+        ).all()
+        supplements_by_id = {s.id: s for s in rows}
+
+    items = [
+        TodaySupplementItem(
+            plan_id=plan.id,
+            supplement_id=plan.supplement_id,
+            supplement_name=supplements_by_id[plan.supplement_id].name,
+            dose=plan.dose,
+            time_of_day=plan.time_of_day,
+            done=plan.id in intakes_by_plan,
+            intake_id=intakes_by_plan[plan.id].id if plan.id in intakes_by_plan else None,
+        )
+        for plan in plans
+    ]
+    items.extend(
+        TodaySupplementItem(
+            plan_id=None,
+            supplement_id=intake.supplement_id,
+            supplement_name=supplements_by_id[intake.supplement_id].name,
+            dose=intake.dose,
+            time_of_day=None,
+            done=True,
+            intake_id=intake.id,
+        )
+        for intake in ad_hoc
+    )
+    return items
