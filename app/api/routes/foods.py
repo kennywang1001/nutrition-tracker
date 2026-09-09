@@ -62,7 +62,19 @@ async def create_food(
         created_by=user.id,
     )
     db.add(food)
-    await db.flush()
+    try:
+        # 唯一約束是在「這裡」檢查的，不是在下面的 commit ——
+        # INSERT 在 flush 當下就送進資料庫了。併發下兩個請求同時通過上面的
+        # 前置 SELECT 時，後到的那個會在這一行違反 uq_foods_owner_id_name_brand。
+        #
+        # 這一段原本沒有保護，於是那個情境會變成未處理的 500：
+        # 底下 commit 的 except IntegrityError 雖然註解寫著「由唯一約束接住」，
+        # 但例外早在好幾行之前就炸開了，那個 handler 對這個情境不可達。
+        # （計畫 4a Task 11 稽核 rollback 呼叫點時發現並實測確認。）
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise ConflictError("FOOD_EXISTS", "你已經建過同名的食物了") from exc
 
     revision = FoodRevision(
         food_id=food.id,
@@ -82,9 +94,11 @@ async def create_food(
     food.current_revision_id = revision.id
 
     try:
+        # 延後外鍵（fk_foods_current_revision_id_food_revisions 是
+        # DEFERRABLE INITIALLY DEFERRED）要到這裡才檢查，所以 commit 仍然需要保護。
+        # 名稱重複則是在上面的 flush 就擋掉了，走不到這裡。
         await db.commit()
     except IntegrityError as exc:
-        # 併發下兩個相同名稱同時通過上面的檢查時，由唯一約束接住。
         # rollback 是必要的 —— 少了它，這個 session 之後所有操作都會拋
         # PendingRollbackError（見計畫 1 Task 7 的第四個邊界）。
         await db.rollback()
