@@ -7,12 +7,14 @@
 """
 
 from fastapi import APIRouter, Depends, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.params import ResourceId
 from app.api.routes.supplement_plans import _load_owned_plan
 from app.db import get_db
-from app.errors import UnprocessableEntityError
+from app.errors import NotFoundError, UnprocessableEntityError
 from app.models.supplement import SupplementIntake
 from app.models.user import User
 from app.nutrition import scale_supplement
@@ -77,3 +79,33 @@ async def create_intake(
     await db.commit()
     await db.refresh(intake)
     return _to_response(intake)
+
+
+async def _load_owned_intake(db: AsyncSession, intake_id: int, user: User) -> SupplementIntake:
+    """依擁有權載入一筆打卡紀錄；不存在或不是自己的，一律回同一種 404
+    （繼承規矩第 1 條），比照 `_load_owned_plan` / `_load_owned_meal`。
+    """
+    intake = await db.scalar(
+        select(SupplementIntake).where(
+            SupplementIntake.id == intake_id, SupplementIntake.user_id == user.id
+        )
+    )
+    if intake is None:
+        raise NotFoundError("SUPPLEMENT_INTAKE_NOT_FOUND", "找不到該打卡紀錄")
+    return intake
+
+
+@router.delete("/{intake_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_intake(
+    intake_id: ResourceId,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """刪一筆打卡紀錄。擁有權檢查必須在刪除之前（`_load_owned_intake`）——
+    順序反了的話「回 404」跟「真的沒刪掉」會脫鉤（計畫 3 Task 11、
+    本計畫 Task 7 都實測過這個坑），對一個一查就砍的實作，只斷言狀態碼
+    的測試看不出差別。
+    """
+    intake = await _load_owned_intake(db, intake_id, user)
+    await db.delete(intake)
+    await db.commit()

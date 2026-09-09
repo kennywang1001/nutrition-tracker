@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from app.models.supplement import SupplementIntake
 from app.security.tokens import create_token
-from tests.factories import create_plan, create_supplement, create_user
+from tests.factories import create_intake, create_plan, create_supplement, create_user
 
 
 def auth(user):
@@ -212,3 +212,59 @@ async def test_changing_a_supplements_kcal_does_not_change_an_already_recorded_i
     assert reloaded.protein_g == Decimal("10.00")
     assert reloaded.fat_g == Decimal("4.00")
     assert reloaded.carb_g == Decimal("6.00")
+
+
+# ---------------------------------------------------------------------------
+# Task 9: DELETE /api/supplement-intakes/{id}
+# ---------------------------------------------------------------------------
+
+
+async def test_delete_intake_deletes_own_intake(client, db_session):
+    user = await create_user(db_session)
+    supplement = await create_supplement(db_session, created_by=user, owner=user)
+    intake = await create_intake(db_session, user=user, supplement=supplement)
+    intake_id = intake.id
+
+    response = await client.delete(f"/api/supplement-intakes/{intake_id}", headers=auth(user))
+
+    assert response.status_code == 204
+    still_there = await db_session.get(SupplementIntake, intake_id)
+    assert still_there is None
+
+
+async def test_delete_intake_rejects_someone_elses_intake_and_leaves_it_intact(
+    client, db_session
+):
+    """光看狀態碼不夠：先刪除、再檢查擁有權的實作狀態碼一樣是 404
+    （計畫 3 Task 11、本計畫 Task 7 都實測過這個坑），要真的重查那一筆
+    才能確認它還在。
+    """
+    alice = await create_user(db_session)
+    bob = await create_user(db_session)
+    supplement = await create_supplement(db_session, created_by=alice, owner=alice)
+    intake = await create_intake(db_session, user=alice, supplement=supplement)
+    intake_id = intake.id
+
+    response = await client.delete(f"/api/supplement-intakes/{intake_id}", headers=auth(bob))
+
+    assert response.status_code == 404
+    still_there = await db_session.get(SupplementIntake, intake_id)
+    assert still_there is not None
+
+
+async def test_delete_intake_returns_404_for_a_nonexistent_intake(client, db_session):
+    user = await create_user(db_session)
+
+    response = await client.delete("/api/supplement-intakes/999999", headers=auth(user))
+
+    assert response.status_code == 404
+
+
+async def test_delete_intake_requires_authentication(client, db_session):
+    user = await create_user(db_session)
+    supplement = await create_supplement(db_session, created_by=user, owner=user)
+    intake = await create_intake(db_session, user=user, supplement=supplement)
+
+    response = await client.delete(f"/api/supplement-intakes/{intake.id}")
+
+    assert response.status_code == 401
