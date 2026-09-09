@@ -448,6 +448,49 @@ Commit: `feat: 新增補劑主檔的 API`
 
 Commit: `feat: 新增補劑固定清單的建立與查詢 API`
 
+#### Task 5 實測發現
+
+**1. 繼承規矩第 3 條（`rollback()`）從計畫 1 帶到現在，一直沒有被任何測試驗證過。**
+
+只拿掉 `await db.rollback()` 那一行（保留 `except IntegrityError` 與 409），
+**274 個測試全部照樣通過**。
+
+原因不是覆蓋不足，是**測試形狀的盲點**：驗證錯誤路徑的測試在拿到 409 之後就
+結束了，沒有人在**同一個 session** 上再做一次資料庫操作 ——
+而那正是缺少 rollback 唯一會顯現的地方（`PendingRollbackError`）。
+
+補法是在那個測試的 409 之後再打一次 `GET /api/supplement-plans`，
+斷言 200 且確實只有 1 筆。實測確認：拿掉 rollback → 恰好 1 個測試失敗。
+
+> **這是第七種「綠燈說謊」的機制，形狀跟前六種都不同：**
+> 前六種是「斷言本身沒有鑑別力」，這一種是**斷言正確、但停在錯誤發生的那一刻**。
+> 清理動作（rollback、關檔、釋放鎖）的缺失，**在定義上只會在「之後」顯現**。
+>
+> 通則：**測試一個清理動作，就必須在它之後再做一件需要乾淨狀態的事。**
+> 只斷言「錯誤有被正確回報」，證明不了「錯誤之後系統還能用」。
+>
+> 這一條值得回頭套用到既有的每一個 `except IntegrityError`（計畫 2 的
+> `propose_revision`、計畫 3 的相關路徑）—— 它們今天可能也是未驗證的。
+> 記在這裡，Task 11 的隔離掃描時一併處理。
+
+**2. EXCLUDE 少一欄的突變，正好被那個「不該誤擋」的測試抓到。**
+把 `time_of_day` 從 EXCLUDE 的鍵拿掉（model 與 migration 同步改，
+維持 `alembic check` 乾淨以確保訊號來自資料庫層），
+**恰好** `test_create_plan_allows_overlapping_plan_for_a_different_time_of_day` 失敗。
+
+「同時段重疊要擋」那個測試**維持綠燈** —— 因為三欄鍵仍然擋得住同時段重疊，
+它只是變得過度寬泛。**只寫「該擋的有擋」那一半，抓不到鍵取太少的錯。**
+
+**3. `dose` 是「份數」這件事，今天只存在於註解裡。**
+`CheckConstraint("dose > 0")` 與 Pydantic 的 `Field(gt=0)` 只保證正數，
+沒有任何東西表達「這是份數的倍數，不是公克」。
+真正的 `kcal * dose` 計算在 Task 8 才出現 —— **決定 1 要到那時才會被程式碼落實。**
+
+**4. `serving_size <= 0` 與負營養素是被 Pydantic 擋的，不是資料庫 CHECK。**
+422 發生在碰到資料庫之前。CHECK 約束仍然存在且已在 Task 2 用原始 SQL 驗過，
+但**這些 API 層的測試沒有碰到它** —— 兩層守不同的東西，測試也要分開講清楚
+（同計畫 2 `ck_food_revisions_rejected_needs_reason` 的結論）。
+
 ---
 
 ## Task 6: `PATCH /api/supplement-plans/{id}` —— 關舊期間、開新期間
