@@ -1,8 +1,9 @@
 from datetime import date
+from decimal import Decimal
 
-from app.models.supplement import TimeOfDay
+from app.models.supplement import SupplementIntake, SupplementPlan, TimeOfDay
 from app.security.tokens import create_token
-from tests.factories import create_plan, create_supplement, create_user
+from tests.factories import create_intake, create_plan, create_supplement, create_user
 
 
 def auth(user):
@@ -411,3 +412,94 @@ async def test_update_plan_returns_409_when_new_period_overlaps_another_plan(
     assert unchanged["effective_to"] == "2026-06-01"
 
 
+# ---------------------------------------------------------------------------
+# Task 7: DELETE /api/supplement-plans/{id}
+# ---------------------------------------------------------------------------
+
+
+async def test_delete_plan_deletes_own_plan(client, db_session):
+    user = await create_user(db_session)
+    supplement = await create_supplement(db_session, created_by=user, owner=user)
+    plan = await create_plan(db_session, user=user, supplement=supplement)
+    plan_id = plan.id
+
+    response = await client.delete(f"/api/supplement-plans/{plan_id}", headers=auth(user))
+
+    assert response.status_code == 204
+    still_there = await db_session.get(SupplementPlan, plan_id)
+    assert still_there is None
+
+
+async def test_delete_plan_rejects_someone_elses_plan_and_leaves_it_intact(
+    client, db_session
+):
+    """光看狀態碼不夠：計畫 3 Task 11 實測過「先刪除、再檢查擁有權」的
+    實作狀態碼一樣是 404，要真的重查那一筆才能確認它還在。
+    """
+    alice = await create_user(db_session)
+    bob = await create_user(db_session)
+    supplement = await create_supplement(db_session, created_by=alice, owner=alice)
+    plan = await create_plan(db_session, user=alice, supplement=supplement)
+    plan_id = plan.id
+
+    response = await client.delete(f"/api/supplement-plans/{plan_id}", headers=auth(bob))
+
+    assert response.status_code == 404
+    still_there = await db_session.get(SupplementPlan, plan_id)
+    assert still_there is not None
+
+
+async def test_delete_plan_returns_404_for_a_nonexistent_plan(client, db_session):
+    user = await create_user(db_session)
+
+    response = await client.delete("/api/supplement-plans/999999", headers=auth(user))
+
+    assert response.status_code == 404
+
+
+async def test_delete_plan_requires_authentication(client, db_session):
+    user = await create_user(db_session)
+    supplement = await create_supplement(db_session, created_by=user, owner=user)
+    plan = await create_plan(db_session, user=user, supplement=supplement)
+
+    response = await client.delete(f"/api/supplement-plans/{plan.id}")
+
+    assert response.status_code == 401
+
+
+async def test_delete_plan_orphans_its_intakes_instead_of_deleting_them(client, db_session):
+    """`supplement_intakes.plan_id` 是 ON DELETE SET NULL：打卡紀錄是歷史，
+    不能因為計畫被刪而消失，但它不再屬於任何計畫。這是資料庫層的行為，
+    ORM 端的 identity map 不會自動知道 —— 必須 `refresh()` 之後才能看到
+    真正的資料庫狀態，不能只看 Python 物件裡舊的快取值。
+    """
+    user = await create_user(db_session)
+    supplement = await create_supplement(db_session, created_by=user, owner=user)
+    plan = await create_plan(db_session, user=user, supplement=supplement)
+    intake = await create_intake(
+        db_session,
+        user=user,
+        supplement=supplement,
+        plan=plan,
+        dose=2,
+        kcal=20,
+        protein_g=4,
+        fat_g=2,
+        carb_g=1,
+    )
+    intake_id = intake.id
+    plan_id = plan.id
+
+    response = await client.delete(f"/api/supplement-plans/{plan_id}", headers=auth(user))
+
+    assert response.status_code == 204
+
+    await db_session.refresh(intake)
+    refreshed = await db_session.get(SupplementIntake, intake_id)
+    assert refreshed is not None
+    assert refreshed.plan_id is None
+    assert refreshed.dose == Decimal("2.00")
+    assert refreshed.kcal == Decimal("20.00")
+    assert refreshed.protein_g == Decimal("4.00")
+    assert refreshed.fat_g == Decimal("2.00")
+    assert refreshed.carb_g == Decimal("1.00")

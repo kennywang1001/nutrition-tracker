@@ -156,3 +156,23 @@ async def update_plan(
     await db.commit()
     await db.refresh(new_plan)
     return _to_response(new_plan)
+
+
+@router.delete("/{plan_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_plan(
+    plan_id: ResourceId,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """刪一筆計畫。擁有權檢查必須在刪除之前（`_load_owned_plan`）——
+    不能「先刪、再檢查」，那種順序下「回 404」跟「真的沒刪掉」會脫鉤
+    （計畫 3 Task 11 實測過這個坑），對一個一查就砍的實作，只斷言狀態碼
+    的測試看不出差別。
+
+    `supplement_intakes.plan_id` 是 `ON DELETE SET NULL`（model 裡宣告）：
+    打卡紀錄是歷史，不因為計畫被刪而消失，只是不再屬於任何計畫 —— 這件事
+    完全由資料庫的外鍵處理，這裡不需要、也不應該手動去更新 intakes。
+    """
+    plan = await _load_owned_plan(db, plan_id, user)
+    await db.delete(plan)
+    await db.commit()
