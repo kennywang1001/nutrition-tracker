@@ -45,12 +45,22 @@ async def test_create_supplement_requires_authentication(client):
 async def test_create_supplement_rejects_a_duplicate_name_and_brand_for_the_same_owner(
     client, db_session
 ):
+    """Task 11 跨端點的 rollback 稽核發現：這個路徑的 `await db.rollback()`
+    拿掉之後，全部既有測試照樣通過 —— 跟 Task 5 在 `supplement_plans.py`
+    踩到的坑同一個形狀：測試在拿到 409 之後就結束，沒有人在**同一個
+    session** 上再做一次資料庫操作。
+
+    補法比照 Task 5 之後那些接了 rollback 的測試：409 之後用同一個
+    client（背後是同一個 db_session）再打一次搜尋端點，證明它還能正常用。
+    這是在稽核發現存活之後才補上的斷言。
+    """
     user = await create_user(db_session)
     await create_supplement(db_session, created_by=user, owner=user, name="魚油", brand="牌子A")
+    headers = auth(user)
 
     response = await client.post(
         "/api/supplements",
-        headers=auth(user),
+        headers=headers,
         json={
             "name": "魚油",
             "brand": "牌子A",
@@ -62,6 +72,12 @@ async def test_create_supplement_rejects_a_duplicate_name_and_brand_for_the_same
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "SUPPLEMENT_EXISTS"
+
+    # rollback 是否必要，要靠「同一個 session 之後還能用」來驗證：漏掉的話
+    # 這裡會拋 PendingRollbackError，而不是單純讓上面的斷言變紅。
+    listing = await client.get("/api/supplements", params={"q": "魚油"}, headers=headers)
+    assert listing.status_code == 200
+    assert len(listing.json()) == 1
 
 
 async def test_two_users_can_each_have_a_supplement_with_the_same_name_and_brand(
