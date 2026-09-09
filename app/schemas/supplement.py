@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 
@@ -99,3 +99,43 @@ class SupplementPlanResponse(BaseModel):
     time_of_day: TimeOfDay
     effective_from: date
     effective_to: date | None
+
+
+class SupplementIntakeCreateRequest(BaseModel):
+    supplement_id: int = Field(gt=0, le=_MAX_BIGINT)
+    # NULL = 臨時記錄，不屬於任何固定計畫（規格第 6.4 節）。
+    plan_id: int | None = Field(default=None, gt=0, le=_MAX_BIGINT)
+    # 份數，跟 SupplementPlanCreateRequest.dose 同一個意思（決定 1）：
+    # kcal_total = supplement.kcal * dose，在這裡（Task 8）當下算好存快照。
+    dose: Decimal = Field(gt=0, le=1000, max_digits=8, decimal_places=2)
+    taken_at: datetime
+
+
+class SupplementIntakeResponse(BaseModel):
+    id: int
+    supplement_id: int
+    plan_id: int | None
+    dose: Decimal
+    taken_at: datetime
+    # 快照：這一次攝取的總量（已乘過 dose），寫入當下就固定，補劑主檔之後
+    # 被改也不會連動（決定 3）。
+    kcal: Decimal
+    protein_g: Decimal
+    fat_g: Decimal
+    carb_g: Decimal
+
+
+class TodaySupplementItem(BaseModel):
+    """`GET /api/supplements/today` 的一個項目 —— 陷阱 2：把「計畫」與
+    「實際」對起來。`plan_id` 為 None 代表這是一筆臨時記錄（沒有對應的
+    固定計畫），這種項目一定是 `done=True`（記錄本身就代表已經吃了）；
+    `plan_id` 有值的項目才會有 `done=False` 的可能（計畫存在但今天還沒打卡）。
+    """
+
+    plan_id: int | None
+    supplement_id: int
+    supplement_name: str
+    dose: Decimal
+    time_of_day: TimeOfDay | None
+    done: bool
+    intake_id: int | None
