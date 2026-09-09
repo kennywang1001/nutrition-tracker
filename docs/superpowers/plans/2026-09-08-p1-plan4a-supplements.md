@@ -731,16 +731,25 @@ Commit: `test: 補劑端點加入跨使用者隔離掃描`
 
 ## 完成驗收
 
-- [ ] `alembic downgrade 0004` 後再 `alembic upgrade head`（對 `wallet_test`）
-- [ ] `alembic check` → `No new upgrade operations detected.`，連續三次
-- [ ] `pytest -v -W error` 全部通過，測試數 ≥ 310
-- [ ] `ruff check .`、`mypy app` 無錯誤
-- [ ] `pytest --cov=app --cov-fail-under=80` 通過
-- [ ] OpenAPI 列出 37 個操作（28 + 9）
-- [ ] `pg_constraint` 裡三張新表的約束全部符合命名慣例（`contype::text`）
-      —— 注意 EXCLUDE 的 `ex_` 前綴是手寫在 `name=` 裡的，命名慣例不會自動加
-- [ ] **EXCLUDE 約束實測**：重疊計畫被資料庫擋下；不同時段的重疊可以成功
-- [ ] Task 11 的七個突變全部被抓到，無一存活
+- [x] `alembic downgrade 0004` 後再 `alembic upgrade head`（對 `wallet_test`，
+      dev 的 `wallet` 全程留在 0004 沒被動）
+- [x] `alembic check` → `No new upgrade operations detected.`，**連續三次**
+- [x] `pytest -v -W error` → **320 passed**（門檻 310）
+- [x] `ruff check .`、`mypy app` 無錯誤
+- [x] `pytest --cov=app --cov-fail-under=80` → **98.20%**
+- [x] OpenAPI 列出 **37 個操作**（28 + 9），與預估一致
+- [x] `pg_constraint` 裡三張新表共 **21 個約束、0 個違規**
+      —— EXCLUDE 的名稱是 `ex_supplement_plans_no_overlap`，
+      `contype = 'x'`，前綴確認是手寫的
+- [x] **EXCLUDE 約束實測 6/6**：同時段重疊被擋（23P01）；
+      不同時段重疊、相鄰不重疊、不同補劑、不同使用者都正常通過
+- [x] Task 11 的七個突變全部被抓到，無一存活
+
+**額外完成（不在原本的驗收清單裡）：**
+
+- [x] **稽核了 `app/` 裡全部六個 `except IntegrityError` → `rollback()` 呼叫點**，
+      發現三個從未被驗證，其中兩個補上測試、一個是真缺陷
+- [x] **修好 `create_food` 併發下回 500 的缺陷**，並用突變確認測試抓得到
 
 ---
 
