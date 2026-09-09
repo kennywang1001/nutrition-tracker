@@ -675,6 +675,58 @@ Task 10 回報說：這條規則只適用於「日期相等」比較，不適用
 
 Commit: `test: 補劑端點加入跨使用者隔離掃描`
 
+#### Task 11 實測發現
+
+**1. rollback 稽核：六個呼叫點裡有三個從來沒被驗證過。**
+
+把 Task 5 的發現回頭套用到 `app/` 裡每一個 `except IntegrityError` →
+`db.rollback()`，逐一拿掉 rollback 跑全套：
+
+| 呼叫點 | 拿掉 rollback | 處置 |
+|---|---|---|
+| `foods.py` `create_food` | **存活** | 見下方第 2 點 —— 是真缺陷，不是測試問題 |
+| `foods.py` `propose_revision` | 被抓到 | 既有測試就夠 |
+| `foods.py` `create_portion` | **存活** | 補上後續同 session 請求 |
+| `supplements.py` `create_supplement` | **存活** | 補上後續同 session 請求 |
+| `supplement_plans.py` `create_plan` | 被抓到 | Task 5 建立的測試 |
+| `supplement_plans.py` `update_plan` | 被抓到 | Task 6 建立的測試 |
+
+**一條寫在計畫裡三次、被遵守了四個計畫的規矩，實際覆蓋率是 50%。**
+規矩被遵守不等於規矩被驗證。
+
+**2. 稽核逼出一個既有的真缺陷：`create_food` 併發下會回 500 不是 409。**
+
+`create_food` 跟它的兩個 sibling（`create_supplement`、`create_portion`）
+形狀不同：後兩者是 `db.add()` 直接接 `try: commit()`，中間沒有 flush，
+所以 INSERT 發生在 commit 裡、`except` 接得到。
+
+但 `create_food` 需要中間的 flush（拿 `food.id` 去建 revision、再回填指標），
+而**唯一約束就是在那個 flush 檢查的** —— INSERT 在那一刻就送進資料庫了。
+`try/except IntegrityError` 包的是好幾行之後的 `commit()`，
+所以它註解裡宣稱要接的併發情境，對它**結構上不可達**。
+
+實測（monkeypatch 讓前置 SELECT 謊報一次「沒有重複」，重現併發狀態）：
+`IntegrityError` 未經處理逃逸。已修 —— 把第一個 flush 也包進 try，
+並補上一個測試釘住。突變確認：拿掉保護 → 恰好那個測試失敗。
+
+> **這個缺陷之所以能活這麼久，是因為它有一個「看起來有在保護」的 handler。**
+> 程式碼審查會看到 `except IntegrityError` 就打勾，
+> 測試會因為前置 SELECT 先擋下而永遠走不到那條路。
+> **註解宣稱的意圖與程式碼實際涵蓋的範圍，是兩件要分開驗證的事。**
+>
+> 一般化：**`try` 區塊的邊界要對齊「例外實際會從哪裡拋出」，
+> 而不是對齊「概念上哪一步在做這件事」。** ORM 特別容易搞混這兩者，
+> 因為 `flush()` 與 `commit()` 在心智模型裡都是「寫入資料庫」，
+> 實際送出 SQL 的時機卻不同。
+
+**3. Task 11 自己也差點交出一個不會失敗的測試（自行抓到）。**
+第一版把「別人的計畫」與「別人的臨時打卡」合成一個 `/today` 測試，
+結果 M6（打卡的 `user_id` 過濾）突變**存活**，原因有兩層：
+沒有 pin 住「今天」，以及那筆打卡綁著計畫 —— 而綁計畫的打卡只有在對應計畫
+也出現在回應裡才會被列出，M5 完整時 Bob 的計畫清單是空的，
+於是那筆洩漏的打卡根本到不了回應。
+拆成兩個測試、並改用**臨時打卡**（`plan_id=None`）之後，M5 與 M6 各自獨立被抓到。
+
 ---
 
 ## 完成驗收
