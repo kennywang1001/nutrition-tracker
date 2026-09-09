@@ -4,11 +4,17 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.params import ResourceId
+from app.days import today_in_timezone
 from app.db import get_db
-from app.errors import ConflictError
+from app.errors import ConflictError, NotFoundError, UnprocessableEntityError
 from app.models.supplement import SupplementPlan
 from app.models.user import User
-from app.schemas.supplement import SupplementPlanCreateRequest, SupplementPlanResponse
+from app.schemas.supplement import (
+    SupplementPlanCreateRequest,
+    SupplementPlanResponse,
+    SupplementPlanUpdateRequest,
+)
 from app.supplement_visibility import assert_supplement_visible
 
 router = APIRouter(prefix="/supplement-plans", tags=["supplement-plans"])
@@ -73,3 +79,80 @@ async def list_plans(
         )
     ).all()
     return [_to_response(p) for p in plans]
+
+
+async def _load_owned_plan(db: AsyncSession, plan_id: int, user: User) -> SupplementPlan:
+    """依擁有權載入一筆計畫；不存在或不是自己的，一律回同一種 404
+    （繼承規矩第 1 條），比照 `app/api/routes/meals.py` 的 `_load_owned_meal`。
+    PATCH 與 DELETE 共用這一個函式，擁有權規則只寫一次。
+    """
+    plan = await db.scalar(
+        select(SupplementPlan).where(
+            SupplementPlan.id == plan_id, SupplementPlan.user_id == user.id
+        )
+    )
+    if plan is None:
+        raise NotFoundError("SUPPLEMENT_PLAN_NOT_FOUND", "找不到該計畫")
+    return plan
+
+
+@router.patch("/{plan_id}", response_model=SupplementPlanResponse)
+async def update_plan(
+    plan_id: ResourceId,
+    payload: SupplementPlanUpdateRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> SupplementPlanResponse:
+    """修改一筆計畫 —— 陷阱 3：這不是原地修改，是「關閉舊期間、開新期間」。
+
+    舊列的 dose / time_of_day 完全不動，只有 effective_to 被設成生效日；
+    新列從生效日起、承接沒有明確送的欄位（沿用舊列的值）。這正是有效期間制
+    的意義：歷史不動，4b 的依從率才能靠舊列本身回答「當時該吃幾次」。
+
+    **順序不能換**（陷阱 3 已實測）：EXCLUDE 約束逐列立即檢查，UPDATE 一定
+    要先 flush，INSERT 的檢查才看得到已經關閉的舊期間；反過來的話新舊兩列
+    會重疊，直接違反約束。這裡刻意分兩次 flush（而不是一次 flush 讓
+    SQLAlchemy 自己決定 unit-of-work 內的順序），把順序寫死、不依賴實作細節。
+    """
+    plan = await _load_owned_plan(db, plan_id, user)
+
+    updates = payload.model_dump(exclude_unset=True)
+    effective_date = updates.pop("effective_date", None) or today_in_timezone(user.timezone)
+
+    # 跟資料庫的 effective_range CHECK（effective_to > effective_from）同一條
+    # 規則：這個生效日會變成舊列的 effective_to。
+    if effective_date <= plan.effective_from:
+        raise UnprocessableEntityError(
+            "EFFECTIVE_DATE_TOO_EARLY", "生效日必須晚於目前這筆計畫的生效日"
+        )
+
+    dose = updates.get("dose", plan.dose)
+    time_of_day = updates.get("time_of_day", plan.time_of_day)
+
+    plan.effective_to = effective_date
+    await db.flush()  # 1. UPDATE 舊列 —— 必須先執行，見上面的說明
+
+    new_plan = SupplementPlan(
+        user_id=user.id,
+        supplement_id=plan.supplement_id,
+        dose=dose,
+        time_of_day=time_of_day,
+        effective_from=effective_date,
+        effective_to=None,
+    )
+    db.add(new_plan)
+    try:
+        await db.flush()  # 2. INSERT 新列
+    except IntegrityError as exc:
+        # 新期間往後延伸太多、撞上另一筆既有計畫（同補劑同時段重疊）。
+        # rollback 是必要的（繼承規矩第 3 條）：這裡兩個 flush 都還沒
+        # commit，rollback 會把上面那個 UPDATE 也一併復原 —— 交易要嘛
+        # 整筆成功、要嘛完全不留下「舊列已關閉但新列沒開成」的半吊子狀態。
+        await db.rollback()
+        raise ConflictError(
+            "PLAN_OVERLAPS", "這個補劑在同一時段已經有重疊的計畫"
+        ) from exc
+
+    await db.commit()
+    await db.refresh(new_plan)
+    return _to_response(new_plan)

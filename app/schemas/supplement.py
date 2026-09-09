@@ -68,6 +68,30 @@ class SupplementPlanCreateRequest(BaseModel):
         return self
 
 
+class SupplementPlanUpdateRequest(BaseModel):
+    """`PATCH /api/supplement-plans/{id}` 的請求 —— 見計畫陷阱 3。
+
+    這個端點**不修改**目標那一列的數值：它關閉舊期間、開一個新期間。
+    三個欄位都可以省略（省略的欄位沿用舊列的值，`effective_date` 省略時
+    預設「使用者時區的今天」），但比照 `UpdateMeRequest`（計畫 3 Task 3）
+    的哨兵陷阱：**可以不帶，不接受明確的 null**——`X | None = None`
+    這個型別本身無法區分「沒帶」跟「明確送 null」，兩者都要靠
+    `model_fields_set` 與下面的驗證器分開處理，否則 null 會一路流到
+    `setattr` 撞上資料庫的 NOT NULL，變成 500（計畫 3 Task 3 的教訓）。
+    """
+
+    dose: Decimal | None = Field(default=None, gt=0, le=1000, max_digits=8, decimal_places=2)
+    time_of_day: TimeOfDay | None = None
+    effective_date: date | None = None
+
+    @model_validator(mode="after")
+    def _reject_explicit_nulls(self) -> "SupplementPlanUpdateRequest":
+        nulls = sorted(f for f in self.model_fields_set if getattr(self, f) is None)
+        if nulls:
+            raise ValueError(f"這些欄位可以省略，但不接受 null：{', '.join(nulls)}")
+        return self
+
+
 class SupplementPlanResponse(BaseModel):
     id: int
     supplement_id: int
