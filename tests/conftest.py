@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import asyncpg
 import pytest
@@ -10,6 +11,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
 
+from app.config import settings
 from app.db import get_db
 from app.main import app
 from app.ratelimit import login_rate_limiter
@@ -162,3 +164,21 @@ async def client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
         # override 也一定會被清掉，不會漏到下一個測試。目前沒有證據這會發生，
         # 純粹是防禦性寫法。
         app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def _photo_dir_in_tmp_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """**每一個**測試都把 photo_dir 指到 tmp_path，沒有例外。
+
+    這件事原本是四個測試檔各自宣告一次 autouse fixture 處理的，
+    於是「新增一個照片測試但忘記加那個 fixture」會直接寫進真實的
+    `data/photos`。**這不是假設 —— 真的發生過**：P4 Task 6 的清理指令
+    第一次對真實環境跑 dry-run 時，找到了一張孤兒照片
+    `data/photos/1/d516da...jpg`，而 dev 資料庫的使用者 id 從 3 開始，
+    user 1 從來不存在 —— 那是某次測試漏進去的。
+
+    搬到這裡之後，漏寫變成不可能：fixture 是 autouse 而且在 conftest 裡，
+    每個測試都會套用。這是計畫 4b Task 9 那條教訓的又一次應用 ——
+    **文件（或「記得加 fixture」的慣例）擋不住重蹈覆轍，程式碼可以。**
+    """
+    monkeypatch.setattr(settings, "photo_dir", str(tmp_path))

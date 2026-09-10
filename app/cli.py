@@ -154,6 +154,24 @@ async def cleanup_orphan_photos(
     return CleanupResult(dry_run=dry_run, deleted=tuple(deleted), failed=tuple(failed))
 
 
+def _non_negative_hours(value: str) -> float:
+    """`--min-age-hours` 不接受負數。
+
+    負數會讓 `cutoff` 跑到未來，於是**每一個**檔案都「夠舊」——
+    陷阱 5 的競態防護完全失效，包含一張剛寫入、DB 還沒 commit 的照片。
+    `argparse` 的 `type=float` 不會擋這個，所以自己擋。
+
+    0 是允許的：那是「我確定現在沒有上傳在進行，全部清掉」的刻意用法。
+    """
+    hours = float(value)
+    if hours < 0:
+        raise argparse.ArgumentTypeError(
+            f"--min-age-hours 不能是負數（給了 {hours}）——"
+            "負數會讓所有檔案都被視為夠舊，等於關掉防止刪到進行中上傳的保護。"
+        )
+    return hours
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m app.cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -171,7 +189,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cleanup_parser.add_argument(
         "--min-age-hours",
-        type=float,
+        type=_non_negative_hours,
         default=DEFAULT_ORPHAN_MIN_AGE_HOURS,
         help=f"只刪除修改時間早於這個小時數之前的檔案（預設 {DEFAULT_ORPHAN_MIN_AGE_HOURS}）",
     )

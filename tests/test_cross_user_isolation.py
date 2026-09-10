@@ -135,10 +135,6 @@ async def alices_meal(db_session):
     return alice, bob, meal, item, food
 
 
-@pytest.fixture(autouse=True)
-def _photo_dir_in_tmp_path(tmp_path, monkeypatch):
-    # 這個檔案裡的照片測試絕對不能寫進真的 data/photos。
-    monkeypatch.setattr(settings, "photo_dir", str(tmp_path))
 
 
 async def test_bob_cannot_read_alices_meal(client, alices_meal):

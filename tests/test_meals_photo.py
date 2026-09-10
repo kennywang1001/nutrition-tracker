@@ -41,10 +41,6 @@ def _jpeg_bytes(width: int = 400, height: int = 300) -> bytes:
     return buffer.getvalue()
 
 
-@pytest.fixture(autouse=True)
-def _photo_dir_in_tmp_path(tmp_path, monkeypatch):
-    # 絕對不能讓這個檔案的測試寫進真的 data/photos。
-    monkeypatch.setattr(settings, "photo_dir", str(tmp_path))
 
 
 async def _create_meal(client, user) -> int:

@@ -30,10 +30,6 @@ def _write_file(path: Path, *, age_hours: float) -> None:
     os.utime(path, (stamp, stamp))
 
 
-@pytest.fixture(autouse=True)
-def _photo_dir_in_tmp_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # 絕對不能讓測試寫進真的 data/photos —— 跟 tests/test_photo_storage.py 同一個理由。
-    monkeypatch.setattr(settings, "photo_dir", str(tmp_path))
 
 
 async def test_a_referenced_file_is_not_deleted(db_session, tmp_path):
@@ -208,3 +204,20 @@ def test_cli_parser_cleanup_photos_defaults_to_no_dry_run_and_default_age():
 
     assert args.dry_run is False
     assert args.min_age_hours == DEFAULT_ORPHAN_MIN_AGE_HOURS
+
+
+def test_min_age_hours_rejects_negative_values():
+    """負數會讓 cutoff 跑到未來，於是每個檔案都「夠舊」—— 競態防護整個失效。
+
+    `argparse` 的 `type=float` 不會擋這個，所以自己擋。
+    0 仍然允許（那是「我確定現在沒有上傳，全部清掉」的刻意用法）。
+    """
+    from app.cli import build_parser
+
+    parser = build_parser()
+
+    args = parser.parse_args(["cleanup-photos", "--min-age-hours", "0"])
+    assert args.min_age_hours == 0
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["cleanup-photos", "--min-age-hours", "-1"])
