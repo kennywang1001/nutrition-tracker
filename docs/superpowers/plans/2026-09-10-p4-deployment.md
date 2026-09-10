@@ -251,6 +251,45 @@ Commit: `feat: 密鑰改為必填，缺少時在啟動就失敗`
 
 Commit: `feat: 新增與 liveness 分開的 readiness 檢查`
 
+#### Task 1 / 2 實測發現：fail-closed 當場咬了自己一口（這是好事）
+
+Task 1 合併後，**跑著的 dev 容器立刻進入崩潰迴圈** ——
+而且是本計畫要修的每一個問題同時上演：
+
+```
+$ docker ps
+wallet-api-1   Up 2 days          <- 看起來完全正常
+$ curl localhost:8000/api/health
+(連不上)
+$ docker logs wallet-api-1
+ValidationError: JWT_SECRET 不能是原始碼裡公開過的開發預設值
+```
+
+發生了什麼：`docker-compose.yml` 裡寫死的 `JWT_SECRET` 就是那個被新驗證器
+禁掉的公開字串。原始碼是掛載進去的、`--reload` 有效，所以 `app/config.py`
+一改動容器就重載 → `Settings()` → 拒絕啟動。
+
+**三件事同時被證實：**
+
+1. **fail-closed 真的有效。** 它拒絕用一個公開的字串當密鑰啟動 ——
+   這正是設計意圖，而且是在**啟動當下**大聲失敗，不是安靜跑起來。
+2. **容器狀態會謊報存活**（決定 3 與陷阱的核心）。`Up 2 days` 完全沒有反映
+   應用程式已經死了兩分鐘。**Task 5 的 healthcheck 就是在修這個。**
+3. **改了環境變數必須重建容器，`restart` 不夠。**
+   `docker compose up -d api` 才會用新的 compose 設定重建。
+   這條計畫 1 就記過，這次是第二次咬人。
+
+> **值得記的是這次的因果方向：** 不是我們寫錯而被 fail-closed 擋下，
+> 而是 fail-closed 一上線就找出了一個**既有的**問題（dev compose 用公開字串
+> 當密鑰）。一個好的守衛在導入的當天就會抓到東西 ——
+> 如果導入之後什麼都沒發生，反而要懷疑它有沒有真的接上。
+
+**順帶修掉的狀態不一致：** dev 資料庫還停在 `0004`，計畫 4a / 4b 的
+`0005`（補劑三表）與 `0006`（user_targets）從來沒套用上去 ——
+容器上的 API 打補劑或目標端點會直接炸。已升級到 `0006`，
+示範資料（4 使用者、3 食物、2 餐、3 個餐點項目）完全不受影響
+（兩個 migration 的 upgrade 都是純 `create_table`）。
+
 ---
 
 ## Task 3: Argon2 移出 event loop + 速率限制（**必須一起**）
