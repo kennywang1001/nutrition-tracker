@@ -7,6 +7,7 @@ from app.api.routes import (
     health,
     me,
     meals,
+    stats,
     supplement_intakes,
     supplement_plans,
     supplements,
@@ -26,3 +27,4 @@ app.include_router(supplements.router, prefix="/api")
 app.include_router(supplement_plans.router, prefix="/api")
 app.include_router(supplement_intakes.router, prefix="/api")
 app.include_router(targets.router, prefix="/api")
+app.include_router(stats.router, prefix="/api")
