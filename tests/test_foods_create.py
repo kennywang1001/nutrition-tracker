@@ -87,12 +87,35 @@ async def test_create_food_rejects_negative_nutrition(client, db_session):
 
 
 async def test_create_food_rejects_a_duplicate_name_for_the_same_owner(client, db_session):
+    """Task 11（計畫 4a）跨端點的 rollback 稽核：先加上「409 之後 session
+    還能用」這個一般性斷言，比照 Task 5 之後那些接了 rollback 的測試。
+
+    **這個斷言驗證不到 `foods.py` 84-91 的 `except IntegrityError` /
+    `await db.rollback()`。** `create_food` 在真的 commit 之前，先用一次
+    SELECT 預先擋掉「已經存在同名列」的重複（見 foods.py 42-56），
+    一般的重複建立走的就是這一層，回應就在這裡（line 56）產生，根本不會
+    跑到後面的 try/except。實測確認：把 line 88 的 `await db.rollback()`
+    拿掉，這個測試（含這裡新加的 listing 斷言）照樣全線通過。
+
+    更進一步：用 monkeypatch 讓第一層的 SELECT 假裝「沒有重複」、逼流程真的
+    往下走，結果連 `db.add(food)` 後面那個**沒有包 try/except** 的
+    `await db.flush()`（line 65）就先撞上 `uq_foods_owner_id_name_brand`，
+    以未被攔截的 `IntegrityError` 直接炸穿測試 —— 根本走不到 line 84 的
+    try 區塊。這代表 84-91 這段 `except IntegrityError` 對「兩個相同名稱
+    同時通過上面檢查」（line 87 的註解講的正是這個情境）**很可能是打不到
+    的死碼**：真正的名稱唯一約束衝突在更早的地方就以未攔截的例外離開了。
+    這是稽核過程中意外發現的既有缺陷，不在這個 task 的修改範圍內
+    （「只能改測試、不能動 app/」），另外在報告裡回報。這裡不把那個
+    monkeypatch 實驗寫成常駐測試 —— 它本身會讓套件在稽核基準狀態下就是紅的，
+    不適合留在測試套件裡。
+    """
     user = await create_user(db_session)
     await create_food(db_session, created_by=user, owner=user, name="滷肉飯")
+    headers = auth(user)
 
     response = await client.post(
         "/api/foods",
-        headers=auth(user),
+        headers=headers,
         json={
             "name": "滷肉飯",
             "nutrition": {"kcal": "1", "protein_g": "1", "fat_g": "1", "carb_g": "1"},
@@ -101,6 +124,12 @@ async def test_create_food_rejects_a_duplicate_name_for_the_same_owner(client, d
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "FOOD_EXISTS"
+
+    # rollback 是否必要，要靠「同一個 session 之後還能用」來驗證：漏掉的話
+    # 這裡會拋 PendingRollbackError，而不是單純讓上面的斷言變紅。
+    listing = await client.get("/api/foods", params={"q": "滷肉飯"}, headers=headers)
+    assert listing.status_code == 200
+    assert len(listing.json()) == 1
 
 
 async def test_two_users_can_each_have_a_food_with_the_same_name(client, db_session):
@@ -118,3 +147,48 @@ async def test_two_users_can_each_have_a_food_with_the_same_name(client, db_sess
     )
 
     assert response.status_code == 201
+
+
+async def test_a_concurrent_duplicate_name_returns_409_not_500(client, db_session, monkeypatch):
+    """併發下兩個請求同時通過前置檢查時，必須是 409 而不是未處理的 500。
+
+    這條路徑無法用「先建一筆再送重複的」測到 —— 前置的 SELECT 會先擋下來，
+    根本走不到寫入。所以用 monkeypatch 讓那個 SELECT 謊報一次「沒有重複」，
+    這正是併發下真實會發生的狀態。
+
+    修正前實測：IntegrityError 在 `db.flush()` 逃逸成未處理的 500，
+    因為那時 try/except 只包住好幾行之後的 commit()。
+    """
+    user = await create_user(db_session)
+    await create_food(db_session, created_by=user, owner=user, name="撞名食物")
+    await db_session.commit()
+    headers = auth(user)
+
+    real_scalar = db_session.scalar
+    calls = {"n": 0}
+
+    async def scalar_that_misses_the_duplicate_once(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None
+        return await real_scalar(*args, **kwargs)
+
+    monkeypatch.setattr(db_session, "scalar", scalar_that_misses_the_duplicate_once)
+
+    response = await client.post(
+        "/api/foods",
+        headers=headers,
+        json={
+            "name": "撞名食物",
+            "nutrition": {"kcal": "100", "protein_g": "1", "fat_g": "1", "carb_g": "1"},
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "FOOD_EXISTS"
+
+    # rollback 有生效：同一個 session 之後還能用（計畫 4a Task 5 的教訓）
+    monkeypatch.undo()
+    after = await client.get("/api/foods", headers=headers, params={"q": "撞名"})
+    assert after.status_code == 200
+    assert len(after.json()) == 1

@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from itertools import count
 
@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.food import BaseUnit, Food, FoodPortion, FoodRevision, RevisionStatus
 from app.models.meal import Meal, MealItem, MealType
+from app.models.supplement import Supplement, SupplementIntake, SupplementPlan, TimeOfDay
 from app.models.user import User, UserRole
 from app.security.password import hash_password
 
@@ -186,3 +187,111 @@ async def create_meal(
     await db_session.commit()
     await db_session.refresh(meal)
     return meal
+
+
+_supplement_counter = count(1)
+
+
+async def create_supplement(
+    db_session: AsyncSession,
+    *,
+    created_by: User,
+    name: str | None = None,
+    brand: str | None = None,
+    owner: User | None = None,
+    serving_unit: str = "capsule",
+    serving_size: Decimal | int = 1,
+    kcal: Decimal | int = 0,
+    protein_g: Decimal | int = 0,
+    fat_g: Decimal | int = 0,
+    carb_g: Decimal | int = 0,
+) -> Supplement:
+    """owner=None 代表全域補劑（比照 create_food）。
+
+    四個營養素預設為 0：魚油那種「只記錄吃了沒，不記熱量」的補劑就是這個形狀
+    （計畫決定 1 附帶的情境），不用每次呼叫都特地餵值。
+    """
+    supplement = Supplement(
+        name=name or f"測試補劑{next(_supplement_counter)}",
+        brand=brand,
+        owner_id=owner.id if owner is not None else None,
+        serving_unit=serving_unit,
+        serving_size=Decimal(serving_size),
+        kcal=Decimal(kcal),
+        protein_g=Decimal(protein_g),
+        fat_g=Decimal(fat_g),
+        carb_g=Decimal(carb_g),
+        created_by=created_by.id,
+    )
+    db_session.add(supplement)
+    await db_session.commit()
+    await db_session.refresh(supplement)
+    return supplement
+
+
+# 固定值，不用 date.today()：依賴日界線的測試會因為「今天是哪天」隨機失敗
+# （見計畫 Task 3 的說明，跟 _DEFAULT_EATEN_AT 是同一個理由）。
+_DEFAULT_EFFECTIVE_FROM = date(2026, 1, 1)
+
+
+async def create_plan(
+    db_session: AsyncSession,
+    *,
+    user: User,
+    supplement: Supplement,
+    dose: Decimal | int = 1,
+    time_of_day: TimeOfDay = TimeOfDay.MORNING,
+    effective_from: date | None = None,
+    effective_to: date | None = None,
+) -> SupplementPlan:
+    plan = SupplementPlan(
+        user_id=user.id,
+        supplement_id=supplement.id,
+        dose=Decimal(dose),
+        time_of_day=time_of_day,
+        effective_from=effective_from or _DEFAULT_EFFECTIVE_FROM,
+        effective_to=effective_to,
+    )
+    db_session.add(plan)
+    await db_session.commit()
+    await db_session.refresh(plan)
+    return plan
+
+
+_DEFAULT_TAKEN_AT = datetime(2026, 1, 1, 8, 0, tzinfo=UTC)
+
+
+async def create_intake(
+    db_session: AsyncSession,
+    *,
+    user: User,
+    supplement: Supplement,
+    plan: SupplementPlan | None = None,
+    dose: Decimal | int = 1,
+    taken_at: datetime | None = None,
+    kcal: Decimal | int = 0,
+    protein_g: Decimal | int = 0,
+    fat_g: Decimal | int = 0,
+    carb_g: Decimal | int = 0,
+) -> SupplementIntake:
+    """四個營養素欄位直接收值，不在工廠裡幫忙乘 dose ——
+
+    工廠的目的是佈置測試資料，不是重新驗證 POST /api/supplement-intakes 的
+    快照邏輯（計畫決定 3）。呼叫端要「已乘過 dose 的總量」就自己算好傳進來，
+    跟 create_meal 對 quantity_g 的取捨一致。
+    """
+    intake = SupplementIntake(
+        user_id=user.id,
+        supplement_id=supplement.id,
+        plan_id=plan.id if plan is not None else None,
+        dose=Decimal(dose),
+        taken_at=taken_at or _DEFAULT_TAKEN_AT,
+        kcal=Decimal(kcal),
+        protein_g=Decimal(protein_g),
+        fat_g=Decimal(fat_g),
+        carb_g=Decimal(carb_g),
+    )
+    db_session.add(intake)
+    await db_session.commit()
+    await db_session.refresh(intake)
+    return intake

@@ -70,19 +70,36 @@ async def test_an_admin_can_create_a_global_portion(client, db_session):
 
 
 async def test_duplicate_label_for_the_same_owner_is_rejected(client, db_session):
+    """Task 11（計畫 4a）跨端點的 rollback 稽核發現：這個路徑的
+    `await db.rollback()` 拿掉之後，全部既有測試照樣通過 —— 跟計畫 4a
+    Task 5 在 `supplement_plans.py` 踩到的坑同一個形狀：測試在拿到 409
+    之後就結束，沒有人在**同一個 session** 上再做一次資料庫操作。
+
+    補法比照 Task 5 之後那些接了 rollback 的測試：409 之後用同一個
+    client（背後是同一個 db_session）再打一次列表端點，證明它還能正常用。
+    這是在稽核發現存活之後才補上的斷言。
+    """
     admin = await create_user(db_session)
     user = await create_user(db_session)
     food = await create_food(db_session, created_by=admin)
     await create_portion(db_session, food=food, label="我的碗", owner=user)
+    headers = auth(user)
+    food_id = food.id
 
     response = await client.post(
-        f"/api/foods/{food.id}/portions",
-        headers=auth(user),
+        f"/api/foods/{food_id}/portions",
+        headers=headers,
         json={"label": "我的碗", "grams": "999"},
     )
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "PORTION_EXISTS"
+
+    # rollback 是否必要，要靠「同一個 session 之後還能用」來驗證：漏掉的話
+    # 這裡會拋 PendingRollbackError，而不是單純讓上面的斷言變紅。
+    listing = await client.get(f"/api/foods/{food_id}/portions", headers=headers)
+    assert listing.status_code == 200
+    assert len(listing.json()) == 1
 
 
 async def test_two_users_can_use_the_same_label(client, db_session):

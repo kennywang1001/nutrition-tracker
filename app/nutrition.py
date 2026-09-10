@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
 from app.models.food import FoodRevision
+from app.models.supplement import Supplement
 
 BASE_AMOUNT = Decimal(100)
 _CENTS = Decimal("0.01")
@@ -58,6 +59,25 @@ def scale(revision: FoodRevision, quantity_g: Decimal) -> Macros:
         protein_g=_round(revision.protein_g * factor),
         fat_g=_round(revision.fat_g * factor),
         carb_g=_round(revision.carb_g * factor),
+    )
+
+
+def scale_supplement(supplement: Supplement, dose: Decimal) -> Macros:
+    """依補劑每一份的量，換算成這次攝取的總量（計畫 4a 決定 1 + 決定 3）。
+
+    跟 `scale()` 是不同的換算：食物的份量要先除以 `BASE_AMOUNT` 正規化，
+    因為營養素是以每 100g 為基準；補劑的 `serving_size` 本身就是標籤上的
+    基準單位，`dose` 直接是份數的倍數，不需要再正規化，所以這裡是單純的
+    乘法。這是決定 1（`kcal_total = supplement.kcal * dose`）唯一落地成
+    程式碼的地方 —— `app/api/routes/supplement_intakes.py` 呼叫這裡算出
+    快照，寫入 `supplement_intakes` 之後就不再重算（決定 3：4b 的統計只需要
+    對這些已經算好的欄位做 `SUM`）。
+    """
+    return Macros(
+        kcal=_round(supplement.kcal * dose),
+        protein_g=_round(supplement.protein_g * dose),
+        fat_g=_round(supplement.fat_g * dose),
+        carb_g=_round(supplement.carb_g * dose),
     )
 
 

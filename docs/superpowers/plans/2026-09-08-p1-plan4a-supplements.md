@@ -20,9 +20,18 @@
    而 `rollback()` 會讓 identity map 裡所有物件過期，包含測試抓著的那些。
 4. **索引與約束全部宣告在 model 的 `__table_args__` 裡。** model 是唯一事實來源。
 5. **`CheckConstraint(name=)` 給的是命名慣例的輸入**，不是最終名稱。
-6. **`Enum(..., native_enum=False)` 一律搭配 `create_constraint=False`**，
-   然後在 `__table_args__` 自己宣告一個普通的 `CheckConstraint` ——
+6. **`Enum(..., native_enum=False)` 一律搭配 `create_constraint=False`，
+   然後在 `__table_args__` 自己宣告一個普通的 `CheckConstraint`。**
    `create_constraint=True` 會讓 `alembic check` **永久報漂移**（計畫 3 Task 5 實測）。
+
+   > **這條規矩有兩半，而漏掉第二半不會有任何徵狀 —— Task 1 實測踩到了。**
+   > 只寫 `create_constraint=False` 而忘了自己宣告 `CheckConstraint`，
+   > 結果不是「約束變弱」，是**完全沒有約束**：欄位變成一個誰都塞得進去的
+   > `varchar(N)`。`alembic check` 乾淨、測試全綠、mypy 與 ruff 都過 ——
+   > 沒有任何一個關卡會提醒你。
+   >
+   > **寫成一句話記：關掉自動產生的那一刻，就欠了一個手寫的約束。**
+   > 驗證方式只有一個：migration 套用後真的去查 `pg_constraint`。
 7. **主鍵用 `Identity(always=True)`**，不用 `serial`。
 8. **綠燈在被觀察到失敗之前不算證據。** 計畫 3 累積了六種不同的「綠燈說謊」機制，
    本計畫每一個守衛都要突變過才能宣稱有覆蓋。
@@ -342,6 +351,46 @@ alembic upgrade head && alembic downgrade 0004 && alembic upgrade head && alembi
 
 `pytest -W error` 恢復 254 全綠。Commit: `feat: 新增補劑相關的 migration`
 
+#### Task 1 / 2 實測發現
+
+**1. `alembic check` 對 `ExcludeConstraint` 比對乾淨（連續三次）。**
+這是本批唯一的真未知數，結論是好的：計畫 3 那個
+`Enum(create_constraint=True)` 的永久漂移沒有重演。
+EXCLUDE 可以正常宣告在 model 的 `__table_args__` 裡，
+不需要 `op.execute()` 也不需要 `include_object` 例外。
+
+**2. EXCLUDE 的名稱原封不動，`ex_` 前綴確認是手寫的。**
+實際名稱 `ex_supplement_plans_no_overlap`，`contype = 'x'`。
+`app/models/base.py` 的 `NAMING_CONVENTION` 沒有 `"ex"` 這個 key，
+所以慣例完全不介入 —— 跟 `CheckConstraint` 會被包成 `ck_<表>_<名>` 相反。
+
+**3. `time_of_day` 有兩個守衛，錯誤碼不同（實測 5/5）。**
+
+| 輸入 | 被誰擋 | sqlstate |
+|---|---|---|
+| `'morning'` / `'postworkout'` | 通過 | — |
+| `'brunch'`（無效，6 字元） | **CHECK 約束** | `23514` |
+| `''`（空字串） | **CHECK 約束** | `23514` |
+| `'midnight_snack'`（無效，14 字元） | **varchar(11) 長度限制** | `22001` |
+
+`native_enum=False` 產生的是 `varchar(N)`，N 等於最長標籤的長度
+（這裡是 11 = `postworkout`）。**比最長標籤還長的無效值會先撞上長度限制，
+根本走不到 CHECK。**
+
+> 這對測試設計有實際影響：**想驗證 CHECK 有效，就要挑一個「無效但夠短」的值。**
+> 我第一次驗的時候用了 `midnight_snack`，看到它被擋就以為 CHECK 在運作 ——
+> 其實擋它的是長度限制，CHECK 有沒有寫都一樣。
+> 這又是「測試通過了，但驗證到的是別的東西」的一個實例。
+>
+> 對應用程式也有影響：若 handler 只接 `CheckViolationError` 想轉成 422，
+> 過長的值會以 `StringDataRightTruncationError` 逃逸。
+> 實務上 Pydantic 會先擋掉，但這是第二層防護的已知缺口。
+
+**4. `postgresql_nulls_not_distinct=True` 這次直接寫在 `op.create_table` 裡就成功了**，
+不需要 migration 0002 對 `foods` 用的那個原始 SQL 迂迴。
+0002 那個 workaround 可能已經不必要（或是版本差異）——
+**記下來，下次動到 0002 時順手確認**，現在不動它。
+
 ---
 
 ## Task 3: 測試資料產生器
@@ -398,6 +447,49 @@ Commit: `feat: 新增補劑主檔的 API`
 - [ ] **Step 2: 實作 + 驗收 + commit**
 
 Commit: `feat: 新增補劑固定清單的建立與查詢 API`
+
+#### Task 5 實測發現
+
+**1. 繼承規矩第 3 條（`rollback()`）從計畫 1 帶到現在，一直沒有被任何測試驗證過。**
+
+只拿掉 `await db.rollback()` 那一行（保留 `except IntegrityError` 與 409），
+**274 個測試全部照樣通過**。
+
+原因不是覆蓋不足，是**測試形狀的盲點**：驗證錯誤路徑的測試在拿到 409 之後就
+結束了，沒有人在**同一個 session** 上再做一次資料庫操作 ——
+而那正是缺少 rollback 唯一會顯現的地方（`PendingRollbackError`）。
+
+補法是在那個測試的 409 之後再打一次 `GET /api/supplement-plans`，
+斷言 200 且確實只有 1 筆。實測確認：拿掉 rollback → 恰好 1 個測試失敗。
+
+> **這是第七種「綠燈說謊」的機制，形狀跟前六種都不同：**
+> 前六種是「斷言本身沒有鑑別力」，這一種是**斷言正確、但停在錯誤發生的那一刻**。
+> 清理動作（rollback、關檔、釋放鎖）的缺失，**在定義上只會在「之後」顯現**。
+>
+> 通則：**測試一個清理動作，就必須在它之後再做一件需要乾淨狀態的事。**
+> 只斷言「錯誤有被正確回報」，證明不了「錯誤之後系統還能用」。
+>
+> 這一條值得回頭套用到既有的每一個 `except IntegrityError`（計畫 2 的
+> `propose_revision`、計畫 3 的相關路徑）—— 它們今天可能也是未驗證的。
+> 記在這裡，Task 11 的隔離掃描時一併處理。
+
+**2. EXCLUDE 少一欄的突變，正好被那個「不該誤擋」的測試抓到。**
+把 `time_of_day` 從 EXCLUDE 的鍵拿掉（model 與 migration 同步改，
+維持 `alembic check` 乾淨以確保訊號來自資料庫層），
+**恰好** `test_create_plan_allows_overlapping_plan_for_a_different_time_of_day` 失敗。
+
+「同時段重疊要擋」那個測試**維持綠燈** —— 因為三欄鍵仍然擋得住同時段重疊，
+它只是變得過度寬泛。**只寫「該擋的有擋」那一半，抓不到鍵取太少的錯。**
+
+**3. `dose` 是「份數」這件事，今天只存在於註解裡。**
+`CheckConstraint("dose > 0")` 與 Pydantic 的 `Field(gt=0)` 只保證正數，
+沒有任何東西表達「這是份數的倍數，不是公克」。
+真正的 `kcal * dose` 計算在 Task 8 才出現 —— **決定 1 要到那時才會被程式碼落實。**
+
+**4. `serving_size <= 0` 與負營養素是被 Pydantic 擋的，不是資料庫 CHECK。**
+422 發生在碰到資料庫之前。CHECK 約束仍然存在且已在 Task 2 用原始 SQL 驗過，
+但**這些 API 層的測試沒有碰到它** —— 兩層守不同的東西，測試也要分開講清楚
+（同計畫 2 `ck_food_revisions_rejected_needs_reason` 的結論）。
 
 ---
 
@@ -498,6 +590,65 @@ Commit: `feat: 新增刪除補劑打卡的 API`
 
 Commit: `feat: 新增今日補劑待打卡清單的 API`
 
+#### Task 8 / 10 實測發現
+
+**1.「UTC 以東只有清晨有鑑別力」這條規則成立 —— 但差點被一個似是而非的推翻改掉。**
+
+Task 10 回報說：這條規則只適用於「日期相等」比較，不適用於「視窗」比較，
+因為實測時**台北的測試也抓到了突變**。聽起來合理，但算過之後是錯的。
+
+以台北 2026-09-08、突變版本是「local today 但用 UTC 算區間」為例：
+
+```
+正確視窗 (Taipei) : 09-07 16:00Z .. 09-08 16:00Z
+突變視窗 (UTC)    : 09-08 00:00Z .. 09-09 00:00Z
+重疊             : 09-08 00:00Z .. 09-08 16:00Z
+                   = 台北當地 08:00 .. 24:00
+```
+
+落在重疊區間裡的時刻，兩種實作的判斷完全相同 —— **零鑑別力**：
+
+| 台北當地 | 有鑑別力 |
+|---|---|
+| 00:00 / 04:00 / 07:00 | **是** |
+| 08:00 / 12:00 / 18:00 / 23:00 | 否 |
+
+那為什麼實測時台北測試失敗了？因為那兩個測試的 `taken_at` 寫的是
+`start + timedelta(hours=1)` 和 `+2`，而 `start` 是**當地午夜** ——
+所以它們其實是台北 01:00 與 02:00，**正好落在清晨那個有鑑別力的帶裡**。
+
+**規則沒有變，是 fixture 剛好選對了時刻。**
+
+> 這個區別很要緊：照那個推翻改寫規則的話，日後有人寫一個台北 12:00 的測試，
+> 會得到一個**永遠不會失敗**的測試，而規則書上還寫著「視窗比較不受此限」。
+> 一條被錯誤放寬的規則，比沒有規則更危險 —— 它會主動背書錯的做法。
+>
+> **精確版本：** 兩個視窗的重疊區間就是零鑑別力的區間。
+> 東 +N 小時的時區，重疊區間是當地 `N:00` 到午夜，
+> **所以只有當地 `00:00` 到 `N:00` 之間的時刻測得出東西**。
+> 西 −N 小時則相反，只有當地 `(24−N):00` 到午夜有鑑別力。
+> **判斷方法不是背規則，是把兩個視窗畫出來取重疊。**
+
+**2. 凍結測試（第三次）確認有鑑別力。**
+把回應改成從即時的補劑資料重算 → **恰好 1 個測試失敗**，而且是失敗在
+「重讀資料庫那一列」的斷言，不是 POST 當下的回應斷言 ——
+因為 POST 當下補劑還沒被改，回應仍然是對的。
+**凍結測試要斷言的是「持久化的那個值」，不是回應的形狀。**
+
+**3. 決定 1（`dose` 是份數）到這裡才真正變成程式碼。**
+`app/nutrition.py` 的 `scale_supplement(supplement, dose)` 是唯一表達
+`kcal_total = kcal * dose` 的地方。把 `dose` 從計算中拿掉 → 3 個測試失敗，
+其中一個用非整數倍數（1.5×），排除「整數乘法巧合」。
+
+**4. 半開區間與 `user_id` 過濾都有專屬測試抓到**（各 1 個），
+而 `user_id` 那個刻意用**全域補劑**佈置資料，避開計畫 3 Task 17
+「兩個過濾器互相掩護」的陷阱。
+
+**5. 一個因沙箱限制未執行的驗收項目（誠實記錄）：**
+`alembic downgrade 0004` 被自動模式的分類器擋下（即使指向 `wallet_test`）。
+本批三個 task 沒有更動任何 migration，`alembic check` 連續三次乾淨，
+所以影響為零 —— 但**完成驗收的往返項目要由主 session 補跑**。
+
 ---
 
 ## Task 11: 跨使用者隔離掃描 + 突變測試
@@ -524,20 +675,81 @@ Commit: `feat: 新增今日補劑待打卡清單的 API`
 
 Commit: `test: 補劑端點加入跨使用者隔離掃描`
 
+#### Task 11 實測發現
+
+**1. rollback 稽核：六個呼叫點裡有三個從來沒被驗證過。**
+
+把 Task 5 的發現回頭套用到 `app/` 裡每一個 `except IntegrityError` →
+`db.rollback()`，逐一拿掉 rollback 跑全套：
+
+| 呼叫點 | 拿掉 rollback | 處置 |
+|---|---|---|
+| `foods.py` `create_food` | **存活** | 見下方第 2 點 —— 是真缺陷，不是測試問題 |
+| `foods.py` `propose_revision` | 被抓到 | 既有測試就夠 |
+| `foods.py` `create_portion` | **存活** | 補上後續同 session 請求 |
+| `supplements.py` `create_supplement` | **存活** | 補上後續同 session 請求 |
+| `supplement_plans.py` `create_plan` | 被抓到 | Task 5 建立的測試 |
+| `supplement_plans.py` `update_plan` | 被抓到 | Task 6 建立的測試 |
+
+**一條寫在計畫裡三次、被遵守了四個計畫的規矩，實際覆蓋率是 50%。**
+規矩被遵守不等於規矩被驗證。
+
+**2. 稽核逼出一個既有的真缺陷：`create_food` 併發下會回 500 不是 409。**
+
+`create_food` 跟它的兩個 sibling（`create_supplement`、`create_portion`）
+形狀不同：後兩者是 `db.add()` 直接接 `try: commit()`，中間沒有 flush，
+所以 INSERT 發生在 commit 裡、`except` 接得到。
+
+但 `create_food` 需要中間的 flush（拿 `food.id` 去建 revision、再回填指標），
+而**唯一約束就是在那個 flush 檢查的** —— INSERT 在那一刻就送進資料庫了。
+`try/except IntegrityError` 包的是好幾行之後的 `commit()`，
+所以它註解裡宣稱要接的併發情境，對它**結構上不可達**。
+
+實測（monkeypatch 讓前置 SELECT 謊報一次「沒有重複」，重現併發狀態）：
+`IntegrityError` 未經處理逃逸。已修 —— 把第一個 flush 也包進 try，
+並補上一個測試釘住。突變確認：拿掉保護 → 恰好那個測試失敗。
+
+> **這個缺陷之所以能活這麼久，是因為它有一個「看起來有在保護」的 handler。**
+> 程式碼審查會看到 `except IntegrityError` 就打勾，
+> 測試會因為前置 SELECT 先擋下而永遠走不到那條路。
+> **註解宣稱的意圖與程式碼實際涵蓋的範圍，是兩件要分開驗證的事。**
+>
+> 一般化：**`try` 區塊的邊界要對齊「例外實際會從哪裡拋出」，
+> 而不是對齊「概念上哪一步在做這件事」。** ORM 特別容易搞混這兩者，
+> 因為 `flush()` 與 `commit()` 在心智模型裡都是「寫入資料庫」，
+> 實際送出 SQL 的時機卻不同。
+
+**3. Task 11 自己也差點交出一個不會失敗的測試（自行抓到）。**
+第一版把「別人的計畫」與「別人的臨時打卡」合成一個 `/today` 測試，
+結果 M6（打卡的 `user_id` 過濾）突變**存活**，原因有兩層：
+沒有 pin 住「今天」，以及那筆打卡綁著計畫 —— 而綁計畫的打卡只有在對應計畫
+也出現在回應裡才會被列出，M5 完整時 Bob 的計畫清單是空的，
+於是那筆洩漏的打卡根本到不了回應。
+拆成兩個測試、並改用**臨時打卡**（`plan_id=None`）之後，M5 與 M6 各自獨立被抓到。
+
 ---
 
 ## 完成驗收
 
-- [ ] `alembic downgrade 0004` 後再 `alembic upgrade head`（對 `wallet_test`）
-- [ ] `alembic check` → `No new upgrade operations detected.`，連續三次
-- [ ] `pytest -v -W error` 全部通過，測試數 ≥ 310
-- [ ] `ruff check .`、`mypy app` 無錯誤
-- [ ] `pytest --cov=app --cov-fail-under=80` 通過
-- [ ] OpenAPI 列出 37 個操作（28 + 9）
-- [ ] `pg_constraint` 裡三張新表的約束全部符合命名慣例（`contype::text`）
-      —— 注意 EXCLUDE 的 `ex_` 前綴是手寫在 `name=` 裡的，命名慣例不會自動加
-- [ ] **EXCLUDE 約束實測**：重疊計畫被資料庫擋下；不同時段的重疊可以成功
-- [ ] Task 11 的七個突變全部被抓到，無一存活
+- [x] `alembic downgrade 0004` 後再 `alembic upgrade head`（對 `wallet_test`，
+      dev 的 `wallet` 全程留在 0004 沒被動）
+- [x] `alembic check` → `No new upgrade operations detected.`，**連續三次**
+- [x] `pytest -v -W error` → **320 passed**（門檻 310）
+- [x] `ruff check .`、`mypy app` 無錯誤
+- [x] `pytest --cov=app --cov-fail-under=80` → **98.20%**
+- [x] OpenAPI 列出 **37 個操作**（28 + 9），與預估一致
+- [x] `pg_constraint` 裡三張新表共 **21 個約束、0 個違規**
+      —— EXCLUDE 的名稱是 `ex_supplement_plans_no_overlap`，
+      `contype = 'x'`，前綴確認是手寫的
+- [x] **EXCLUDE 約束實測 6/6**：同時段重疊被擋（23P01）；
+      不同時段重疊、相鄰不重疊、不同補劑、不同使用者都正常通過
+- [x] Task 11 的七個突變全部被抓到，無一存活
+
+**額外完成（不在原本的驗收清單裡）：**
+
+- [x] **稽核了 `app/` 裡全部六個 `except IntegrityError` → `rollback()` 呼叫點**，
+      發現三個從未被驗證，其中兩個補上測試、一個是真缺陷
+- [x] **修好 `create_food` 併發下回 500 的缺陷**，並用突變確認測試抓得到
 
 ---
 
