@@ -24,7 +24,12 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+asyncpg://wallet:wallet@db:5432/wallet
-      JWT_SECRET: dev-secret-change-me-in-production
+      # 明顯是開發用的值——不是留一個沒人守的預設值，是刻意寫死在這裡，
+      # 讓「這是開發環境」一眼就看得出來。這裡的重點是「必須有值才能啟動」
+      # （compose 沒設這行，容器會直接因為 JWT_SECRET 缺失而啟動失敗），
+      # 不是「不准有值」。不可以是 "dev-secret-change-me-in-production"
+      # ——那個字串在公開的 GitHub repo 裡，Settings 會直接拒絕啟動。
+      JWT_SECRET: local-docker-compose-dev-only-not-a-real-secret
       PHOTO_DIR: /app/data/photos
     ports:
       - "8000:8000"
