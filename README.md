@@ -68,6 +68,19 @@ python -m app.cli cleanup-photos             # 實際刪除
 
 （更細緻的作法 —— 只登出單一使用者 —— 見計畫文件的「後續任務：session 撤銷」。）
 
+## 部署到 NAS
+
+透過 SSH + `docker compose`、經由 Tailscale 存取。
+完整步驟（含每一步的預期輸出、備份還原、緊急處置與故障排除）：
+
+**[docs/deployment.md](docs/deployment.md)**
+
+production 用疊加設定啟動，不會載入開發用的 `docker-compose.override.yml`：
+
+```bash
+docker compose --env-file .env.production   -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
 ## 設計文件
 
 - [P1 設計規格](docs/superpowers/specs/2026-09-02-diet-tracker-p1-design.md)
