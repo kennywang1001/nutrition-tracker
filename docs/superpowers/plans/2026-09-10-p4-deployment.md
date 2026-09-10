@@ -251,6 +251,45 @@ Commit: `feat: 密鑰改為必填，缺少時在啟動就失敗`
 
 Commit: `feat: 新增與 liveness 分開的 readiness 檢查`
 
+#### Task 1 / 2 實測發現：fail-closed 當場咬了自己一口（這是好事）
+
+Task 1 合併後，**跑著的 dev 容器立刻進入崩潰迴圈** ——
+而且是本計畫要修的每一個問題同時上演：
+
+```
+$ docker ps
+wallet-api-1   Up 2 days          <- 看起來完全正常
+$ curl localhost:8000/api/health
+(連不上)
+$ docker logs wallet-api-1
+ValidationError: JWT_SECRET 不能是原始碼裡公開過的開發預設值
+```
+
+發生了什麼：`docker-compose.yml` 裡寫死的 `JWT_SECRET` 就是那個被新驗證器
+禁掉的公開字串。原始碼是掛載進去的、`--reload` 有效，所以 `app/config.py`
+一改動容器就重載 → `Settings()` → 拒絕啟動。
+
+**三件事同時被證實：**
+
+1. **fail-closed 真的有效。** 它拒絕用一個公開的字串當密鑰啟動 ——
+   這正是設計意圖，而且是在**啟動當下**大聲失敗，不是安靜跑起來。
+2. **容器狀態會謊報存活**（決定 3 與陷阱的核心）。`Up 2 days` 完全沒有反映
+   應用程式已經死了兩分鐘。**Task 5 的 healthcheck 就是在修這個。**
+3. **改了環境變數必須重建容器，`restart` 不夠。**
+   `docker compose up -d api` 才會用新的 compose 設定重建。
+   這條計畫 1 就記過，這次是第二次咬人。
+
+> **值得記的是這次的因果方向：** 不是我們寫錯而被 fail-closed 擋下，
+> 而是 fail-closed 一上線就找出了一個**既有的**問題（dev compose 用公開字串
+> 當密鑰）。一個好的守衛在導入的當天就會抓到東西 ——
+> 如果導入之後什麼都沒發生，反而要懷疑它有沒有真的接上。
+
+**順帶修掉的狀態不一致：** dev 資料庫還停在 `0004`，計畫 4a / 4b 的
+`0005`（補劑三表）與 `0006`（user_targets）從來沒套用上去 ——
+容器上的 API 打補劑或目標端點會直接炸。已升級到 `0006`，
+示範資料（4 使用者、3 食物、2 餐、3 個餐點項目）完全不受影響
+（兩個 migration 的 upgrade 都是純 `create_table`）。
+
 ---
 
 ## Task 3: Argon2 移出 event loop + 速率限制（**必須一起**）
@@ -407,16 +446,37 @@ healthcheck 有效、readiness 在資料庫斷線時回 503、
 
 ## 完成驗收
 
-- [ ] `pytest -v -W error` 全部通過，測試數 ≥ 455
-- [ ] `ruff check .`、`mypy app` 無錯誤
-- [ ] `pytest --cov=app --cov-fail-under=80` 通過
-- [ ] `alembic check` 乾淨
-- [ ] 缺少 `JWT_SECRET` 時，`Settings()` 拋 `ValidationError`
-- [ ] production compose 在缺少必要環境變數時失敗並指名
-- [ ] production 映像不含 pytest（`docker run ... pip show pytest` 失敗）
-- [ ] 登入限速的前後量測對照已回報
-- [ ] 備份 → 還原 → 比對筆數，實際做過一次
-- [ ] Task 9 的「使用者驗證」清單已交付（不是由 AI 打勾）
+- [x] `pytest -v -W error` → **463 passed**（門檻 455）
+- [x] `ruff check .`、`mypy app` 無錯誤
+- [x] `pytest --cov=app --cov-fail-under=80` → **96.54%**
+- [x] `alembic check` 乾淨
+- [x] 缺少 `JWT_SECRET` 時 `Settings()` 拋 `ValidationError`
+      （`jwt_secret / Field required [type=missing]`，exit 1）
+      —— 而且**設成公開的開發字串也會被拒絕**
+- [x] production compose 在缺少必要環境變數時失敗並**指名**
+      （`required variable BIND_ADDR` / `required variable JWT_SECRET`）
+- [x] production 映像不含 pytest（501MB → **354MB**，−29%）
+- [x] 登入限速的前後量測對照已回報：
+      單帳號 **19.37 次/秒 → 5 次/60 秒**（>99.5% 下降）；
+      `/api/health` 在並發雜湊下最高 **1094.66ms → 153.30ms**
+- [x] 備份 → 還原到另一個資料庫 → 11 張表筆數與 md5 內容全部相符，
+      臨時資料庫已丟棄
+- [x] Task 9 的「使用者驗證」清單已交付於
+      [`docs/deployment.md`](../../deployment.md) 第七節，
+      分成「已自動驗證」與「只有你做得到」兩類，後者不由 AI 打勾
+
+**額外完成（不在原本清單裡）：**
+
+- [x] **production 不再發佈資料庫埠**。`db.ports` 原本留在共用的
+      `docker-compose.yml`，而 `ports` 跟 `volumes` 一樣是「合併不取代」——
+      production 拿不掉它，結果會是 PostgreSQL 以 `0.0.0.0:5433`、
+      密碼 `wallet` 暴露在 NAS 的區網上。已搬進 dev override。
+- [x] **限制同時進行的 Argon2 運算數量**。搬進執行緒池解開序列化之後，
+      全域限速允許的 20 次並發 = 80 路平行 + 1.2 GiB（`parallelism=4`、
+      `memory_cost=64 MiB`）。12 核開發機上只是慢，NAS 上會出事。
+- [x] **`photo_dir` 覆寫改成全域 autouse fixture**。原本四個測試檔各自宣告，
+      漏寫會污染真實照片目錄 —— 實測突變：拿掉之後只跑一個測試檔，
+      真實目錄從 1 個檔案變成 9 個，而 21 個測試全部照樣通過。
 
 ---
 

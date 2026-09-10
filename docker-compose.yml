@@ -5,17 +5,24 @@ services:
       POSTGRES_USER: wallet
       POSTGRES_PASSWORD: wallet
       POSTGRES_DB: wallet
-    ports:
-      # 主機用 5433，避免跟開發機上其他專案的 PostgreSQL 撞埠。
-      # 容器之間仍走 5432（見下面 api 的 DATABASE_URL），CI 也用 5432（runner 是乾淨的）。
-      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # db 的 ports 故意不寫在這裡：production **完全不需要**把資料庫發佈到主機上，
+    # api 是走 compose 網路的 db:5432 連過去的。發佈到主機純粹是本機開發的方便
+    # （host 上的 pytest 與 alembic 要連得到），所以只寫在 docker-compose.override.yml。
+    #
+    # 這不只是整潔問題：ports 跟 volumes 一樣是「合併不取代」的清單，
+    # 如果寫在這個共用檔案，production 就拿不掉它 —— 結果會是 PostgreSQL
+    # 以 0.0.0.0:5433、密碼 wallet 暴露在 NAS 的區域網路上。
+    # 決定 5 的理由（Tailscale 是邊界）對資料庫同樣適用，而且更嚴重。
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U wallet -d wallet"]
       interval: 5s
       timeout: 5s
       retries: 10
+    # 計畫 2 開發期間咬過一次：host 上的 Docker daemon 重啟後，其他專案的
+    # 容器自己回來了，這個專案的沒有，直到有人發現。兩個服務都要有。
+    restart: unless-stopped
 
   api:
     build: .
@@ -24,14 +31,43 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+asyncpg://wallet:wallet@db:5432/wallet
-      JWT_SECRET: dev-secret-change-me-in-production
       PHOTO_DIR: /app/data/photos
-    ports:
-      - "8000:8000"
+      # JWT_SECRET 故意不寫在這裡：它在開發與 production 是完全不同的值
+      # （開發是寫死的明顯字串，production 是 ${JWT_SECRET:?...} 必填），
+      # 而 compose 的變數代換是「每個檔案各自解析、代換失敗會直接中止」，
+      # 不是「先合併再代換」——所以就算某個 override 之後會補上值，
+      # 只要這個共用檔案自己寫了 ${JWT_SECRET:?...} 卻沒有值可用，
+      # 一樣會在還沒合併前就炸掉（實測驗證過，不是猜的）。
+      # 拆成 docker-compose.override.yml（開發，plain `docker compose up`
+      # 自動套用）與 docker-compose.prod.yml（production，明確帶 -f 才套用）
+      # 各自宣告一次，兩邊才都能各自解析成功。
     volumes:
-      - ./app:/app/app
       - photos:/app/data/photos
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      # 原始碼掛載（./app:/app/app）故意不寫在這裡：compose 的 volumes
+      # 清單是「合併 + 依 target 路徑去重」，不是「override 整份取代」——
+      # 如果掛載寫在這個共用檔案，production 的 override 沒辦法把它拿掉
+      # （實測驗證過）。所以掛載只寫在 docker-compose.override.yml。
+    healthcheck:
+      # 決定 3：打 liveness（/api/health），不是 readiness。兩者混在一起，
+      # 資料庫短暫抖動會讓容器被判定不健康而重啟——但重啟並不能解決資料庫
+      # 的問題，只會在資料庫恢復期間把 API 也弄掉。
+      # python:3.12-slim 沒有 curl/wget，用標準庫的 urllib 打一次，
+      # 不需要多裝任何東西。
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    # ports 同樣故意不寫在這裡：發佈位址在開發（0.0.0.0，本機沒有邊界問題）
+    # 與 production（${BIND_ADDR:?...}，決定 5）完全不同，且跟 JWT_SECRET
+    # 一樣有「必填變數要在真正會用到它的那個檔案裡宣告」的限制。
 
 volumes:
   pgdata:

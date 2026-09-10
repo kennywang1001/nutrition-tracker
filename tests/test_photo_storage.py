@@ -89,10 +89,6 @@ def _solid_color_bomb_png(width: int, height: int) -> bytes:
     return buffer.getvalue()
 
 
-@pytest.fixture(autouse=True)
-def _photo_dir_in_tmp_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # 每個測試都指到獨立的暫存目錄 —— 絕對不能讓測試寫進真的 data/photos。
-    monkeypatch.setattr(settings, "photo_dir", str(tmp_path))
 
 
 def test_saving_a_normal_jpeg_returns_a_relative_path_and_the_file_exists():

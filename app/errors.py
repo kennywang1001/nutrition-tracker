@@ -1,4 +1,5 @@
 import logging
+import math
 from typing import Any
 
 from fastapi import FastAPI, Request, status
@@ -17,11 +18,15 @@ class AppError(Exception):
         message: str,
         status_code: int,
         details: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         self.code = code
         self.message = message
         self.status_code = status_code
         self.details = details or {}
+        # 目前只有 TooManyRequestsError 會用到（帶 Retry-After）。其餘子類別
+        # 都不傳，維持 None，JSONResponse 收到 None 就等同沒有額外標頭。
+        self.headers = headers
         super().__init__(message)
 
 
@@ -53,6 +58,45 @@ class UnprocessableEntityError(AppError):
 
     def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__(code, message, status.HTTP_422_UNPROCESSABLE_CONTENT, details)
+
+
+class ServiceUnavailableError(AppError):
+    """用於「應用程式本身沒問題，但它依賴的東西暫時不可用」。
+
+    目前唯一的用途是 `GET /api/health/ready`（決定 3）：資料庫連不上時要回
+    503，不是 500——503 才能讓呼叫端分辨「這是暫時性的依賴問題」，
+    跟「應用程式本身出了未預期的錯誤」（那個情況本來就會走
+    handle_unexpected_error，回 500）是不同的意思。
+    """
+
+    def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(code, message, status.HTTP_503_SERVICE_UNAVAILABLE, details)
+
+
+class TooManyRequestsError(AppError):
+    """速率限制觸發（P4 Task 3，決定 1／決定 2：登入限速）。
+
+    帶 `Retry-After` 標頭告訴呼叫端多久後可以再試。秒數用 `math.ceil` 無條件
+    進位、且至少 1 秒：無條件捨去可能讓呼叫端在視窗真正重置「之前」就又送出
+    下一次請求，那樣算出來的等待時間會比實際需要的短。
+    """
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        retry_after_seconds: float,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        retry_after = max(1, math.ceil(retry_after_seconds))
+        super().__init__(
+            code,
+            message,
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            details,
+            headers={"Retry-After": str(retry_after)},
+        )
+        self.retry_after_seconds = retry_after
 
 
 class PayloadTooLargeError(AppError):
@@ -88,6 +132,7 @@ def register_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=exc.status_code,
             content=jsonable_encoder(_envelope(exc.code, exc.message, exc.details)),
+            headers=exc.headers,
         )
 
     @app.exception_handler(RequestValidationError)
