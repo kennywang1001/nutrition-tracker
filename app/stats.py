@@ -25,14 +25,14 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import ColumnElement, Date, cast, func, select
+from sqlalchemy import ColumnElement, Date, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
 from app.days import day_bounds
 from app.models.food import FoodRevision
 from app.models.meal import Meal, MealItem
-from app.models.supplement import SupplementIntake
+from app.models.supplement import SupplementIntake, SupplementPlan
 from app.nutrition import Macros, scale, total
 
 
@@ -158,3 +158,86 @@ async def daily_macros(
         db, user_id=user_id, tz_name=tz_name, start=day, end=day + timedelta(days=1)
     )
     return buckets.get(day, DayMacros(food=Macros.zero(), supplement=Macros.zero()))
+
+
+async def adherence_rate(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    tz_name: str,
+    start: date,
+    end: date,
+) -> tuple[int, int]:
+    """回傳 `(有打卡的配對數, 應該有的配對數)`，範圍是 `[start, end)`。
+
+    決定 3 的定義：
+
+        應吃 = 期間內每一天 × 當天生效的每一筆計畫  -> (plan, day) 配對
+        實吃 = 上述配對中「當天至少有一筆對應打卡」的數量
+
+    **分子是「配對」不是「打卡筆數」**，所以同一天同一計畫吃兩次只算一次。
+    不設這個上限的話，某天多吃一顆會讓依從率超過 100%，
+    而且可以用連吃三天補回漏掉的兩天 —— 那衡量的就不是「有沒有按計畫吃」了。
+
+    分子只計入「計畫當天真的生效」的配對：對著一筆當天沒生效的計畫打卡
+    （資料上做得到）不會讓分子超過分母。這是結構上保證 `分子 <= 分母`，
+    而不是事後夾住。
+
+    臨時打卡（`plan_id IS NULL`）不會進分子 —— 它不對應任何計畫。
+    但它仍然計入營養素總攝取，那是 `bucket_daily_macros()` 的事。
+
+    兩次查詢（計畫一次、打卡一次），跟期間有幾天無關。
+    """
+    if end <= start:
+        return (0, 0)
+
+    # 期間內曾經生效過的計畫：effective_from 在 end 之前，
+    # 且 effective_to 為 NULL 或落在 start 之後（半開區間）。
+    plans = (
+        await db.execute(
+            select(
+                SupplementPlan.id,
+                SupplementPlan.effective_from,
+                SupplementPlan.effective_to,
+            ).where(
+                SupplementPlan.user_id == user_id,
+                SupplementPlan.effective_from < end,
+                or_(
+                    SupplementPlan.effective_to.is_(None),
+                    SupplementPlan.effective_to > start,
+                ),
+            )
+        )
+    ).all()
+
+    utc_start, _ = day_bounds(start, tz_name)
+    utc_end, _ = day_bounds(end, tz_name)
+    intake_local_day = local_day_expr(tz_name, SupplementIntake.taken_at).label("local_day")
+    taken_pairs = {
+        (plan_id, local_day)
+        for plan_id, local_day in (
+            await db.execute(
+                select(SupplementIntake.plan_id, intake_local_day)
+                .where(
+                    SupplementIntake.user_id == user_id,
+                    SupplementIntake.plan_id.is_not(None),
+                    SupplementIntake.taken_at >= utc_start,
+                    SupplementIntake.taken_at < utc_end,
+                )
+                .distinct()
+            )
+        ).all()
+    }
+
+    expected = 0
+    taken = 0
+    for plan_id, effective_from, effective_to in plans:
+        day = max(start, effective_from)
+        last = end if effective_to is None else min(end, effective_to)
+        while day < last:
+            expected += 1
+            if (plan_id, day) in taken_pairs:
+                taken += 1
+            day += timedelta(days=1)
+
+    return (taken, expected)

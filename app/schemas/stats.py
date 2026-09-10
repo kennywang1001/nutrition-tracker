@@ -48,3 +48,41 @@ class DailyStatsResponse(BaseModel):
     target: NullableMacrosResponse | None
     ratio: NullableMacrosResponse | None
     breakdown: BreakdownResponse
+
+
+class DayTrendResponse(BaseModel):
+    """`GET /api/stats/range` 趨勢陣列裡的一天（Task 8）。
+
+    欄位與 `DailyStatsResponse` 的前四項刻意完全一致，包括 `target` / `ratio`
+    的兩層 null 語意 —— 趨勢裡的一天跟單獨查那一天，意義必須一樣，
+    否則同一個日期從兩個端點拿到不同答案。
+
+    沒有資料的日子 `actual` 是 0，不是把那一天從陣列裡拿掉：畫圖要連續。
+    """
+
+    date: date
+    actual: MacrosResponse
+    target: NullableMacrosResponse | None
+    ratio: NullableMacrosResponse | None
+
+
+class RangeStatsResponse(BaseModel):
+    """`GET /api/stats/range?from=&to=` 的回應（Task 8）。
+
+    查詢參數是 `from` / `to`（規格第 7.6 節），但回應欄位叫
+    `date_from` / `date_to` —— `from` 是 Python 保留字，當欄位名要額外的
+    alias 機制才寫得出來，而回應欄位名不影響使用者輸入的介面。
+
+    區間**兩端都含**：使用者說「9/1 到 9/7」預期的是 7 天。
+    （內部分桶仍然用半開區間，見 `app/stats.py`。）
+
+    `adherence` 是決定 3 定義的補劑依從率：
+    「有打卡的 (計畫, 日) 配對數 / 應該有的配對數」，每對最多算一次。
+    完全沒有計畫時是 `null` —— 不是 0（那會讀成「一次都沒吃」），
+    也不是 1（那會讀成「全部做到」）。
+    """
+
+    date_from: date
+    date_to: date
+    trend: list[DayTrendResponse]
+    adherence: Decimal | None
