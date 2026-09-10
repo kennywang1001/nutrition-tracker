@@ -402,3 +402,96 @@ async def test_concurrent_register_does_not_block_other_requests(client, monkeyp
     assert max_latency < 0.3, (
         f"/api/health 有一次花了 {max_latency:.3f}s，event loop 被 hash_password 卡住了"
     )
+
+
+# ---------------------------------------------------------------------------
+# 並發雜湊數量的上限（P4 Task 3 收尾補上）
+# ---------------------------------------------------------------------------
+
+
+def test_concurrent_hashing_is_bounded_by_the_semaphore(monkeypatch):
+    """同時進行的 Argon2 運算不能超過 MAX_CONCURRENT_HASHES。
+
+    這個測試**不量延遲** —— 延遲測試在 CI 上會 flaky。它直接觀測
+    「同一時刻有幾個雜湊在跑」的峰值。
+
+    為什麼需要這個上限：argon2-cffi 的預設 parallelism=4、memory_cost=64 MiB，
+    所以「一次雜湊」本身就要 4 路平行 + 64 MiB。把 Argon2 搬進執行緒池解開了
+    原本的序列化之後，全域限速允許的 20 次並發會變成 80 路平行 + 1.2 GiB ——
+    在 12 核開發機上實測 /api/health 最高仍到 ~1000ms，
+    而部署目標 NAS 只有 2~4 核、4~8 GB 而且要分給 DSM。
+
+    實測對照（/api/health 在 20 個並發雜湊下的最高延遲）：
+        Argon2 阻塞 event loop（原始）     1094.66ms
+        搬進執行緒池、無號誌               ~1000ms
+        加上號誌（上限 2）                  153.30ms
+    """
+    import threading
+    import time
+
+    from app.security import password as password_module
+
+    live = 0
+    peak = 0
+    lock = threading.Lock()
+
+    class CountingHasher:
+        """替換整個 _hasher，而不是它的 hash 方法 ——
+        `PasswordHasher.hash` 是唯讀屬性（attrs 凍結類別），monkeypatch 不上去。"""
+
+        def hash(self, value: str) -> str:
+            nonlocal live, peak
+            with lock:
+                live += 1
+                peak = max(peak, live)
+            try:
+                time.sleep(0.05)  # 拉長重疊視窗，讓峰值穩定觀測得到
+                return "fake-hash"
+            finally:
+                with lock:
+                    live -= 1
+
+    monkeypatch.setattr(password_module, "_hasher", CountingHasher())
+
+    threads = [
+        threading.Thread(target=password_module.hash_password, args=("pw",)) for _ in range(10)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert peak <= password_module.MAX_CONCURRENT_HASHES, (
+        f"同時有 {peak} 個雜湊在跑，上限是 {password_module.MAX_CONCURRENT_HASHES}"
+    )
+    assert peak >= 2, "上限是 2，應該真的有兩個同時跑過（否則測試沒有觀測到並發）"
+
+
+def test_the_hash_concurrency_bound_is_actually_small():
+    """上限本身必須是個小數字 —— 這一條跟上面那個測試守的是不同的東西。
+
+    上面那個斷言寫的是 `peak <= MAX_CONCURRENT_HASHES`，它**讀那個常數**，
+    所以把常數從 2 調到 20，標準會跟著調高、測試照樣通過 ——
+    實測確認過：那個突變存活。它守的是「機制存在」（拿掉號誌會紅），
+    守不住「常數合理」。
+
+    所以這裡直接對常數本身設限，並把理由寫進失敗訊息：
+    每一次 Argon2 要 64 MiB，而部署目標 NAS 只有 4~8 GB 且要分給 DSM
+    與其他容器。把上限調到 8 就是 512 MiB 的峰值，調到 20 就是 1.2 GiB。
+
+    要調高的人會在這裡被擋下來，而且會看到該算的那筆帳 ——
+    這比在文件裡再寫一次警告有效（計畫 4b Task 9 的教訓：
+    文件擋不住重蹈覆轍，程式碼可以）。
+    """
+    limit = password_module_max()
+    assert limit <= 4, (
+        f"MAX_CONCURRENT_HASHES = {limit}，峰值記憶體約 {limit * 64} MiB。"
+        "部署目標是 NAS（4~8 GB，還要分給 DSM 與其他容器），"
+        "要調高請先算過那筆帳並更新這個測試。"
+    )
+
+
+def password_module_max() -> int:
+    from app.security import password as password_module
+
+    return password_module.MAX_CONCURRENT_HASHES
