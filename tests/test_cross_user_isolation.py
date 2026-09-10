@@ -1,5 +1,6 @@
 import io
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from tests.factories import (
     create_plan,
     create_portion,
     create_supplement,
+    create_target,
     create_user,
 )
 
@@ -591,3 +593,160 @@ async def test_todays_list_does_not_leak_a_long_past_ad_hoc_intake(
 
     assert response.status_code == 200
     assert response.json() == []
+
+
+# ---------------------------------------------------------------------------
+# 目標與統計（計畫 4b Task 10）
+#
+# 這一段的測試資料一律用**全域**食物與補劑（owner=None）。用私人的話，
+# 可見性過濾會先擋住 Bob，於是就算 user_id 過濾整個被拿掉也不會有測試變紅
+# —— 計畫 3 Task 17 與計畫 4a Task 11 都真的踩過這個「兩個過濾器互相掩護」
+# 的陷阱。要測 A 過濾器，測試資料就必須讓 B 過濾器無效。
+# ---------------------------------------------------------------------------
+
+_DAY = date(2026, 9, 8)
+# 台北當地 2026-09-08 00:30 -> UTC 前一天 16:30。挑清晨是因為 UTC 以東的
+# 時區只有當地 00:00~08:00 對「用 UTC 還是用當地時區」有鑑別力。
+_NOON_UTC = datetime(2026, 9, 8, 4, 0, tzinfo=UTC)
+
+
+@pytest.fixture
+async def alice_and_bob(db_session):
+    alice = await create_user(db_session)
+    bob = await create_user(db_session)
+    return alice, bob
+
+
+async def test_bob_cannot_list_alices_targets(client, alice_and_bob, db_session):
+    alice, bob = alice_and_bob
+    await create_target(db_session, user=alice, kcal=2000, effective_from=date(2026, 1, 1))
+    await db_session.commit()
+
+    response = await client.get("/api/targets", headers=auth(bob))
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+async def test_bob_cannot_see_alices_target_by_date(client, alice_and_bob, db_session):
+    alice, bob = alice_and_bob
+    await create_target(db_session, user=alice, kcal=2000, effective_from=date(2026, 1, 1))
+    await db_session.commit()
+
+    response = await client.get(
+        "/api/targets", headers=auth(bob), params={"date": _DAY.isoformat()}
+    )
+
+    assert response.status_code == 200
+    assert response.json() is None, "Bob 沒設目標，不能看到愛麗絲的"
+
+
+async def test_bob_cannot_update_alices_target(client, alice_and_bob, db_session):
+    alice, bob = alice_and_bob
+    target = await create_target(
+        db_session, user=alice, kcal=2000, effective_from=date(2026, 1, 1)
+    )
+    await db_session.commit()
+    target_id = target.id
+
+    response = await client.patch(
+        f"/api/targets/{target_id}",
+        headers=auth(bob),
+        json={"kcal": "9999", "effective_from": _DAY.isoformat()},
+    )
+
+    assert response.status_code == 404
+    # 「回 404」與「沒有真的改到」是兩件事 —— 要重查確認
+    await db_session.refresh(target)
+    assert target.kcal == Decimal("2000.00")
+
+
+async def test_alices_meal_does_not_appear_in_bobs_daily_stats(client, alice_and_bob, db_session):
+    """`/stats/daily` 的食物查詢 user_id 過濾。用**全域**食物佈置。"""
+    alice, bob = alice_and_bob
+    food = await create_food(db_session, created_by=alice, kcal=500)
+    revision = await db_session.get(FoodRevision, food.current_revision_id)
+    await create_meal(
+        db_session, user=alice, eaten_at=_NOON_UTC, items=[(revision, Decimal("100"))]
+    )
+    await db_session.commit()
+
+    response = await client.get(
+        "/api/stats/daily", headers=auth(bob), params={"date": _DAY.isoformat()}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["actual"]["kcal"] == "0.00"
+    assert response.json()["breakdown"]["food"]["kcal"] == "0.00"
+
+
+async def test_alices_intake_does_not_appear_in_bobs_daily_stats(
+    client, alice_and_bob, db_session
+):
+    """`/stats/daily` 的補劑查詢 user_id 過濾。用**全域**補劑佈置。"""
+    alice, bob = alice_and_bob
+    supplement = await create_supplement(db_session, created_by=alice, kcal=80)
+    await create_intake(
+        db_session, user=alice, supplement=supplement, taken_at=_NOON_UTC, kcal=80
+    )
+    await db_session.commit()
+
+    response = await client.get(
+        "/api/stats/daily", headers=auth(bob), params={"date": _DAY.isoformat()}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["breakdown"]["supplement"]["kcal"] == "0.00"
+
+
+async def test_alices_data_does_not_appear_in_bobs_range_stats(client, alice_and_bob, db_session):
+    """`/stats/range` 是另一條分桶路徑（bucket_daily_macros），要各自釘住。"""
+    alice, bob = alice_and_bob
+    food = await create_food(db_session, created_by=alice, kcal=500)
+    revision = await db_session.get(FoodRevision, food.current_revision_id)
+    await create_meal(
+        db_session, user=alice, eaten_at=_NOON_UTC, items=[(revision, Decimal("100"))]
+    )
+    await db_session.commit()
+
+    response = await client.get(
+        "/api/stats/range",
+        headers=auth(bob),
+        params={"from": _DAY.isoformat(), "to": _DAY.isoformat()},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["trend"][0]["actual"]["kcal"] == "0.00"
+
+
+async def test_alices_plans_do_not_affect_bobs_adherence(client, alice_and_bob, db_session):
+    """依從率的分母來自計畫查詢 —— 別人的計畫不能變成你的應吃次數。
+
+    用**全域**補劑：Bob 看得到這個補劑，所以可見性過濾擋不住他，
+    唯一能擋的就是計畫查詢的 user_id 過濾。
+    """
+    alice, bob = alice_and_bob
+    supplement = await create_supplement(db_session, created_by=alice)
+    await create_plan(
+        db_session, user=alice, supplement=supplement, effective_from=date(2026, 1, 1)
+    )
+    await db_session.commit()
+
+    response = await client.get(
+        "/api/stats/range",
+        headers=auth(bob),
+        params={"from": _DAY.isoformat(), "to": _DAY.isoformat()},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["adherence"] is None, "Bob 沒有計畫，分母應該是 0"
+
+
+async def test_target_and_stats_endpoints_require_authentication(client):
+    for method, path, params in (
+        ("get", "/api/targets", None),
+        ("get", "/api/stats/daily", None),
+        ("get", "/api/stats/range", {"from": "2026-09-08", "to": "2026-09-08"}),
+    ):
+        response = await getattr(client, method)(path, params=params)
+        assert response.status_code == 401, f"{method.upper()} {path}"
