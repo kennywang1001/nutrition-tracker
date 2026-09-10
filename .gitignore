@@ -19,6 +19,9 @@ htmlcov/
 # 使用者上傳的照片（存在 Docker volume / NAS 資料夾，不進版控）
 data/photos/
 
+# scripts/backup.sh 的預設輸出目錄：資料庫備份檔，不進版控
+backups/
+
 # 編輯器與作業系統
 .vscode/
 .idea/
