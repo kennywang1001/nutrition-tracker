@@ -1,0 +1,30 @@
+# 純本機開發用的疊加設定。
+#
+# Compose 的規則：`docker compose ...` 不帶任何 -f 時，會自動載入
+# docker-compose.yml + docker-compose.override.yml 這一對；一旦明確帶 -f
+# （production 用的 `docker compose -f docker-compose.yml
+# -f docker-compose.prod.yml up -d`），Compose 就完全不會自動載入這個檔案
+# ——這正是我們要的：production 不會意外撿到這裡的開發設定。
+#
+# 只放開發跟 production 真的不同、而且（實測後）不能靠「寫在
+# docker-compose.prod.yml 疊在一份 production 形狀的 docker-compose.yml 上」
+# 來做到的東西：見 docker-compose.yml 裡的註解，原因是 volumes 清單只會合併
+# 不會被整份取代、而必填的環境變數是「每個檔案各自解析」。
+services:
+  api:
+    environment:
+      # 明顯是開發用的值——不是留一個沒人守的預設值，是刻意寫死在這裡，
+      # 讓「這是開發環境」一眼就看得出來。重點是「必須有值才能啟動」
+      # （docker-compose.yml 本身沒有這個 key，容器會直接因為 JWT_SECRET
+      # 缺失而啟動失敗），不是「不准有值」。不可以是
+      # "dev-secret-change-me-in-production"——那個字串在公開的 GitHub repo
+      # 裡，Settings 會直接拒絕啟動。
+      JWT_SECRET: local-docker-compose-dev-only-not-a-real-secret
+    ports:
+      # 本機沒有「Tailscale 是邊界」這個前提，綁 0.0.0.0 沒問題。
+      - "8000:8000"
+    volumes:
+      # 原始碼掛載：改 app/ 底下的程式碼不用重新 build，配合下面的
+      # --reload 讓 uvicorn 自動重載。
+      - ./app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload

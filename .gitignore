@@ -14,6 +14,7 @@ htmlcov/
 .env
 .env.*
 !.env.example
+!.env.production.example
 
 # 使用者上傳的照片（存在 Docker volume / NAS 資料夾，不進版控）
 data/photos/
