@@ -55,6 +55,19 @@ class UnprocessableEntityError(AppError):
         super().__init__(code, message, status.HTTP_422_UNPROCESSABLE_CONTENT, details)
 
 
+class ServiceUnavailableError(AppError):
+    """用於「應用程式本身沒問題，但它依賴的東西暫時不可用」。
+
+    目前唯一的用途是 `GET /api/health/ready`（決定 3）：資料庫連不上時要回
+    503，不是 500——503 才能讓呼叫端分辨「這是暫時性的依賴問題」，
+    跟「應用程式本身出了未預期的錯誤」（那個情況本來就會走
+    handle_unexpected_error，回 500）是不同的意思。
+    """
+
+    def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(code, message, status.HTTP_503_SERVICE_UNAVAILABLE, details)
+
+
 class PayloadTooLargeError(AppError):
     """上傳內容超過大小上限（計畫 3 Task 14：照片上傳）。
 
