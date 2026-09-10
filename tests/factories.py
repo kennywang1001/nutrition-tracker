@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.food import BaseUnit, Food, FoodPortion, FoodRevision, RevisionStatus
 from app.models.meal import Meal, MealItem, MealType
 from app.models.supplement import Supplement, SupplementIntake, SupplementPlan, TimeOfDay
+from app.models.target import UserTarget
 from app.models.user import User, UserRole
 from app.security.password import hash_password
 
@@ -295,3 +296,39 @@ async def create_intake(
     await db_session.commit()
     await db_session.refresh(intake)
     return intake
+
+
+async def create_target(
+    db_session: AsyncSession,
+    *,
+    user: User,
+    kcal: Decimal | int | None = 2000,
+    protein_g: Decimal | int | None = None,
+    fat_g: Decimal | int | None = None,
+    carb_g: Decimal | int | None = None,
+    label: str | None = None,
+    effective_from: date | None = None,
+    effective_to: date | None = None,
+) -> UserTarget:
+    """四個營養素皆可為 NULL（陷阱 3：規格第 6.5 節允許只設熱量目標）——
+
+    預設只給 kcal，其餘三個留 None，剛好對應「只設熱量目標」這個最常見的
+    測試情境；呼叫端要三大營養素的話自己餵值。
+
+    effective_from 沿用 create_plan 的 _DEFAULT_EFFECTIVE_FROM（固定值，不用
+    date.today()）——依賴日界線的測試會因為「今天是哪天」隨機失敗。
+    """
+    target = UserTarget(
+        user_id=user.id,
+        kcal=Decimal(kcal) if kcal is not None else None,
+        protein_g=Decimal(protein_g) if protein_g is not None else None,
+        fat_g=Decimal(fat_g) if fat_g is not None else None,
+        carb_g=Decimal(carb_g) if carb_g is not None else None,
+        label=label,
+        effective_from=effective_from or _DEFAULT_EFFECTIVE_FROM,
+        effective_to=effective_to,
+    )
+    db_session.add(target)
+    await db_session.commit()
+    await db_session.refresh(target)
+    return target
