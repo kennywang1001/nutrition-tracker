@@ -70,16 +70,112 @@ python -m app.cli cleanup-photos             # 實際刪除
 
 ## 部署到 NAS
 
-透過 SSH + `docker compose`、經由 Tailscale 存取。
-完整步驟（含每一步的預期輸出、備份還原、緊急處置與故障排除）：
+透過 SSH + `docker compose`，經由 Tailscale 存取。以下是主要流程；
+**每一步的預期輸出、備份還原、緊急處置與故障排除**在
+[docs/deployment.md](docs/deployment.md)。
 
-**[docs/deployment.md](docs/deployment.md)**
+### 前提
 
-production 用疊加設定啟動，不會載入開發用的 `docker-compose.override.yml`：
+NAS 已安裝 Container Manager、已開啟 SSH、已加入你的 tailnet。
+
+### 1. 取得原始碼
 
 ```bash
-docker compose --env-file .env.production   -f docker-compose.yml -f docker-compose.prod.yml up -d
+ssh your-user@your-nas
+mkdir -p ~/apps && cd ~/apps
+git clone https://github.com/kennywang1001/nutrition-tracker.git
+cd nutrition-tracker
 ```
+
+### 2. 查出 NAS 的 Tailscale 位址
+
+```bash
+tailscale ip -4          # 輸出類似 100.x.y.z，下一步要用
+```
+
+### 3. 產生密鑰並填設定
+
+```bash
+cp .env.production.example .env.production
+openssl rand -hex 32     # 把輸出填進 JWT_SECRET
+```
+
+編輯 `.env.production`：
+
+```
+JWT_SECRET=<剛才產生的 64 字元十六進位>
+BIND_ADDR=100.x.y.z
+```
+
+> `BIND_ADDR` 填 tailnet 位址、**不要填 `0.0.0.0`** —— 那會讓區域網路上的
+> 任何裝置都連得到，「Tailscale 是邊界」這個前提就形同虛設。
+>
+> 這兩個變數都**沒有預設值可以退回**。忘記填的話下一步會直接失敗並指名
+> 是哪一個，而不是安靜地用一個可預測的值跑起來。
+
+### 4. 先驗設定，再啟動
+
+```bash
+# 設定解析得出來嗎？（缺變數會指名）
+docker compose --env-file .env.production   -f docker-compose.yml -f docker-compose.prod.yml config >/dev/null && echo OK
+
+# 啟動（第一次要建映像，NAS 上可能十幾分鐘）
+docker compose --env-file .env.production   -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
+
+### 5. 確認健康
+
+```bash
+docker compose --env-file .env.production   -f docker-compose.yml -f docker-compose.prod.yml ps
+```
+
+**看 `(healthy)`，不要看 `Up`。**
+
+```
+NAME            SERVICE   STATUS
+wallet-api-1    api       Up 30 seconds (healthy)
+wallet-db-1     db        Up 40 seconds (healthy)
+```
+
+> `Up` 不代表活著 —— 這個專案實際踩過兩次：uvicorn 的 reloader 父行程
+> 在子行程 import 失敗時仍然活著，`docker ps` 顯示 `Up 4 days` 而 API
+> 已經死了四天。healthcheck 就是為此存在的。
+
+### 6. 套用 migration 並建立管理員
+
+```bash
+PROD="--env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml"
+
+docker compose $PROD exec api python -m alembic upgrade head
+docker compose $PROD exec api python -m app.cli create-admin you@example.com '你的密碼' '你的名字'
+```
+
+### 7. 從手機確認
+
+tailnet 裡的手機開 `http://100.x.y.z:8000/docs`。
+
+### 更新
+
+程式碼是 build 進映像的（production 沒有原始碼掛載也沒有 `--reload`），
+所以**一律用 `up -d --build`，`restart` 不夠**：
+
+```bash
+git pull
+docker compose $PROD up -d --build
+docker compose $PROD exec api python -m alembic upgrade head   # 若這次有 migration
+```
+
+### 例行維護
+
+```bash
+bash scripts/backup.sh                                          # 資料庫備份（保留最新 7 份）
+docker compose $PROD exec api python -m app.cli cleanup-photos  # 清理孤兒照片
+```
+
+> 清理照片**必須在容器內執行** —— 照片存在 Docker 的具名 volume 裡，
+> 在 host 上跑會看錯目錄、回報「0 個孤兒」而真實的卷一直累積。
+
+排程與還原流程見 [docs/deployment.md](docs/deployment.md)。
 
 ## 設計文件
 
