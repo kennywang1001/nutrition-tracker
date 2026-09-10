@@ -230,6 +230,41 @@ EXCLUDE 真的擋得住重疊、且不誤擋相鄰期間與不同使用者。
 
 Commit: `feat: 新增 user_targets 的 migration`
 
+#### Task 1 / 2 實測發現
+
+**1. `CHECK` 約束對 NULL 完全放行 —— `IS NULL OR` 前綴是裝飾性的。**
+
+```
+SELECT NULL::numeric >= 0   ->  NULL   （不是 FALSE）
+SELECT   5::numeric >= 0    ->  TRUE
+SELECT (-5)::numeric >= 0   ->  FALSE
+```
+
+**CHECK 只在求值為 `FALSE` 時才擋**，求值為 `NULL` 時放行。實測建了兩個欄位
+（一個寫 `CHECK (bare >= 0)`、一個寫 `CHECK (guarded IS NULL OR guarded >= 0)`），
+兩者對 NULL 都插得進去、對 `-5` 都擋得住 —— **行為完全相同**。
+
+我們仍然保留 `IS NULL OR`，因為它把意圖寫給讀的人看，成本是零。
+但要知道它沒有在做事。
+
+> **這一點兩面都會咬人：**
+>
+> - **想擋掉 NULL 的人**：CHECK 幫不了你，要用 `NOT NULL`。
+>   寫 `CHECK (x > 0)` 以為順便擋掉了 NULL 的話，那是個安靜的洞。
+> - **讀程式碼的人**：看到 `CHECK (kcal >= 0)` 很容易推論「這欄不可為空」——
+>   推論是錯的。欄位可不可為空只由 `NOT NULL` 決定，CHECK 一個字都沒說。
+>
+> 一般化：**三值邏輯下，「沒有回報錯誤」不等於「條件成立」。**
+> 這跟本專案反覆遇到的「綠燈不等於正確」是同一個形狀，只是換到了 SQL 層。
+
+**2. EXCLUDE 實測（含兩個 bonus 情境）：**
+同使用者期間重疊 → 被擋（23P01）；相鄰期間（前一段結束日 = 後一段開始日）→ 通過，
+證明 `[)` 正確；不同使用者同期間 → 通過；
+開放式期間（`effective_to = NULL`）不重疊 → 通過、重疊 → 被擋。
+
+**3. `alembic check` 連續三次乾淨**，`ex_user_targets_no_overlap` 名稱原封不動
+（`contype = 'x'`），再次確認命名慣例不介入 `ExcludeConstraint`。
+
 ---
 
 ## Task 3: 測試資料產生器
