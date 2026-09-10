@@ -77,7 +77,8 @@ def discriminating_instant(day: date, tz_name: str) -> datetime:
     start, end = day_bounds(day, tz_name)
     offset = datetime(day.year, day.month, day.day, 12, tzinfo=ZoneInfo(tz_name)).utcoffset()
     assert offset is not None
-    instant = start + timedelta(minutes=30) if offset > timedelta(0) else end - timedelta(minutes=30)
+    half_hour = timedelta(minutes=30)
+    instant = start + half_hour if offset > timedelta(0) else end - half_hour
     assert instant.astimezone(UTC).date() != day, (
         f"{tz_name} {day}：挑到的時刻換算 UTC 仍是同一天，沒有鑑別力"
     )
