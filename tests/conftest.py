@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_e
 
 from app.db import get_db
 from app.main import app
+from app.ratelimit import login_rate_limiter
 
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
@@ -63,6 +64,17 @@ async def _recreate_test_database() -> None:
         await connection.execute(f'CREATE DATABASE "{db_name}"')
     finally:
         await connection.close()
+
+
+@pytest.fixture(autouse=True)
+def _reset_login_rate_limiter() -> None:
+    """P4 Task 3：`login_rate_limiter` 是 app/ratelimit.py 裡的一個全域 instance，
+    在整個測試 process 的生命週期裡只有一份。不重置的話，測試之間會透過重複
+    使用的 email 字串（例如很多測試檔都用 "me@example.com"）互相污染計數——
+    某個測試在別的測試檔跑過的失敗次數，可能讓下一個測試的第一次登入就變 429。
+    每個測試開始前重置一次，讓每個測試都是乾淨的狀態。
+    """
+    login_rate_limiter.reset()
 
 
 @pytest.fixture(scope="session")
