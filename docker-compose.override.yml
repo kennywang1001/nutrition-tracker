@@ -11,6 +11,14 @@
 # 來做到的東西：見 docker-compose.yml 裡的註解，原因是 volumes 清單只會合併
 # 不會被整份取代、而必填的環境變數是「每個檔案各自解析」。
 services:
+  db:
+    ports:
+      # 主機用 5433，避免跟開發機上其他專案的 PostgreSQL 撞埠。
+      # 容器之間仍走 5432（見 docker-compose.yml 裡 api 的 DATABASE_URL），
+      # CI 也用 5432（runner 是乾淨的）。
+      # 只有開發需要這個 —— production 不發佈資料庫埠。
+      - "5433:5432"
+
   api:
     environment:
       # 明顯是開發用的值——不是留一個沒人守的預設值，是刻意寫死在這裡，

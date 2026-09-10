@@ -5,12 +5,16 @@ services:
       POSTGRES_USER: wallet
       POSTGRES_PASSWORD: wallet
       POSTGRES_DB: wallet
-    ports:
-      # 主機用 5433，避免跟開發機上其他專案的 PostgreSQL 撞埠。
-      # 容器之間仍走 5432（見下面 api 的 DATABASE_URL），CI 也用 5432（runner 是乾淨的）。
-      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # db 的 ports 故意不寫在這裡：production **完全不需要**把資料庫發佈到主機上，
+    # api 是走 compose 網路的 db:5432 連過去的。發佈到主機純粹是本機開發的方便
+    # （host 上的 pytest 與 alembic 要連得到），所以只寫在 docker-compose.override.yml。
+    #
+    # 這不只是整潔問題：ports 跟 volumes 一樣是「合併不取代」的清單，
+    # 如果寫在這個共用檔案，production 就拿不掉它 —— 結果會是 PostgreSQL
+    # 以 0.0.0.0:5433、密碼 wallet 暴露在 NAS 的區域網路上。
+    # 決定 5 的理由（Tailscale 是邊界）對資料庫同樣適用，而且更嚴重。
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U wallet -d wallet"]
       interval: 5s
