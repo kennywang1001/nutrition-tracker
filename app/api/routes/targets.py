@@ -6,11 +6,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.params import ResourceId
+from app.days import today_in_timezone
 from app.db import get_db
-from app.errors import ConflictError
+from app.errors import ConflictError, NotFoundError, UnprocessableEntityError
 from app.models.target import UserTarget
 from app.models.user import User
-from app.schemas.target import TargetCreateRequest, TargetResponse
+from app.schemas.target import TargetCreateRequest, TargetResponse, TargetUpdateRequest
 
 router = APIRouter(prefix="/targets", tags=["targets"])
 
@@ -94,3 +96,90 @@ async def list_or_get_target(
         )
     )
     return _to_response(target) if target is not None else None
+
+
+async def _load_owned_target(db: AsyncSession, target_id: int, user: User) -> UserTarget:
+    """依擁有權載入一筆目標；不存在或不是自己的，一律回同一種 404
+    （繼承規矩第 1 條），比照 `supplement_plans._load_owned_plan`。
+    """
+    target = await db.scalar(
+        select(UserTarget).where(UserTarget.id == target_id, UserTarget.user_id == user.id)
+    )
+    if target is None:
+        raise NotFoundError("TARGET_NOT_FOUND", "找不到該目標")
+    return target
+
+
+@router.patch("/{target_id}", response_model=TargetResponse)
+async def update_target(
+    target_id: ResourceId,
+    payload: TargetUpdateRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TargetResponse:
+    """修改一筆目標 —— 決定 1：不是原地修改，是「關閉舊期間、開新期間」。
+
+    舊列的四個營養素、label 完全不動，只有 effective_to 被設成新期間的
+    起始日。這正是有效期間制的意義：三月的目標值必須維持「三月當時設的值」，
+    `/stats/range`（Task 8）才能用「當天生效的目標」算歷史達成率，不能用
+    改完之後的最新值重算過去。
+
+    **順序不能換**（陷阱 3 已在 supplement_plans 實測、這裡同構）：
+    EXCLUDE 約束逐列立即檢查，UPDATE 舊列一定要先 flush，INSERT 新列的
+    檢查才看得到已經關閉的舊期間；反過來的話新舊兩列會重疊，直接違反約束。
+    """
+    target = await _load_owned_target(db, target_id, user)
+
+    updates = payload.model_dump(exclude_unset=True)
+    new_effective_from = updates.pop("effective_from", None) or today_in_timezone(user.timezone)
+    # 省略跟顯式 null 對 effective_to 而言效果相同（都合法、都代表開放式），
+    # `.pop(key, None)` 剛好兩種情況都回傳 None，不需要另外分支處理。
+    new_effective_to = updates.pop("effective_to", None)
+
+    # 跟資料庫的 effective_range CHECK（effective_to > effective_from）同一條
+    # 規則：這個生效日會變成舊列的 effective_to。
+    if new_effective_from <= target.effective_from:
+        raise UnprocessableEntityError(
+            "EFFECTIVE_DATE_TOO_EARLY", "生效日必須晚於目前這筆目標的生效日"
+        )
+    # effective_from 省略時要到這裡才算出最終值（today_in_timezone），
+    # TargetUpdateRequest 的驗證器只能擋「兩個都明確送」的情況，這裡補上
+    # 涵蓋「effective_from 省略、effective_to 明確送」的組合。
+    if new_effective_to is not None and new_effective_to <= new_effective_from:
+        raise UnprocessableEntityError(
+            "EFFECTIVE_RANGE_INVALID", "effective_to 必須晚於 effective_from"
+        )
+
+    kcal = updates.get("kcal", target.kcal)
+    protein_g = updates.get("protein_g", target.protein_g)
+    fat_g = updates.get("fat_g", target.fat_g)
+    carb_g = updates.get("carb_g", target.carb_g)
+    label = updates.get("label", target.label)
+
+    target.effective_to = new_effective_from
+    await db.flush()  # 1. UPDATE 舊列 —— 必須先執行，見上面的說明
+
+    new_target = UserTarget(
+        user_id=user.id,
+        kcal=kcal,
+        protein_g=protein_g,
+        fat_g=fat_g,
+        carb_g=carb_g,
+        label=label,
+        effective_from=new_effective_from,
+        effective_to=new_effective_to,
+    )
+    db.add(new_target)
+    try:
+        await db.flush()  # 2. INSERT 新列
+    except IntegrityError as exc:
+        # 新期間撞上另一筆既有目標。rollback 是必要的（繼承規矩第 3 條）：
+        # 這裡兩個 flush 都還沒 commit，rollback 會把上面那個 UPDATE 也一併
+        # 復原——交易要嘛整筆成功、要嘛完全不留下「舊列已關閉但新列沒開成」
+        # 的半吊子狀態。
+        await db.rollback()
+        raise ConflictError("TARGET_OVERLAPS", "這段期間已經有重疊的目標") from exc
+
+    await db.commit()
+    await db.refresh(new_target)
+    return _to_response(new_target)
