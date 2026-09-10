@@ -158,6 +158,7 @@ async def create_meal(
     meal_type: MealType = MealType.LUNCH,
     items: Sequence[tuple[FoodRevision, Decimal | int]] | None = None,
     note: str | None = None,
+    photo_path: str | None = None,
 ) -> Meal:
     """建立一餐，items 收 (food_revision, quantity_g) 序列，直接寫入 quantity_g。
 
@@ -165,12 +166,17 @@ async def create_meal(
     工廠的目的是佈置測試資料，不是重新驗證 POST /api/meals 的安全邏輯。
     quantity 欄位（只用於顯示）在這裡跟 quantity_g 給同一個值，因為工廠
     呼叫端關心的是換算結果，不是「使用者當時輸入的份量數字」。
+
+    `photo_path`：直接寫進 `meals.photo_path`，不經過 `save_photo()` ——
+    P4 Task 6 的孤兒照片清理測試需要「DB 引用一個相對路徑」而不在乎那個
+    路徑背後的檔案內容是什麼。
     """
     meal = Meal(
         user_id=user.id,
         eaten_at=eaten_at or _DEFAULT_EATEN_AT,
         meal_type=meal_type,
         note=note,
+        photo_path=photo_path,
     )
     db_session.add(meal)
     await db_session.flush()

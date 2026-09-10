@@ -39,12 +39,24 @@ pytest
 ## 建立管理員帳號
 
 ```bash
-python -m app.cli <email> <password> <顯示名稱>
+python -m app.cli create-admin <email> <password> <顯示名稱>
 ```
 
 > **注意：對一個已存在的 email 重跑這個指令，會重設那個帳號的密碼並把它變成管理員。**
 > 沒有確認步驟，也沒有復原機制 —— 打錯 email 就是靜默地接管別人的帳號。
 > 指令會印出「已建立」或「已提升」來區分這兩種情況，執行後請確認那行輸出。
+
+## 清理孤兒照片
+
+`meals.photo_path` 是權威來源；`photo_dir` 底下沒被任何一筆 `meals` 引用、
+而且修改時間超過 24 小時（避免刪到還沒 commit 的上傳）的檔案視為孤兒。
+
+```bash
+python -m app.cli cleanup-photos --dry-run   # 先看會刪什麼，不會真的刪
+python -m app.cli cleanup-photos             # 實際刪除
+```
+
+`--min-age-hours` 可以覆寫預設的 24 小時緩衝。
 
 ## 緊急處置：強制登出所有 session
 
