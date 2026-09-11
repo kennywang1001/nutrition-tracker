@@ -1,9 +1,9 @@
-from app.security.tokens import create_token
+from app.security.tokens import create_access_token
 from tests.factories import create_food, create_user
 
 
 def auth(user):
-    return {"Authorization": f"Bearer {create_token(user.id, 'access')}"}
+    return {"Authorization": f"Bearer {create_access_token(user.id)}"}
 
 
 async def test_search_returns_both_global_and_own_foods(client, db_session):

@@ -10,7 +10,7 @@ from decimal import Decimal
 
 from app.models.food import FoodRevision
 from app.models.supplement import TimeOfDay
-from app.security.tokens import create_token
+from app.security.tokens import create_access_token
 from tests.factories import (
     create_food,
     create_intake,
@@ -29,7 +29,7 @@ def _noon(day: date) -> datetime:
 
 
 def auth(user):
-    return {"Authorization": f"Bearer {create_token(user.id, 'access')}"}
+    return {"Authorization": f"Bearer {create_access_token(user.id)}"}
 
 
 async def _revision(db_session, food):

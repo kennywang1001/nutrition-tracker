@@ -1,10 +1,10 @@
 from app.models.user import UserRole
-from app.security.tokens import create_token
+from app.security.tokens import create_access_token
 from tests.factories import create_food, create_portion, create_user
 
 
 def auth(user):
-    return {"Authorization": f"Bearer {create_token(user.id, 'access')}"}
+    return {"Authorization": f"Bearer {create_access_token(user.id)}"}
 
 
 async def test_anyone_can_add_a_personal_portion_to_a_global_food(client, db_session):

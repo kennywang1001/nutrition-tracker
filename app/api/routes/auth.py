@@ -1,3 +1,5 @@
+import uuid
+
 from fastapi import APIRouter, Depends, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,7 +17,12 @@ from app.schemas.auth import (
     UserResponse,
 )
 from app.security.password import DUMMY_PASSWORD_HASH, hash_password, verify_password
-from app.security.tokens import TokenError, create_token, decode_token
+from app.security.tokens import (
+    TokenError,
+    create_access_token,
+    create_refresh_token,
+    decode_refresh_token,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -81,23 +88,23 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> To
     login_rate_limiter.record_success(payload.email)
 
     return TokenResponse(
-        access_token=create_token(user.id, "access"),
-        refresh_token=create_token(user.id, "refresh"),
+        access_token=create_access_token(user.id),
+        refresh_token=create_refresh_token(user.id, uuid.uuid4()),
     )
 
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
     try:
-        user_id = decode_token(payload.refresh_token, expected_type="refresh")
+        claims = decode_refresh_token(payload.refresh_token)
     except TokenError as exc:
         raise UnauthorizedError("INVALID_TOKEN", "token 無效或已過期") from exc
 
-    user = await db.get(User, user_id)
+    user = await db.get(User, claims.user_id)
     if user is None:
         raise UnauthorizedError("INVALID_TOKEN", "token 無效或已過期")
 
     return TokenResponse(
-        access_token=create_token(user.id, "access"),
-        refresh_token=create_token(user.id, "refresh"),
+        access_token=create_access_token(user.id),
+        refresh_token=create_refresh_token(user.id, uuid.uuid4()),
     )

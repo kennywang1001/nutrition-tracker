@@ -2,12 +2,12 @@ from datetime import date
 
 import pytest
 
-from app.security.tokens import create_token
+from app.security.tokens import create_access_token
 from tests.factories import create_target, create_user
 
 
 def auth(user):
-    return {"Authorization": f"Bearer {create_token(user.id, 'access')}"}
+    return {"Authorization": f"Bearer {create_access_token(user.id)}"}
 
 
 # ---------------------------------------------------------------------------

@@ -14,13 +14,13 @@ from PIL import Image
 from app.api.routes.meals import MAX_PHOTO_BYTES, _read_upload_within_limit
 from app.config import settings
 from app.errors import PayloadTooLargeError
-from app.security.tokens import create_token
+from app.security.tokens import create_access_token
 from app.storage.photos import delete_photo
 from tests.factories import create_user
 
 
 def auth(user):
-    return {"Authorization": f"Bearer {create_token(user.id, 'access')}"}
+    return {"Authorization": f"Bearer {create_access_token(user.id)}"}
 
 
 def _create_payload(**overrides):

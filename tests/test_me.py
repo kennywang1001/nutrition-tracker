@@ -1,4 +1,4 @@
-from app.security.tokens import create_token
+from app.security.tokens import create_access_token
 from tests.factories import create_user
 
 
@@ -6,7 +6,7 @@ async def test_can_update_timezone(client, db_session):
     user = await create_user(db_session)
     assert user.timezone == "Asia/Taipei"  # server_default，見計畫 3 Task 1
     user_id = user.id
-    token = create_token(user_id, "access")
+    token = create_access_token(user_id)
 
     response = await client.patch(
         "/api/me",
@@ -24,7 +24,7 @@ async def test_can_update_timezone(client, db_session):
 async def test_can_update_display_name(client, db_session):
     user = await create_user(db_session, display_name="舊名字")
     user_id = user.id
-    token = create_token(user_id, "access")
+    token = create_access_token(user_id)
 
     response = await client.patch(
         "/api/me",
@@ -51,7 +51,7 @@ async def test_updating_one_field_leaves_the_other_untouched(client, db_session)
     user = await create_user(db_session, display_name="原本的名字")
     assert user.timezone == "Asia/Taipei"  # server_default，見計畫 3 Task 1
     user_id = user.id
-    token = create_token(user_id, "access")
+    token = create_access_token(user_id)
 
     response = await client.patch(
         "/api/me",
@@ -73,7 +73,7 @@ async def test_invalid_timezone_is_rejected(client, db_session):
     user = await create_user(db_session)
     assert user.timezone == "Asia/Taipei"  # server_default，見計畫 3 Task 1
     user_id = user.id
-    token = create_token(user_id, "access")
+    token = create_access_token(user_id)
 
     response = await client.patch(
         "/api/me",
@@ -114,7 +114,7 @@ async def test_an_explicit_null_timezone_is_rejected_not_a_500(client, db_sessio
     而是在 schema 層明講「這兩個欄位不接受 null」。
     """
     user = await create_user(db_session)
-    token = create_token(user.id, "access")
+    token = create_access_token(user.id)
 
     response = await client.patch(
         "/api/me",
@@ -127,7 +127,7 @@ async def test_an_explicit_null_timezone_is_rejected_not_a_500(client, db_sessio
 
 async def test_an_explicit_null_display_name_is_rejected_not_a_500(client, db_session):
     user = await create_user(db_session)
-    token = create_token(user.id, "access")
+    token = create_access_token(user.id)
 
     response = await client.patch(
         "/api/me",
