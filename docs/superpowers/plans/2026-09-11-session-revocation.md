@@ -1813,8 +1813,13 @@ git commit -m "feat: cleanup-sessions 指令
 | 6 | `start_session` 改成共用一個固定的 `family_id` | `test_two_logins_start_two_separate_families` 與 `test_logout_only_affects_the_device_that_logged_out` | 待填 |
 | 7 | `decode_refresh_token` 的 `require` 拿掉 `"jti"` | `test_refresh_token_without_jti_is_rejected` | 待填 |
 | 8 | `cleanup_expired_sessions` 的 where 改成 `revoked_at.is_not(None)` | `test_cleanup_removes_revoked_sessions_only_after_they_expire` | 待填 |
-| 9 | 部分唯一索引從 **model 與 migration 同時**拿掉 | `test_a_family_cannot_have_two_live_tokens` | 待填 |
-| 10 | `CheckConstraint` 從 **model 與 migration 同時**拿掉 | `test_expires_at_must_be_after_issued_at` | 待填 |
+| 9 | 部分唯一索引從 **model 與 migration 同時**拿掉 | `test_a_family_cannot_have_two_live_tokens` | ✅ **已驗證**（Task 1）`DID NOT RAISE IntegrityError`，1 failed / 5 passed；同時 `alembic check` 乾淨 |
+| 10 | `CheckConstraint` 從 **model 與 migration 同時**拿掉 | `test_expires_at_must_be_after_issued_at` | ✅ **已驗證**（Task 1）`DID NOT RAISE IntegrityError`，1 failed / 5 passed；同時 `alembic check` 乾淨 |
+
+**第 9、10 條已在 Task 1 當場跑完**（那三條測試在約束已存在的情況下寫成，
+直接就是綠的，所以紅燈只能用突變取得）。兩次的 `alembic check` 都是
+`No new upgrade operations detected.` —— 這是這兩筆結果最重要的部分：
+它證明漂移檢查對「兩邊一起刪」完全沒有鑑別力，那三條測試是唯一的守衛。
 
 > 第 9、10 條要「**兩邊同時**拿掉」才是有效的突變。只拿掉一邊的話 `alembic check`
 > 會先紅，那證明的是漂移檢查有效，**不是**那個約束有守衛。兩邊一起拿掉時
