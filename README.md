@@ -177,6 +177,12 @@ docker compose $PROD exec api python -m app.cli cleanup-photos  # 清理孤兒�
 
 排程與還原流程見 [docs/deployment.md](docs/deployment.md)。
 
+## 交接文件
+
+專案全貌、核心設計決定與其理由、踩過的坑、已知缺口、下一步：
+
+**[docs/handover.md](docs/handover.md)**
+
 ## 設計文件
 
 - [P1 設計規格](docs/superpowers/specs/2026-09-02-diet-tracker-p1-design.md)
