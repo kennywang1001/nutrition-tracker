@@ -66,3 +66,57 @@ async def test_sessions_are_deleted_when_the_user_is_deleted(db_session):
 
     remaining = (await db_session.scalars(select(RefreshSession))).all()
     assert remaining == []
+
+
+async def test_a_family_cannot_have_two_live_tokens(db_session):
+    """鏈分岔就是這張表要防的 bug（規格 §3.1）。Task 4 的條件式 UPDATE 保證了它，
+    但那是程式碼；這條測試證明資料庫也擋。
+
+    **沒有這條測試，把部分唯一索引從 model 與 migration 同時刪掉，
+    `alembic check` 乾淨、整套測試全綠、不變量安靜消失。**
+    alembic check 抓的是「模型與 migration 不一致」，兩邊一起刪它看不見。
+    """
+    user = await create_user(db_session)
+    family_id = uuid4()
+    db_session.add(_session_row(user.id, family_id=family_id))
+    await db_session.commit()
+
+    db_session.add(_session_row(user.id, family_id=family_id))
+    with pytest.raises(IntegrityError) as exc:
+        await db_session.commit()
+    assert "one_live_per_family" in str(exc.value)
+    await db_session.rollback()
+
+
+async def test_used_and_revoked_rows_free_the_family_slot(db_session):
+    """索引只約束**活**票 —— 否則輪替會在第二次換發就炸。
+
+    這條跟上面那條是一對：上面證明它會擋，這條證明它擋對了東西。
+    只有上面那條的話，把述詞寫成「family_id 唯一」也是綠的。
+    """
+    user = await create_user(db_session)
+    family_id = uuid4()
+    spent = _session_row(user.id, family_id=family_id)
+    spent.used_at = datetime.now(UTC)
+    db_session.add(spent)
+    await db_session.commit()
+
+    db_session.add(_session_row(user.id, family_id=family_id))
+    await db_session.commit()  # 不該炸
+
+
+async def test_expires_at_must_be_after_issued_at(db_session):
+    """Task 4 刻意不檢查 expires_at，所以壞掉的值在程式碼裡不會報錯 ——
+    使用者只會莫名被登出。由 CHECK 擋住。
+
+    用 expires_at == issued_at 這個邊界值，不是明顯更小的值：
+    `>=` 與 `>` 的差別只有這個輸入分得出來。
+    """
+    user = await create_user(db_session)
+    row = _session_row(user.id)
+    row.expires_at = row.issued_at
+    db_session.add(row)
+    with pytest.raises(IntegrityError) as exc:
+        await db_session.commit()
+    assert "expires_after_issued" in str(exc.value)
+    await db_session.rollback()

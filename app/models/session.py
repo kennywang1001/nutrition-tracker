@@ -48,10 +48,6 @@ class RefreshSession(Base):
         # 最終會是 ck_refresh_sessions_expires_after_issued（陷阱表第 1 條）。
         CheckConstraint("expires_at > issued_at", name="expires_after_issued"),
     )
-    # expires_at 刻意**不**建索引：唯一的消費者是每天跑一次的 cleanup-sessions，
-    # 而那是會掃掉表中數 % 列的 bulk DELETE，規劃器本來就會選 seq scan。
-    # 這張表是整個 app 寫入率最高的（每台活躍裝置每天約 100 列），
-    # 不為一個量不到的節省在最熱的寫入路徑上多維護一棵 btree。等量到再加。
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     user_id: Mapped[int] = mapped_column(
@@ -65,6 +61,11 @@ class RefreshSession(Base):
     # 只給 cleanup-sessions 用。**過期判斷本身由 JWT 的 exp 負責**，這個欄位
     # 刻意不參與換發時的條件判斷 —— 理由寫在 app/security/sessions.py 的
     # rotate_session 裡：兩個地方都擋的話，突變掉任一個都不會有測試變紅。
+    #
+    # 刻意**不**建索引：唯一的消費者是每天跑一次的 cleanup-sessions，而那是
+    # 會掃掉表中數 % 列的 bulk DELETE，規劃器本來就會選 seq scan。這張表是
+    # 整個 app 寫入率最高的（每台活躍裝置每天約 100 列），不為一個量不到的
+    # 節省在最熱的寫入路徑上多維護一棵 btree。等量到再加。
     #
     # 這四個時間戳（issued_at / expires_at / used_at / revoked_at）都由
     # **應用程式的時鐘**寫入，不像這個 schema 其他表用 server_default=func.now()。
