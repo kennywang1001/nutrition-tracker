@@ -132,6 +132,60 @@ async def test_sessions_are_deleted_when_the_user_is_deleted(db_session):
 
     remaining = (await db_session.scalars(select(RefreshSession))).all()
     assert remaining == []
+
+
+async def test_a_family_cannot_have_two_live_tokens(db_session):
+    """鏈分岔就是這張表要防的 bug（規格 §3.1）。Task 4 的條件式 UPDATE 保證了它，
+    但那是程式碼；這條測試證明資料庫也擋。
+
+    **沒有這條測試，把部分唯一索引從 model 與 migration 同時刪掉，
+    `alembic check` 乾淨、整套測試全綠、不變量安靜消失。**
+    alembic check 抓的是「模型與 migration 不一致」，兩邊一起刪它看不見。
+    """
+    user = await create_user(db_session)
+    family_id = uuid4()
+    db_session.add(_session_row(user.id, family_id=family_id))
+    await db_session.commit()
+
+    db_session.add(_session_row(user.id, family_id=family_id))
+    with pytest.raises(IntegrityError) as exc:
+        await db_session.commit()
+    assert "one_live_per_family" in str(exc.value)
+    await db_session.rollback()
+
+
+async def test_used_and_revoked_rows_free_the_family_slot(db_session):
+    """索引只約束**活**票 —— 否則輪替會在第二次換發就炸。
+
+    這條跟上面那條是一對：上面證明它會擋，這條證明它擋對了東西。
+    只有上面那條的話，把述詞寫成「family_id 唯一」也是綠的。
+    """
+    user = await create_user(db_session)
+    family_id = uuid4()
+    spent = _session_row(user.id, family_id=family_id)
+    spent.used_at = datetime.now(UTC)
+    db_session.add(spent)
+    await db_session.commit()
+
+    db_session.add(_session_row(user.id, family_id=family_id))
+    await db_session.commit()  # 不該炸
+
+
+async def test_expires_at_must_be_after_issued_at(db_session):
+    """Task 4 刻意不檢查 expires_at，所以壞掉的值在程式碼裡不會報錯 ——
+    使用者只會莫名被登出。由 CHECK 擋住。
+
+    用 expires_at == issued_at 這個邊界值，不是明顯更小的值：
+    `>=` 與 `>` 的差別只有這個輸入分得出來。
+    """
+    user = await create_user(db_session)
+    row = _session_row(user.id)
+    row.expires_at = row.issued_at
+    db_session.add(row)
+    with pytest.raises(IntegrityError) as exc:
+        await db_session.commit()
+    assert "expires_after_issued" in str(exc.value)
+    await db_session.rollback()
 ```
 
 - [ ] **Step 2: 跑測試確認它失敗**
@@ -327,7 +381,7 @@ def downgrade() -> None:
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_sessions.py -v`
 
-Expected: 3 passed
+Expected: 6 passed
 
 conftest 的 `migrated_database` fixture 會先砍掉重建測試資料庫、跑 `alembic upgrade head`、再跑 `alembic check`。這三步任何一步失敗都會在這裡炸出來，所以這一次通過同時就是漂移檢查通過，不需要另外下指令。
 
@@ -335,7 +389,7 @@ conftest 的 `migrated_database` fixture 會先砍掉重建測試資料庫、跑
 
 Run: `.venv/Scripts/python.exe -m pytest -W error`
 
-Expected: 466 passed（463 + 3）
+Expected: 469 passed（463 + 6）
 
 - [ ] **Step 8: Commit**
 
@@ -748,7 +802,7 @@ grep -rn "from app.security.tokens import" tests/
 
 Run: `.venv/Scripts/python.exe -m pytest -W error`
 
-Expected: 467 passed, 2 xfailed（466 + test_tokens.py 新增的 3 個，再減掉轉成 xfail 的 2 個）
+Expected: 470 passed, 2 xfailed（469 + test_tokens.py 新增的 3 個，再減掉轉成 xfail 的 2 個）
 
 Run: `.venv/Scripts/python.exe -m mypy app` → Success
 
@@ -956,11 +1010,11 @@ from app.security.sessions import start_session
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_sessions.py -v`
 
-Expected: 6 passed（Task 1 的 3 個 + 這裡的 3 個）
+Expected: 9 passed（Task 1 的 6 個 + 這裡的 3 個）
 
 Run: `.venv/Scripts/python.exe -m pytest -W error`
 
-Expected: 470 passed, 2 xfailed
+Expected: 473 passed, 2 xfailed
 
 - [ ] **Step 7: Commit**
 
@@ -1156,6 +1210,12 @@ async def _reject(db: AsyncSession, claims: RefreshClaims) -> NoReturn:
 
 async def rotate_session(db: AsyncSession, refresh_token: str) -> IssuedTokens:
     """換發：舊票當場失效，新票長在同一條 family 上。"""
+    # **呼叫前不可以在 session 上留著沒 commit 的 RefreshSession。**
+    # SQLAlchemy 的 autoflush 會讓下面那個 db.execute() 先把待寫入的 INSERT
+    # 送出去，順序就反過來 —— 新列在舊列被標 used_at 之前就進了部分唯一索引，
+    # 直接撞 uq_refresh_sessions_one_live_per_family。目前所有呼叫路徑都安全
+    # （get_db 是 per-request，start_session / rotate_session 都自己 commit），
+    # 但下一個寫這張表的人不會知道，所以寫在這裡。
     claims = decode_refresh_token(refresh_token)
 
     # 條件式 UPDATE ... RETURNING，不是「先 SELECT 判斷再 UPDATE」：
@@ -1238,11 +1298,11 @@ async def test_refresh_endpoint_invalidates_the_old_token(client, db_session):
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_sessions.py tests/test_auth_refresh.py -v`
 
-Expected: 12 passed + 5 passed，**0 xfailed**（兩個標記都拿掉了）
+Expected: 15 passed + 5 passed，**0 xfailed**（兩個標記都拿掉了）
 
 Run: `.venv/Scripts/python.exe -m pytest -W error`
 
-Expected: 479 passed（兩個 xfail 轉為正常通過）
+Expected: 482 passed（兩個 xfail 轉為正常通過）
 
 Run: `.venv/Scripts/python.exe -m mypy app` → Success
 Run: `.venv/Scripts/ruff.exe check .` → All checks passed
@@ -1529,7 +1589,7 @@ Expected: 9 passed
 
 Run: `.venv/Scripts/python.exe -m pytest -W error`
 
-Expected: 488 passed
+Expected: 491 passed
 
 - [ ] **Step 7: Commit**
 
@@ -1714,7 +1774,7 @@ Expected: 既有測試 + 4 passed
 
 Run: `.venv/Scripts/python.exe -m pytest -W error`
 
-Expected: 492 passed
+Expected: 495 passed
 
 - [ ] **Step 5: Commit**
 
@@ -1753,6 +1813,12 @@ git commit -m "feat: cleanup-sessions 指令
 | 6 | `start_session` 改成共用一個固定的 `family_id` | `test_two_logins_start_two_separate_families` 與 `test_logout_only_affects_the_device_that_logged_out` | 待填 |
 | 7 | `decode_refresh_token` 的 `require` 拿掉 `"jti"` | `test_refresh_token_without_jti_is_rejected` | 待填 |
 | 8 | `cleanup_expired_sessions` 的 where 改成 `revoked_at.is_not(None)` | `test_cleanup_removes_revoked_sessions_only_after_they_expire` | 待填 |
+| 9 | 部分唯一索引從 **model 與 migration 同時**拿掉 | `test_a_family_cannot_have_two_live_tokens` | 待填 |
+| 10 | `CheckConstraint` 從 **model 與 migration 同時**拿掉 | `test_expires_at_must_be_after_issued_at` | 待填 |
+
+> 第 9、10 條要「**兩邊同時**拿掉」才是有效的突變。只拿掉一邊的話 `alembic check`
+> 會先紅，那證明的是漂移檢查有效，**不是**那個約束有守衛。兩邊一起拿掉時
+> `alembic check` 是乾淨的 —— 那時還會變紅的東西，才是真正的守衛。
 
 > **突變存活時先問「這一行真的是唯一實現該保證的地方嗎」，再問「測試夠不夠力」**（§6 規矩 5）。例如突變 1 若存活，要先確認是不是 `_reject` 那條路徑也把它擋住了 —— 那樣的話兩道防線互相掩護，該處理的是設計不是測試。
 
@@ -1823,7 +1889,7 @@ DATABASE_URL="postgresql+asyncpg://wallet:wallet@localhost:5433/wallet_test" \
   .venv/Scripts/python.exe -m alembic check
 ```
 
-Expected：492 passed、All checks passed、Success、`No new upgrade operations detected.`
+Expected：495 passed、All checks passed、Success、`No new upgrade operations detected.`
 
 覆蓋率不得低於現況：
 
