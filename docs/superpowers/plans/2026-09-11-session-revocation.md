@@ -236,6 +236,13 @@ from app.models.session import RefreshSession
     "RefreshSession",
 ```
 
+> **注意 dev 資料庫沒有被 migrate。** conftest 只對 `wallet_test` 跑
+> `alembic upgrade head`；跑在容器裡的 api 用的是 `wallet`，那邊還沒有這張表。
+> 要手動打 API 驗證之前，先跑一次：
+> ```bash
+> docker compose exec -T api alembic upgrade head
+> ```
+
 > **這一步不能漏。** `migrations/env.py` 的 `target_metadata` 是 `app.models.Base.metadata`，而 model 只有被 import 過才會註冊進 metadata。漏掉的話：表在資料庫裡、metadata 裡沒有 → `alembic check` 會認為這張表是多餘的，而 conftest 的 `migrated_database` fixture 每個 session 都會跑一次 `alembic check`，**整個測試套件會在收集階段就失敗**，錯誤訊息是一個看不出關聯的 `CalledProcessError`。
 
 - [ ] **Step 5: 寫 migration**
@@ -283,9 +290,17 @@ def upgrade() -> None:
         # （uq_%(table_name)s_%(column_0_N_name)s）。差一個字 alembic check 就紅，
         # 而那個紅燈的訊息不會告訴你「只是名字不一樣」。
         sa.UniqueConstraint("jti", name="uq_refresh_sessions_jti"),
-        sa.CheckConstraint(
-            "expires_at > issued_at", name="ck_refresh_sessions_expires_after_issued"
-        ),
+        # **name= 這裡要寫原始名字，不是完整名字**（實作時踩到，已驗證）。
+        # alembic 的 op.create_table 內部建的暫時 MetaData 會從
+        # migrations/env.py 的 target_metadata 繼承 NAMING_CONVENTION，
+        # 而 ck 樣板是 "ck_%(table_name)s_%(constraint_name)s" —— 含
+        # %(constraint_name)s token。給它一個已經完整的名字會再套一次樣板：
+        #   name="ck_refresh_sessions_expires_after_issued"
+        #     -> ck_refresh_sessions_ck_refresh_sessions_expires_after_issued
+        # 跟模型算出來的對不上，alembic check 永久報漂移。
+        # uq / fk / pk 三個樣板不含這個 token，所以它們寫完整名字沒事 ——
+        # **只有 CheckConstraint 是這樣**（handover §7 第 1 條）。
+        sa.CheckConstraint("expires_at > issued_at", name="expires_after_issued"),
     )
     # 核心不變量：一個 family 最多一張活票（規格 §3.1）。
     # postgresql_where 的述詞必須跟模型裡拼得一模一樣，否則 alembic check 報漂移。
