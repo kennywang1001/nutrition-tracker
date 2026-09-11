@@ -60,13 +60,25 @@ CREATE TABLE refresh_sessions (
     issued_at   timestamptz  NOT NULL,
     expires_at  timestamptz  NOT NULL,
     used_at     timestamptz,   -- 被拿去換過新票的時間；NULL = 還沒用過
-    revoked_at  timestamptz    -- 撤銷時間；NULL = 有效
+    revoked_at  timestamptz,   -- 撤銷時間；NULL = 有效
+
+    CONSTRAINT ck_refresh_sessions_expires_after_issued CHECK (expires_at > issued_at)
 );
+
+-- 核心不變量：一個 family 最多只有一張活票（見下）
+CREATE UNIQUE INDEX uq_refresh_sessions_one_live_per_family
+    ON refresh_sessions (family_id)
+    WHERE used_at IS NULL AND revoked_at IS NULL;
 
 CREATE INDEX ix_refresh_sessions_user_id_revoked_at ON refresh_sessions (user_id, revoked_at);
 CREATE INDEX ix_refresh_sessions_family_id          ON refresh_sessions (family_id);
-CREATE INDEX ix_refresh_sessions_expires_at         ON refresh_sessions (expires_at);
 ```
+
+**`expires_at` 刻意不建索引。** 唯一的消費者是每天跑一次的 `cleanup-sessions`，
+而那是一個會掃掉表中數 % 列的 bulk DELETE —— 規劃器本來就會選 seq scan。
+這張表是整個 app 寫入率最高的（access token 15 分鐘過期，每台活躍裝置每天
+約 100 次輪替 = 100 列），不值得為一個量不到的節省，在最熱的寫入路徑上
+多維護一棵 btree。**等真的量到再加**，判斷標準跟 §8.2 的照片縮圖同一個。
 
 **`family_id` 是一次登入衍生出的整條鏈。** 登入時產生一個新的 family，
 之後每次輪替都在同一個 family 裡長出下一列。撤銷的單位是 family，
@@ -76,6 +88,33 @@ CREATE INDEX ix_refresh_sessions_expires_at         ON refresh_sessions (expires
 兩者是不同的事實：「已經被拿去換過」是正常流程的終點，
 「被撤銷」是安全事件或使用者登出。合併之後就再也分不出
 「這條鏈是正常輪替到底的」與「這條鏈被判定外洩」。
+
+### 3.1 「一個 family 最多一張活票」由資料庫保證
+
+鏈分岔 —— 同一個 family 裡同時存在兩張有效的票 —— **就是這整張表要防的那個
+bug**。§5.2 的條件式 UPDATE 保證了它，但那是程式碼：只要那個 WHERE 被改弱，
+或哪天有人在沒先作廢前一張的情況下呼叫了簽發，鏈就會**安靜地**分岔，
+沒有錯誤、沒有紅燈，只有兩張同時有效的票。
+
+那個部分唯一索引讓資料庫也保證一次。真的發生時，要的是一個大聲的
+`IntegrityError`，不是一個沒人發現的分岔。
+
+與所有流程相容，逐一確認過：
+
+| 流程 | 索引裡的活票數 |
+|---|---|
+| 登入 | 插入一列 → 1 |
+| 輪替 | 先 UPDATE 前一列的 `used_at`（退出索引）、再 INSERT 後繼列 → 1。PostgreSQL 逐 statement 檢查唯一索引，順序是對的 |
+| 重用偵測 / 登出 | 整個 family 寫 `revoked_at` → 0 |
+| 清理 | 刪除過期列 → 不影響 |
+
+**實作風險要先講明：** 部分索引的 `WHERE` 述詞在模型與 migration 兩邊必須
+拼得一模一樣，否則 `alembic check` 會報漂移 —— 而且這有可能是**無法收斂**的
+那一種（§7 的 `Enum(create_constraint=True)` 就是這個形狀）。實作時若確認
+收斂不了，**回報，不要硬凹**：那時的選擇是換一種寫法或放棄這個索引，
+不是讓 `alembic check` 長期紅著。
+
+### 3.2 其他
 
 **存 `jti` 不存 token 本身。** token 字串進資料庫等於把一份可直接使用的
 憑證留在備份裡，而 `jti` 已經足夠做撤銷判斷。這跟 §4.9 照片不進資料庫是
@@ -153,7 +192,12 @@ POST /api/auth/logout-all  需要 access token       → 撤銷該 user 所有 f
 
 ### 5.4 清理
 
-`python -m app.cli cleanup-sessions` —— 刪掉 `expires_at < now()` 的列。
+`python -m app.cli cleanup-sessions` —— 刪掉 `expires_at` 已過的列。
+
+**比較用的是 Python 的時鐘（`datetime.now(UTC)`），不是 SQL 的 `now()`。**
+這四個時間戳都是應用程式寫進去的（見 §3 的 `issued_at`），
+所以比較也要用同一個時鐘。混用的話，NAS 上容器時鐘與 PostgreSQL 時鐘
+一旦漂移，session 就會提早或延後過期，而且沒有任何東西指得出原因。
 形狀與 `cleanup-photos` 相同，一樣**必須在容器內執行**，一樣寫進部署手冊的 cron。
 
 ---

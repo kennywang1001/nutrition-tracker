@@ -97,6 +97,10 @@ async def test_a_session_row_can_be_stored_and_read_back(db_session):
     assert row.id is not None
     assert row.used_at is None
     assert row.revoked_at is None
+    # DateTime(timezone=True) 必須回 aware 的 datetime —— Task 6 的比較
+    # （Python 時鐘 vs 這個欄位）建立在這上面，naive 的話會直接 TypeError。
+    assert row.issued_at.tzinfo is not None
+    assert row.expires_at.tzinfo is not None
 
 
 async def test_jti_is_unique(db_session):
@@ -144,7 +148,7 @@ Create `app/models/session.py`:
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Identity, Index
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Identity, Index, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -168,23 +172,53 @@ class RefreshSession(Base):
 
     __tablename__ = "refresh_sessions"
     __table_args__ = (
+        # **核心不變量：一個 family 最多只有一張活票。**
+        # 鏈分岔就是這張表要防的那個 bug。Task 4 的條件式 UPDATE 保證了它，
+        # 但那是程式碼 —— WHERE 被改弱、或有人沒先作廢前一張就簽發，
+        # 鏈會**安靜地**分岔。這個部分唯一索引讓資料庫也保證一次，
+        # 真的發生時是一個大聲的 IntegrityError，不是兩張沒人發現的活票。
+        Index(
+            "uq_refresh_sessions_one_live_per_family",
+            "family_id",
+            unique=True,
+            postgresql_where=text("used_at IS NULL AND revoked_at IS NULL"),
+        ),
         # 撤銷整個 family 時走這個索引。
         Index("ix_refresh_sessions_family_id", "family_id"),
-        # logout-all：撈某個使用者所有還沒撤銷的列。
+        # logout-all：撈某個使用者所有還沒撤銷的列。user_id 當前導欄位同時也
+        # 服務 ON DELETE CASCADE —— PostgreSQL 不會自動幫外鍵來源欄位建索引。
         Index("ix_refresh_sessions_user_id_revoked_at", "user_id", "revoked_at"),
-        # cleanup-sessions：刪掉過期的列。
-        Index("ix_refresh_sessions_expires_at", "expires_at"),
+        # Task 4 刻意不在換發時檢查 expires_at（理由見 app/security/sessions.py
+        # 的 rotate_session），所以一個亂掉的 expires_at 不會在任何地方報錯 ——
+        # 使用者只會莫名其妙被登出。由資料庫擋住它。
+        # 注意：CheckConstraint 的 name= 是命名慣例的**輸入**不是最終名稱，
+        # 最終會是 ck_refresh_sessions_expires_after_issued（陷阱表第 1 條）。
+        CheckConstraint("expires_at > issued_at", name="expires_after_issued"),
     )
+    # expires_at 刻意**不**建索引：唯一的消費者是每天跑一次的 cleanup-sessions，
+    # 而那是會掃掉表中數 % 列的 bulk DELETE，規劃器本來就會選 seq scan。
+    # 這張表是整個 app 寫入率最高的（每台活躍裝置每天約 100 列），
+    # 不為一個量不到的節省在最熱的寫入路徑上多維護一棵 btree。等量到再加。
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     user_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
+    # unique=True 會依 NAMING_CONVENTION 產生 uq_refresh_sessions_jti ——
+    # 手寫的 migration 必須用一模一樣的名字，否則 alembic check 紅。
     jti: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), unique=True, nullable=False)
     family_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    # 只給 cleanup-sessions 用。**過期判斷本身由 JWT 的 exp 負責**，
-    # 這個欄位刻意不參與換發時的條件判斷 —— 理由見 Task 4 Step 3 的註解。
+    # 只給 cleanup-sessions 用。**過期判斷本身由 JWT 的 exp 負責**，這個欄位
+    # 刻意不參與換發時的條件判斷 —— 理由寫在 app/security/sessions.py 的
+    # rotate_session 裡：兩個地方都擋的話，突變掉任一個都不會有測試變紅。
+    #
+    # 這四個時間戳（issued_at / expires_at / used_at / revoked_at）都由
+    # **應用程式的時鐘**寫入，不像這個 schema 其他表用 server_default=func.now()。
+    # 這是刻意的：issued_at 與 expires_at 必須來自同一個 now，TTL 才精確。
+    # 因此拿它們做比較時也一律用 datetime.now(UTC)，不要用 SQL 的 now() ——
+    # 混用的話，容器時鐘與 PostgreSQL 時鐘一旦漂移，session 會提早或延後
+    # 過期，而且沒有任何東西指得出原因。
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -249,6 +283,18 @@ def upgrade() -> None:
         # （uq_%(table_name)s_%(column_0_N_name)s）。差一個字 alembic check 就紅，
         # 而那個紅燈的訊息不會告訴你「只是名字不一樣」。
         sa.UniqueConstraint("jti", name="uq_refresh_sessions_jti"),
+        sa.CheckConstraint(
+            "expires_at > issued_at", name="ck_refresh_sessions_expires_after_issued"
+        ),
+    )
+    # 核心不變量：一個 family 最多一張活票（規格 §3.1）。
+    # postgresql_where 的述詞必須跟模型裡拼得一模一樣，否則 alembic check 報漂移。
+    op.create_index(
+        "uq_refresh_sessions_one_live_per_family",
+        "refresh_sessions",
+        ["family_id"],
+        unique=True,
+        postgresql_where=sa.text("used_at IS NULL AND revoked_at IS NULL"),
     )
     op.create_index("ix_refresh_sessions_family_id", "refresh_sessions", ["family_id"])
     op.create_index(
@@ -256,7 +302,6 @@ def upgrade() -> None:
         "refresh_sessions",
         ["user_id", "revoked_at"],
     )
-    op.create_index("ix_refresh_sessions_expires_at", "refresh_sessions", ["expires_at"])
 
 
 def downgrade() -> None:
@@ -1595,19 +1640,27 @@ async def cleanup_expired_sessions(db: AsyncSession, *, dry_run: bool = False) -
     測試同樣是綠的，但重用偵測的證據沒了，真正的攻擊會被降級成一次
     普通的失敗。過期之後才刪，那時 JWT 的 exp 已經自己擋住了。
     """
-    stmt = select(RefreshSession).where(RefreshSession.expires_at < datetime.now(UTC))
-    rows = (await db.scalars(stmt)).all()
+    cutoff = datetime.now(UTC)
 
     if dry_run:
-        return len(rows)
+        count = await db.scalar(
+            select(func.count()).select_from(RefreshSession).where(
+                RefreshSession.expires_at < cutoff
+            )
+        )
+        return count or 0
 
-    for row in rows:
-        await db.delete(row)
+    # 單一 statement，不是「撈出來再一列一列 delete」——
+    # 這張表每台活躍裝置每天長約 100 列，把幾千個 ORM 物件載進記憶體
+    # 只為了刪掉它們，是沒有必要的。
+    result = await db.execute(
+        delete(RefreshSession).where(RefreshSession.expires_at < cutoff)
+    )
     await db.commit()
-    return len(rows)
+    return result.rowcount
 ```
 
-頂端 import 補上 `from app.models.session import RefreshSession`。
+頂端 import 補上 `from app.models.session import RefreshSession`，以及 `from sqlalchemy import delete, func, select`（`select` 已經有了）。
 
 `build_parser()` 在 `cleanup_parser` 之後追加：
 
