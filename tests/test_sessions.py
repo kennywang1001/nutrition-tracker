@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.models.session import RefreshSession
-from app.security.sessions import ReuseDetectedError, rotate_session, start_session
+from app.security.sessions import ReuseDetectedError, revoke_session, rotate_session, start_session
 from app.security.tokens import (
     TokenError,
     create_refresh_token,
@@ -388,3 +388,44 @@ async def test_rotation_rejects_a_token_whose_row_does_not_exist(db_session):
 
     with pytest.raises(TokenError):
         await rotate_session(db_session, orphan)
+
+
+async def test_logout_revokes_the_whole_family(db_session):
+    """三層鏈：登出時手上那張可能已經輪替過好幾輪，撤銷必須及於整條鏈。
+
+    **端點層測不到這件事**：鏈上任一張票在登出後都回 401，不管是因為
+    「已撤銷」還是因為「已用過」——那兩條路徑刻意回同一個 401。
+    """
+    user = await create_user(db_session)
+    user_id = user.id
+    a = await start_session(db_session, user_id)
+    b = await rotate_session(db_session, a.refresh_token)
+
+    await revoke_session(db_session, b.refresh_token)
+
+    revoked = (
+        await db_session.scalars(
+            select(RefreshSession.revoked_at).where(RefreshSession.user_id == user_id)
+        )
+    ).all()
+    assert len(revoked) == 2
+    assert all(value is not None for value in revoked)
+
+
+async def test_logout_persists_the_revocation(db_session):
+    """撤銷必須真的寫進資料庫。rollback 之後還讀得到的才算數
+    （見本計畫開頭那一節）。
+    """
+    user = await create_user(db_session)
+    user_id = user.id
+    issued = await start_session(db_session, user_id)
+
+    await revoke_session(db_session, issued.refresh_token)
+    await db_session.rollback()
+
+    revoked = (
+        await db_session.scalars(
+            select(RefreshSession.revoked_at).where(RefreshSession.user_id == user_id)
+        )
+    ).all()
+    assert revoked and all(value is not None for value in revoked)

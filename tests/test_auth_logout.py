@@ -1,3 +1,6 @@
+from sqlalchemy import select
+
+from app.models.session import RefreshSession
 from tests.factories import DEFAULT_PASSWORD, create_user
 
 
@@ -49,6 +52,10 @@ async def test_logout_kills_the_whole_family_not_just_the_last_token(client, db_
 async def test_logout_is_idempotent(client, db_session):
     """登出是冪等的。「讓我登出」在票已經死掉時已經達成了 ——
     回錯誤只會逼前端在登出流程裡多寫一段沒有意義的錯誤處理。
+
+    冪等不是只有「兩次都回 204」——第二次呼叫必須真的什麼都沒做，
+    不能把 `revoked_at` 又蓋一次新的時間戳。那樣的話第一次撤銷的
+    真正時間點就永遠讀不到了，鑑識時分不出「這張票到底是什麼時候死的」。
     """
     user = await create_user(db_session)
     tokens = await _login(client, user)
@@ -56,18 +63,43 @@ async def test_logout_is_idempotent(client, db_session):
     first = await client.post(
         "/api/auth/logout", json={"refresh_token": tokens["refresh_token"]}
     )
+    revoked_after_first = (
+        await db_session.scalars(
+            select(RefreshSession.revoked_at).where(RefreshSession.user_id == user.id)
+        )
+    ).all()
+
     second = await client.post(
         "/api/auth/logout", json={"refresh_token": tokens["refresh_token"]}
     )
+    revoked_after_second = (
+        await db_session.scalars(
+            select(RefreshSession.revoked_at).where(RefreshSession.user_id == user.id)
+        )
+    ).all()
 
     assert first.status_code == 204
     assert second.status_code == 204
+    assert revoked_after_first == revoked_after_second
 
 
-async def test_logout_accepts_garbage_without_leaking_whether_it_was_valid(client):
-    """對無效的 token 一樣回 204。回 401 等於提供一個「這張票還活著嗎」的探針。"""
-    response = await client.post("/api/auth/logout", json={"refresh_token": "nope"})
-    assert response.status_code == 204
+async def test_logout_accepts_garbage_without_leaking_whether_it_was_valid(client, db_session):
+    """對無效的 token 一樣回 204，而且回應本身要跟一次合法的登出無法區分 ——
+
+    只檢查 garbage 那邊是 204 不夠：如果狀態碼、body 或 header 有任何一處
+    跟合法登出不一樣，那個差異本身就是一個「這張票還活著嗎」的探針。
+    """
+    user = await create_user(db_session)
+    tokens = await _login(client, user)
+
+    valid = await client.post(
+        "/api/auth/logout", json={"refresh_token": tokens["refresh_token"]}
+    )
+    garbage = await client.post("/api/auth/logout", json={"refresh_token": "nope"})
+
+    assert valid.status_code == garbage.status_code == 204
+    assert valid.text == garbage.text
+    assert set(valid.headers.keys()) == set(garbage.headers.keys())
 
 
 async def test_logout_only_affects_the_device_that_logged_out(client, db_session):

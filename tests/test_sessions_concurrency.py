@@ -81,6 +81,76 @@ async def _wait_until_someone_else_is_lock_waiting(exclude_pid: int) -> None:
         await raw.close()
 
 
+async def _perform_interfering_rotation(
+    independent_sessions: async_sessionmaker[AsyncSession],
+    *,
+    user_id: int,
+    jti: uuid.UUID,
+    rotation_ready: asyncio.Event,
+) -> None:
+    """手動重現一次真正輪替的資料庫動作（UPDATE 舊列、INSERT 新列），
+    卡在 commit 之前不放，等到另一側真的被鎖卡住了才放行。
+
+    兩條並行測試（重用偵測 vs 輪替、登出 vs 輪替）都需要這個「干擾側」，
+    抽成一個共用函式，而不是各自複製一份。
+
+    **耦合說明（刻意的取捨，不是缺點）：** 這裡手寫了 `rotate_session`
+    內部「先 UPDATE 舊列、再 INSERT 新列」的操作順序，而不是直接呼叫
+    `rotate_session` 本身——因為我們需要在這兩步之後、commit 之前暫停，
+    那個暫停點在 `rotate_session` 函式內部，外面插不進去。如果那個順序
+    日後改變，這個函式要跟著調整。**這是唯一的耦合入口**：兩條測試共用
+    同一份，順序一旦改變，只有一個地方需要修，也只有這一個地方的註解
+    會提醒你這件事——不是各自一份、只有其中一份記得寫警告。
+    """
+    async with independent_sessions() as s:
+        # 這一側也要拿鎖——它在模擬一次真正的輪替，而真正的輪替會拿。
+        # 少了它，這條測試在「鎖被拿掉」時就抓不到問題：另一側不會等它，
+        # 兩邊會各走各的，永遠不會卡在同一列上。
+        await s.execute(select(func.pg_advisory_xact_lock(user_id)))
+        own_pid = await s.scalar(select(func.pg_backend_pid()))
+
+        family_id = (
+            await s.execute(
+                update(RefreshSession)
+                .where(
+                    RefreshSession.jti == jti,
+                    RefreshSession.used_at.is_(None),
+                    RefreshSession.revoked_at.is_(None),
+                )
+                .values(used_at=datetime.now(UTC))
+                .returning(RefreshSession.family_id)
+            )
+        ).scalar_one()
+
+        now = datetime.now(UTC)
+        s.add(
+            RefreshSession(
+                user_id=user_id,
+                jti=uuid.uuid4(),
+                family_id=family_id,
+                issued_at=now,
+                expires_at=now + timedelta(days=14),
+            )
+        )
+
+        rotation_ready.set()
+        # 等到另一側真的卡住了（不管是卡在上面那個 advisory lock，
+        # 還是——如果鎖被拿掉——卡在想鎖這裡剛剛更新的那一列），
+        # 才放行 commit。逾時兜底不是這個等待的本體，只是避免測試在
+        # 環境異常時無限卡住。
+        try:
+            async with asyncio.timeout(5.0):
+                await _wait_until_someone_else_is_lock_waiting(own_pid)
+        except TimeoutError as exc:
+            raise AssertionError(
+                "等不到另一側卡進 Lock 等待狀態——如果這裡逾時，"
+                "代表這個 PostgreSQL 環境的鎖等待行為跟預期不同，"
+                "不要調鬆 timeout 蓋過去，先確認 pg_stat_activity "
+                "的假設還成不成立。"
+            ) from exc
+        await s.commit()
+
+
 async def test_reuse_detection_revokes_the_family_even_under_concurrent_rotation(
     independent_sessions,
 ):
@@ -99,22 +169,11 @@ async def test_reuse_detection_revokes_the_family_even_under_concurrent_rotation
     方向。那條測試從頭到尾沒有真的被突變觀察過，等於沒有守衛。
 
     這裡改成手動、確定性地建構規格 §3.2 描述的那個交錯，不依賴任何自然
-    時序：
-
-      1. 「干擾側」手動重現一次真正輪替 B 的資料庫動作（UPDATE 舊列、
-         INSERT 新列 C），卡在 commit 之前不放。
-      2. 輪詢 `pg_stat_activity`，確認 replay 側真的被鎖卡住了才放行——
-         不是猜一個看起來夠長的 sleep，是直接觀察到那個狀態發生
-         （見 `_wait_until_someone_else_is_lock_waiting`）。
-      3. replay 側呼叫的是**真正的** `rotate_session`——它才是被測的對象。
-
-    **耦合說明（刻意的取捨，不是缺點）：** 干擾側手寫了「UPDATE 舊列 →
-    INSERT 新列」兩個步驟，而不是呼叫 `rotate_session` 本身——因為我們
-    需要在這兩步之後、commit 之前暫停，那個暫停點在 `rotate_session`
-    函式內部，外面插不進去。這讓這條測試知道 `rotate_session` 內部的
-    操作順序：先 UPDATE 舊列、再 INSERT 新列。如果那個順序日後改變，
-    這條測試可能要跟著調整。換來的是能夠**確定性地**重現這個競態，
-    而不是每次執行看運氣——這是目前唯一看得見規格 §3.2 的方法。
+    時序：「干擾側」（`_perform_interfering_rotation`）手動重現一次真正
+    輪替 B 的資料庫動作，卡在 commit 之前不放，直到輪詢 `pg_stat_activity`
+    確認 replay 側真的被鎖卡住了才放行；replay 側呼叫的是**真正的**
+    `rotate_session`——它才是被測的對象。交錯建構的耦合說明見
+    `_perform_interfering_rotation` 的 docstring，不在這裡重複一份。
     """
     async with independent_sessions() as setup:
         user = User(
@@ -135,55 +194,12 @@ async def test_reuse_detection_revokes_the_family_even_under_concurrent_rotation
         rotation_ready = asyncio.Event()
 
         async def interfering_rotation() -> None:
-            """手動重現一次輪替 B 的資料庫動作，卡在 commit 之前不放。"""
-            async with independent_sessions() as s:
-                # 這一側也要拿鎖——它在模擬一次真正的輪替，而真正的輪替
-                # 會拿。少了它，這條測試在「rotate_session 的鎖被拿掉」時
-                # 就抓不到問題：replay 側不會等它，兩邊會各走各的，永遠
-                # 不會卡在同一列上。
-                await s.execute(select(func.pg_advisory_xact_lock(user_id)))
-                own_pid = await s.scalar(select(func.pg_backend_pid()))
-
-                family_id = (
-                    await s.execute(
-                        update(RefreshSession)
-                        .where(
-                            RefreshSession.jti == claims_b.jti,
-                            RefreshSession.used_at.is_(None),
-                            RefreshSession.revoked_at.is_(None),
-                        )
-                        .values(used_at=datetime.now(UTC))
-                        .returning(RefreshSession.family_id)
-                    )
-                ).scalar_one()
-
-                now = datetime.now(UTC)
-                s.add(
-                    RefreshSession(
-                        user_id=user_id,
-                        jti=uuid.uuid4(),
-                        family_id=family_id,
-                        issued_at=now,
-                        expires_at=now + timedelta(days=14),
-                    )
-                )
-
-                rotation_ready.set()
-                # 等到 replay 側真的卡住了（不管是卡在上面那個 advisory
-                # lock，還是——如果鎖被拿掉——卡在 _revoke_family 想鎖
-                # 這裡剛剛更新的 B 列），才放行 commit。逾時兜底不是這個
-                # 等待的本體，只是避免測試在環境異常時無限卡住。
-                try:
-                    async with asyncio.timeout(5.0):
-                        await _wait_until_someone_else_is_lock_waiting(own_pid)
-                except TimeoutError as exc:
-                    raise AssertionError(
-                        "等不到 replay 側卡進 Lock 等待狀態——如果這裡逾時，"
-                        "代表這個 PostgreSQL 環境的鎖等待行為跟預期不同，"
-                        "不要調鬆 timeout 蓋過去，先確認 pg_stat_activity "
-                        "的假設還成不成立。"
-                    ) from exc
-                await s.commit()
+            await _perform_interfering_rotation(
+                independent_sessions,
+                user_id=user_id,
+                jti=claims_b.jti,
+                rotation_ready=rotation_ready,
+            )
 
         async def replay_rotation() -> Exception | None:
             await rotation_ready.wait()
@@ -243,15 +259,11 @@ async def test_logout_revokes_the_family_even_under_concurrent_rotation(
     但那張新票還能繼續換發。
 
     交錯的建構方式跟上面那條同構（同樣是實測驗證過、不依賴自然時序的
-    確定性版本）：
-
-      1. 「干擾側」手動重現一次真正輪替 A 的資料庫動作（UPDATE 舊列、
-         INSERT 新列 C），卡在 commit 之前不放。
-      2. 輪詢 `pg_stat_activity`，確認 replay 側真的卡住了才放行——
-         有鎖時卡在 `_lock_user_sessions` 的 advisory lock；鎖被拿掉時
-         卡在 `_revoke_family` 想鎖干擾側剛更新的 A 那一列（兩者的
-         `wait_event_type` 都是 'Lock'，所以同一個輪詢函式兩種情況都認得出來）。
-      3. replay 側呼叫的是**真正的** `revoke_session`——它才是被測的對象。
+    確定性版本，見 `_perform_interfering_rotation`）：有鎖時 replay 側卡在
+    `_lock_user_sessions` 的 advisory lock；鎖被拿掉時卡在 `_revoke_family`
+    想鎖干擾側剛更新的 A 那一列（兩者的 `wait_event_type` 都是 'Lock'，
+    所以同一個輪詢函式兩種情況都認得出來）。replay 側呼叫的是**真正的**
+    `revoke_session`——它才是被測的對象。
     """
     async with independent_sessions() as setup:
         user = User(
@@ -271,48 +283,12 @@ async def test_logout_revokes_the_family_even_under_concurrent_rotation(
         rotation_ready = asyncio.Event()
 
         async def interfering_rotation() -> None:
-            """手動重現一次真正輪替 A 的資料庫動作，卡在 commit 之前不放。"""
-            async with independent_sessions() as s:
-                # 這一側也要拿鎖——它在模擬一次真正的輪替，而真正的輪替會拿。
-                await s.execute(select(func.pg_advisory_xact_lock(user_id)))
-                own_pid = await s.scalar(select(func.pg_backend_pid()))
-
-                family_id = (
-                    await s.execute(
-                        update(RefreshSession)
-                        .where(
-                            RefreshSession.jti == claims_a.jti,
-                            RefreshSession.used_at.is_(None),
-                            RefreshSession.revoked_at.is_(None),
-                        )
-                        .values(used_at=datetime.now(UTC))
-                        .returning(RefreshSession.family_id)
-                    )
-                ).scalar_one()
-
-                now = datetime.now(UTC)
-                s.add(
-                    RefreshSession(
-                        user_id=user_id,
-                        jti=uuid.uuid4(),
-                        family_id=family_id,
-                        issued_at=now,
-                        expires_at=now + timedelta(days=14),
-                    )
-                )
-
-                rotation_ready.set()
-                try:
-                    async with asyncio.timeout(5.0):
-                        await _wait_until_someone_else_is_lock_waiting(own_pid)
-                except TimeoutError as exc:
-                    raise AssertionError(
-                        "等不到 replay 側卡進 Lock 等待狀態——如果這裡逾時，"
-                        "代表這個 PostgreSQL 環境的鎖等待行為跟預期不同，"
-                        "不要調鬆 timeout 蓋過去，先確認 pg_stat_activity "
-                        "的假設還成不成立。"
-                    ) from exc
-                await s.commit()
+            await _perform_interfering_rotation(
+                independent_sessions,
+                user_id=user_id,
+                jti=claims_a.jti,
+                rotation_ready=rotation_ready,
+            )
 
         async def replay_logout() -> None:
             await rotation_ready.wait()

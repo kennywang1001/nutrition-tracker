@@ -100,13 +100,16 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> To
     )
 
 
+# 刻意**不需要** access token，理由只給看程式碼的人看，不對外發佈：
+# 使用者要登出的時刻，手上的 access token 很可能已經過期了——那正是他想
+# 登出的原因之一。要求 access token 會讓「票過期的裝置反而登不出去」。
+# 而呼叫者手上已經有那張 refresh token 了，能做的事遠比登出多——這不是
+# 額外開放的權限。
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(payload: LogoutRequest, db: AsyncSession = Depends(get_db)) -> None:
-    """刻意**不需要** access token。
+    """登出這一台裝置：這張 refresh token 所屬的整條鏈立刻失效，不能再換發新票。
 
-    使用者要登出的時刻，手上的 access token 很可能已經過期了 —— 那正是
-    他想登出的原因之一。要求 access token 會讓「票過期的裝置反而登不出去」。
-    而呼叫者手上已經有那張 refresh token 了，能做的事遠比登出多。
+    對無效、過期、已經登出過的 token 一律回 204——這個端點本來就是冪等的。
     """
     await revoke_session(db, payload.refresh_token)
 
@@ -115,6 +118,13 @@ async def logout(payload: LogoutRequest, db: AsyncSession = Depends(get_db)) -> 
 async def logout_all(
     user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ) -> None:
+    """登出所有裝置：這個帳號名下每一條 refresh token 鏈立刻失效，不能再換發新票。
+
+    **請注意：已經發出去的 access token 不受影響，最多還能繼續用到它自己的
+    到期時間（目前 15 分鐘）。** 這個端點擋得住的是「換新票」，擋不住
+    「手上這張還沒過期的票」——如果懷疑帳號被盜用，這 15 分鐘的空窗期
+    是目前系統的已知限制，不是這個端點沒做好。
+    """
     await revoke_all_for_user(db, user.id)
 
 

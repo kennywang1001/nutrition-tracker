@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import NoReturn
 
-from sqlalchemy import func, select, update
+from sqlalchemy import BigInteger, cast, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -120,8 +120,14 @@ async def _lock_user_sessions(db: AsyncSession, user_id: int) -> None:
 
     這個 codebase 目前沒有其他地方用 advisory lock，所以不需要命名空間；
     日後若有，要改用有命名空間的雙參數形式。
+
+    **必須明確 cast 成 BigInteger。** `pg_advisory_xact_lock` 有 int4 與
+    int8 兩個重載，SQLAlchemy 對 Python `int` 預設綁成 `INTEGER`（int4）。
+    `users.id` 是 `BigInteger`，今天 id 從 1 開始、都是個位數所以測不出來，
+    但 id 一旦超過 2³¹，不 cast 就會在這裡直接撞 `NumericValueOutOfRange`
+    ——而且撞到的不只是登出，換發、登入全部共用這個函式，會一起壞掉。
     """
-    await db.execute(select(func.pg_advisory_xact_lock(user_id)))
+    await db.execute(select(func.pg_advisory_xact_lock(cast(user_id, BigInteger))))
 
 
 async def _revoke_family(db: AsyncSession, family_id: uuid.UUID) -> None:
@@ -213,6 +219,21 @@ async def revoke_session(db: AsyncSession, refresh_token: str) -> None:
     分頁正在輪替」會留下一張活票，跟重用偵測那個洞是同一個，只是從登出
     這條路進來。鎖的粒度是使用者，讓輪替、登出、全部登出三條路徑互斥。
 
+    **先 SELECT 拿到那一列、再取鎖，順序不能反。** 呼叫這個函式不需要
+    通過身分驗證，只需要一張簽章有效的 refresh token——如果先取鎖，
+    任何一張簽章有效但列已經被清掉的 token（過期太久被 Task 6 的
+    cleanup 清掉、或使用者本尊早就登出過）都能讓沒有通過任何驗證的
+    呼叫者，拿到那個使用者的 advisory lock。反過來先 SELECT：鎖只在
+    真的找到列、真的要撤銷時才取，而且用**列上的** `user_id`（資料庫
+    裡的事實），不是 token 聲稱的那個。這同時也修掉了另一個問題——
+    原本 `row is None` 的提早 return 會在已經取到鎖之後才發生，
+    離開時沒有 commit 也沒有 rollback，鎖只能等交易結束才釋放；
+    先 SELECT 的話那個分支根本還沒碰過鎖。
+
+    `family_id` 不會因為輪替而改變，所以先取到的值在拿鎖前後仍然有效；
+    列在這段空窗期被刪除，代表對應的 family 早就因為使用者被刪除而
+    整條消失，撤銷一個不存在的 family 是安全的空操作。
+
     **一律靜默成功。** 無效、過期、偽造、已經撤銷過的 token 都不回錯誤 ——
     回錯誤等於提供一個「這張票還活著嗎」的探針，而登出本來就是冪等的。
     """
@@ -221,11 +242,11 @@ async def revoke_session(db: AsyncSession, refresh_token: str) -> None:
     except TokenError:
         return
 
-    await _lock_user_sessions(db, claims.user_id)
-
     row = await db.scalar(select(RefreshSession).where(RefreshSession.jti == claims.jti))
     if row is None:
         return
+
+    await _lock_user_sessions(db, row.user_id)
 
     await _revoke_family(db, row.family_id)
     await db.commit()
