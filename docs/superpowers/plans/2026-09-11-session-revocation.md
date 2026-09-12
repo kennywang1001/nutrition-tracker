@@ -31,6 +31,28 @@ docker compose up -d                        # 需要 db 起著（測試連 local
 
 ---
 
+## 這份計畫最重要的一個陷阱：測試看不見 `commit`
+
+`tests/conftest.py` 的 `db_session` 用 `join_transaction_mode="create_savepoint"`，
+外層交易在測試結束時整個 rollback。於是 **`commit()` 只是 RELEASE SAVEPOINT** ——
+對同一個 session 來說，「已 flush 但沒 commit」與「已 commit」**在結構上不可觀察**。
+而 `client` fixture 把同一個 session 交給 app，所以端點測試也看不見。
+
+實測（Task 3 品質審查）：把 `start_session` 的 `await db.commit()` **整行刪掉**，
+476 個測試**全綠**。但 production 的 `get_db` 是 per-request，`session.close()`
+會把沒 commit 的 INSERT 丟掉 —— 登入發出一張沒有對應資料列的票，
+Task 4 之後就是 100% 的換發失敗。
+
+**要讓「有沒有 commit」變成可觀察，測試必須在斷言前自己 `await db_session.rollback()`。**
+沒 commit 的資料還在 savepoint 裡，rollback 會把它抹掉；commit 過的不會。
+
+這份計畫裡每一條宣稱「釘住了持久化」的測試都必須有那一行 rollback，
+否則它證明的只是「資料在記憶體裡」。目前有兩條：
+`test_start_session_commits_the_row`（Task 3）與
+`test_reuse_detection_persists_the_revocation`（Task 4）。
+
+---
+
 ## 檔案結構
 
 | 檔案 | 責任 |
@@ -959,6 +981,32 @@ async def test_login_endpoint_creates_a_session_row(client, db_session):
     )
     assert row is not None
     assert row.user_id == user.id
+
+
+async def test_start_session_commits_the_row(db_session):
+    """**這條測試守的是這個 task 唯一真正的決定：sessions.py 自己管交易。**
+
+    `commit` 不能弱化成 `flush`，也不能省略 —— production 的 `get_db` 是
+    per-request，session 一關就把沒 commit 的 INSERT 丟掉，登入會發出一張
+    沒有對應資料列的票，Task 4 之後每一次換發都 401。
+
+    而預設情況下這件事**測不出來**：測試的 `db_session` 用 create_savepoint，
+    `commit()` 只是 RELEASE SAVEPOINT，對同一個 session 來說「有沒有 commit」
+    不可觀察（實測：把 commit 整行刪掉，476 個測試全綠）。
+
+    下面那行 `rollback()` 就是把它變成可觀察的：沒 commit 的話那一列還在
+    savepoint 裡，rollback 會把它抹掉；commit 過的不會。
+    """
+    user = await create_user(db_session)
+    issued = await start_session(db_session, user.id)
+
+    await db_session.rollback()
+
+    claims = decode_refresh_token(issued.refresh_token)
+    row = await db_session.scalar(
+        select(RefreshSession).where(RefreshSession.jti == claims.jti)
+    )
+    assert row is not None
 ```
 
 > `test_login_endpoint_creates_a_session_row` 是這個 task 唯一有鑑別力的端點測試。既有的 `test_auth_login.py` 只斷言「回了一個能解碼的 refresh token」—— 把 `login()` 改回自己簽票、完全不寫資料列，那些測試一個都不會紅。
@@ -991,7 +1039,18 @@ class IssuedTokens:
     refresh_token: str
 
 
-def _add_row(db: AsyncSession, *, user_id: int, family_id: uuid.UUID) -> uuid.UUID:
+def _issue(db: AsyncSession, *, user_id: int, family_id: uuid.UUID) -> IssuedTokens:
+    """寫一列，並簽出對應那一列的一組票。
+
+    **寫列與簽票刻意綁在同一個函式裡，`jti` 不外流。** 拆成
+    「`_add_row` 回傳 jti」+「`_tokens_for(jti)`」的話，呼叫端就有可能
+    把兩者配錯 —— 而那個 bug 的後果是資料列與票上的 jti 不一致，
+    每一次換發都 401（突變 11 已驗證這一類的破壞力）。綁在一起之後，
+    配錯這件事在結構上不可表達。
+
+    不在這裡 commit：呼叫端可能還要在同一個交易裡做別的事（Task 4 的輪替
+    就是先 UPDATE 舊列再呼叫這裡），交易邊界交給呼叫端決定。
+    """
     jti = uuid.uuid4()
     now = datetime.now(UTC)
     db.add(
@@ -1000,15 +1059,17 @@ def _add_row(db: AsyncSession, *, user_id: int, family_id: uuid.UUID) -> uuid.UU
             jti=jti,
             family_id=family_id,
             issued_at=now,
-            # 這個值只給 cleanup-sessions 用。過期判斷本身由 JWT 的 exp 負責，
-            # 所以這裡跟 token 的 exp 之間幾微秒的差距沒有任何影響。
+            # 這個值只給 cleanup-sessions 用；過期判斷本身由 JWT 的 exp 負責。
+            #
+            # 它跟 token 的 exp 不是同一個時刻算出來的，實測差距約 150 毫秒
+            # （主因是 JWT 的 exp 是整數秒的 NumericDate，PyJWT 會截斷；
+            # 其次是兩次 datetime.now() 之間隔著一次資料庫往返）。
+            # 截斷通常讓資料列比票晚過期（安全的方向），但**方向不保證** ——
+            # 往返時間超過截斷餘數時會反過來。在 14 天的尾巴上差幾百毫秒，
+            # 後果可以忽略，但不要以為這兩個值相等。
             expires_at=now + timedelta(days=settings.refresh_token_ttl_days),
         )
     )
-    return jti
-
-
-def _tokens_for(user_id: int, jti: uuid.UUID) -> IssuedTokens:
     return IssuedTokens(
         access_token=create_access_token(user_id),
         refresh_token=create_refresh_token(user_id, jti),
@@ -1020,10 +1081,22 @@ async def start_session(db: AsyncSession, user_id: int) -> IssuedTokens:
 
     每次登入都是獨立的一條鏈，所以在手機上登出不會動到桌機 —— 那是規格 §1
     整個要解決的問題（今天唯一的止血手段是換 JWT_SECRET，會把所有人一起登出）。
+
+    **這個模組自己管交易，不把 commit 留給路由** —— 這違反了這個 codebase
+    其他地方的慣例（交易邊界一律在 `app/api/routes/` 裡），所以理由寫在這裡：
+
+    Task 4 的重用偵測必須**先把整個 family 的撤銷寫進資料庫、再拋例外**。
+    例外一拋，路由層就不會 commit 了，撤銷會跟著被 rollback —— 結果是
+    「回了 401、但票其實還活著」的靜默失效。既然那條路徑非自己 commit 不可，
+    整個模組就統一自己管，不要一半一半。
+
+    **代價：呼叫端不可以在呼叫這裡之前留下不相關的待寫入資料**，
+    那些東西會被這裡的 commit 一起帶進去。今天的 `login()` 在這之前
+    只有一次 SELECT，沒有寫入。
     """
-    jti = _add_row(db, user_id=user_id, family_id=uuid.uuid4())
+    issued = _issue(db, user_id=user_id, family_id=uuid.uuid4())
     await db.commit()
-    return _tokens_for(user_id, jti)
+    return issued
 ```
 
 > **為什麼 commit 寫在這裡，而不是留給路由。** 這個模組的其他函式（Task 4）在「偵測到重用」時必須**先把整個 family 撤銷寫進資料庫、再拋例外**。例外一旦拋出，路由那層就不會 commit 了，撤銷會跟著被 rollback 掉 —— 那是一個「回了 401、但票其實還活著」的靜默失效。既然那條路徑非自己 commit 不可，整個模組就統一自己管交易，不要一半一半。
@@ -1066,16 +1139,39 @@ from app.security.sessions import start_session
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_sessions.py -v`
 
-Expected: 9 passed（Task 1 的 6 個 + 這裡的 3 個）
+Expected: 10 passed（Task 1 的 6 個 + 這裡的 4 個）
 
 Run: `.venv/Scripts/python.exe -m pytest -W error`
 
-Expected: 476 passed
+Expected: 477 passed
+
+- [ ] **Step 6b: 給 TTL 設定加下界**
+
+Task 3 改變了「TTL 設成 0 或負數」的後果。在這之前那是軟性失敗（票一出生就
+過期，但登入本身還是成功）；現在 `ck_refresh_sessions_expires_after_issued`
+會在 `start_session` 的 commit 當下拋 `CheckViolationError`，**沒人接，
+登入端點 500**。
+
+照 `app/config.py` 既有的 fail-closed 精神（`_reject_known_public_placeholder`）
+與 commit `0f9f331`（拒絕負的 `--min-age-hours`）的前例，讓它在啟動時就失敗：
+
+```python
+    access_token_ttl_minutes: int = Field(15, gt=0)
+    refresh_token_ttl_days: int = Field(14, gt=0)
+```
+
+import 補上 `Field`。
+
+> **確認一件事再改：** `tests/test_tokens.py` 有兩個測試用
+> `monkeypatch.setattr(settings, "refresh_token_ttl_days", -1)` 測過期。
+> Pydantic v2 的 `BaseSettings` 預設 `validate_assignment=False`，所以
+> 指派不會觸發驗證，那兩個測試應該不受影響 —— **但要實際跑過確認**，
+> 不要從文件推論。如果真的壞了，回報，不要改那兩個測試。
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add app/security/sessions.py app/api/routes/auth.py tests/test_sessions.py
+git add app/config.py app/security/sessions.py app/api/routes/auth.py tests/test_sessions.py
 git commit -m "feat: 登入時開一條 refresh session family
 
 sessions.py 自己管交易，不把 commit 留給路由 —— Task 4 的重用偵測必須
@@ -1173,6 +1269,12 @@ async def test_reuse_detection_persists_the_revocation(db_session):
 
     with pytest.raises(ReuseDetectedError):
         await rotate_session(db_session, a.refresh_token)
+
+    # **這一行不能省。** 沒有它，這個測試證明的只是「撤銷在記憶體裡」——
+    # 測試的 db_session 用 create_savepoint，commit 只是 RELEASE SAVEPOINT，
+    # 「有沒有 commit」對同一個 session 不可觀察（見本計畫開頭那一節）。
+    # rollback 之後還讀得到的，才是真的寫進資料庫的。
+    await db_session.rollback()
 
     rows = (
         await db_session.scalars(
@@ -1303,9 +1405,9 @@ async def rotate_session(db: AsyncSession, refresh_token: str) -> IssuedTokens:
         await _reject(db, claims)
 
     user_id, family_id = claimed
-    jti = _add_row(db, user_id=user_id, family_id=family_id)
+    issued = _issue(db, user_id=user_id, family_id=family_id)
     await db.commit()
-    return _tokens_for(user_id, jti)
+    return issued
 ```
 
 - [ ] **Step 4: 讓 `refresh()` 走 `rotate_session`**
@@ -1380,11 +1482,11 @@ async def test_refresh_endpoint_invalidates_the_old_token(client, db_session):
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_sessions.py tests/test_auth_refresh.py -v`
 
-Expected: 15 passed + 5 passed
+Expected: 16 passed + 5 passed
 
 Run: `.venv/Scripts/python.exe -m pytest -W error`
 
-Expected: 483 passed
+Expected: 484 passed
 
 Run: `.venv/Scripts/python.exe -m mypy app` → Success
 Run: `.venv/Scripts/ruff.exe check .` → All checks passed
@@ -1671,7 +1773,7 @@ Expected: 9 passed
 
 Run: `.venv/Scripts/python.exe -m pytest -W error`
 
-Expected: 492 passed
+Expected: 493 passed
 
 - [ ] **Step 7: Commit**
 
@@ -1856,7 +1958,7 @@ Expected: 既有測試 + 4 passed
 
 Run: `.venv/Scripts/python.exe -m pytest -W error`
 
-Expected: 496 passed
+Expected: 497 passed
 
 - [ ] **Step 5: Commit**
 
@@ -1898,6 +2000,7 @@ git commit -m "feat: cleanup-sessions 指令
 | 9 | 部分唯一索引從 **model 與 migration 同時**拿掉 | `test_a_family_cannot_have_two_live_tokens` | ✅ **已驗證**（Task 1）`DID NOT RAISE IntegrityError`，1 failed / 5 passed；同時 `alembic check` 乾淨 |
 | 10 | `CheckConstraint` 從 **model 與 migration 同時**拿掉 | `test_expires_at_must_be_after_issued_at` | ✅ **已驗證**（Task 1）`DID NOT RAISE IntegrityError`，1 failed / 5 passed；同時 `alembic check` 乾淨 |
 | 11 | `create_refresh_token` 忽略傳入的 `jti`，改簽 `uuid.uuid4()` | `test_refresh_token_round_trip_carries_the_jti` | ✅ **已驗證**（Task 2 品質審查）唯一變紅的測試。這個突變在正式環境的後果是資料列與票上的 jti 不一致，**每一次換發都 401** |
+| 13 | `start_session` 的 `await db.commit()` 刪掉（或弱化成 `flush()`） | `test_start_session_commits_the_row` | 待填 —— **加這條測試之前兩種突變都存活**（476 全綠），見計畫開頭那一節 |
 | 12 | `_user_id_from` 的 type 比對改成 `if False:` | 見右 | ✅ **已驗證**（Task 2）**3 failed** / 470 passed：`test_refresh_token_is_rejected_where_an_access_token_is_expected`、`test_a_token_typed_access_but_carrying_a_jti_is_still_rejected_as_refresh`、`test_auth_me.py::test_me_rejects_a_refresh_token` |
 
 ### 跑突變時的一條規矩（Task 2 踩到）
@@ -1993,7 +2096,7 @@ DATABASE_URL="postgresql+asyncpg://wallet:wallet@localhost:5433/wallet_test" \
   .venv/Scripts/python.exe -m alembic check
 ```
 
-Expected：496 passed、All checks passed、Success、`No new upgrade operations detected.`
+Expected：497 passed、All checks passed、Success、`No new upgrade operations detected.`
 
 覆蓋率不得低於現況：
 
