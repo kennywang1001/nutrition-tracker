@@ -2407,6 +2407,35 @@ async def test_cleanup_dry_run_deletes_nothing(db_session):
     assert len(remaining) == 1
 
 
+async def test_cleanup_persists_the_deletion(db_session):
+    """刪除必須真的 commit。
+
+    **實測：拿掉 `cleanup_expired_sessions` 的 `await db.commit()`，
+    完整套件 502 全綠。** 共用 session 的夾具讓「有沒有 commit」不可觀察
+    （見本計畫開頭那一節）—— 這是這份計畫裡第三次踩到同一件事
+    （Task 3 的 start_session、Task 5 的 revoke_session）。
+
+    rollback 之後還消失的，才是真的被刪掉的。注意 rollback 前先把 jti 取進
+    本地變數，查詢時選欄位而不是實體 —— rollback 之後讀 ORM 屬性會炸
+    MissingGreenlet，讓測試以崩潰而非斷言的方式變紅。
+    """
+    user = await create_user(db_session)
+    expired = _session_row(user.id, expires_at=datetime.now(UTC) - timedelta(seconds=1))
+    db_session.add(expired)
+    await db_session.commit()
+    expired_jti = expired.jti
+
+    await cleanup_expired_sessions(db_session)
+    await db_session.rollback()
+
+    remaining = (
+        await db_session.scalars(
+            select(RefreshSession.jti).where(RefreshSession.jti == expired_jti)
+        )
+    ).all()
+    assert remaining == []
+
+
 def test_parser_accepts_cleanup_sessions():
     args = build_parser().parse_args(["cleanup-sessions", "--dry-run"])
     assert args.command == "cleanup-sessions"
@@ -2425,32 +2454,32 @@ Append to `app/cli.py`:
 
 ```python
 async def cleanup_expired_sessions(db: AsyncSession, *, dry_run: bool = False) -> int:
-    """刪掉 expires_at 已過的 refresh session 列，回傳筆數。
+    """刪掉 `expires_at` 已過的 refresh session 列，回傳筆數。
 
-    **只看 expires_at，不看 revoked_at。** 一列已撤銷但還沒過期的紀錄，
+    **只看 `expires_at`，不看 `revoked_at`。** 一列已撤銷但還沒過期的紀錄，
     正是「這張票已經死了、而且是這樣死的」的唯一證據：提早刪掉的話，
-    rotate_session 查不到列，走的是「找不到」那條路 —— 回應同樣是 401，
+    `rotate_session` 查不到列，走的是「找不到」那條路 —— 回應同樣是 401，
     測試同樣是綠的，但重用偵測的證據沒了，真正的攻擊會被降級成一次
-    普通的失敗。過期之後才刪，那時 JWT 的 exp 已經自己擋住了。
+    普通的失敗。過期之後才刪，那時 JWT 的 `exp` 已經自己擋住了。
     """
     cutoff = datetime.now(UTC)
 
     if dry_run:
         count = await db.scalar(
-            select(func.count()).select_from(RefreshSession).where(
-                RefreshSession.expires_at < cutoff
-            )
+            select(func.count())
+            .select_from(RefreshSession)
+            .where(RefreshSession.expires_at < cutoff)
         )
         return count or 0
 
     # 單一 statement，不是「撈出來再一列一列 delete」——
     # 這張表每台活躍裝置每天長約 100 列，把幾千個 ORM 物件載進記憶體
     # 只為了刪掉它們，是沒有必要的。
-    result = await db.execute(
-        delete(RefreshSession).where(RefreshSession.expires_at < cutoff)
-    )
+    result = await db.execute(delete(RefreshSession).where(RefreshSession.expires_at < cutoff))
     await db.commit()
-    return result.rowcount
+    # AsyncSession.execute() 的靜態型別是 Result[Any]——rowcount 定義在
+    # CursorResult 上，但那正是 DML 陳述式實際回傳的物件。
+    return cast(CursorResult[Any], result).rowcount
 ```
 
 頂端 import 補上 `from app.models.session import RefreshSession`，以及 `from sqlalchemy import delete, func, select`（`select` 已經有了）。
@@ -2483,6 +2512,12 @@ async def _run_cleanup_sessions(*, dry_run: bool) -> None:
     elif args.command == "cleanup-sessions":
         await _run_cleanup_sessions(dry_run=args.dry_run)
 ```
+
+> **`mypy app` 會擋 `result.rowcount`。** `AsyncSession.execute()` 的靜態
+> 型別是 `Result[Any]`，而 `rowcount` 定義在 `CursorResult` 上 —— 但那正是
+> DML 陳述式實際回傳的東西。用 `cast(CursorResult[Any], result).rowcount`，
+> 並在旁邊註解說明為什麼這個 cast 是安全的。
+> （計畫最初的程式碼片段漏了這個，實作時補上。）
 
 - [ ] **Step 4: 跑測試**
 
@@ -2535,7 +2570,9 @@ git commit -m "feat: cleanup-sessions 指令
 | 5d | `_revoke_family` 的 where 拿掉 `revoked_at.is_(None)` | `test_logout_is_idempotent`（強化後） | ✅ **已驗證**（Task 5）乾淨斷言失敗。**強化那條測試之前，33 條測試全綠** —— 冪等性「第二次呼叫不會破壞東西」那一半原本沒有守衛，`revoked_at` 會被覆寫，鑑識資訊（family 是什麼時候死的）會消失 |
 | 6 | `start_session` 改成共用一個固定的 `family_id` | `test_two_logins_start_two_separate_families` 與 `test_logout_only_affects_the_device_that_logged_out` | 待填 |
 | 7 | `decode_refresh_token` 的 `require` 拿掉 `"jti"` | `test_refresh_token_without_jti_is_rejected` | ✅ **已驗證**（Task 2）1 failed，拋的是未接住的 `KeyError: 'jti'` 而非 `TokenError`。**收窄 `except` 之前這個突變是存活的**（套件全綠） |
-| 8 | `cleanup_expired_sessions` 的 where 改成 `revoked_at.is_not(None)` | `test_cleanup_removes_revoked_sessions_only_after_they_expire` | 待填 |
+| 8 | `cleanup_expired_sessions` 的 where 改成 `revoked_at.is_not(None)` | `test_cleanup_removes_revoked_sessions_only_after_they_expire` | ✅ **已驗證**（Task 6）**4 failed** / 499 passed —— 該欄位同時影響 dry_run 與真刪兩條 where，所以四條清理測試一起變紅 |
+| 8b | 拿掉 `dry_run` 分支（讓 dry run 也真的刪） | `test_cleanup_dry_run_deletes_nothing` | ✅ **已驗證**（Task 6）1 failed / 502 passed，乾淨的 `assert 0 == 1`，特異性正確 |
+| 8c | `cleanup_expired_sessions` 拿掉 `await db.commit()` | `test_cleanup_persists_the_deletion` | ✅ **已驗證**（Task 6）**補這條測試之前 502 全綠** —— 這是同一個夾具盲點在這份計畫裡的第三次（Task 3、Task 5、Task 6）。補完之後 1 failed / 502 passed |
 | 9 | 部分唯一索引從 **model 與 migration 同時**拿掉 | `test_a_family_cannot_have_two_live_tokens` | ✅ **已驗證**（Task 1）`DID NOT RAISE IntegrityError`，1 failed / 5 passed；同時 `alembic check` 乾淨 |
 | 10 | `CheckConstraint` 從 **model 與 migration 同時**拿掉 | `test_expires_at_must_be_after_issued_at` | ✅ **已驗證**（Task 1）`DID NOT RAISE IntegrityError`，1 failed / 5 passed；同時 `alembic check` 乾淨 |
 | 11 | `create_refresh_token` 忽略傳入的 `jti`，改簽 `uuid.uuid4()` | `test_refresh_token_round_trip_carries_the_jti` | ✅ **已驗證**（Task 2 品質審查）唯一變紅的測試。這個突變在正式環境的後果是資料列與票上的 jti 不一致，**每一次換發都 401** |
