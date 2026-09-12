@@ -457,9 +457,36 @@ def test_refresh_token_is_rejected_where_an_access_token_is_expected():
 
 
 def test_access_token_is_rejected_where_a_refresh_token_is_expected():
+    """注意這條測試**不是**在測 type 檢查 —— access token 沒有 jti，
+    所以它在 `_decode` 的 require 清單那一關就被擋掉了，根本走不到
+    type 比對。名字與實際守住的東西不一致，但兩個性質都該有測試，
+    所以保留它，另外用下面那條補上 type 檢查。
+    """
     token = create_access_token(user_id=1)
     with pytest.raises(TokenError):
         decode_refresh_token(token)
+
+
+def test_a_token_typed_access_but_carrying_a_jti_is_still_rejected_as_refresh():
+    """把 type 比對單獨釘住。
+
+    上面那條被 require 清單擋在前面，於是「把 type 檢查整個拿掉」這個突變
+    只有 refresh→access 那個方向會變紅（實測：2 個測試紅），access→refresh
+    方向無人看守。這裡偽造一張 type=access 但帶合法 jti 的票 ——
+    require 清單滿足了，**只剩 type 檢查能擋它**。
+    """
+    now = datetime.now(UTC)
+    forged = _forge(
+        {
+            "sub": "1",
+            "type": "access",
+            "jti": str(uuid4()),
+            "iat": now,
+            "exp": now + timedelta(minutes=15),
+        }
+    )
+    with pytest.raises(TokenError):
+        decode_refresh_token(forged)
 
 
 def test_tampered_token_is_rejected():
@@ -593,7 +620,7 @@ Replace 全部內容：
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 import jwt
 
@@ -635,7 +662,12 @@ def _decode(token: str, *, require: list[str]) -> dict[str, Any]:
     return payload
 
 
-def _user_id_from(payload: dict[str, Any], *, expected_type: str) -> int:
+# 保留這個 Literal：expected_type 打錯字（"acess"）要在 mypy 就爆掉 ——
+# 這個 task 的整個論點就是「讓錯誤的選擇由型別擋住」。
+TokenType = Literal["access", "refresh"]
+
+
+def _user_id_from(payload: dict[str, Any], *, expected_type: TokenType) -> int:
     if payload.get("type") != expected_type:
         raise TokenError("token 類型不正確")
     try:
@@ -689,9 +721,21 @@ def decode_refresh_token(token: str) -> RefreshClaims:
     """
     payload = _decode(token, require=["exp", "iat", "sub", "type", "jti"])
     user_id = _user_id_from(payload, expected_type="refresh")
+
+    # **這裡刻意只接 ValueError，不接 KeyError。**
+    # 「jti 存不存在」是上面 require 清單的責任，這個 except 只負責
+    # 「值的格式對不對」。兩者都接的話就是兩道防線互相掩護（§6 第 5 種）：
+    # 把 require 裡的 jti 拿掉，KeyError 會被接住、拋出同一個 TokenError，
+    # 測試全綠 —— 這個性質就從來沒有被任何單一守衛釘住過
+    # （Task 2 品質審查實測驗證，不是推論）。
+    #
+    # 也刻意不先套 str()：str() 會讓一個 32 位十進位整數也變成合法 UUID。
+    raw_jti = payload["jti"]
+    if not isinstance(raw_jti, str):
+        raise TokenError("token payload 格式不正確")
     try:
-        jti = uuid.UUID(str(payload["jti"]))
-    except (KeyError, ValueError, AttributeError) as exc:
+        jti = uuid.UUID(raw_jti)
+    except ValueError as exc:
         raise TokenError("token payload 格式不正確") from exc
     return RefreshClaims(user_id=user_id, jti=jti)
 ```
@@ -700,7 +744,7 @@ def decode_refresh_token(token: str) -> RefreshClaims:
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_tokens.py -v`
 
-Expected: 14 passed
+Expected: 15 passed
 
 - [ ] **Step 5: 讓 mypy 列出所有還沒改的呼叫點，逐一修掉**
 
@@ -811,7 +855,7 @@ grep -rn "from app.security.tokens import" tests/
 
 Run: `.venv/Scripts/python.exe -m pytest -W error`
 
-Expected: 472 passed（469 + test_tokens.py 淨增的 3 個），**0 xfailed**
+Expected: 473 passed（469 + test_tokens.py 淨增的 4 個），**0 xfailed**
 
 Run: `.venv/Scripts/python.exe -m mypy app` → Success
 
@@ -1026,7 +1070,7 @@ Expected: 9 passed（Task 1 的 6 個 + 這裡的 3 個）
 
 Run: `.venv/Scripts/python.exe -m pytest -W error`
 
-Expected: 475 passed
+Expected: 476 passed
 
 - [ ] **Step 7: Commit**
 
@@ -1340,7 +1384,7 @@ Expected: 15 passed + 5 passed
 
 Run: `.venv/Scripts/python.exe -m pytest -W error`
 
-Expected: 482 passed
+Expected: 483 passed
 
 Run: `.venv/Scripts/python.exe -m mypy app` → Success
 Run: `.venv/Scripts/ruff.exe check .` → All checks passed
@@ -1627,7 +1671,7 @@ Expected: 9 passed
 
 Run: `.venv/Scripts/python.exe -m pytest -W error`
 
-Expected: 491 passed
+Expected: 492 passed
 
 - [ ] **Step 7: Commit**
 
@@ -1812,7 +1856,7 @@ Expected: 既有測試 + 4 passed
 
 Run: `.venv/Scripts/python.exe -m pytest -W error`
 
-Expected: 495 passed
+Expected: 496 passed
 
 - [ ] **Step 5: Commit**
 
@@ -1849,10 +1893,12 @@ git commit -m "feat: cleanup-sessions 指令
 | 4 | `revoke_session` 改成直接 `return`（什麼都不做） | `test_logout_kills_the_refresh_token` | 待填 |
 | 5 | `revoke_all_for_user` 的 where 拿掉 `user_id ==` | `test_logout_all_does_not_touch_another_users_sessions` | 待填 |
 | 6 | `start_session` 改成共用一個固定的 `family_id` | `test_two_logins_start_two_separate_families` 與 `test_logout_only_affects_the_device_that_logged_out` | 待填 |
-| 7 | `decode_refresh_token` 的 `require` 拿掉 `"jti"` | `test_refresh_token_without_jti_is_rejected` | 待填 |
+| 7 | `decode_refresh_token` 的 `require` 拿掉 `"jti"` | `test_refresh_token_without_jti_is_rejected` | 待填 —— **只在 `except` 收窄成 `ValueError` 之後才成立**（見 Task 2 Step 3） |
 | 8 | `cleanup_expired_sessions` 的 where 改成 `revoked_at.is_not(None)` | `test_cleanup_removes_revoked_sessions_only_after_they_expire` | 待填 |
 | 9 | 部分唯一索引從 **model 與 migration 同時**拿掉 | `test_a_family_cannot_have_two_live_tokens` | ✅ **已驗證**（Task 1）`DID NOT RAISE IntegrityError`，1 failed / 5 passed；同時 `alembic check` 乾淨 |
 | 10 | `CheckConstraint` 從 **model 與 migration 同時**拿掉 | `test_expires_at_must_be_after_issued_at` | ✅ **已驗證**（Task 1）`DID NOT RAISE IntegrityError`，1 failed / 5 passed；同時 `alembic check` 乾淨 |
+| 11 | `create_refresh_token` 忽略傳入的 `jti`，改簽 `uuid.uuid4()` | `test_refresh_token_round_trip_carries_the_jti` | ✅ **已驗證**（Task 2 品質審查）唯一變紅的測試。這個突變在正式環境的後果是資料列與票上的 jti 不一致，**每一次換發都 401** |
+| 12 | `_user_id_from` 的 type 比對改成 `if False:` | `test_a_token_typed_access_but_carrying_a_jti_is_still_rejected_as_refresh` 與 `test_refresh_token_is_rejected_where_an_access_token_is_expected` | 待填 |
 
 **第 9、10 條已在 Task 1 當場跑完**（那三條測試在約束已存在的情況下寫成，
 直接就是綠的，所以紅燈只能用突變取得）。兩次的 `alembic check` 都是
@@ -1932,7 +1978,7 @@ DATABASE_URL="postgresql+asyncpg://wallet:wallet@localhost:5433/wallet_test" \
   .venv/Scripts/python.exe -m alembic check
 ```
 
-Expected：495 passed、All checks passed、Success、`No new upgrade operations detected.`
+Expected：496 passed、All checks passed、Success、`No new upgrade operations detected.`
 
 覆蓋率不得低於現況：
 

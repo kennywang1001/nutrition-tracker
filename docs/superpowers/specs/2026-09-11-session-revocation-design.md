@@ -10,7 +10,7 @@
 ## 1. 問題
 
 `POST /api/auth/refresh` 每次換發都發一張新的 14 天票，**而舊的仍然有效**
-（`app/api/routes/auth.py` 的 `refresh()` 只做 `decode_token` 就發新票，
+（`app/api/routes/auth.py` 的 `refresh()` 只做解碼就發新票，
 沒有任何一處記錄或作廢舊票，實測確認）。
 
 所以「refresh token 14 天」不是上限，是一個
@@ -156,7 +156,7 @@ POST /api/auth/login
 
 ```
 POST /api/auth/refresh
-  decode_token(refresh_token, expected_type="refresh")  ← payload 必須含 jti
+  decode_refresh_token(refresh_token)  ← payload 必須含 jti
   SELECT ... FROM refresh_sessions WHERE jti = :jti
 
   查不到           → 401 INVALID_TOKEN
@@ -258,7 +258,16 @@ A → B → C，然後拿 B 去換
 | 拿掉 `used_at` 檢查 | 陷阱 1 的形狀 |
 | family 撤銷改成只撤銷單列 | 陷阱 2 的形狀 |
 | `logout` 改成只回 204 不寫 `revoked_at` | 陷阱 3 的形狀 |
-| `decode_token` 的 `require` 拿掉 `jti` | §7 的既有 token 測試 |
+| `decode_refresh_token` 的 `require` 拿掉 `jti` | §7 的既有 token 測試 |
+
+> **這一條原本是錯的預測，實作時實測推翻。** 拿掉 `require` 裡的 `jti` 之後
+> 套件仍然全綠 —— 因為 `payload["jti"]` 的 `KeyError` 被 `except` 接住，
+> 拋出的還是同一個 `TokenError`。**兩道防線互相掩護（§6 第 5 種），
+> 於是這個性質從來沒有被任何單一守衛釘住過。**
+>
+> 修法是設計層的，不是測試層的（§6 規矩 5）：把 `except` 收窄成只接
+> `ValueError`。`require` 負責「有沒有」，`except` 只負責「格式對不對」，
+> 兩者不再重疊，這一列的突變才真的會變紅。
 | 登入時每次都用同一個 `family_id` | 跨裝置隔離測試（登出手機不該登出桌機） |
 
 ---
@@ -267,7 +276,7 @@ A → B → C，然後拿 B 去換
 
 部署當下，所有已發出的 refresh token 都沒有 `jti`，查不到對應的 session 列。
 
-**行為必須是明確的失效，不是容錯。** `decode_token` 的
+**行為必須是明確的失效，不是容錯。** `decode_refresh_token` 的
 `options={"require": [...]}` 加上 `"jti"`，缺 `jti` 的 token 在解碼階段
 就拋 `TokenError`。
 
