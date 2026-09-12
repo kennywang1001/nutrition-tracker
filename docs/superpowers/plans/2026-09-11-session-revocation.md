@@ -1893,12 +1893,27 @@ git commit -m "feat: cleanup-sessions 指令
 | 4 | `revoke_session` 改成直接 `return`（什麼都不做） | `test_logout_kills_the_refresh_token` | 待填 |
 | 5 | `revoke_all_for_user` 的 where 拿掉 `user_id ==` | `test_logout_all_does_not_touch_another_users_sessions` | 待填 |
 | 6 | `start_session` 改成共用一個固定的 `family_id` | `test_two_logins_start_two_separate_families` 與 `test_logout_only_affects_the_device_that_logged_out` | 待填 |
-| 7 | `decode_refresh_token` 的 `require` 拿掉 `"jti"` | `test_refresh_token_without_jti_is_rejected` | 待填 —— **只在 `except` 收窄成 `ValueError` 之後才成立**（見 Task 2 Step 3） |
+| 7 | `decode_refresh_token` 的 `require` 拿掉 `"jti"` | `test_refresh_token_without_jti_is_rejected` | ✅ **已驗證**（Task 2）1 failed，拋的是未接住的 `KeyError: 'jti'` 而非 `TokenError`。**收窄 `except` 之前這個突變是存活的**（套件全綠） |
 | 8 | `cleanup_expired_sessions` 的 where 改成 `revoked_at.is_not(None)` | `test_cleanup_removes_revoked_sessions_only_after_they_expire` | 待填 |
 | 9 | 部分唯一索引從 **model 與 migration 同時**拿掉 | `test_a_family_cannot_have_two_live_tokens` | ✅ **已驗證**（Task 1）`DID NOT RAISE IntegrityError`，1 failed / 5 passed；同時 `alembic check` 乾淨 |
 | 10 | `CheckConstraint` 從 **model 與 migration 同時**拿掉 | `test_expires_at_must_be_after_issued_at` | ✅ **已驗證**（Task 1）`DID NOT RAISE IntegrityError`，1 failed / 5 passed；同時 `alembic check` 乾淨 |
 | 11 | `create_refresh_token` 忽略傳入的 `jti`，改簽 `uuid.uuid4()` | `test_refresh_token_round_trip_carries_the_jti` | ✅ **已驗證**（Task 2 品質審查）唯一變紅的測試。這個突變在正式環境的後果是資料列與票上的 jti 不一致，**每一次換發都 401** |
-| 12 | `_user_id_from` 的 type 比對改成 `if False:` | `test_a_token_typed_access_but_carrying_a_jti_is_still_rejected_as_refresh` 與 `test_refresh_token_is_rejected_where_an_access_token_is_expected` | 待填 |
+| 12 | `_user_id_from` 的 type 比對改成 `if False:` | 見右 | ✅ **已驗證**（Task 2）**3 failed** / 470 passed：`test_refresh_token_is_rejected_where_an_access_token_is_expected`、`test_a_token_typed_access_but_carrying_a_jti_is_still_rejected_as_refresh`、`test_auth_me.py::test_me_rejects_a_refresh_token` |
+
+### 跑突變時的一條規矩（Task 2 踩到）
+
+**突變一定要跑完整套件，不可以只跑「被改動的那個模組的測試檔」。**
+
+Task 2 的突變 12，只跑 `tests/test_tokens.py` 得到 2 個紅燈，跑完整套件得到
+3 個 —— 第三個在 `tests/test_auth_me.py`。
+
+為什麼這件事重要：突變的目的是回答「哪些測試真的在守這一行」。把範圍限縮在
+被改動的模組，等於預設「守衛都住在隔壁」—— 而端點層的測試往往才是真正
+在守某個安全性質的東西（`test_me_rejects_a_refresh_token` 守的是
+「長效票不能拿來存取 API」，那比單元測試更接近真正的攻擊面）。
+
+漏掉它的後果不只是數字少一個：會誤以為某個方向沒有守衛而去補一條多餘的
+測試，或者更糟 —— 誤以為某個守衛存在。
 
 **第 9、10 條已在 Task 1 當場跑完**（那三條測試在約束已存在的情況下寫成，
 直接就是綠的，所以紅燈只能用突變取得）。兩次的 `alembic check` 都是
