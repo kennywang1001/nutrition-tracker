@@ -6,7 +6,9 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.models.session import RefreshSession
-from tests.factories import create_user
+from app.security.sessions import start_session
+from app.security.tokens import decode_access_token, decode_refresh_token
+from tests.factories import DEFAULT_PASSWORD, create_user
 
 
 def _session_row(user_id: int, *, jti=None, family_id=None) -> RefreshSession:
@@ -120,3 +122,69 @@ async def test_expires_at_must_be_after_issued_at(db_session):
         await db_session.commit()
     assert "expires_after_issued" in str(exc.value)
     await db_session.rollback()
+
+
+async def test_start_session_writes_a_row_matching_the_issued_token(db_session):
+    user = await create_user(db_session)
+
+    issued = await start_session(db_session, user.id)
+
+    claims = decode_refresh_token(issued.refresh_token)
+    assert decode_access_token(issued.access_token) == user.id
+
+    row = await db_session.scalar(
+        select(RefreshSession).where(RefreshSession.jti == claims.jti)
+    )
+    assert row is not None
+    assert row.user_id == user.id
+    assert row.used_at is None
+    assert row.revoked_at is None
+
+
+async def test_two_logins_start_two_separate_families(db_session):
+    """每次登入是獨立的一條鏈 —— 否則在手機上登出會把桌機也一起登出，
+    而規格 §1 的整個出發點就是要能只撤銷一台裝置。
+    """
+    user = await create_user(db_session)
+
+    first = await start_session(db_session, user.id)
+    second = await start_session(db_session, user.id)
+
+    first_family = (
+        await db_session.scalar(
+            select(RefreshSession).where(
+                RefreshSession.jti == decode_refresh_token(first.refresh_token).jti
+            )
+        )
+    ).family_id
+    second_family = (
+        await db_session.scalar(
+            select(RefreshSession).where(
+                RefreshSession.jti == decode_refresh_token(second.refresh_token).jti
+            )
+        )
+    ).family_id
+
+    assert first_family != second_family
+
+
+async def test_login_endpoint_creates_a_session_row(client, db_session):
+    """端點層：登入回的 refresh token 必須真的對應到一列。
+
+    只測 start_session 不夠 —— login() 有可能繞過它自己簽一張票，
+    那樣所有 sessions.py 的單元測試都還是綠的。
+    """
+    user = await create_user(db_session)
+
+    response = await client.post(
+        "/api/auth/login",
+        json={"email": user.email, "password": DEFAULT_PASSWORD},
+    )
+
+    assert response.status_code == 200
+    claims = decode_refresh_token(response.json()["refresh_token"])
+    row = await db_session.scalar(
+        select(RefreshSession).where(RefreshSession.jti == claims.jti)
+    )
+    assert row is not None
+    assert row.user_id == user.id

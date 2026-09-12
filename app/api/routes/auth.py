@@ -17,6 +17,7 @@ from app.schemas.auth import (
     UserResponse,
 )
 from app.security.password import DUMMY_PASSWORD_HASH, hash_password, verify_password
+from app.security.sessions import start_session
 from app.security.tokens import (
     TokenError,
     create_access_token,
@@ -87,9 +88,10 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> To
     # 決定 1：成功登入立刻重置該 email 的計數——不鎖帳號，只延遲。
     login_rate_limiter.record_success(payload.email)
 
+    issued = await start_session(db, user.id)
     return TokenResponse(
-        access_token=create_access_token(user.id),
-        refresh_token=create_refresh_token(user.id, uuid.uuid4()),
+        access_token=issued.access_token,
+        refresh_token=issued.refresh_token,
     )
 
 
