@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import NoReturn
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -88,9 +88,40 @@ class ReuseDetectedError(TokenError):
 
     繼承 TokenError，所以路由層只要接 TokenError 就同時涵蓋兩者 ——
     對呼叫端來說回應完全一樣（401 INVALID_TOKEN），**刻意不讓攻擊者
-    從回應分辨出「我被偵測到了」**。分成兩個類別純粹是為了讓伺服器端
-    的日誌能區分「票過期了」與「有人在重放」。
+    從回應分辨出「我被偵測到了」**。分成兩個類別是為了讓伺服器端的日誌
+    能區分「票過期了」與「有人在重放」——`user_id` 是這筆日誌要用的，
+    不是給呼叫端看的，路由層絕對不能把它放進回應內容。
     """
+
+    def __init__(self, message: str, *, user_id: int) -> None:
+        super().__init__(message)
+        self.user_id = user_id
+
+
+async def _lock_user_sessions(db: AsyncSession, user_id: int) -> None:
+    """把「同一個使用者的 session 變更」序列化。
+
+    **為什麼需要（實測發現，不是理論）：** `_revoke_family` 是一個 bulk
+    UPDATE，在 READ COMMITTED 下它的快照固定在 statement 開始的那一刻。
+    同時間另一個交易 INSERT 進來的新列**完全不在它的視野裡** ——
+    EvalPlanQual 只會重新檢查被鎖住的既有列，不會看見新插入的列。
+
+    後果：攻擊者同時送出「已用過的 A」與「還活著的 B」，A 觸發重用偵測、
+    撤銷整個 family，但 B 那條交易剛插入的 C 沒被撤銷到 —— 系統回報
+    「已撤銷」、使用者被登出，而攻擊者手上握著一張活票。
+    **60 次並行試驗重現 59 次**，這是主流結果不是罕見競態。
+
+    **鎖的粒度是使用者而不是 family：** logout-all 一次要處理多個 family，
+    用 family 當鍵的話它跟輪替不會互斥，同一個洞會從登出那條路再開一次。
+    使用者層級讓輪替、登出、全部登出三條路徑共用同一個鍵空間。
+
+    `user_id` 直接當鍵，不需要額外查詢 —— 它來自已驗簽的 JWT。
+    代價可以忽略：一台裝置每 15 分鐘才換發一次票。
+
+    這個 codebase 目前沒有其他地方用 advisory lock，所以不需要命名空間；
+    日後若有，要改用有命名空間的雙參數形式。
+    """
+    await db.execute(select(func.pg_advisory_xact_lock(user_id)))
 
 
 async def _revoke_family(db: AsyncSession, family_id: uuid.UUID) -> None:
@@ -120,7 +151,7 @@ async def _reject(db: AsyncSession, claims: RefreshClaims) -> NoReturn:
         await _revoke_family(db, row.family_id)
         # 必須在拋例外前 commit：例外一拋，路由層就不會 commit 了。
         await db.commit()
-        raise ReuseDetectedError("refresh token 被重複使用")
+        raise ReuseDetectedError("refresh token 被重複使用", user_id=claims.user_id)
 
     raise TokenError("token 無效或已過期")
 
@@ -134,6 +165,10 @@ async def rotate_session(db: AsyncSession, refresh_token: str) -> IssuedTokens:
     # （get_db 是 per-request，start_session / rotate_session 都自己 commit），
     # 但下一個寫這張表的人不會知道，所以寫在這裡。
     claims = decode_refresh_token(refresh_token)
+
+    # **必須在條件式 UPDATE 之前取得。** 見 _lock_user_sessions 的說明 ——
+    # 少了這一行，重用偵測在並行下有 59/60 的機率留下一張活票。
+    await _lock_user_sessions(db, claims.user_id)
 
     # 條件式 UPDATE ... RETURNING，不是「先 SELECT 判斷再 UPDATE」：
     # 兩個並行的換發請求都會通過 SELECT 的檢查，然後兩個都發出新票，

@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,8 +17,10 @@ from app.schemas.auth import (
     UserResponse,
 )
 from app.security.password import DUMMY_PASSWORD_HASH, hash_password, verify_password
-from app.security.sessions import rotate_session, start_session
+from app.security.sessions import ReuseDetectedError, rotate_session, start_session
 from app.security.tokens import TokenError
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -92,6 +96,15 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> To
 async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
     try:
         issued = await rotate_session(db, payload.refresh_token)
+    except ReuseDetectedError as exc:
+        # 順序不能反：ReuseDetectedError 是 TokenError 的子類別，這個
+        # except 必須排在前面，否則下面那個父類別的 except 會先接走，
+        # 這筆日誌永遠不會被記錄。回應內容跟下面完全一樣——攻擊者仍然
+        # 分辨不出「我被偵測到了」，這筆 log 只在伺服器端看得到。
+        logger.warning(
+            "refresh token 重用偵測，已撤銷整個 family（user_id=%s）", exc.user_id
+        )
+        raise UnauthorizedError("INVALID_TOKEN", "token 無效或已過期") from exc
     except TokenError as exc:
         raise UnauthorizedError("INVALID_TOKEN", "token 無效或已過期") from exc
 

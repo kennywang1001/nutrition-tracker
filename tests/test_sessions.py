@@ -286,6 +286,38 @@ async def test_reusing_a_spent_token_revokes_the_whole_family(db_session):
         await rotate_session(db_session, c.refresh_token)
 
 
+async def test_replaying_a_token_from_an_already_revoked_family_is_a_plain_token_error(
+    db_session,
+):
+    """`_reject` 判定重用的條件是 `row.revoked_at is None and row.used_at is not None`
+    ——`revoked_at is None` 這半沒有任何測試釘住（審查者實測：拿掉它、只留
+    `row.used_at is not None`，21 passed，沒有任何東西變紅）。
+
+    今天拿掉它行為差異是零，但這個條件很快就會控制一條安全日誌（重用偵測會
+    記一筆 warning）：拿掉之後，每次有人重放一張**早就死掉**的票（family
+    已經因為之前的重用事件被整條撤銷），都會再發一次重用警報，把真正的
+    事件淹掉。
+
+    重建 test_reusing_a_spent_token_revokes_the_whole_family 的狀態
+    （A → B → C，重放 B 觸發整條撤銷），然後**再重放一次 B**（不是 C——
+    C 的 `used_at` 從來沒被設定過，不管 `revoked_at` 那半條件在不在，
+    C 都會落到單純 TokenError 那條路，對這個條件零鑑別力）。
+    這次 B 的 `used_at` 與 `revoked_at` 都已經被設定，必須是單純的
+    TokenError，不能是 ReuseDetectedError。
+    """
+    user = await create_user(db_session)
+    a = await start_session(db_session, user.id)
+    b = await rotate_session(db_session, a.refresh_token)
+    await rotate_session(db_session, b.refresh_token)
+
+    with pytest.raises(ReuseDetectedError):
+        await rotate_session(db_session, b.refresh_token)
+
+    with pytest.raises(TokenError) as exc_info:
+        await rotate_session(db_session, b.refresh_token)
+    assert not isinstance(exc_info.value, ReuseDetectedError)
+
+
 async def test_reuse_detection_persists_the_revocation(db_session):
     """撤銷必須真的寫進資料庫，不能只是「拋了例外」。
 
@@ -333,17 +365,26 @@ async def test_revoking_one_family_leaves_another_family_alone(db_session):
     with pytest.raises(ReuseDetectedError):
         await rotate_session(db_session, phone.refresh_token)
 
-    # 桌機那條鏈完全沒被波及
+    # 桌機那條鏈完全沒被波及：仍然能正常輪替，而且新列沒有被撤銷
+    # （斷言 access_token 非空沒有鑑別力——JWT 字串永遠非空）。
     rotated = await rotate_session(db_session, desktop.refresh_token)
-    assert rotated.access_token
+    rotated_row = await db_session.scalar(
+        select(RefreshSession).where(
+            RefreshSession.jti == decode_refresh_token(rotated.refresh_token).jti
+        )
+    )
+    assert rotated_row.revoked_at is None
 
 
 async def test_rotation_rejects_a_token_whose_row_does_not_exist(db_session):
     """簽章有效、jti 格式正確，但資料庫裡沒有這一列 —— 例如上線前發出的票
     （規格 §7），或資料庫被還原到更早的時間點。
+
+    user_id 用任意整數就好，不需要真的建一個使用者：rotate_session 從頭到尾
+    只查 refresh_sessions 這張表，不會查 users（使用者被刪除時 ON DELETE
+    CASCADE 已經處理掉了，見 rotate_session 的呼叫端註解）。
     """
-    user = await create_user(db_session)
-    orphan = create_refresh_token(user.id, uuid4())
+    orphan = create_refresh_token(999_999, uuid4())
 
     with pytest.raises(TokenError):
         await rotate_session(db_session, orphan)
