@@ -2000,7 +2000,9 @@ git commit -m "feat: cleanup-sessions 指令
 | 9 | 部分唯一索引從 **model 與 migration 同時**拿掉 | `test_a_family_cannot_have_two_live_tokens` | ✅ **已驗證**（Task 1）`DID NOT RAISE IntegrityError`，1 failed / 5 passed；同時 `alembic check` 乾淨 |
 | 10 | `CheckConstraint` 從 **model 與 migration 同時**拿掉 | `test_expires_at_must_be_after_issued_at` | ✅ **已驗證**（Task 1）`DID NOT RAISE IntegrityError`，1 failed / 5 passed；同時 `alembic check` 乾淨 |
 | 11 | `create_refresh_token` 忽略傳入的 `jti`，改簽 `uuid.uuid4()` | `test_refresh_token_round_trip_carries_the_jti` | ✅ **已驗證**（Task 2 品質審查）唯一變紅的測試。這個突變在正式環境的後果是資料列與票上的 jti 不一致，**每一次換發都 401** |
-| 13 | `start_session` 的 `await db.commit()` 刪掉（或弱化成 `flush()`） | `test_start_session_commits_the_row` | 待填 —— **加這條測試之前兩種突變都存活**（476 全綠），見計畫開頭那一節 |
+| 13 | `start_session` 的 `await db.commit()` 刪掉，或弱化成 `flush()` | `test_start_session_commits_the_row` | ✅ **已驗證**（Task 3，兩種突變各跑一次，主 session 又獨立複跑一次刪除版）1 failed / 476 passed，乾淨的斷言失敗。**加這條測試之前兩種突變都存活**（476 全綠） |
+| 14 | `start_session` 改用固定的 `family_id` | `test_two_logins_start_two_separate_families` | ✅ **已驗證**（Task 3）1 failed / 475 passed，但**是 `IntegrityError` 不是斷言失敗** —— Task 1 的部分唯一索引先擋住了。斷言本身仍有鑑別力（索引若被拿掉，`FIXED != FIXED` 會失敗），但今天跑不到那一行 |
+| 15 | `login()` 繞過 `start_session`，改回自己簽票 | `test_login_endpoint_creates_a_session_row` | ✅ **已驗證**（Task 3）1 failed / 475 passed，乾淨的斷言失敗。既有的 `test_auth_login.py` 一個都沒紅 —— 它只驗「票能解碼」 |
 | 12 | `_user_id_from` 的 type 比對改成 `if False:` | 見右 | ✅ **已驗證**（Task 2）**3 failed** / 470 passed：`test_refresh_token_is_rejected_where_an_access_token_is_expected`、`test_a_token_typed_access_but_carrying_a_jti_is_still_rejected_as_refresh`、`test_auth_me.py::test_me_rejects_a_refresh_token` |
 
 ### 跑突變時的一條規矩（Task 2 踩到）
