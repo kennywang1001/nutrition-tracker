@@ -1,4 +1,4 @@
-from app.security.tokens import decode_token
+from app.security.tokens import decode_access_token, decode_refresh_token
 from tests.factories import DEFAULT_PASSWORD, create_user
 
 
@@ -13,8 +13,8 @@ async def test_login_returns_tokens(client, db_session):
     assert response.status_code == 200
     body = response.json()
     assert body["token_type"] == "bearer"
-    assert decode_token(body["access_token"], expected_type="access") == user.id
-    assert decode_token(body["refresh_token"], expected_type="refresh") == user.id
+    assert decode_access_token(body["access_token"]) == user.id
+    assert decode_refresh_token(body["refresh_token"]).user_id == user.id
 
 
 async def test_login_rejects_a_wrong_password(client, db_session):

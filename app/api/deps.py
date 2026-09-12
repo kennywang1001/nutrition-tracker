@@ -6,7 +6,7 @@ from sqlalchemy.orm import DeclarativeBase
 from app.db import get_db
 from app.errors import ForbiddenError, NotFoundError, UnauthorizedError
 from app.models.user import User, UserRole
-from app.security.tokens import TokenError, decode_token
+from app.security.tokens import TokenError, decode_access_token
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -19,7 +19,7 @@ async def get_current_user(
         raise UnauthorizedError("NOT_AUTHENTICATED", "需要登入")
 
     try:
-        user_id = decode_token(credentials.credentials, expected_type="access")
+        user_id = decode_access_token(credentials.credentials)
     except TokenError as exc:
         raise UnauthorizedError("INVALID_TOKEN", "token 無效或已過期") from exc
 

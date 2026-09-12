@@ -2,8 +2,8 @@
 
 **專案：** nutrition-tracker —— 飲食紀錄系統
 **Repo：** https://github.com/kennywang1001/nutrition-tracker（公開）
-**狀態：** 後端完成並可部署；**尚無前端**
-**文件產出日：** 2026-09-11
+**狀態：** 後端完成並可部署、session 撤銷已完成；**尚無前端**
+**文件產出日：** 2026-09-11（session 撤銷完成後更新於 2026-09-12）
 
 ---
 
@@ -28,11 +28,11 @@
 
 | 項目 | 數字 |
 |---|---|
-| 端點 | **43** |
-| 測試 | **463**（`pytest -W error` 全綠） |
-| 覆蓋率 | 96.5% |
-| 資料表 | 10（+ `alembic_version`） |
-| Migration | `0001` ~ `0006` |
+| 端點 | **45** |
+| 測試 | **503**（`pytest -W error` 全綠） |
+| 覆蓋率 | 96% |
+| 資料表 | 11（+ `alembic_version`） |
+| Migration | `0001` ~ `0007` |
 | Commit | 180+ |
 | PR | 5 個，全部經 CI 驗證後合併 |
 
@@ -73,14 +73,16 @@ app/
   stats.py             統計彙總核心（SQL 分桶）
   ratelimit.py         登入速率限制（記憶體，單容器）
   food_visibility.py   食物/份量的分層可見性（共用）
-  cli.py               create-admin / cleanup-photos
+  cli.py               create-admin / cleanup-photos / cleanup-sessions
   storage/photos.py    照片的所有檔案讀寫（規格第 8 節：集中在單一模組）
+  security/tokens.py   JWT 編解碼（access / refresh 兩組，refresh 強制帶 jti）
+  security/sessions.py refresh session 的生命週期：簽發 / 輪替 / 重用偵測 / 撤銷
   models/              SQLAlchemy models（唯一的 schema 事實來源）
   schemas/             Pydantic 請求/回應
   api/routes/          端點
 docs/
-  superpowers/specs/   規格（P1 設計文件）
-  superpowers/plans/   六份實作計畫（含所有實測發現）
+  superpowers/specs/   規格（P1、session 撤銷、P3-A 前端）
+  superpowers/plans/   七份實作計畫（含所有實測發現與突變結果）
   deployment.md        部署手冊
   handover.md          本文件
 ```
@@ -219,7 +221,7 @@ userland proxy 對發佈的埠做 SNAT）。按 IP 限速會把 tailnet 上所�
 
 ---
 
-## 6. 這個專案最有價值的產出：十種「綠燈說謊」
+## 6. 這個專案最有價值的產出：十六種「綠燈說謊」
 
 **每一種的機制都不同，而且都是實測踩到的，不是理論。**
 新加的任何測試都應該對照這份清單檢查一次。
@@ -236,6 +238,78 @@ userland proxy 對發佈的埠做 SNAT）。按 IP 限速會把 tailnet 上所�
 | 8 | **突變存活是因為挑錯突變點**，不是測試不夠力 |
 | 9 | **測試量到的視窗跟缺陷沒有重疊**（`await` 讓出 loop，健康檢查在阻塞開始前就溜過去） |
 | 10 | **自我指涉的斷言**（`peak <= MAX_CONCURRENT_HASHES` 讀的就是它要限制的常數） |
+| 11 | **測試夾具讓 `commit` 在結構上不可觀察**（同一份計畫裡踩到三次） |
+| 12 | **紅燈的原因跟被測的性質無關**（測試以崩潰而非斷言變紅） |
+| 13 | **資料庫約束先於斷言擋住**（測試變紅了，但那一行斷言從沒執行過） |
+| 14 | **測試所在的世界裡沒有那個維度**（共用一個交易，就看不見任何並行缺陷） |
+| 15 | **靠自然時序的守衛，在某些機器上原理上不會變紅**（並行測試連跑 25 次全過） |
+| 16 | **刻意的不可區分性，造成該層的測試盲區**（兩種失敗回同一個 401，端點層就分不出 family 範圍） |
+
+### 第 11～16 種是 session 撤銷那次長出來的，機制都不同
+
+**第 11 種：夾具讓 `commit` 不可觀察。** `conftest.py` 的 `db_session` 用
+`join_transaction_mode="create_savepoint"`，所以 `commit()` 只是
+RELEASE SAVEPOINT —— 對同一個 session 而言，「已 flush 但沒 commit」與
+「已 commit」**不可區分**。而 `client` fixture 把同一個 session 交給 app，
+所以端點測試也看不見。
+
+實測：把 `start_session` 的 `await db.commit()` 整行刪掉，476 個測試全綠 ——
+但 production 的 `get_db` 是 per-request，`session.close()` 會把沒 commit 的
+INSERT 丟掉，登入會發出一張沒有對應資料列的票。
+
+**同一件事在那次踩到三次**（`start_session`、`revoke_session`、
+`cleanup_expired_sessions`），三次都在補測試之前全綠。這已經不是個別疏漏，
+是這套夾具的結構性盲點：**任何「這件事真的寫進資料庫了嗎」的斷言，
+預設都是無效的。**
+
+解法：斷言前自己 `await db_session.rollback()`。沒 commit 的資料還在
+savepoint 裡會被抹掉，commit 過的不會。
+
+**第 12 種：紅燈的原因跟被測性質無關。** 某個突變確實讓測試變紅了 ——
+但形態是 `MissingGreenlet` 崩潰，不是斷言失敗。追下去發現：`rollback()` 會讓
+session 裡所有 ORM 物件過期，之後第一次讀屬性（那個測試讀的是 `user.id`）
+會觸發同步 refresh 查詢，在 async 下直接炸。那個崩潰跟「撤銷有沒有持久化」
+完全無關。
+
+**崩潰是偶然的守衛**：換個 SQLAlchemy 版本、或有人把測試稍微重寫，崩潰就
+消失，而缺陷還在。**紅燈要問「它為什麼紅」，不能只看它紅了。**
+
+**第 13 種：資料庫約束先於斷言擋住。** 突變「所有登入共用一個 family_id」
+讓測試變紅了，但形態是 `IntegrityError`（撞上部分唯一索引），斷言那一行
+根本沒跑到。斷言本身有鑑別力（索引若被拿掉，它會失敗），但**今天它跑不到**。
+日後有人弱化那個索引時，會以為這條斷言還在守，結果兩道防線一起消失。
+
+**第 14 種：測試所在的世界裡沒有那個維度。** 這是最貴的一個。
+
+`_revoke_family` 是 bulk UPDATE，在 READ COMMITTED 下快照固定在 statement
+開始那一刻 —— **並行交易新 INSERT 的列完全不在它的視野裡**。後果：攻擊者
+同時送出「已用的 A」與「活著的 B」，重用偵測撤銷整個 family，但輪替那條
+交易剛插入的 C 沒被撤銷到。**系統回報已撤銷、受害者被登出、攻擊者帶著一張
+活票走人。** 實測 60 次並行試驗，59 次重現。
+
+而這個缺陷能活下來，不是因為測試寫得不夠力 —— 是因為**所有測試共用一個
+交易**，「兩個交易互相看不見對方」在那個世界裡**在結構上不存在**。
+不是斷言挑錯了，是那個維度不在觀察範圍內。
+
+解法也因此不同：不是加斷言，是**另外開一條真實連線**。
+
+**第 15 種：靠自然時序的守衛在某些機器上原理上不會變紅。** 第一版的並行
+測試用 `asyncio.gather` 讓兩條真實連線自然競速。把修正拿掉之後，它在
+Windows + Docker Desktop 上**連跑 25 次一次都沒變紅** —— 那台機器上兩條
+連線的自然交錯穩定落在安全的方向。
+
+這跟第 2 種（選錯時區）是同一個家族：**測試在那個環境裡原理上不可能失敗。**
+改成手動、確定性地建構那個交錯（用 `pg_stat_activity` 直接觀察對方真的被
+鎖卡住了才放行，而不是 sleep 一段時間猜），才變成有鎖 10/10 綠、
+沒鎖 10/10 紅。
+
+**第 16 種：刻意的不可區分性造成測試盲區。** 登出後重放鏈上任一張票都回
+401 —— 已撤銷的走 `TokenError`、未撤銷但已用的走 `ReuseDetectedError`，
+而那兩者是**刻意**回同一個 401 的（不讓攻擊者分辨出「我被偵測到了」）。
+
+結果：把「撤銷整個 family」改成「只撤銷被出示的那一列」，9 條登出端點測試
+全綠。**那個刻意的安全設計，同時讓端點層測不到 family 範圍。**
+修法只能是模組層測試 —— 這一層的盲區補不起來，要換一層看。
 
 ### 由此長出的幾條規矩
 
@@ -247,6 +321,13 @@ userland proxy 對發佈的埠做 SNAT）。按 IP 限速會把 tailnet 上所�
 6. **兩個視窗的重疊區間就是零鑑別力的區間。** 判斷方法不是背規則，是畫出來取重疊。
 7. **文件擋不住重蹈覆轍，程式碼可以。** 與其寫第三次警告，不如把檢查寫進 helper，
    讓錯誤的選擇在執行時就爆掉。
+
+8. **紅燈要問「它為什麼紅」。** 崩潰、被上游約束擋住、被另一道防線接走 ——
+   都會讓儀表板變紅，但守住的不是你以為的那個東西。
+9. **先問「這個缺陷所在的維度，在我的測試世界裡存在嗎」**，再問測試夠不夠力。
+   共用交易的夾具看不見並行，共用 session 看不見 commit。
+10. **靠時序自然發生的守衛不是守衛。** 要嘛確定性地建構那個情境，要嘛承認
+    它沒有被守住。
 
 > **第 7 條是最貴的一課。** 「零鑑別力區間」這條規則是我自己寫下來的，
 > 又在下一個計畫的說明裡重述了一次 —— 然後還是踩了。
@@ -277,14 +358,33 @@ userland proxy 對發佈的埠做 SNAT）。按 IP 限速會把 tailnet 上所�
 
 ## 8. 已知缺口與延後項目
 
-### 8.1 需要優先處理
+### 8.1 已完成：session 撤銷
 
-**session 撤銷（安全性）。** `/api/auth/refresh` 每次換發都發一張新的 14 天票，
-**而舊的仍然有效**（實測確認）。所以那不是 14 天上限，是一個
-**只要裝置持續使用就永遠不會關上的滑動視窗**。手機掉了唯一的止血是
-換 `JWT_SECRET`，那會把所有人一起登出。
+**refresh token 改為輪替制。** 換發時舊票當場失效；舊票被重複使用一律判定
+外洩，撤銷整條 family（同一次登入衍生的所有票）。新增
+`POST /api/auth/logout`（單一裝置）與 `/logout-all`（全部裝置）。
 
-計畫 1 明寫「不要拖到 P4，要自己一個 task」—— 目前仍未做。
+**刻意留著的缺口：** access token 不查資料庫，所以撤銷之後該裝置手上那張
+**最多還能再用 15 分鐘**。有一條測試明確斷言這個缺口存在
+（`test_an_access_token_still_works_after_logout_and_that_is_deliberate`），
+避免日後有人「順手修好」它而沒發現效能代價。
+
+**並行安全靠一把每使用者的 advisory lock。** 沒有它，重用偵測在並行下有
+極高機率留下一張活票（見上面第 14 種）。`rotate_session`、`revoke_session`、
+`revoke_all_for_user` 三條路徑都要取那把鎖。
+
+規格：[session 撤銷設計](superpowers/specs/2026-09-11-session-revocation-design.md)
+計畫：[實作計畫](superpowers/plans/2026-09-11-session-revocation.md)（含 20 條突變的實測結果）
+
+### 8.1b 仍需優先處理
+
+**`/api/auth/refresh` 與 `/api/auth/logout` 都沒有限速。** 兩者都是未認證、
+可無限重放的寫入路徑，而且都會取每使用者的 advisory lock。實測：12 條並行
+連線拿同一張**早就死掉的** refresh token 重放 `/logout`，可維持 302 次/秒，
+把同一個使用者的合法換發從中位數 7.2ms 拉到 34.2ms。
+
+是劣化不是阻斷，而且 `/refresh` 從 P1 就是這樣了，不是 session 撤銷引入的。
+但要做就兩個一起做，鍵用 token 解出來的 `sub`。
 
 ### 8.2 其他延後項目
 
@@ -353,7 +453,12 @@ dev 資料庫已有：3 個帳號（`admin@example.com` 管理員 /
 
 **認證**：`HTTPBearer`。`POST /api/auth/login` 回 access（15 分鐘）+
 refresh（14 天）。`POST /api/auth/refresh` 換新的。
-**注意舊 refresh token 不會失效**（見 §8.1）。
+**舊的 refresh token 在換發時會立刻失效**，而且重複使用會撤銷整條鏈 ——
+前端必須保證同一時間只有一個 refresh 在飛（P3-A 規格 §6.4 的 single-flight
+鎖），否則兩個分頁同時換票會讓使用者莫名被登出。
+
+登出走 `POST /api/auth/logout`（帶 refresh token，不需要 access token）或
+`/logout-all`。注意**撤銷不是即時的**：access token 最多還有效 15 分鐘。
 
 **所有數值都是字串，不是數字。** `"180.50"` 而非 `180.5` ——
 `Decimal` 序列化成字串以避免浮點誤差。前端要用

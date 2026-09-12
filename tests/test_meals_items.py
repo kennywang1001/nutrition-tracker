@@ -3,12 +3,12 @@ from decimal import Decimal
 from sqlalchemy import func, select
 
 from app.models.meal import MealItem
-from app.security.tokens import create_token
+from app.security.tokens import create_access_token
 from tests.factories import create_food, create_portion, create_user
 
 
 def auth(user):
-    return {"Authorization": f"Bearer {create_token(user.id, 'access')}"}
+    return {"Authorization": f"Bearer {create_access_token(user.id)}"}
 
 
 def _create_payload(**overrides):

@@ -1,12 +1,12 @@
 from sqlalchemy import select
 
 from app.models.food import Food, FoodRevision, RevisionStatus
-from app.security.tokens import create_token
+from app.security.tokens import create_access_token
 from tests.factories import create_food, create_user
 
 
 def auth(user):
-    return {"Authorization": f"Bearer {create_token(user.id, 'access')}"}
+    return {"Authorization": f"Bearer {create_access_token(user.id)}"}
 
 
 async def test_create_food_returns_the_food_with_its_nutrition(client, db_session):
