@@ -294,7 +294,14 @@ async def test_reuse_detection_persists_the_revocation(db_session):
     而只斷言例外的測試完全看不到這件事。
     """
     user = await create_user(db_session)
-    a = await start_session(db_session, user.id)
+    # 先把 id 取出來。下面的 rollback() 會讓 user 這個 ORM 物件過期，
+    # 之後再讀 user.id 會觸發一次同步的 refresh 查詢，在 async 環境下
+    # 直接炸 MissingGreenlet —— 那會讓這條測試以「崩潰」而不是
+    # 「斷言失敗」的方式變紅，而崩潰是偶然的守衛（見本計畫開頭那一節）。
+    user_id = user.id
+    a = await start_session(db_session, user_id)
+    # 不賦值：這裡只需要「A 已經被輪替過一次」這件事，留著未使用的變數
+    # ruff 會報 F841。
     await rotate_session(db_session, a.refresh_token)
 
     with pytest.raises(ReuseDetectedError):
@@ -306,13 +313,14 @@ async def test_reuse_detection_persists_the_revocation(db_session):
     # rollback 之後還讀得到的，才是真的寫進資料庫的。
     await db_session.rollback()
 
-    rows = (
+    # 選欄位而不是實體，同樣是為了不在 rollback 之後碰 ORM 屬性。
+    revoked_at_values = (
         await db_session.scalars(
-            select(RefreshSession).where(RefreshSession.user_id == user.id)
+            select(RefreshSession.revoked_at).where(RefreshSession.user_id == user_id)
         )
     ).all()
-    assert len(rows) == 2
-    assert all(row.revoked_at is not None for row in rows)
+    assert len(revoked_at_values) == 2
+    assert all(value is not None for value in revoked_at_values)
 
 
 async def test_revoking_one_family_leaves_another_family_alone(db_session):
