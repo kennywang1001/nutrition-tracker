@@ -790,19 +790,28 @@ grep -rn "from app.security.tokens import" tests/
     token = create_refresh_token(user.id, uuid4())
 ```
 
-`tests/test_auth_refresh.py` 四個測試全部改用 `create_refresh_token(..., uuid4())` 與 `decode_access_token(...)`。**其中兩個現在會失敗** —— `test_refresh_returns_a_new_access_token` 與 `test_refresh_rejects_a_token_for_a_deleted_user` 都需要資料列存在才會通過，而資料列要到 Task 3 才有。這一步先標記：
+`tests/test_auth_refresh.py` 四個測試全部改用 `create_refresh_token(..., uuid4())` 與 `decode_access_token(...)`。**四個都會通過，不需要任何 xfail 標記。**
 
-```python
-@pytest.mark.xfail(reason="Task 3 接上 refresh_sessions 之後才會通過", strict=True)
-```
-
-> **`strict=True` 是重點。** 非 strict 的 xfail 在測試意外通過時仍然是綠的，那會讓「Task 3 忘記拿掉標記」變成一個沒有任何東西會發現的錯誤。strict 之下，測試一旦通過就變 XPASS 紅燈，逼你回來拿掉。
+> **這份計畫原本在這裡寫錯，實作時由實測推翻 —— 記下來因為推翻的理由本身有價值。**
+>
+> 原本寫的是「其中兩個現在會失敗，先標 `xfail(strict=True)`，Task 4 再拿掉」。
+> 那是錯的：Task 2 的 `refresh()` **根本不查 `refresh_sessions`**（那是 Task 4 的事），
+> 它只是 decode 然後重簽一張。而測試自己用 `create_refresh_token(user.id, uuid4())`
+> 鑄了一張帶合法 jti 的票，所以 decode 會過、`db.get(User, ...)` 也查得到，
+> 結果就是 200。
+>
+> 寫計畫的人腦中想的是 **Task 4 之後**的狀態，然後把那個狀態寫進了 Task 2 的預期。
+> 這是計畫文字層級的缺陷，而計畫的缺陷正是這個專案最常出問題的地方
+> （見交接文件 §11 第 2 點）。
+>
+> **盲目照著加 `xfail(strict=True)` 會讓套件變紅**（XPASS），所以這裡的正確
+> 行為是實測後拒絕執行計畫，而不是照做。
 
 - [ ] **Step 7: 跑完整套件與靜態檢查**
 
 Run: `.venv/Scripts/python.exe -m pytest -W error`
 
-Expected: 470 passed, 2 xfailed（469 + test_tokens.py 新增的 3 個，再減掉轉成 xfail 的 2 個）
+Expected: 472 passed（469 + test_tokens.py 淨增的 3 個），**0 xfailed**
 
 Run: `.venv/Scripts/python.exe -m mypy app` → Success
 
@@ -828,7 +837,6 @@ decode_refresh_token 的 require 清單多一個 jti，既有的 refresh token
 **Files:**
 - Create: `app/security/sessions.py`
 - Modify: `app/api/routes/auth.py`（`login()`）
-- Modify: `tests/test_auth_refresh.py`（拿掉 Task 2 的 xfail）
 - Test: `tests/test_sessions.py`（追加）
 
 - [ ] **Step 1: 寫失敗的測試**
@@ -998,13 +1006,17 @@ from app.security.sessions import start_session
 
 `create_refresh_token` 與 `uuid` 在 `login()` 裡已經不用了，但 `refresh()` 還在用（Task 4 才換掉），先保留 import。
 
-- [ ] **Step 5: 拿掉 `test_auth_refresh.py` 裡那個現在會過的 xfail**
+- [ ] **Step 5: 確認 `test_auth_refresh.py` 仍然全綠，並預告它會在 Task 4 變紅**
 
-`test_refresh_rejects_a_token_for_a_deleted_user` 現在仍然失敗（Task 4 才會過），**保留它的 xfail**。
+這一步不改任何東西，但要親自跑一次 `tests/test_auth_refresh.py`，確認四個都還是綠的。
 
-`test_refresh_returns_a_new_access_token` 也還沒過 —— `refresh()` 目前仍是 Task 2 那個「自己簽一張新票」的版本，它會通過但不寫資料列。**兩個 xfail 都留到 Task 4。**
-
-> 這一步刻意什麼都不做，但要親自跑一次確認 xfail 狀態沒變。`strict=True` 的 xfail 在意外通過時會變成 XPASS 紅燈，那正是我們要它做的事。
+> **Task 4 會讓 `test_refresh_returns_a_new_access_token` 變紅**，這是預期中的。
+> 它現在用 `create_refresh_token(user.id, uuid4())` 手鑄一張票 —— Task 4 讓
+> `rotate_session` 去 `refresh_sessions` 查那個 jti 之後，這張手鑄票查無此列，
+> 回 401。**Task 4 Step 5 會把它改成先登入再換發。**
+>
+> 現在先知道這件事，否則 Task 4 跑出一個紅燈時，第一反應會是去懷疑
+> `rotate_session` 寫錯了。
 
 - [ ] **Step 6: 跑測試**
 
@@ -1014,7 +1026,7 @@ Expected: 9 passed（Task 1 的 6 個 + 這裡的 3 個）
 
 Run: `.venv/Scripts/python.exe -m pytest -W error`
 
-Expected: 473 passed, 2 xfailed
+Expected: 475 passed
 
 - [ ] **Step 7: Commit**
 
@@ -1035,7 +1047,7 @@ sessions.py 自己管交易，不把 commit 留給路由 —— Task 4 的重用
 **Files:**
 - Modify: `app/security/sessions.py`
 - Modify: `app/api/routes/auth.py`（`refresh()`）
-- Modify: `tests/test_auth_refresh.py`（拿掉兩個 xfail）
+- Modify: `tests/test_auth_refresh.py`（改寫一個手鑄 token 的測試 + 新增端點層測試）
 - Test: `tests/test_sessions.py`（追加）
 
 - [ ] **Step 1: 寫失敗的測試**
@@ -1272,9 +1284,35 @@ import 改成 `from app.security.sessions import rotate_session, start_session`�
 
 > `rotate_session` 自己查過使用者了嗎？沒有 —— 它查的是 session 列，而 session 列有 `ON DELETE CASCADE` 的外鍵。使用者被刪掉時那些列會一起消失，於是 `claimed is None` → `_reject` → 找不到列 → `TokenError`。**這就是 `test_refresh_rejects_a_token_for_a_deleted_user` 現在會通過的原因**，不需要在 `refresh()` 裡多查一次 `db.get(User, ...)`。
 
-- [ ] **Step 5: 拿掉兩個 xfail**
+- [ ] **Step 5: 改寫手鑄 token 的測試，並加一個端點層測試**
 
-Modify `tests/test_auth_refresh.py`：刪掉 Task 2 加的兩個 `@pytest.mark.xfail(...)` 裝飾器與不再需要的 `import pytest`。
+**`test_refresh_returns_a_new_access_token` 到這一步會變紅，這是預期中的。**
+它用 `create_refresh_token(user.id, uuid4())` 手鑄一張票，而 `rotate_session`
+現在會去 `refresh_sessions` 查那個 jti —— 查無此列，回 401。
+
+改成先登入取得一張**真的有對應資料列**的票：
+
+```python
+async def test_refresh_returns_a_new_access_token(client, db_session):
+    user = await create_user(db_session)
+    login = await client.post(
+        "/api/auth/login", json={"email": user.email, "password": DEFAULT_PASSWORD}
+    )
+    refresh_token = login.json()["refresh_token"]
+
+    response = await client.post("/api/auth/refresh", json={"refresh_token": refresh_token})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert decode_access_token(body["access_token"]) == user.id
+```
+
+檔案頂端 import 補上 `from tests.factories import DEFAULT_PASSWORD, create_user`。
+
+另外三個測試不用改：`test_refresh_rejects_an_access_token` 與
+`test_refresh_rejects_garbage` 在 decode 階段就被擋；
+`test_refresh_rejects_a_token_for_a_deleted_user` 走的是「查無此列」那條路
+（見上一個 step 的說明）。
 
 再加一個端點層的測試（sessions.py 的單元測試證明不了路由真的接上了）：
 
@@ -1298,11 +1336,11 @@ async def test_refresh_endpoint_invalidates_the_old_token(client, db_session):
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_sessions.py tests/test_auth_refresh.py -v`
 
-Expected: 15 passed + 5 passed，**0 xfailed**（兩個標記都拿掉了）
+Expected: 15 passed + 5 passed
 
 Run: `.venv/Scripts/python.exe -m pytest -W error`
 
-Expected: 482 passed（兩個 xfail 轉為正常通過）
+Expected: 482 passed
 
 Run: `.venv/Scripts/python.exe -m mypy app` → Success
 Run: `.venv/Scripts/ruff.exe check .` → All checks passed
