@@ -1,7 +1,7 @@
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 import jwt
 
@@ -43,7 +43,12 @@ def _decode(token: str, *, require: list[str]) -> dict[str, Any]:
     return payload
 
 
-def _user_id_from(payload: dict[str, Any], *, expected_type: str) -> int:
+# 保留這個 Literal：expected_type 打錯字（"acess"）要在 mypy 就爆掉 ——
+# 這個 task 的整個論點就是「讓錯誤的選擇由型別擋住」。
+TokenType = Literal["access", "refresh"]
+
+
+def _user_id_from(payload: dict[str, Any], *, expected_type: TokenType) -> int:
     if payload.get("type") != expected_type:
         raise TokenError("token 類型不正確")
     try:
@@ -97,8 +102,20 @@ def decode_refresh_token(token: str) -> RefreshClaims:
     """
     payload = _decode(token, require=["exp", "iat", "sub", "type", "jti"])
     user_id = _user_id_from(payload, expected_type="refresh")
+
+    # **這裡刻意只接 ValueError，不接 KeyError。**
+    # 「jti 存不存在」是上面 require 清單的責任，這個 except 只負責
+    # 「值的格式對不對」。兩者都接的話就是兩道防線互相掩護（§6 第 5 種）：
+    # 把 require 裡的 jti 拿掉，KeyError 會被接住、拋出同一個 TokenError，
+    # 測試全綠 —— 這個性質就從來沒有被任何單一守衛釘住過
+    # （Task 2 品質審查實測驗證，不是推論）。
+    #
+    # 也刻意不先套 str()：str() 會讓一個 32 位十進位整數也變成合法 UUID。
+    raw_jti = payload["jti"]
+    if not isinstance(raw_jti, str):
+        raise TokenError("token payload 格式不正確")
     try:
-        jti = uuid.UUID(str(payload["jti"]))
-    except (KeyError, ValueError, AttributeError) as exc:
+        jti = uuid.UUID(raw_jti)
+    except ValueError as exc:
         raise TokenError("token payload 格式不正確") from exc
     return RefreshClaims(user_id=user_id, jti=jti)

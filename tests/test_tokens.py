@@ -35,9 +35,36 @@ def test_refresh_token_is_rejected_where_an_access_token_is_expected():
 
 
 def test_access_token_is_rejected_where_a_refresh_token_is_expected():
+    """注意這條測試**不是**在測 type 檢查 —— access token 沒有 jti，
+    所以它在 `_decode` 的 require 清單那一關就被擋掉了，根本走不到
+    type 比對。名字與實際守住的東西不一致，但兩個性質都該有測試，
+    所以保留它，另外用下面那條補上 type 檢查。
+    """
     token = create_access_token(user_id=1)
     with pytest.raises(TokenError):
         decode_refresh_token(token)
+
+
+def test_a_token_typed_access_but_carrying_a_jti_is_still_rejected_as_refresh():
+    """把 type 比對單獨釘住。
+
+    上面那條被 require 清單擋在前面，於是「把 type 檢查整個拿掉」這個突變
+    只有 refresh→access 那個方向會變紅（實測：2 個測試紅），access→refresh
+    方向無人看守。這裡偽造一張 type=access 但帶合法 jti 的票 ——
+    require 清單滿足了，**只剩 type 檢查能擋它**。
+    """
+    now = datetime.now(UTC)
+    forged = _forge(
+        {
+            "sub": "1",
+            "type": "access",
+            "jti": str(uuid4()),
+            "iat": now,
+            "exp": now + timedelta(minutes=15),
+        }
+    )
+    with pytest.raises(TokenError):
+        decode_refresh_token(forged)
 
 
 def test_tampered_token_is_rejected():
