@@ -202,3 +202,49 @@ async def rotate_session(db: AsyncSession, refresh_token: str) -> IssuedTokens:
     issued = _issue(db, user_id=user_id, family_id=family_id)
     await db.commit()
     return issued
+
+
+async def revoke_session(db: AsyncSession, refresh_token: str) -> None:
+    """登出單一裝置：撤銷這張票所屬的整條 family。
+
+    **這裡也要先取 `_lock_user_sessions`**（規格 §3.2）：`_revoke_family`
+    是 bulk UPDATE，在 READ COMMITTED 下快照固定在 statement 開始那一刻，
+    並行交易剛 INSERT 的列完全不在它的視野裡 —— 所以「登出的同時另一個
+    分頁正在輪替」會留下一張活票，跟重用偵測那個洞是同一個，只是從登出
+    這條路進來。鎖的粒度是使用者，讓輪替、登出、全部登出三條路徑互斥。
+
+    **一律靜默成功。** 無效、過期、偽造、已經撤銷過的 token 都不回錯誤 ——
+    回錯誤等於提供一個「這張票還活著嗎」的探針，而登出本來就是冪等的。
+    """
+    try:
+        claims = decode_refresh_token(refresh_token)
+    except TokenError:
+        return
+
+    await _lock_user_sessions(db, claims.user_id)
+
+    row = await db.scalar(select(RefreshSession).where(RefreshSession.jti == claims.jti))
+    if row is None:
+        return
+
+    await _revoke_family(db, row.family_id)
+    await db.commit()
+
+
+async def revoke_all_for_user(db: AsyncSession, user_id: int) -> None:
+    """登出所有裝置。`user_id` 來自已驗證的 access token，不是使用者輸入。
+
+    同樣要先取 `_lock_user_sessions`。這也正是鎖的粒度選使用者而不是 family
+    的原因：這個函式一次要處理多個 family，用 family 當鍵它跟輪替不會互斥。
+    """
+    await _lock_user_sessions(db, user_id)
+
+    await db.execute(
+        update(RefreshSession)
+        .where(
+            RefreshSession.user_id == user_id,
+            RefreshSession.revoked_at.is_(None),
+        )
+        .values(revoked_at=datetime.now(UTC))
+    )
+    await db.commit()

@@ -5,19 +5,27 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
+from app.api.deps import get_current_user
 from app.db import get_db
 from app.errors import ConflictError, UnauthorizedError
 from app.models.user import User
 from app.ratelimit import login_rate_limiter
 from app.schemas.auth import (
     LoginRequest,
+    LogoutRequest,
     RefreshRequest,
     RegisterRequest,
     TokenResponse,
     UserResponse,
 )
 from app.security.password import DUMMY_PASSWORD_HASH, hash_password, verify_password
-from app.security.sessions import ReuseDetectedError, rotate_session, start_session
+from app.security.sessions import (
+    ReuseDetectedError,
+    revoke_all_for_user,
+    revoke_session,
+    rotate_session,
+    start_session,
+)
 from app.security.tokens import TokenError
 
 logger = logging.getLogger(__name__)
@@ -90,6 +98,24 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> To
         access_token=issued.access_token,
         refresh_token=issued.refresh_token,
     )
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(payload: LogoutRequest, db: AsyncSession = Depends(get_db)) -> None:
+    """刻意**不需要** access token。
+
+    使用者要登出的時刻，手上的 access token 很可能已經過期了 —— 那正是
+    他想登出的原因之一。要求 access token 會讓「票過期的裝置反而登不出去」。
+    而呼叫者手上已經有那張 refresh token 了，能做的事遠比登出多。
+    """
+    await revoke_session(db, payload.refresh_token)
+
+
+@router.post("/logout-all", status_code=status.HTTP_204_NO_CONTENT)
+async def logout_all(
+    user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+) -> None:
+    await revoke_all_for_user(db, user.id)
 
 
 @router.post("/refresh", response_model=TokenResponse)
