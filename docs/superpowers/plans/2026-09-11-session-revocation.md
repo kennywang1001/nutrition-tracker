@@ -1989,9 +1989,9 @@ git commit -m "feat: cleanup-sessions 指令
 
 | # | 突變 | 必須變紅的測試 | 結果 |
 |---|---|---|---|
-| 1 | `rotate_session` 的 UPDATE 拿掉 `used_at.is_(None)` | `test_the_old_token_stops_working_after_rotation` | 待填 |
-| 2 | `_revoke_family` 的 where 從 `family_id ==` 改成 `jti ==` | `test_reusing_a_spent_token_revokes_the_whole_family` | 待填 |
-| 3 | `_reject` 拿掉 `await db.commit()` | `test_reuse_detection_persists_the_revocation` | 待填 |
+| 1 | `rotate_session` 的 UPDATE 拿掉 `used_at.is_(None)` | `test_the_old_token_stops_working_after_rotation` | ✅ **已驗證**（Task 4）5 failed / 479 passed。除了預測的那條，還連帶紅了 `test_reusing_a_spent_token_revokes_the_whole_family`、`test_reuse_detection_persists_the_revocation`、`test_revoking_one_family_leaves_another_family_alone`、`test_refresh_endpoint_invalidates_the_old_token`——多數不是乾淨的斷言失敗，而是重複換發同一張已用票時撞上 `uq_refresh_sessions_one_live_per_family` 的 `IntegrityError`（同一 family 被發出兩張活票） |
+| 2 | `_revoke_family` 的 where 從 `family_id ==` 改成 `jti ==` | `test_reusing_a_spent_token_revokes_the_whole_family` | ✅ **已驗證**（Task 4）2 failed / 482 passed：預測的那條，加上 `test_reuse_detection_persists_the_revocation`。乾淨的斷言失敗（`revoked_at is None`） |
+| 3 | `_reject` 拿掉 `await db.commit()` | `test_reuse_detection_persists_the_revocation` | ✅ **已驗證**（Task 4）1 failed / 483 passed，就是預測的那一條，沒有波及其他測試。**失敗形態不是乾淨的斷言失敗**，而是 `sqlalchemy.exc.MissingGreenlet`——`await db_session.rollback()` 那一行踩到未 commit 的 UPDATE 留下的連線狀態。仍然是可靠的紅燈：這一行 `rollback()` 確實有鑑別力，不是裝飾品 |
 | 4 | `revoke_session` 改成直接 `return`（什麼都不做） | `test_logout_kills_the_refresh_token` | 待填 |
 | 5 | `revoke_all_for_user` 的 where 拿掉 `user_id ==` | `test_logout_all_does_not_touch_another_users_sessions` | 待填 |
 | 6 | `start_session` 改成共用一個固定的 `family_id` | `test_two_logins_start_two_separate_families` 與 `test_logout_only_affects_the_device_that_logged_out` | 待填 |
