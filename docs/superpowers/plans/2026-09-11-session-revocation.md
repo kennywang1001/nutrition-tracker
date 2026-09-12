@@ -1339,6 +1339,122 @@ async def test_rotation_rejects_a_token_whose_row_does_not_exist(db_session):
 
 檔案頂端的 import 補上 `create_refresh_token`。
 
+新增 `tests/test_sessions_concurrency.py`（獨立檔案，因為它需要完全不同的夾具）：
+
+```python
+"""並行行為的測試 —— 開真實的第二條連線。
+
+`tests/conftest.py` 讓所有測試共用一個交易（外層 rollback 做隔離）。
+那個設計是對的，但它有一個結構性的後果：**「兩個交易互相看不見對方」
+這件事在那套夾具裡無法被觀察**，而這個模組所有的並行保證都活在那個維度上
+（規格 §6 陷阱 5）。
+
+所以這個檔案不用 `db_session`，自己開連線，而且寫進去的資料是**真的會
+commit** 的 —— 必須自己清乾淨。
+"""
+
+import asyncio
+from collections.abc import AsyncIterator
+
+import pytest_asyncio
+from sqlalchemy import delete, func, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from app.models.session import RefreshSession
+from app.models.user import User
+from app.security.password import hash_password
+from app.security.sessions import ReuseDetectedError, rotate_session, start_session
+from app.security.tokens import TokenError
+from tests.conftest import TEST_DATABASE_URL
+
+
+@pytest_asyncio.fixture
+async def independent_sessions(migrated_database: None) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    """一個可以開出多條互相獨立連線的 sessionmaker。
+
+    每條連線各自有自己的交易，commit 是真的 commit —— 這正是重點。
+    """
+    engine = create_async_engine(TEST_DATABASE_URL)
+    try:
+        yield async_sessionmaker(engine, expire_on_commit=False)
+    finally:
+        await engine.dispose()
+
+
+async def test_reuse_detection_revokes_the_family_even_under_concurrent_rotation(
+    independent_sessions,
+):
+    """**規格 §3.2：這是整個功能唯一真正要保證的性質，而且只有這條測試看得見。**
+
+    攻擊形狀：攻擊者握有一份儲存傾印，裡面有已用過的 A 與還活著的 B，
+    同時送出兩個 refresh。A 觸發重用偵測、撤銷整個 family；B 同時在輪替，
+    剛插入的 C 若不在撤銷的視野裡，攻擊者就帶著一張活票走人 ——
+    **在一個所有人都認為已經撤銷的 family 裡**。
+
+    沒有 `_lock_user_sessions` 的話，這裡有 59/60 的機率留下一張活票
+    （實測，不是估計）。
+
+    這條測試寫進資料庫的東西是真的 commit 的，所以結尾要自己清掉。
+    """
+    async with independent_sessions() as setup:
+        user = User(
+            email="concurrency-probe@example.com",
+            password_hash=hash_password("correct-horse-battery"),
+            display_name="並行測試",
+        )
+        setup.add(user)
+        await setup.commit()
+        user_id = user.id
+
+    try:
+        async with independent_sessions() as s:
+            a = await start_session(s, user_id)
+            b = await rotate_session(s, a.refresh_token)
+
+        # 兩條各自獨立的連線，真的同時跑
+        async with independent_sessions() as s1, independent_sessions() as s2:
+            results = await asyncio.gather(
+                rotate_session(s1, a.refresh_token),   # 重放已用的 A
+                rotate_session(s2, b.refresh_token),   # 合法輪替 B
+                return_exceptions=True,
+            )
+
+        # 至少有一邊要被判定成重用（順序不保證，所以不斷言是哪一邊）
+        assert any(isinstance(r, ReuseDetectedError) for r in results), (
+            f"重用偵測沒有觸發：{results}"
+        )
+
+        # **這才是重點：整個 family 不可以留下任何一張活票。**
+        async with independent_sessions() as check:
+            live = await check.scalar(
+                select(func.count())
+                .select_from(RefreshSession)
+                .where(
+                    RefreshSession.user_id == user_id,
+                    RefreshSession.used_at.is_(None),
+                    RefreshSession.revoked_at.is_(None),
+                )
+            )
+        assert live == 0, (
+            f"重用偵測回報已撤銷，但還有 {live} 張活票 —— "
+            "攻擊者可以在一個所有人都認為已撤銷的 family 裡繼續換發（規格 §3.2）"
+        )
+    finally:
+        async with independent_sessions() as cleanup:
+            # ON DELETE CASCADE 會把 refresh_sessions 一起帶走
+            await cleanup.execute(delete(User).where(User.id == user_id))
+            await cleanup.commit()
+```
+
+> **這條測試為什麼不跟其他測試放同一個檔案：** 它需要 `migrated_database`
+> 但**不能**用 `db_session` / `client`，而 `conftest.py` 的 `_photo_dir_in_tmp_path`
+> 之類的 autouse fixture 對它無害。放獨立檔案讓「這個檔案的夾具規則不一樣」
+> 這件事一眼看得出來，不會有人順手把 `db_session` 加進參數列。
+>
+> **它比其他測試慢**（真的開連線、真的 commit），而且**不可重入** ——
+> 用固定的 email，所以同一時間只能跑一份。這是刻意的取捨：
+> 換來的是唯一一條看得見並行缺陷的測試。
+
 - [ ] **Step 2: 跑測試確認它失敗**
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_sessions.py -v`
@@ -1358,6 +1474,32 @@ class ReuseDetectedError(TokenError):
     從回應分辨出「我被偵測到了」**。分成兩個類別純粹是為了讓伺服器端
     的日誌能區分「票過期了」與「有人在重放」。
     """
+
+
+async def _lock_user_sessions(db: AsyncSession, user_id: int) -> None:
+    """把「同一個使用者的 session 變更」序列化。
+
+    **為什麼需要（實測發現，不是理論）：** `_revoke_family` 是一個 bulk
+    UPDATE，在 READ COMMITTED 下它的快照固定在 statement 開始的那一刻。
+    同時間另一個交易 INSERT 進來的新列**完全不在它的視野裡** ——
+    EvalPlanQual 只會重新檢查被鎖住的既有列，不會看見新插入的列。
+
+    後果：攻擊者同時送出「已用過的 A」與「還活著的 B」，A 觸發重用偵測、
+    撤銷整個 family，但 B 那條交易剛插入的 C 沒被撤銷到 —— 系統回報
+    「已撤銷」、使用者被登出，而攻擊者手上握著一張活票。
+    **60 次並行試驗重現 59 次**，這是主流結果不是罕見競態。
+
+    **鎖的粒度是使用者而不是 family：** logout-all 一次要處理多個 family，
+    用 family 當鍵的話它跟輪替不會互斥，同一個洞會從登出那條路再開一次。
+    使用者層級讓輪替、登出、全部登出三條路徑共用同一個鍵空間。
+
+    `user_id` 直接當鍵，不需要額外查詢 —— 它來自已驗簽的 JWT。
+    代價可以忽略：一台裝置每 15 分鐘才換發一次票。
+
+    這個 codebase 目前沒有其他地方用 advisory lock，所以不需要命名空間；
+    日後若有，要改用有命名空間的雙參數形式。
+    """
+    await db.execute(select(func.pg_advisory_xact_lock(user_id)))
 
 
 async def _revoke_family(db: AsyncSession, family_id: uuid.UUID) -> None:
@@ -1401,6 +1543,10 @@ async def rotate_session(db: AsyncSession, refresh_token: str) -> IssuedTokens:
     # （get_db 是 per-request，start_session / rotate_session 都自己 commit），
     # 但下一個寫這張表的人不會知道，所以寫在這裡。
     claims = decode_refresh_token(refresh_token)
+
+    # **必須在條件式 UPDATE 之前取得。** 見 _lock_user_sessions 的說明 ——
+    # 少了這一行，重用偵測在並行下有 59/60 的機率留下一張活票。
+    await _lock_user_sessions(db, claims.user_id)
 
     # 條件式 UPDATE ... RETURNING，不是「先 SELECT 判斷再 UPDATE」：
     # 兩個並行的換發請求都會通過 SELECT 的檢查，然後兩個都發出新票，
@@ -1716,6 +1862,10 @@ Append to `app/security/sessions.py`:
 async def revoke_session(db: AsyncSession, refresh_token: str) -> None:
     """登出單一裝置：撤銷這張票所屬的整條 family。
 
+    **注意這裡也要先取 `_lock_user_sessions`**（規格 §3.2）：`_revoke_family`
+    在並行下看不見另一個交易剛 INSERT 的列，所以「登出的同時另一個分頁正在
+    輪替」會留下一張活票 —— 跟重用偵測那個洞是同一個，只是從登出這條路進來。
+
     **一律靜默成功。** 無效、過期、偽造、已經撤銷過的 token 都不回錯誤 ——
     回錯誤等於提供一個「這張票還活著嗎」的探針，而登出本來就是冪等的。
     """
@@ -1733,7 +1883,11 @@ async def revoke_session(db: AsyncSession, refresh_token: str) -> None:
 
 
 async def revoke_all_for_user(db: AsyncSession, user_id: int) -> None:
-    """登出所有裝置。`user_id` 來自已驗證的 access token，不是使用者輸入。"""
+    """登出所有裝置。`user_id` 來自已驗證的 access token，不是使用者輸入。
+
+    同樣要先取 `_lock_user_sessions`。這也正是鎖的粒度選使用者而不是 family
+    的原因：這個函式一次要處理多個 family，用 family 當鍵它跟輪替不會互斥。
+    """
     await db.execute(
         update(RefreshSession)
         .where(
@@ -2017,6 +2171,7 @@ git commit -m "feat: cleanup-sessions 指令
 |---|---|---|---|
 | 1 | `rotate_session` 的 UPDATE 拿掉 `used_at.is_(None)` | `test_the_old_token_stops_working_after_rotation` | ✅ **已驗證**（Task 4）5 failed / 479 passed。除了預測的那條，還連帶紅了 `test_reusing_a_spent_token_revokes_the_whole_family`、`test_reuse_detection_persists_the_revocation`、`test_revoking_one_family_leaves_another_family_alone`、`test_refresh_endpoint_invalidates_the_old_token`——多數不是乾淨的斷言失敗，而是重複換發同一張已用票時撞上 `uq_refresh_sessions_one_live_per_family` 的 `IntegrityError`（同一 family 被發出兩張活票） |
 | 2 | `_revoke_family` 的 where 從 `family_id ==` 改成 `jti ==` | `test_reusing_a_spent_token_revokes_the_whole_family` | ✅ **已驗證**（Task 4）2 failed / 482 passed：預測的那條，加上 `test_reuse_detection_persists_the_revocation`。乾淨的斷言失敗（`revoked_at is None`） |
+| 3b | `rotate_session` 拿掉 `await _lock_user_sessions(...)` | 新的並行測試 | 待填 |
 | 3 | `_reject` 拿掉 `await db.commit()` | `test_reuse_detection_persists_the_revocation` | ✅ **已驗證**（Task 4，修過測試後複跑）1 failed / 483 passed，就是預測的那一條，沒有波及其他測試，乾淨的 `assert False`（`all(value is not None for value in revoked_at_values)`）。**修法之前**這條測試雖然也會變紅，但失敗形態是 `sqlalchemy.exc.MissingGreenlet`——rollback 後讀 `user.id` 這個過期的 ORM 屬性觸發同步 refresh 查詢在 async 環境炸掉，跟撤銷有沒有持久化無關，是偶然的守衛（見本計畫開頭「用了 rollback 就不能再讀 ORM 屬性」一節）。改成 rollback 前先存 `user_id`、查詢選欄位而非實體之後，才是真正在守這個性質的乾淨斷言 |
 | 4 | `revoke_session` 改成直接 `return`（什麼都不做） | `test_logout_kills_the_refresh_token` | 待填 |
 | 5 | `revoke_all_for_user` 的 where 拿掉 `user_id ==` | `test_logout_all_does_not_touch_another_users_sessions` | 待填 |
