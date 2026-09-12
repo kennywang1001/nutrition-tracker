@@ -161,7 +161,7 @@ await db.execute(select(func.pg_advisory_xact_lock(user_id)))
 收斂不了，**回報，不要硬凹**：那時的選擇是換一種寫法或放棄這個索引，
 不是讓 `alembic check` 長期紅著。
 
-### 3.2 其他
+### 3.3 其他
 
 **存 `jti` 不存 token 本身。** token 字串進資料庫等於把一份可直接使用的
 憑證留在備份裡，而 `jti` 已經足夠做撤銷判斷。這跟 §4.9 照片不進資料庫是
@@ -232,6 +232,25 @@ POST /api/auth/refresh
 POST /api/auth/logout      body: {refresh_token}   → 撤銷該 family
 POST /api/auth/logout-all  需要 access token       → 撤銷該 user 所有 family
 ```
+
+**`logout-all` 實際上只需要一張 refresh token 就能到達**，因為呼叫一次
+`/refresh` 就能換到 access token。這是這個設計引入的一個放大：在此之前，
+一張被擄走的 refresh token 只能殺掉一條 family，現在它能殺掉該使用者的
+全部 session。
+
+**判斷是可接受的**，理由是誘因反過來：`logout-all` 會連攻擊者自己那條
+family 一起撤銷，15 分鐘後他的 access token 也跟著死。一個握有活 refresh
+token 的攻擊者對帳號有完整讀寫權，用它來把受害者登出是一種**會賠掉帳號、
+而且會驚動受害者**的破壞行為。唯一會這樣做的是想被發現的人。
+
+記在這裡是因為它是一個真實的變化，不是因為它需要修。
+
+**兩個端點的契約必須寫進 docstring**，不只寫在這份規格裡 —— FastAPI 會把
+docstring 當成 OpenAPI 的 description 發佈出去，而前端會照著它做
+「登出所有裝置」那個按鈕。特別是 §4 那個 15 分鐘缺口：使用者按下
+「我的帳號被盜了，全部登出」時，**他有權知道攻擊者手上那張最多還能用
+15 分鐘**。反過來說，`/logout` 那些內部安全理由不該出現在公開的 schema 裡，
+那是給維護者看的，寫成 `#` 註解。
 
 `logout` 對已經無效的 token 回 **204**，不回 401。登出是冪等的 ——
 「讓我登出」在票已經死掉時已經達成了，回錯誤只會讓前端在登出流程裡
@@ -349,6 +368,26 @@ A → B → C，然後拿 B 去換
 （「沒有 jti 就放行」）是一條明確的繞道，日後忘記拿掉就是永久的後門。
 
 ---
+
+## 7.1 延後項目：帶 token 的認證端點沒有限速
+
+`/api/auth/login` 有按 email 與全域兩層限速（P4 決定 1、2），但
+**`/api/auth/refresh` 與 `/api/auth/logout` 都沒有**，而兩者都是
+未認證、可無限重放的寫入路徑，都會取每使用者的 advisory lock。
+
+實測（Task 5 品質審查）：12 條並行連線拿**同一張早就死掉的 refresh token**
+重放 `/logout`，可以維持 **302 次/秒**，並讓同一個使用者的一次合法換發
+從中位數 **7.2ms 拉高到 34.2ms**（p95 37ms）。是劣化不是阻斷 ——
+鎖每次只握約 4ms —— 但真正的天花板不是鎖，是 `app/db.py` 的連線池
+（5 + 10 overflow），持續灌會把連線卡在鎖等待上，影響的是**所有使用者**。
+
+**刻意不在這個階段修。** 只給 `/logout` 加限速是做樣子，`/refresh` 開著
+同一扇門；而 `/refresh` 從 P1 就是這樣了，不是這次引入的。要做就兩個一起，
+鍵用 token 解出來的 `sub`（decode 之後、取鎖之前就拿得到）。
+
+`/logout` 唯一新增的東西是**它被設計成可重放的** —— `/refresh` 至少在
+happy path 會消耗掉 token，而 `/logout` 承諾冪等，所以「拿一張擄到的票
+永遠敲下去」從邊緣情況變成了被支援的行為。
 
 ## 8. 完成標準
 

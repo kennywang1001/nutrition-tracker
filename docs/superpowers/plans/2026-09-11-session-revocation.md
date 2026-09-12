@@ -1825,9 +1825,6 @@ git commit -m "feat: refresh token 輪替與重用偵測
 Create `tests/test_auth_logout.py`:
 
 ```python
-from uuid import uuid4
-
-from app.security.tokens import create_access_token, create_refresh_token
 from tests.factories import DEFAULT_PASSWORD, create_user
 
 
@@ -2091,6 +2088,68 @@ from app.api.deps import get_current_user
 from app.schemas.auth import LogoutRequest
 from app.security.sessions import revoke_all_for_user, revoke_session, rotate_session, start_session
 ```
+
+- [ ] **Step 5a: 補兩條模組層的測試 —— HTTP 表面看不見這兩個性質**
+
+Task 4 的 `rotate_session` 有 `tests/test_sessions.py` 的模組層覆蓋，
+Task 5 原本只有路由層測試加一條並行測試。實測（Task 5 品質審查）證明
+那不夠，**兩個突變存活，9 條登出測試全綠**：
+
+| 突變 | 為什麼 HTTP 層看不見 |
+|---|---|
+| `revoke_session` 改成只撤銷被出示的那一列，不撤整個 family | 登出後重放鏈上任一張票都是 401 —— 已撤銷的走 `TokenError`、未撤銷但已用的走 `ReuseDetectedError`，兩者刻意回同一個 401。**端點層在定義上分不出來。** |
+| `revoke_session` 拿掉 `await db.commit()` | 共用 session 的夾具讓沒 commit 的寫入對下一個請求仍然可見（見本計畫開頭那一節） |
+
+兩條都加進 `tests/test_sessions.py`（**不是** `test_auth_logout.py`）：
+
+```python
+async def test_logout_revokes_the_whole_family(db_session):
+    """三層鏈：登出時手上那張可能已經輪替過好幾輪，撤銷必須及於整條鏈。
+
+    **端點層測不到這件事**：鏈上任一張票在登出後都回 401，不管是因為
+    「已撤銷」還是因為「已用過」——那兩條路徑刻意回同一個 401。
+    """
+    user = await create_user(db_session)
+    user_id = user.id
+    a = await start_session(db_session, user_id)
+    b = await rotate_session(db_session, a.refresh_token)
+
+    await revoke_session(db_session, b.refresh_token)
+
+    revoked = (
+        await db_session.scalars(
+            select(RefreshSession.revoked_at).where(RefreshSession.user_id == user_id)
+        )
+    ).all()
+    assert len(revoked) == 2
+    assert all(value is not None for value in revoked)
+
+
+async def test_logout_persists_the_revocation(db_session):
+    """撤銷必須真的寫進資料庫。rollback 之後還讀得到的才算數
+    （見本計畫開頭那一節）。
+    """
+    user = await create_user(db_session)
+    user_id = user.id
+    issued = await start_session(db_session, user_id)
+
+    await revoke_session(db_session, issued.refresh_token)
+    await db_session.rollback()
+
+    revoked = (
+        await db_session.scalars(
+            select(RefreshSession.revoked_at).where(RefreshSession.user_id == user_id)
+        )
+    ).all()
+    assert revoked and all(value is not None for value in revoked)
+```
+
+> **為什麼這兩條不能只靠那條並行測試。** 它們目前唯一的守衛是
+> `test_logout_revokes_the_family_even_under_concurrent_rotation`，而且是
+> **偶然**守到的 —— 那條測試的失敗訊息講的是並行，不是「忘了 commit」。
+> 它同時也是最貴、對環境最敏感的一條（輪詢 `pg_stat_activity`、5 秒逾時）。
+> 那正是 CI 一不穩就會被 `xfail` 掉的測試 —— 而它一被關掉，
+> **三個互相獨立的性質（鎖、family 範圍、持久化）會同時失去唯一的守衛。**
 
 - [ ] **Step 5b: 補一條登出版的並行測試**
 
