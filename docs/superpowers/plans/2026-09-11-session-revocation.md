@@ -1989,15 +1989,25 @@ Expected: FAIL — 多數是 404（`/api/auth/logout` 還不存在）
 
 - [ ] **Step 3: 加撤銷函式**
 
+> **這一段的程式碼曾經跟它自己的 docstring 矛盾。** 原本的版本在 docstring
+> 裡寫「這裡也要先取 `_lock_user_sessions`」，但**程式碼範例裡沒有那行呼叫**。
+> 照抄的人會漏掉，而漏掉的後果是登出那條路徑重新打開規格 §3.2 那個洞。
+>
+> 這正好是交接文件 §6 第 7 條的實例：**文件擋不住重蹈覆轍，程式碼可以。**
+> 把警告寫進 docstring 而不是寫進程式碼本身，等於什麼都沒做。
+> 下面的版本是從實作驗證過的 `app/security/sessions.py` 直接同步回來的。
+
 Append to `app/security/sessions.py`:
 
 ```python
 async def revoke_session(db: AsyncSession, refresh_token: str) -> None:
     """登出單一裝置：撤銷這張票所屬的整條 family。
 
-    **注意這裡也要先取 `_lock_user_sessions`**（規格 §3.2）：`_revoke_family`
-    在並行下看不見另一個交易剛 INSERT 的列，所以「登出的同時另一個分頁正在
-    輪替」會留下一張活票 —— 跟重用偵測那個洞是同一個，只是從登出這條路進來。
+    **這裡也要先取 `_lock_user_sessions`**（規格 §3.2）：`_revoke_family`
+    是 bulk UPDATE，在 READ COMMITTED 下快照固定在 statement 開始那一刻，
+    並行交易剛 INSERT 的列完全不在它的視野裡 —— 所以「登出的同時另一個
+    分頁正在輪替」會留下一張活票，跟重用偵測那個洞是同一個，只是從登出
+    這條路進來。鎖的粒度是使用者，讓輪替、登出、全部登出三條路徑互斥。
 
     **一律靜默成功。** 無效、過期、偽造、已經撤銷過的 token 都不回錯誤 ——
     回錯誤等於提供一個「這張票還活著嗎」的探針，而登出本來就是冪等的。
@@ -2006,6 +2016,8 @@ async def revoke_session(db: AsyncSession, refresh_token: str) -> None:
         claims = decode_refresh_token(refresh_token)
     except TokenError:
         return
+
+    await _lock_user_sessions(db, claims.user_id)
 
     row = await db.scalar(select(RefreshSession).where(RefreshSession.jti == claims.jti))
     if row is None:
@@ -2021,6 +2033,8 @@ async def revoke_all_for_user(db: AsyncSession, user_id: int) -> None:
     同樣要先取 `_lock_user_sessions`。這也正是鎖的粒度選使用者而不是 family
     的原因：這個函式一次要處理多個 family，用 family 當鍵它跟輪替不會互斥。
     """
+    await _lock_user_sessions(db, user_id)
+
     await db.execute(
         update(RefreshSession)
         .where(
@@ -2077,6 +2091,139 @@ from app.api.deps import get_current_user
 from app.schemas.auth import LogoutRequest
 from app.security.sessions import revoke_all_for_user, revoke_session, rotate_session, start_session
 ```
+
+- [ ] **Step 5b: 補一條登出版的並行測試**
+
+`revoke_session` 裡那把鎖，在這個 task 完成時**沒有任何測試在守**。
+實測確認：把 `await _lock_user_sessions(...)` 從 `revoke_session` 拿掉，
+完整套件 496 全綠。
+
+`tests/test_sessions_concurrency.py` 現有那條只涵蓋「重用偵測 vs 輪替」。
+「登出 vs 輪替」是**同一個洞的另一條路徑**，需要自己的測試。結構完全比照
+現有那條（干擾側手動輪替卡在 commit 前、輪詢 `pg_stat_activity` 確認
+登出側真的被鎖住、然後放行）：
+
+```python
+async def test_logout_revokes_the_family_even_under_concurrent_rotation(
+    independent_sessions,
+):
+    """**規格 §3.2 的另一條路徑：登出 vs 輪替，跟重用偵測是同一個洞。**
+
+    `revoke_session` 呼叫的是同一個 `_revoke_family`——一個 bulk UPDATE，
+    在 READ COMMITTED 下快照固定在 statement 開始那一刻，並行交易剛
+    INSERT 的新列完全不在它的視野裡。上面那條測試釘住的是「重用偵測 vs
+    輪替」；這條走的是完全不同的呼叫路徑（使用者主動登出，不是重放判斷）
+    ——Task 5 之前這條路徑上完全沒有測試看得見它。
+
+    攻擊/意外形狀：裝置手上握著 A，使用者按下登出的同時，另一個分頁
+    （或背景自動換發）剛好在輪替 A -> C。登出讀到 A 對應的 family_id，
+    去撤銷整個 family，但如果撤銷發生在 C 被 INSERT 之後、卻在同一個
+    bulk UPDATE 的快照之外，C 就會活下來——使用者以為登出了，
+    但那張新票還能繼續換發。
+
+    交錯的建構方式跟上面那條同構（同樣是實測驗證過、不依賴自然時序的
+    確定性版本）：
+
+      1. 「干擾側」手動重現一次真正輪替 A 的資料庫動作（UPDATE 舊列、
+         INSERT 新列 C），卡在 commit 之前不放。
+      2. 輪詢 `pg_stat_activity`，確認 replay 側真的卡住了才放行——
+         有鎖時卡在 `_lock_user_sessions` 的 advisory lock；鎖被拿掉時
+         卡在 `_revoke_family` 想鎖干擾側剛更新的 A 那一列（兩者的
+         `wait_event_type` 都是 'Lock'，所以同一個輪詢函式兩種情況都認得出來）。
+      3. replay 側呼叫的是**真正的** `revoke_session`——它才是被測的對象。
+    """
+    async with independent_sessions() as setup:
+        user = User(
+            email="logout-concurrency-probe@example.com",
+            password_hash=hash_password("correct-horse-battery"),
+            display_name="登出並行測試",
+        )
+        setup.add(user)
+        await setup.commit()
+        user_id = user.id
+
+    try:
+        async with independent_sessions() as s:
+            a = await start_session(s, user_id)
+
+        claims_a = decode_refresh_token(a.refresh_token)
+        rotation_ready = asyncio.Event()
+
+        async def interfering_rotation() -> None:
+            """手動重現一次真正輪替 A 的資料庫動作，卡在 commit 之前不放。"""
+            async with independent_sessions() as s:
+                # 這一側也要拿鎖——它在模擬一次真正的輪替，而真正的輪替會拿。
+                await s.execute(select(func.pg_advisory_xact_lock(user_id)))
+                own_pid = await s.scalar(select(func.pg_backend_pid()))
+
+                family_id = (
+                    await s.execute(
+                        update(RefreshSession)
+                        .where(
+                            RefreshSession.jti == claims_a.jti,
+                            RefreshSession.used_at.is_(None),
+                            RefreshSession.revoked_at.is_(None),
+                        )
+                        .values(used_at=datetime.now(UTC))
+                        .returning(RefreshSession.family_id)
+                    )
+                ).scalar_one()
+
+                now = datetime.now(UTC)
+                s.add(
+                    RefreshSession(
+                        user_id=user_id,
+                        jti=uuid.uuid4(),
+                        family_id=family_id,
+                        issued_at=now,
+                        expires_at=now + timedelta(days=14),
+                    )
+                )
+
+                rotation_ready.set()
+                try:
+                    async with asyncio.timeout(5.0):
+                        await _wait_until_someone_else_is_lock_waiting(own_pid)
+                except TimeoutError as exc:
+                    raise AssertionError(
+                        "等不到 replay 側卡進 Lock 等待狀態——如果這裡逾時，"
+                        "代表這個 PostgreSQL 環境的鎖等待行為跟預期不同，"
+                        "不要調鬆 timeout 蓋過去，先確認 pg_stat_activity "
+                        "的假設還成不成立。"
+                    ) from exc
+                await s.commit()
+
+        async def replay_logout() -> None:
+            await rotation_ready.wait()
+            async with independent_sessions() as s:
+                await revoke_session(s, a.refresh_token)
+
+        await asyncio.gather(interfering_rotation(), replay_logout())
+
+        # **這才是重點：登出回報完成之後，這個使用者名下不可以留下任何活票。**
+        async with independent_sessions() as check:
+            live = await check.scalar(
+                select(func.count())
+                .select_from(RefreshSession)
+                .where(
+                    RefreshSession.user_id == user_id,
+                    RefreshSession.used_at.is_(None),
+                    RefreshSession.revoked_at.is_(None),
+                )
+            )
+        assert live == 0, (
+            f"登出應該撤銷整個 family，但還有 {live} 張活票 —— "
+            "使用者以為登出了，輪替出的新票卻還活著（規格 §3.2 的另一條路徑）"
+        )
+    finally:
+        async with independent_sessions() as cleanup:
+            await cleanup.execute(delete(User).where(User.id == user_id))
+            await cleanup.commit()
+```
+
+**驗收數據（雙向都要）：** 有鎖連跑 10 次全綠、拿掉鎖連跑 10 次全紅
+（實作者）；主 session 又獨立複跑 2 次綠 / 3 次紅，失敗一律是乾淨的
+`assert 1 == 0`，而且**只有登出那條變紅**，重用那條仍綠 —— 特異性正確。
 
 - [ ] **Step 6: 跑測試**
 
@@ -2306,8 +2453,9 @@ git commit -m "feat: cleanup-sessions 指令
 | 2 | `_revoke_family` 的 where 從 `family_id ==` 改成 `jti ==` | `test_reusing_a_spent_token_revokes_the_whole_family` | ✅ **已驗證**（Task 4）2 failed / 482 passed：預測的那條，加上 `test_reuse_detection_persists_the_revocation`。乾淨的斷言失敗（`revoked_at is None`） |
 | 3b | `rotate_session` 拿掉 `await _lock_user_sessions(...)` | `tests/test_sessions_concurrency.py` | ✅ **已驗證（第三輪，確定性版本）**。第一版 `test_sessions_concurrency.py` 靠 `asyncio.gather` 讓兩個真實連線自然競速，在某台機器（Windows + Docker Desktop）上跑了 25 次全部通過、一次都沒變紅——規格 §6 規矩 1：「沒被觀察到失敗的守衛不算數」，那個版本從沒被真的突變觀察過，等於沒有守衛，被品質審查擋下。改成手動、確定性地建構規格 §3.2 描述的交錯：「干擾側」手寫 UPDATE 舊列 + INSERT 新列 C、卡在 commit 之前，輪詢 `pg_stat_activity` 確認 replay 側真的卡進 `wait_event_type = 'Lock'`（不管是卡在 advisory lock 還是卡在 `_revoke_family` 想鎖被干擾側佔住的列）才放行 commit；replay 側呼叫真正的 `rotate_session`。**有鎖：連跑 10 次全綠。拿掉鎖：連跑 10 次全紅，每次都是乾淨的 `assert 1 == 0`（活票數）。** 兩個方向都是 10/10 確定性重現，不是機率性的。這條測試手寫了 `rotate_session` 內部「先 UPDATE 舊列、再 INSERT 新列」的操作順序，跟實作順序有耦合——如果那個順序改變，這條測試可能要跟著調整，這是刻意的取捨，換來的是確定性 |
 | 3 | `_reject` 拿掉 `await db.commit()` | `test_reuse_detection_persists_the_revocation` | ✅ **已驗證**（Task 4，修過測試後複跑）1 failed / 483 passed，就是預測的那一條，沒有波及其他測試，乾淨的 `assert False`（`all(value is not None for value in revoked_at_values)`）。**修法之前**這條測試雖然也會變紅，但失敗形態是 `sqlalchemy.exc.MissingGreenlet`——rollback 後讀 `user.id` 這個過期的 ORM 屬性觸發同步 refresh 查詢在 async 環境炸掉，跟撤銷有沒有持久化無關，是偶然的守衛（見本計畫開頭「用了 rollback 就不能再讀 ORM 屬性」一節）。改成 rollback 前先存 `user_id`、查詢選欄位而非實體之後，才是真正在守這個性質的乾淨斷言 |
-| 4 | `revoke_session` 改成直接 `return`（什麼都不做） | `test_logout_kills_the_refresh_token` | 待填 |
-| 5 | `revoke_all_for_user` 的 where 拿掉 `user_id ==` | `test_logout_all_does_not_touch_another_users_sessions` | 待填 |
+| 4 | `revoke_session` 改成直接 `return`（什麼都不做） | `test_logout_kills_the_refresh_token` | ✅ **已驗證**（Task 5）該條 + `test_logout_kills_the_whole_family_not_just_the_last_token` 一起變紅 |
+| 4b | `revoke_session` 拿掉 `await _lock_user_sessions(...)` | `test_logout_revokes_the_family_even_under_concurrent_rotation` | ✅ **已驗證**（Task 5）**補這條測試之前完整套件 496 全綠** —— 那把鎖原本是沒有守衛的守衛。補完之後：有鎖 10/10 綠、沒鎖 10/10 紅，乾淨的 `assert 1 == 0` |
+| 5 | `revoke_all_for_user` 的 where 拿掉 `user_id ==` | `test_logout_all_does_not_touch_another_users_sessions` | ✅ **已驗證**（Task 5）`401 == 200` 的乾淨斷言失敗 |
 | 6 | `start_session` 改成共用一個固定的 `family_id` | `test_two_logins_start_two_separate_families` 與 `test_logout_only_affects_the_device_that_logged_out` | 待填 |
 | 7 | `decode_refresh_token` 的 `require` 拿掉 `"jti"` | `test_refresh_token_without_jti_is_rejected` | ✅ **已驗證**（Task 2）1 failed，拋的是未接住的 `KeyError: 'jti'` 而非 `TokenError`。**收窄 `except` 之前這個突變是存活的**（套件全綠） |
 | 8 | `cleanup_expired_sessions` 的 where 改成 `revoked_at.is_not(None)` | `test_cleanup_removes_revoked_sessions_only_after_they_expire` | 待填 |
