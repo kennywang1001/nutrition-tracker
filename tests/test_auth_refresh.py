@@ -1,12 +1,15 @@
 from uuid import uuid4
 
 from app.security.tokens import create_access_token, create_refresh_token, decode_access_token
-from tests.factories import create_user
+from tests.factories import DEFAULT_PASSWORD, create_user
 
 
 async def test_refresh_returns_a_new_access_token(client, db_session):
     user = await create_user(db_session)
-    refresh_token = create_refresh_token(user.id, uuid4())
+    login = await client.post(
+        "/api/auth/login", json={"email": user.email, "password": DEFAULT_PASSWORD}
+    )
+    refresh_token = login.json()["refresh_token"]
 
     response = await client.post("/api/auth/refresh", json={"refresh_token": refresh_token})
 
@@ -38,3 +41,18 @@ async def test_refresh_rejects_a_token_for_a_deleted_user(client):
     response = await client.post("/api/auth/refresh", json={"refresh_token": refresh_token})
 
     assert response.status_code == 401
+
+
+async def test_refresh_endpoint_invalidates_the_old_token(client, db_session):
+    user = await create_user(db_session)
+    first = await client.post(
+        "/api/auth/login",
+        json={"email": user.email, "password": DEFAULT_PASSWORD},
+    )
+    old_refresh = first.json()["refresh_token"]
+
+    await client.post("/api/auth/refresh", json={"refresh_token": old_refresh})
+    again = await client.post("/api/auth/refresh", json={"refresh_token": old_refresh})
+
+    assert again.status_code == 401
+    assert again.json()["error"]["code"] == "INVALID_TOKEN"

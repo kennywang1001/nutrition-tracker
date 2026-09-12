@@ -6,8 +6,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.models.session import RefreshSession
-from app.security.sessions import start_session
-from app.security.tokens import decode_access_token, decode_refresh_token
+from app.security.sessions import ReuseDetectedError, rotate_session, start_session
+from app.security.tokens import (
+    TokenError,
+    create_refresh_token,
+    decode_access_token,
+    decode_refresh_token,
+)
 from tests.factories import DEFAULT_PASSWORD, create_user
 
 
@@ -222,3 +227,115 @@ async def test_start_session_commits_the_row(db_session):
         select(RefreshSession).where(RefreshSession.jti == claims.jti)
     )
     assert row is not None
+
+
+async def test_rotation_issues_a_new_token_in_the_same_family(db_session):
+    user = await create_user(db_session)
+    first = await start_session(db_session, user.id)
+
+    second = await rotate_session(db_session, first.refresh_token)
+
+    first_row = await db_session.scalar(
+        select(RefreshSession).where(
+            RefreshSession.jti == decode_refresh_token(first.refresh_token).jti
+        )
+    )
+    second_row = await db_session.scalar(
+        select(RefreshSession).where(
+            RefreshSession.jti == decode_refresh_token(second.refresh_token).jti
+        )
+    )
+
+    assert first_row.used_at is not None
+    assert second_row.used_at is None
+    assert second_row.family_id == first_row.family_id
+
+
+async def test_the_old_token_stops_working_after_rotation(db_session):
+    """**這個專案要修的就是這一件事。**
+
+    注意「換發後新票可用」那種測試對這個缺陷零鑑別力 —— 它在修好之前
+    就是綠的，修好之後也是綠的，跟缺陷的重疊區間是空的（§6 第 6 條）。
+    有鑑別力的形狀只有一種：拿【舊】票再換一次，必須失敗。
+    """
+    user = await create_user(db_session)
+    first = await start_session(db_session, user.id)
+    await rotate_session(db_session, first.refresh_token)
+
+    with pytest.raises(TokenError):
+        await rotate_session(db_session, first.refresh_token)
+
+
+async def test_reusing_a_spent_token_revokes_the_whole_family(db_session):
+    """三層鏈，不是兩層。
+
+    A → B → C 之後拿 B 重用：B 失效是本來就會發生的事（它已經 used_at 了），
+    真正要證明的是 **C 也一起死**。只驗兩層的話，把「撤銷整個 family」
+    改成「只撤銷這一列」，測試照樣綠。
+    """
+    user = await create_user(db_session)
+    a = await start_session(db_session, user.id)
+    b = await rotate_session(db_session, a.refresh_token)
+    c = await rotate_session(db_session, b.refresh_token)
+
+    with pytest.raises(ReuseDetectedError):
+        await rotate_session(db_session, b.refresh_token)
+
+    # C 必須也死了
+    with pytest.raises(TokenError):
+        await rotate_session(db_session, c.refresh_token)
+
+
+async def test_reuse_detection_persists_the_revocation(db_session):
+    """撤銷必須真的寫進資料庫，不能只是「拋了例外」。
+
+    §6 第 3 條與第 7 條的組合：例外拋出後路由不會 commit，如果撤銷是靠
+    呼叫端 commit 的，它會被 rollback 掉 —— 結果是「回了 401，但票還活著」，
+    而只斷言例外的測試完全看不到這件事。
+    """
+    user = await create_user(db_session)
+    a = await start_session(db_session, user.id)
+    await rotate_session(db_session, a.refresh_token)
+
+    with pytest.raises(ReuseDetectedError):
+        await rotate_session(db_session, a.refresh_token)
+
+    # **這一行不能省。** 沒有它，這個測試證明的只是「撤銷在記憶體裡」——
+    # 測試的 db_session 用 create_savepoint，commit 只是 RELEASE SAVEPOINT，
+    # 「有沒有 commit」對同一個 session 不可觀察（見本計畫開頭那一節）。
+    # rollback 之後還讀得到的，才是真的寫進資料庫的。
+    await db_session.rollback()
+
+    rows = (
+        await db_session.scalars(
+            select(RefreshSession).where(RefreshSession.user_id == user.id)
+        )
+    ).all()
+    assert len(rows) == 2
+    assert all(row.revoked_at is not None for row in rows)
+
+
+async def test_revoking_one_family_leaves_another_family_alone(db_session):
+    """手機外洩不該把桌機一起弄掉。"""
+    user = await create_user(db_session)
+    phone = await start_session(db_session, user.id)
+    desktop = await start_session(db_session, user.id)
+    await rotate_session(db_session, phone.refresh_token)
+
+    with pytest.raises(ReuseDetectedError):
+        await rotate_session(db_session, phone.refresh_token)
+
+    # 桌機那條鏈完全沒被波及
+    rotated = await rotate_session(db_session, desktop.refresh_token)
+    assert rotated.access_token
+
+
+async def test_rotation_rejects_a_token_whose_row_does_not_exist(db_session):
+    """簽章有效、jti 格式正確，但資料庫裡沒有這一列 —— 例如上線前發出的票
+    （規格 §7），或資料庫被還原到更早的時間點。
+    """
+    user = await create_user(db_session)
+    orphan = create_refresh_token(user.id, uuid4())
+
+    with pytest.raises(TokenError):
+        await rotate_session(db_session, orphan)
