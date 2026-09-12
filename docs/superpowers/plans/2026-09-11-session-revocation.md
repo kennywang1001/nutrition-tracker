@@ -2568,7 +2568,7 @@ git commit -m "feat: cleanup-sessions 指令
 | 5b | `revoke_session` 只撤銷被出示的那一列，不撤整個 family | `test_logout_revokes_the_whole_family` | ✅ **已驗證**（Task 5）乾淨斷言失敗。**補這條模組層測試之前，9 條登出端點測試全綠** —— 端點層在定義上分不出來，見 Step 5a |
 | 5c | `revoke_session` 拿掉 `await db.commit()` | `test_logout_persists_the_revocation` | ✅ **已驗證**（Task 5）乾淨斷言失敗，其餘 27 條全綠（特異性正確）。**補這條之前 9 條登出測試全綠** |
 | 5d | `_revoke_family` 的 where 拿掉 `revoked_at.is_(None)` | `test_logout_is_idempotent`（強化後） | ✅ **已驗證**（Task 5）乾淨斷言失敗。**強化那條測試之前，33 條測試全綠** —— 冪等性「第二次呼叫不會破壞東西」那一半原本沒有守衛，`revoked_at` 會被覆寫，鑑識資訊（family 是什麼時候死的）會消失 |
-| 6 | `start_session` 改成共用一個固定的 `family_id` | `test_two_logins_start_two_separate_families` 與 `test_logout_only_affects_the_device_that_logged_out` | 待填 |
+| 6 | `start_session` 改成共用一個固定的 `family_id` | 見右 | ✅ **已驗證**（Task 7 補跑，此時登出測試已存在）**5 failed** / 498 passed：`test_two_logins_start_two_separate_families`、`test_revoking_one_family_leaves_another_family_alone`、`test_logout_only_affects_the_device_that_logged_out`、`test_logout_all_kills_every_device`、`test_logout_all_does_not_touch_another_users_sessions`。跟第 14 條是同一個突變，但那次跑的時候登出端點還不存在 —— 同一個突變在不同時間點的鑑別力不同，這本身值得記 |
 | 7 | `decode_refresh_token` 的 `require` 拿掉 `"jti"` | `test_refresh_token_without_jti_is_rejected` | ✅ **已驗證**（Task 2）1 failed，拋的是未接住的 `KeyError: 'jti'` 而非 `TokenError`。**收窄 `except` 之前這個突變是存活的**（套件全綠） |
 | 8 | `cleanup_expired_sessions` 的 where 改成 `revoked_at.is_not(None)` | `test_cleanup_removes_revoked_sessions_only_after_they_expire` | ✅ **已驗證**（Task 6）**4 failed** / 499 passed —— 該欄位同時影響 dry_run 與真刪兩條 where，所以四條清理測試一起變紅 |
 | 8b | 拿掉 `dry_run` 分支（讓 dry run 也真的刪） | `test_cleanup_dry_run_deletes_nothing` | ✅ **已驗證**（Task 6）1 failed / 502 passed，乾淨的 `assert 0 == 1`，特異性正確 |
