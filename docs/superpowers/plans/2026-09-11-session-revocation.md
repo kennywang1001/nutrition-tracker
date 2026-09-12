@@ -2006,6 +2006,21 @@ async def revoke_session(db: AsyncSession, refresh_token: str) -> None:
     分頁正在輪替」會留下一張活票，跟重用偵測那個洞是同一個，只是從登出
     這條路進來。鎖的粒度是使用者，讓輪替、登出、全部登出三條路徑互斥。
 
+    **先 SELECT 拿到那一列、再取鎖，順序不能反。** 呼叫這個函式不需要
+    通過身分驗證，只需要一張簽章有效的 refresh token——如果先取鎖，
+    任何一張簽章有效但列已經被清掉的 token（過期太久被 Task 6 的
+    cleanup 清掉、或使用者本尊早就登出過）都能讓沒有通過任何驗證的
+    呼叫者，拿到那個使用者的 advisory lock。反過來先 SELECT：鎖只在
+    真的找到列、真的要撤銷時才取，而且用**列上的** `user_id`（資料庫
+    裡的事實），不是 token 聲稱的那個。這同時也修掉了另一個問題——
+    原本 `row is None` 的提早 return 會在已經取到鎖之後才發生，
+    離開時沒有 commit 也沒有 rollback，鎖只能等交易結束才釋放；
+    先 SELECT 的話那個分支根本還沒碰過鎖。
+
+    `family_id` 不會因為輪替而改變，所以先取到的值在拿鎖前後仍然有效；
+    列在這段空窗期被刪除，代表對應的 family 早就因為使用者被刪除而
+    整條消失，撤銷一個不存在的 family 是安全的空操作。
+
     **一律靜默成功。** 無效、過期、偽造、已經撤銷過的 token 都不回錯誤 ——
     回錯誤等於提供一個「這張票還活著嗎」的探針，而登出本來就是冪等的。
     """
@@ -2014,11 +2029,11 @@ async def revoke_session(db: AsyncSession, refresh_token: str) -> None:
     except TokenError:
         return
 
-    await _lock_user_sessions(db, claims.user_id)
-
     row = await db.scalar(select(RefreshSession).where(RefreshSession.jti == claims.jti))
     if row is None:
         return
+
+    await _lock_user_sessions(db, row.user_id)
 
     await _revoke_family(db, row.family_id)
     await db.commit()
@@ -2515,6 +2530,9 @@ git commit -m "feat: cleanup-sessions 指令
 | 4 | `revoke_session` 改成直接 `return`（什麼都不做） | `test_logout_kills_the_refresh_token` | ✅ **已驗證**（Task 5）該條 + `test_logout_kills_the_whole_family_not_just_the_last_token` 一起變紅 |
 | 4b | `revoke_session` 拿掉 `await _lock_user_sessions(...)` | `test_logout_revokes_the_family_even_under_concurrent_rotation` | ✅ **已驗證**（Task 5）**補這條測試之前完整套件 496 全綠** —— 那把鎖原本是沒有守衛的守衛。補完之後：有鎖 10/10 綠、沒鎖 10/10 紅，乾淨的 `assert 1 == 0` |
 | 5 | `revoke_all_for_user` 的 where 拿掉 `user_id ==` | `test_logout_all_does_not_touch_another_users_sessions` | ✅ **已驗證**（Task 5）`401 == 200` 的乾淨斷言失敗 |
+| 5b | `revoke_session` 只撤銷被出示的那一列，不撤整個 family | `test_logout_revokes_the_whole_family` | ✅ **已驗證**（Task 5）乾淨斷言失敗。**補這條模組層測試之前，9 條登出端點測試全綠** —— 端點層在定義上分不出來，見 Step 5a |
+| 5c | `revoke_session` 拿掉 `await db.commit()` | `test_logout_persists_the_revocation` | ✅ **已驗證**（Task 5）乾淨斷言失敗，其餘 27 條全綠（特異性正確）。**補這條之前 9 條登出測試全綠** |
+| 5d | `_revoke_family` 的 where 拿掉 `revoked_at.is_(None)` | `test_logout_is_idempotent`（強化後） | ✅ **已驗證**（Task 5）乾淨斷言失敗。**強化那條測試之前，33 條測試全綠** —— 冪等性「第二次呼叫不會破壞東西」那一半原本沒有守衛，`revoked_at` 會被覆寫，鑑識資訊（family 是什麼時候死的）會消失 |
 | 6 | `start_session` 改成共用一個固定的 `family_id` | `test_two_logins_start_two_separate_families` 與 `test_logout_only_affects_the_device_that_logged_out` | 待填 |
 | 7 | `decode_refresh_token` 的 `require` 拿掉 `"jti"` | `test_refresh_token_without_jti_is_rejected` | ✅ **已驗證**（Task 2）1 failed，拋的是未接住的 `KeyError: 'jti'` 而非 `TokenError`。**收窄 `except` 之前這個突變是存活的**（套件全綠） |
 | 8 | `cleanup_expired_sessions` 的 where 改成 `revoked_at.is_not(None)` | `test_cleanup_removes_revoked_sessions_only_after_they_expire` | 待填 |
