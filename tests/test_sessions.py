@@ -144,6 +144,14 @@ async def test_start_session_writes_a_row_matching_the_issued_token(db_session):
 async def test_two_logins_start_two_separate_families(db_session):
     """每次登入是獨立的一條鏈 —— 否則在手機上登出會把桌機也一起登出，
     而規格 §1 的整個出發點就是要能只撤銷一台裝置。
+
+    如果 `start_session` 改成每次都用同一個固定 family_id，第二次
+    `start_session` 會先在 Task 1 那個部分唯一索引撞
+    `IntegrityError`（一個 family 最多一張活票）——最下面那行
+    assertion 其實根本跑不到。這條測試仍然值得留著（它釘住的是
+    「這裡呼叫的是 start_session，行為應該是兩條獨立的鏈」這個意圖），
+    但如果日後有人弱化那個索引，讓它不再擋，這行 assertion 才是
+    真正在守這個不變量的最後一道防線。
     """
     user = await create_user(db_session)
 
@@ -188,3 +196,29 @@ async def test_login_endpoint_creates_a_session_row(client, db_session):
     )
     assert row is not None
     assert row.user_id == user.id
+
+
+async def test_start_session_commits_the_row(db_session):
+    """**這條測試守的是這個 task 唯一真正的決定：sessions.py 自己管交易。**
+
+    `commit` 不能弱化成 `flush`，也不能省略 —— production 的 `get_db` 是
+    per-request，session 一關就把沒 commit 的 INSERT 丟掉，登入會發出一張
+    沒有對應資料列的票，Task 4 之後每一次換發都 401。
+
+    而預設情況下這件事**測不出來**：測試的 `db_session` 用 create_savepoint，
+    `commit()` 只是 RELEASE SAVEPOINT，對同一個 session 來說「有沒有 commit」
+    不可觀察（實測：把 commit 整行刪掉，476 個測試全綠）。
+
+    下面那行 `rollback()` 就是把它變成可觀察的：沒 commit 的話那一列還在
+    savepoint 裡，rollback 會把它抹掉；commit 過的不會。
+    """
+    user = await create_user(db_session)
+    issued = await start_session(db_session, user.id)
+
+    await db_session.rollback()
+
+    claims = decode_refresh_token(issued.refresh_token)
+    row = await db_session.scalar(
+        select(RefreshSession).where(RefreshSession.jti == claims.jti)
+    )
+    assert row is not None
