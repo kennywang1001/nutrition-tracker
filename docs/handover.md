@@ -347,6 +347,7 @@ Windows + Docker Desktop 上**連跑 25 次一次都沒變紅** —— 那台機
 | compose 變數代換 | **每個檔案各自解析**，不是先合併再代換。`${VAR:?}` 不能寫在共用 base |
 | compose `volumes` / `ports` | **合併不取代**，override 拿不掉 —— 所以 dev-only 的東西要寫在 dev override |
 | `tzdata` | Windows 沒有系統時區庫，Linux 有 → 不宣告會「CI 綠、本機紅」 |
+| **CI 沒開 `-W error`** | 本機開、CI 沒開，而 CI 的 `JWT_SECRET` 短到會觸發 `InsecureKeyLengthWarning` —— **兩邊都不會因為警告變紅**（本機有嚴格模式沒觸發條件，CI 有觸發條件沒嚴格模式）。§6 第 5 種的 CI/本機版本 |
 | PG `AT TIME ZONE` vs Python `zoneinfo` | 兩套獨立實作。實測 90 個時刻 0 不一致，但有測試釘住漂移 |
 | asyncpg `contype` | `"char"` 回傳成 **bytes**（`b'c'`），比對要加 `::text` |
 | asyncpg 日期參數 | 要傳真的 `date` 物件，`$1::date` 配字串會拋 `DataError` |
