@@ -37,10 +37,22 @@ export default defineConfig({
 		// include: ["src","tests"] 的實際設定。實測過：不指定時，把
 		// schema.d.ts 的 protein_g 從 string 改成 number，typecheck 還是
 		// 全線通過——是假綠燈。指到 tsconfig.app.json 之後同一個突變才會紅。
+		// glob 蓋 .test.ts 也蓋 .test.tsx（Task 8 加了第一個 .tsx 測試檔）。
+		// 實測過兩種寫法的差異：tsconfig.app.json 的 include 涵蓋整個
+		// src/tests，所以 tsc 的 Program 本來就會把 .tsx 檔也編進去，
+		// 一個純型別錯誤（例如把 login.test.tsx 裡的字串塞進 number
+		// 變數）就算 include 只寫 *.test.ts 也還是會讓 npm run test
+		// 的 exit code 變成 1——不是完全沒有防護，只是被歸類成一則
+		// 語氣不確定的「Unhandled Errors ... may cause false positive
+		// tests」，沒有掛在對應的檔案底下、Test Files 也不會顯示那支
+		// 檔案失敗。把 .tsx 補進這個 glob 之後，同一個突變會變成乾淨的
+		// FAIL tests/login.test.tsx，可以在報告裡直接看出是哪一支
+		// 檔案、哪一行——不再是仰賴「診斷剛好從整個 Program 漏出來」
+		// 這個沒有文件保證的行為。
 		typecheck: {
 			enabled: true,
 			tsconfig: "./tsconfig.app.json",
-			include: ["tests/**/*.test.ts"],
+			include: ["tests/**/*.test.?(c|m)[jt]s?(x)"],
 		},
 	},
 });
