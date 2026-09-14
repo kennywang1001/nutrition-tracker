@@ -12,15 +12,19 @@
 # 這裡也沒有 volumes：不宣告原始碼掛載，image 裡 COPY 進去的程式碼就是
 # 唯一的來源。
 services:
+  caddy:
+    ports:
+      # 只聽 loopback。對外由 tailscale serve 終結 TLS 之後轉進來。
+      - "127.0.0.1:8080:8080"
+
   api:
     environment:
       # 決定 6（fail closed）在 compose 層的體現：沒有預設值可以退回，
       # 忘記設就是啟動當下大聲的失敗，而不是安靜地退回一個可預測的密鑰。
       # 用 `openssl rand -hex 32` 產生一組新的，不要跟開發或別的環境共用。
       JWT_SECRET: "${JWT_SECRET:?JWT_SECRET is required in production. Generate one with: openssl rand -hex 32}"
-    ports:
-      # 決定 5：綁到 Tailscale 的位址，不是 0.0.0.0。規格第 3 節寫
-      # 「Tailscale 是邊界」，但 0.0.0.0 從沒真的強制這件事——NAS
-      # 在區域網路上的任何裝置都連得到。BIND_ADDR 填 NAS 的 tailnet
-      # 位址（例如 100.x.x.x，用 `tailscale ip -4` 查）。
-      - "${BIND_ADDR:?BIND_ADDR is required in production. Set it to the NAS's Tailscale address (e.g. 100.x.x.x), never 0.0.0.0}:8000:8000"
+    # 決定：api 在 prod 不再發佈任何埠。
+    # 之前是 ${BIND_ADDR}:8000:8000，現在唯一的入口是 caddy，
+    # 而 caddy 走 compose 網路的 api:8000 連過去。
+    # 這讓規格第 3 節「Tailscale 是邊界」又收緊了一層。
+    ports: !reset []

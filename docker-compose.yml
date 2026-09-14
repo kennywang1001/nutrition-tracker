@@ -69,6 +69,33 @@ services:
     # 與 production（${BIND_ADDR:?...}，決定 5）完全不同，且跟 JWT_SECRET
     # 一樣有「必填變數要在真正會用到它的那個檔案裡宣告」的限制。
 
+  caddy:
+    build:
+      # context 是 repo 根目錄，因為映像需要同時看到 frontend/ 與 caddy/。
+      context: .
+      dockerfile: frontend/Dockerfile
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8080/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    # ports 刻意不寫在這裡：prod 綁 127.0.0.1。跟 api 的 ports 同一個理由——
+    # compose 的 ports 是「合併不取代」，寫在共用檔案 production 就拿不掉
+    # （陷阱表第 7 條）。
+    #
+    # 注意：這個 service 沒有 profiles 設定，所以純 `docker compose up`
+    # （dev）也會 build/起這個容器——實測確認過。這裡不發佈埠，所以 dev
+    # 沒人連得到它（Vite proxy 直接打 host 的 api:8000，不經過 caddy），
+    # 純粹是多花一次 build 時間，不影響行為。之前想在這裡寫「dev 根本
+    # 不起 caddy」，但那句話實測是假的——這份計畫沒有用 profiles 把它
+    # 限定成 prod-only，之後要收斂的話可以加 `profiles: ["prod"]`，
+    # 但那需要另外處理 prod 怎麼啟用該 profile，不在這個 task 的範圍內。
+
 volumes:
   pgdata:
   photos:

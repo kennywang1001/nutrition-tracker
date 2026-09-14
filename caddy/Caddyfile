@@ -1,0 +1,23 @@
+# 只聽 loopback。對外的唯一入口是 `tailscale serve`，由它終結 TLS。
+# 綁 127.0.0.1 而不是 0.0.0.0 是刻意的：規格第 3 節「Tailscale 是邊界」，
+# 而 0.0.0.0 從沒真的強制過那件事——NAS 在區域網路上的任何裝置都連得到。
+:8080 {
+	# /api/* 轉給 api 容器。注意這裡**不重寫路徑** ——
+	# 後端的所有 router 都掛在 /api 前綴下，兩邊的前綴一致。
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+
+	# 其餘一律回 SPA。try_files 的 fallback 讓前端的 client-side routing
+	# 在重新整理時不會 404。
+	#
+	# **這個 fallback 只在這裡，不在後端。** 規格決策 1 記過：如果 SPA
+	# 是由 FastAPI 掛 StaticFiles 服務的，這個 fallback 會讓 /api/typo
+	# 回 HTML 而不是 HTTP_ERROR 的錯誤信封。放在 caddy 就沒這個問題 ——
+	# 上面的 handle /api/* 先比對到，根本走不到這裡。
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}
