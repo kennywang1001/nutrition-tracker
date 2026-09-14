@@ -312,6 +312,19 @@ git commit -m "chore: vite react-ts scaffold（未修改）
 
 > `noUncheckedIndexedAccess` 不是預設值但值得開：後端的清單端點回陣列，`items[0]` 在空陣列時是 `undefined` —— 沒有這個選項，型別會騙你說它一定有值。
 
+> **⚠️ 同時檢查 `include`，這是實作時踩到的。**
+>
+> scaffold 產生的 `tsconfig.app.json` 是 `"include": ["src"]`，而這份計畫把
+> Vitest 的測試放在跟 `src/` 平行的 `tests/` —— 於是 **`tsc -b` 根本不看
+> 測試檔，`npm run typecheck` 對它們是空轉的**。
+>
+> 已用突變驗證：在 `tests/smoke.test.ts` 塞一個型別錯誤，`tsc -b` exit 0；
+> 把 `include` 改成 `["src", "tests"]` 之後同一個錯誤 exit 2。
+>
+> 這件事的代價會隨時間變大：Task 4 之後**每一支新測試檔的型別都不會被檢查**，
+> 而 `npm run typecheck` 會一直是綠的。典型的假綠燈 —— 工具跑了、回報成功、
+> 但它從來沒看過那些檔案。
+
 - [ ] **Step 4: 裝 Biome 當 lint + format**
 
 ```bash
@@ -326,6 +339,12 @@ npx biome init
 >
 > **如果你或審查者認為該用 ESLint + Prettier**（生態系更大、React 專用規則更多），那是合理的不同判斷 —— 改動範圍是 `biome.json`、`package.json` 的 scripts、與 CI 的一行。現在換比之後換便宜。
 
+> **⚠️ scaffold 可能已經內建別的 linter。** 實作時遇到的版本
+> （`create-vite@9.2.1`）附了 `oxlint`（`.oxlintrc.json` + `package.json`
+> 的 `"lint": "oxlint"`）。**移除它**，不要兩個 linter 並存 ——
+> 兩個都跑會出現「A 說可以、B 說不行」而沒有人是權威；只跑一個、
+> 另一個留在 repo 裡生鏽更糟。
+
 在 `package.json` 的 `scripts` 加：
 
 ```json
@@ -336,6 +355,18 @@ npx biome init
   }
 }
 ```
+
+> **Biome 的預設規則夠不夠用 —— 實測驗證過，不是假設。** 用三支探針檔案跑過：
+>
+> | 探針 | 抓到的規則 |
+> |---|---|
+> | 條件式呼叫 hook | `correctness/useHookAtTopLevel` |
+> | `useEffect` 缺依賴 | `correctness/useExhaustiveDependencies`（附修正建議） |
+> | 非互動元素掛 `onClick` | `a11y/noStaticElementInteractions` + `a11y/useKeyWithClickEvents` |
+>
+> `recommended` preset 不需要額外開 Biome 2.x 的 domain 設定就涵蓋了
+> hooks 正確性與 a11y。**嚴格到連 Vite 官方的 react-ts 模板都過不了**
+> （見下一步）。
 
 - [ ] **Step 5: 裝 Vitest 與 Testing Library**
 
@@ -371,6 +402,49 @@ import "@testing-library/jest-dom/vitest";
 }
 ```
 
+- [ ] **Step 5b: 刪掉 scaffold 的 demo 程式碼，讓 lint 從第一天就是綠的**
+
+Biome 的預設規則會讓 Vite 官方模板報 3 個 error + 1 個 warning：
+`public/favicon.svg` 與 `public/icons.svg` 缺 `<title>`（`a11y/noSvgWithoutTitle`）、
+`App.tsx` 的「Learn more」（`a11y/noAmbiguousAnchorText`）、
+`main.tsx` 的 `getElementById('root')!`（`style/noNonNullAssertion`）。
+
+刪掉：`src/App.tsx`、`src/App.css`、`public/*.svg`、`public/hero.png`（或
+該版本模板附的等價檔案），並把 `index.html` 裡引用 favicon 的那一行拿掉。
+
+`src/main.tsx` 換成最小的殼：
+
+```tsx
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+
+const root = document.getElementById("root");
+if (root === null) throw new Error("找不到 #root");
+createRoot(root).render(
+  <StrictMode>
+    <h1>飲食紀錄</h1>
+  </StrictMode>,
+);
+```
+
+> **這一步是計畫寫作時漏掉的，實作時才發現。** 原本的指示是「保持 scaffold
+> 原樣，讓 lint 在一個真的有內容的專案上跑過一次」，理由聽起來合理 ——
+> 但那個「真的有內容」的內容**過不了 lint**，於是 `npm run lint` 從 Task 2
+> 到 Task 8 會一直是紅的。
+>
+> **一個永遠是紅的訊號不帶任何資訊。** Task 3 到 7 全程沒有人會注意到
+> 新引入的 lint 錯誤，因為它混在既有的四個裡面。這跟「CI 沒開 `-W error`」
+> 是同一類問題：一道防線名義上存在、實際上關著。
+>
+> 用 `biome.json` 的 ignore 去讓它假裝通過**更糟** —— 那會讓這幾條規則
+> 對整個專案永久失效，而它們是真的有用的（`noSvgWithoutTitle` 在 Task 10
+> 放真 icon 時會派上用場）。
+>
+> demo code 沒有任何價值，Task 8 本來就會整個換掉 —— **提早刪掉的成本是零**。
+>
+> `index.html` 的 favicon：Task 10 會放真正的 icon，在那之前沒有 favicon
+> 不影響任何事。
+
 - [ ] **Step 6: 寫第一條測試，確認工具鏈真的通了**
 
 Create `frontend/tests/smoke.test.ts`:
@@ -392,11 +466,29 @@ describe("工具鏈", () => {
 ```bash
 cd frontend
 npm run test       # 預期 1 passed
-npm run lint       # 預期無錯誤（scaffold 的程式碼可能需要先 npm run format）
-npx tsc --noEmit   # 預期無錯誤
+npm run lint       # 預期無錯誤
+npm run typecheck  # 預期無錯誤
+npm run build      # 預期成功
 ```
 
-`package.json` 加 `"typecheck": "tsc --noEmit"`。
+`package.json` 加 `"typecheck": "tsc -b"`（scaffold 用 project references
+時是 `tsc -b`，不是 `tsc --noEmit`；以實際的 scaffold 為準）。
+
+**`npm run lint` 必須是乾淨的。** 如果還有錯，先確認 Step 5b 的 demo code
+真的刪乾淨了，再考慮 `npm run format`。**不要用 ignore 讓它假裝通過。**
+
+- [ ] **Step 7b: 驗證 typecheck 真的看得到 `tests/`**
+
+在 `tests/smoke.test.ts` 裡塞一個明顯的型別錯誤（例如 `const x: number = "字串";`），
+跑 `npm run typecheck`。
+
+Expected: **exit code 非 0，而且訊息指向 `tests/smoke.test.ts`**
+
+如果它是 exit 0，代表 `tsconfig` 的 `include` 沒有涵蓋 `tests/` —— 回到
+Step 3 修好。改完記得把型別錯誤拿掉。
+
+> 這一步就是上面那個陷阱的執法點。**不要跳過** —— 「工具跑了、回報成功、
+> 但它從來沒看過那些檔案」是這個專案清單裡的第 11 種假綠燈的近親。
 
 - [ ] **Step 8: Commit**
 
