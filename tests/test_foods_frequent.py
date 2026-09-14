@@ -1,12 +1,12 @@
 from datetime import UTC, datetime
 
 from app.models.food import FoodRevision
-from app.security.tokens import create_token
+from app.security.tokens import create_access_token
 from tests.factories import create_food, create_meal, create_user
 
 
 def auth(user):
-    return {"Authorization": f"Bearer {create_token(user.id, 'access')}"}
+    return {"Authorization": f"Bearer {create_access_token(user.id)}"}
 
 
 async def _current_revision(db_session, food) -> FoodRevision:

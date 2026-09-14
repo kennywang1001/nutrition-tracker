@@ -26,7 +26,11 @@ jobs:
     env:
       DATABASE_URL: postgresql+asyncpg://wallet:wallet@localhost:5432/wallet
       TEST_DATABASE_URL: postgresql+asyncpg://wallet:wallet@localhost:5432/wallet_test
-      JWT_SECRET: ci-secret
+      # 32 bytes。不是為了保密——CI 的資料庫每次都是新的，這個值也在公開
+      # repo 裡——是為了不觸發 PyJWT 的 InsecureKeyLengthWarning（HMAC 金鑰
+      # 短於 32 bytes 時會發）。舊的值 "ci-secret" 只有 9 bytes，
+      # 而下面的 -W error 會把那個警告變成錯誤。
+      JWT_SECRET: ci-only-not-a-secret-0123456789abcdef
 
     steps:
       - uses: actions/checkout@v7
@@ -54,4 +58,12 @@ jobs:
           alembic check
 
       - name: 測試
-        run: pytest --cov=app --cov-report=term-missing --cov-fail-under=80
+        # -W error：警告即錯誤，跟本機的跑法一致。
+        #
+        # 交接文件 §6 第 4 種記錄過這個 flag 救活過一次測試（解壓縮炸彈那次），
+        # 但 CI 一直沒有開——於是「本機嚴格、CI 寬鬆」變成兩道互相掩護的
+        # 防線：本機有嚴格模式但沒有觸發條件（.env 的密鑰夠長），
+        # CI 有觸發條件但沒有嚴格模式。兩邊都不會因為警告而變紅。
+        #
+        # CI 才是跑在乾淨環境的那一道，它反而是原本沒開的那一道。
+        run: pytest -W error --cov=app --cov-report=term-missing --cov-fail-under=80

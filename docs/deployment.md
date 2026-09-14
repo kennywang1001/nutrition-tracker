@@ -277,9 +277,27 @@ docker compose --env-file .env.production \
 
 ---
 
-## 五、緊急處置：強制登出所有 session
+## 五、緊急處置：強制登出
 
 **手機掉了、或懷疑 token 外流時。**
+
+### 先試這個：登出該帳號的所有裝置
+
+```bash
+# 用該帳號登入拿一張 access token，然後
+curl -X POST https://<你的 tailnet 網域>/api/auth/logout-all \
+  -H "Authorization: Bearer <access_token>"
+```
+
+撤銷該使用者的**所有** refresh session。之後那些裝置再也換不到新票。
+
+> **語意要講清楚：撤銷不是即時的。** access token 不查資料庫（那是刻意的
+> 設計取捨，見規格 §4），所以撤銷之後，已經發出去的 access token
+> **最多還能再用 15 分鐘**。要的是「再也換不到新票」，不是「立刻斷線」。
+>
+> 如果 15 分鐘不能接受，才走下面換密鑰那條。
+
+### 核彈選項：換 `JWT_SECRET`
 
 ```bash
 openssl rand -hex 32          # 產生新密鑰
@@ -288,16 +306,42 @@ docker compose --env-file .env.production \
   -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
 
-所有 access token 與 refresh token 立刻失效，**包含你自己的** ——
-每個人都要重新登入。
+所有 access token 與 refresh token 立刻失效，**包含所有其他使用者的** ——
+每個人都要重新登入。只有在「連 15 分鐘都不能等」時才用。
 
-> **目前沒有「只登出某一台裝置」的能力。** refresh token 每次換發都會發一張
-> 新的 14 天票，而且舊的仍然有效（實測確認過），所以那是一個
-> **只要裝置持續使用就永遠不會關上的滑動視窗**。
-> 撿到手機的人只要 app 正常運作就能一直續下去。
->
-> 真正的解法（session 撤銷表 + 重用偵測）是一個獨立的後續任務，
-> 還沒做。在那之前，換密鑰是唯一的止血方式。
+### 定期清理過期的 session 紀錄
+
+跟清理孤兒照片一樣**必須在容器內執行**：
+
+```bash
+docker compose exec -T api python -m app.cli cleanup-sessions --dry-run   # 先看筆數
+docker compose exec -T api python -m app.cli cleanup-sessions
+```
+
+建議的 cron（每天一次就夠，過期的列不影響任何功能，只是佔空間）：
+
+```
+30 4 * * * cd /volume1/docker/nutrition-tracker && docker compose exec -T api python -m app.cli cleanup-sessions
+```
+
+> **只刪 `expires_at` 已過的列，不刪「已撤銷但還沒過期」的。** 那一列是
+> 「這條 family 是什麼時候、因為什麼而死的」唯一的證據 —— 提早刪掉的話，
+> 真正的重用攻擊會被降級成一次普通的 401，日誌裡再也看不出有人在重放。
+
+---
+
+## 五之二、升級到含 session 撤銷的版本：所有人要重新登入一次
+
+這個版本的 refresh token 多了一個 `jti` 欄位，並對應到資料庫裡的一列。
+**升級前發出的 refresh token 全部沒有 `jti`，會被拒絕。**
+
+後果：升級後所有裝置都要重新登入一次。這是一次性的、刻意的 ——
+相容期間等於舊的缺陷還開著，而那段相容邏輯忘記拿掉就是一個永久的後門。
+
+**先知道這件事**，否則它會表現成「升級後神秘的全員登出」，
+而那種症狀沒人會聯想到這次變更。
+
+升級後記得跑 migration（`## 二、更新` 的步驟已包含）：`0007_create_refresh_sessions`。
 
 ---
 

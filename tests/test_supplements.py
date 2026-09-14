@@ -1,11 +1,11 @@
-from app.security.tokens import create_token
+from app.security.tokens import create_access_token
 from tests.factories import create_supplement, create_user
 
 NUTRITION = {"kcal": "1", "protein_g": "1", "fat_g": "1", "carb_g": "1"}
 
 
 def auth(user):
-    return {"Authorization": f"Bearer {create_token(user.id, 'access')}"}
+    return {"Authorization": f"Bearer {create_access_token(user.id)}"}
 
 
 async def test_create_supplement_returns_the_supplement(client, db_session):

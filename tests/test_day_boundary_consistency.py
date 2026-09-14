@@ -32,7 +32,7 @@ import pytest
 
 from app.days import day_bounds
 from app.models.food import FoodRevision
-from app.security.tokens import create_token
+from app.security.tokens import create_access_token
 from tests.factories import (
     create_food,
     create_intake,
@@ -50,7 +50,7 @@ BOUNDARY_CASES = [
 
 
 def auth(user):
-    return {"Authorization": f"Bearer {create_token(user.id, 'access')}"}
+    return {"Authorization": f"Bearer {create_access_token(user.id)}"}
 
 
 async def _revision(db_session, food):

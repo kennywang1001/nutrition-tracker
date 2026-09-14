@@ -2,12 +2,12 @@ from datetime import date
 from decimal import Decimal
 
 from app.models.supplement import SupplementIntake, SupplementPlan, TimeOfDay
-from app.security.tokens import create_token
+from app.security.tokens import create_access_token
 from tests.factories import create_intake, create_plan, create_supplement, create_user
 
 
 def auth(user):
-    return {"Authorization": f"Bearer {create_token(user.id, 'access')}"}
+    return {"Authorization": f"Bearer {create_access_token(user.id)}"}
 
 
 async def test_create_plan_returns_the_plan(client, db_session):

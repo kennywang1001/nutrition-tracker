@@ -4,13 +4,15 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import CursorResult, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import SessionLocal
 from app.models.meal import Meal
+from app.models.session import RefreshSession
 from app.models.user import User, UserRole
 from app.security.password import hash_password
 
@@ -154,6 +156,35 @@ async def cleanup_orphan_photos(
     return CleanupResult(dry_run=dry_run, deleted=tuple(deleted), failed=tuple(failed))
 
 
+async def cleanup_expired_sessions(db: AsyncSession, *, dry_run: bool = False) -> int:
+    """刪掉 `expires_at` 已過的 refresh session 列，回傳筆數。
+
+    **只看 `expires_at`，不看 `revoked_at`。** 一列已撤銷但還沒過期的紀錄，
+    正是「這張票已經死了、而且是這樣死的」的唯一證據：提早刪掉的話，
+    `rotate_session` 查不到列，走的是「找不到」那條路 —— 回應同樣是 401，
+    測試同樣是綠的，但重用偵測的證據沒了，真正的攻擊會被降級成一次
+    普通的失敗。過期之後才刪，那時 JWT 的 `exp` 已經自己擋住了。
+    """
+    cutoff = datetime.now(UTC)
+
+    if dry_run:
+        count = await db.scalar(
+            select(func.count())
+            .select_from(RefreshSession)
+            .where(RefreshSession.expires_at < cutoff)
+        )
+        return count or 0
+
+    # 單一 statement，不是「撈出來再一列一列 delete」——
+    # 這張表每台活躍裝置每天長約 100 列，把幾千個 ORM 物件載進記憶體
+    # 只為了刪掉它們，是沒有必要的。
+    result = await db.execute(delete(RefreshSession).where(RefreshSession.expires_at < cutoff))
+    await db.commit()
+    # AsyncSession.execute() 的靜態型別是 Result[Any]——rowcount 定義在
+    # CursorResult 上，但那正是 DML 陳述式實際回傳的物件。
+    return cast(CursorResult[Any], result).rowcount
+
+
 def _non_negative_hours(value: str) -> float:
     """`--min-age-hours` 不接受負數。
 
@@ -194,6 +225,13 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"只刪除修改時間早於這個小時數之前的檔案（預設 {DEFAULT_ORPHAN_MIN_AGE_HOURS}）",
     )
 
+    cleanup_sessions_parser = subparsers.add_parser(
+        "cleanup-sessions", help="刪除已過期的 refresh session 紀錄"
+    )
+    cleanup_sessions_parser.add_argument(
+        "--dry-run", action="store_true", help="只計算筆數，不真的刪"
+    )
+
     return parser
 
 
@@ -220,12 +258,22 @@ async def _run_cleanup_photos(*, dry_run: bool, min_age_hours: float) -> None:
             print(f"  {rel_path}")
 
 
+async def _run_cleanup_sessions(*, dry_run: bool) -> None:
+    async with SessionLocal() as db:
+        count = await cleanup_expired_sessions(db, dry_run=dry_run)
+
+    verb = "會刪除" if dry_run else "已刪除"
+    print(f"{verb} {count} 筆過期的 refresh session")
+
+
 async def _main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     if args.command == "create-admin":
         await _run_create_admin(args.email, args.password, args.display_name)
     elif args.command == "cleanup-photos":
         await _run_cleanup_photos(dry_run=args.dry_run, min_age_hours=args.min_age_hours)
+    elif args.command == "cleanup-sessions":
+        await _run_cleanup_sessions(dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

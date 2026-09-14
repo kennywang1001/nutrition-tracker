@@ -4,7 +4,7 @@ from decimal import Decimal
 from app.days import day_bounds
 from app.models.meal import MealType
 from app.models.user import UserRole
-from app.security.tokens import create_token
+from app.security.tokens import create_access_token
 from tests.factories import (
     create_food,
     create_meal,
@@ -15,7 +15,7 @@ from tests.factories import (
 
 
 def auth(user):
-    return {"Authorization": f"Bearer {create_token(user.id, 'access')}"}
+    return {"Authorization": f"Bearer {create_access_token(user.id)}"}
 
 
 def _create_payload(**overrides):

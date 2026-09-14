@@ -1,12 +1,12 @@
 from datetime import UTC, date, datetime, timedelta
 
 from app.days import day_bounds
-from app.security.tokens import create_token
+from app.security.tokens import create_access_token
 from tests.factories import create_intake, create_plan, create_supplement, create_user
 
 
 def auth(user):
-    return {"Authorization": f"Bearer {create_token(user.id, 'access')}"}
+    return {"Authorization": f"Bearer {create_access_token(user.id)}"}
 
 
 # ---------------------------------------------------------------------------

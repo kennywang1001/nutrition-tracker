@@ -1,4 +1,4 @@
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 這個字串以前是 jwt_secret 的預設值，現在整個原始碼庫的歷史裡到處都找得到——
@@ -18,8 +18,8 @@ class Settings(BaseSettings):
     # 實際上任何人都能偽造 token 的預設密鑰。
     jwt_secret: str
     jwt_algorithm: str = "HS256"
-    access_token_ttl_minutes: int = 15
-    refresh_token_ttl_days: int = 14
+    access_token_ttl_minutes: int = Field(15, gt=0)
+    refresh_token_ttl_days: int = Field(14, gt=0)
     photo_dir: str = "data/photos"
 
     @field_validator("jwt_secret")

@@ -37,6 +37,16 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class LogoutRequest(BaseModel):
+    """跟 RefreshRequest 形狀相同，但刻意是獨立的型別 ——
+
+    兩個端點的請求體日後可能各自長出欄位（例如登出帶上裝置識別），
+    共用一個型別會讓那時候的改動被迫同時影響兩邊。
+    """
+
+    refresh_token: str
+
+
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

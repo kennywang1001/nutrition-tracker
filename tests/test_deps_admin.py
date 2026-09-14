@@ -5,7 +5,7 @@ from app.api.deps import require_admin
 from app.db import get_db
 from app.errors import register_error_handlers
 from app.models.user import User, UserRole
-from app.security.tokens import create_token
+from app.security.tokens import create_access_token
 from tests.factories import create_user
 
 
@@ -34,7 +34,7 @@ async def call_admin_endpoint(db_session, token: str | None):
 async def test_admin_can_access(db_session):
     admin = await create_user(db_session, role=UserRole.ADMIN)
 
-    response = await call_admin_endpoint(db_session, create_token(admin.id, "access"))
+    response = await call_admin_endpoint(db_session, create_access_token(admin.id))
 
     assert response.status_code == 200
     assert response.json() == {"user_id": admin.id}
@@ -43,7 +43,7 @@ async def test_admin_can_access(db_session):
 async def test_normal_user_is_forbidden(db_session):
     user = await create_user(db_session, role=UserRole.USER)
 
-    response = await call_admin_endpoint(db_session, create_token(user.id, "access"))
+    response = await call_admin_endpoint(db_session, create_access_token(user.id))
 
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "FORBIDDEN"
