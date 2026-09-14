@@ -879,17 +879,31 @@ export type ErrorEnvelope = {
 export const UNPARSEABLE_ERROR = "UNPARSEABLE_ERROR";
 
 export class ApiError extends Error {
+  // scaffold 的 tsconfig.app.json 開了 `erasableSyntaxOnly`，**禁止建構子的
+  // 參數屬性寫法**（`constructor(readonly status: number)`）—— 那需要實際
+  // 產生程式碼，不是純型別抹除，會報 TS1294。所以欄位宣告與賦值分開寫。
+  //
+  // 這是實作時踩到的：計畫原本寫的是參數屬性的簡寫版，過不了 typecheck。
+  readonly status: number;
+  readonly code: string;
+  readonly details: Record<string, unknown>;
+  /** 429 的 `Retry-After`，秒。沒有這個標頭時是 `null`，**不是 0** ——
+   *  0 會讓 UI 顯示「0 秒後可重試」並立刻放行。 */
+  readonly retryAfterSeconds: number | null;
+
   constructor(
-    readonly status: number,
-    readonly code: string,
+    status: number,
+    code: string,
     message: string,
-    readonly details: Record<string, unknown> = {},
-    /** 429 的 `Retry-After`，秒。沒有這個標頭時是 `null`，**不是 0** ——
-     *  0 會讓 UI 顯示「0 秒後可重試」並立刻放行。 */
-    readonly retryAfterSeconds: number | null = null,
+    details: Record<string, unknown> = {},
+    retryAfterSeconds: number | null = null,
   ) {
     super(message);
     this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+    this.details = details;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -944,7 +958,7 @@ Expected: 6 passed（加上前面的測試）
 | 突變 | 預期變紅 |
 |---|---|
 | `parseRetryAfter` 沒有標頭時回 `0` 而不是 `null` | 「沒有 Retry-After 時是 null，不是 0」 |
-| `isEnvelope` 直接 `return true` | 兩條「不是信封形狀」的測試 |
+| `isEnvelope` 直接 `return true` | **只有**「body 是 JSON 但不是信封形狀」那一條（實測）。「body 不是 JSON」那條**不會**紅 —— 它在 `try/catch` 就短路了，根本走不到 `isEnvelope`。計畫原本的預測高估了一條 |
 
 每個都：改 → 跑 `npm run test` → 記下輸出 → 改回來 → `git diff` 確認乾淨。
 
@@ -1277,6 +1291,17 @@ Expected: 全部通過。
 | `.finally(() => { inFlight = null })` 整段拿掉 | 「一次失敗之後，下一次呼叫會重新嘗試」 |
 | `performRefresh` 改成用外部傳進來的 token 而不是重讀 `getRefreshToken()` | **預期沒有東西變紅** —— 見下 |
 
+> **第三個突變的實測結果：確認存活。** 50 個測試全綠。
+>
+> 這證明了（而不只是假設）「取得鎖之後重新讀 localStorage」這件事
+> **完全沒有被單元測試涵蓋** —— jsdom 只有一個執行環境、沒有
+> `navigator.locks`，不存在「另一個分頁把票換掉了」這個情境。
+>
+> 實作者另外做了一件事值得記：他 mock 了 `navigator.locks.request` 確認
+> `refreshTokens` 真的會呼叫它 —— **但明講那不能證明跨分頁的互斥**，
+> 因為 mock 只是在同一個 context 同步呼叫 callback。
+> 那個區分很重要：驗證「這條分支接對了」跟驗證「這個性質成立」是兩件事。
+>
 > **第三個突變請務必跑，而且我預期它會存活。** 「取得鎖之後要重新讀 localStorage」這件事只在**真的有兩個 context** 時才有差別，而 jsdom 裡只有一個。
 >
 > 如果它真的存活，**不要為此硬寫一條假的單元測試** —— 那會是一條看起來在守、實際上測不到那個情境的測試。正確的處置是回報，並且知道這一條只能靠 Task 11 的 E2E（或真機）守。這跟上一輪後端「測試所在的世界裡沒有那個維度」是同一個形狀。
@@ -1373,7 +1398,10 @@ describe("apiFetch", () => {
 
     const body = await apiFetch<{ display_name: string }>("/api/me");
 
-    expect(body.display_name).toBe("我");
+    // 用 `?.` 不是 `.`：apiFetch 的回傳型別是 `T | null`（204 的情況），
+    // strict 模式下直接取屬性過不了 typecheck。鑑別力沒有損失 ——
+    // body 真的是 null 時 `undefined !== "我"` 一樣會讓測試失敗。
+    expect(body?.display_name).toBe("我");
     expect(fetchMock).toHaveBeenCalledTimes(3);
     // 重送那一次要帶新的 token
     const retryInit = fetchMock.mock.calls[2]?.[1];
