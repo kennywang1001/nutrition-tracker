@@ -37,7 +37,7 @@ export function Login({ onSuccess }: Props) {
 				setCooldown(caught.retryAfterSeconds);
 			} else if (caught instanceof ApiError) {
 				// 後端對「帳號不存在」與「密碼錯誤」回一模一樣的 INVALID_CREDENTIALS
-				// (規格 §6.3)。直接顯示它的 message，**不要自己加工成更具體的說法**——
+				// （規格 §6.3）。直接顯示它的 message，**不要自己加工成更具體的說法**——
 				// 那會把後端關掉的側通道從 UI 這一頭加回來。
 				setError(caught.message);
 			} else {
