@@ -581,6 +581,26 @@ npm install --save-dev openapi-typescript
 npx openapi-typescript http://localhost:8000/openapi.json -o src/api/schema.d.ts
 ```
 
+> **⚠️ peer dependency 會衝突（實作時踩到）。** scaffold 裝的是
+> TypeScript 6.x，而 `openapi-typescript@7.x` 的 peer range 是 `^5.x`。
+>
+> **不要用 `--legacy-peer-deps` 解。** 實測：那樣做會**靜默刪掉
+> `node_modules` 裡的 `@testing-library/dom`**，把 Task 2 已經通過的測試
+> 環境弄壞 —— 而且不會有任何錯誤訊息，只有下一次跑測試時才炸。
+>
+> 正解是在 `package.json` 加一個有範圍的 override：
+>
+> ```json
+> {
+>   "overrides": {
+>     "openapi-typescript": { "typescript": "$typescript" }
+>   }
+> }
+> ```
+>
+> `$typescript` 指向這個專案自己宣告的版本。改完之後普通的 `npm install`
+> 就會過，而且沒有副作用（連跑兩次確認過冪等）。
+
 （後端要起著：`docker compose up -d`）
 
 `package.json` 的 scripts 加：
@@ -623,19 +643,41 @@ describe("後端契約", () => {
 
 > `expectTypeOf` 是 Vitest 內建的型別層斷言，跑 `vitest run --typecheck` 才會實際檢查。下一步把它接上。
 
-- [ ] **Step 3: 讓型別測試真的被執行**
+- [ ] **Step 3: 讓型別測試真的被執行 —— 這裡有一個假綠燈**
 
 `vite.config.ts` 的 `test` 區塊加：
 
 ```ts
+    // Vitest 的 typecheck.include 預設只認 *.test-d.ts，而我們把型別層
+    // 測試跟一般測試放在同一個 *.test.ts 檔案裡，所以要覆寫成同一個 glob。
+    //
+    // **tsconfig 必須明講。** 不指定的話 Vitest 會找到 frontend/tsconfig.json
+    // ——那份只是 project references 的殼（"files": []、沒有自己的
+    // compilerOptions），不是 tsconfig.app.json 那份有 strict、有
+    // include: ["src","tests"] 的實際設定。
     typecheck: {
       enabled: true,
+      tsconfig: "./tsconfig.app.json",
       include: ["tests/**/*.test.ts"],
     },
 ```
 
+> **`enabled: true` 本身是假綠燈，這是實測發現的。**
+>
+> 只寫 `enabled` 與 `include`（計畫原本的版本）時，Vitest 會印
+> `Type Errors  no errors` —— 看起來型別檢查跑了而且通過了。
+> 實際上它指到的是那份空殼 tsconfig，**什麼都沒檢查**。
+>
+> 證明方式：把 `schema.d.ts` 的 `protein_g` 從 `string` 改成 `number`，
+> 跑 `npm run test` → **依然全綠**。加上 `tsconfig: "./tsconfig.app.json"`
+> 之後，同一個突變才會紅。
+>
+> 這跟 Task 2 那個 `tsc -b` 看不到 `tests/` 是**同一個形狀的第二個實例**：
+> 型別檢查器跑了、回報成功、但它從來沒看過那個東西。兩次都只有突變
+> 才發現得了 —— 而兩次的假綠燈訊息都長得跟真的一模一樣。
+
 Run: `cd frontend && npm run test`
-Expected: 型別測試通過。
+Expected: `Type Errors  no errors`，而且 Step 4 的突變**真的會紅**。
 
 - [ ] **Step 4: 驗證這條測試真的會紅**
 
@@ -647,6 +689,34 @@ Expected: **型別測試變紅。**
 
 > **不要跳過這一步。** 這個專案的規矩是「沒有親眼看到紅燈的守衛不算數」——
 > 而型別層的斷言特別容易寫成永遠通過的樣子（例如比對 `any`）。
+
+- [ ] **Step 4b: 把產生物排除在 Biome 之外**
+
+`schema.d.ts` 是產生物，格式不一定符合 Biome 的規則，而**手改它沒有意義**
+（下一次 `npm run gen:api` 就沒了，而且那正是 `contract` CI job 要抓的漂移）。
+
+`biome.json` 的 `files.includes` 加排除：
+
+```json
+	"files": {
+		"ignoreUnknown": false,
+		"includes": ["**", "!src/api/schema.d.ts"]
+	},
+```
+
+> **把設定檔改名成 `biome.jsonc`。** Biome 對 `biome.json` **不接受 `//` 註解**
+> （實測，每個位置都試過），而這個排除規則正是日後有人會疑惑的東西 ——
+> 「為什麼這個檔案不用 lint？」。理由放在 commit 訊息裡太難找。
+>
+> 這個專案的規矩是**把理由寫在現場**（§6 第 7 條的正面版本）。為了能寫
+> 那段註解而換一個副檔名，是划算的。
+>
+> 改完跑一次 `npx biome check src/api/schema.d.ts`，確認它回報這個檔案
+> 被忽略 —— 不要假設設定生效了。
+
+> **在 Windows 上編輯這些檔案要注意換行。** 用 Python / 編輯器寫檔很容易
+> 寫出 CRLF，而 Biome 的 formatter 會因此整個檔案報錯（訊息很長、看起來
+> 像設定壞了，實際上只是換行）。寫檔時明確指定 `newline="\n"`。
 
 - [ ] **Step 5: Commit**
 
@@ -660,6 +730,17 @@ protein_g: string——寫 parseFloat 不會錯，寫 m.protein_g * 2 當場型�
 兩條型別層測試釘住最容易漂移的兩件事（數值是字串、TokenResponse 沒有
 expires_in），而且都實際突變驗證過會變紅。"
 ```
+
+**兩條型別測試的突變結果（實測）：**
+
+| 突變 | 結果 |
+|---|---|
+| `schema.d.ts` 的 `protein_g` 改成 `number` | ✅ 變紅 `TypeCheckError: Type 'string' does not satisfy the constraint '"Expected string, Actual number"'` |
+| `TokenResponse` 加上 `expires_in: number` | ✅ 變紅 `TypeCheckError: Expected 2 arguments, but got 1` |
+| **在加 `tsconfig:` 之前**跑第一個突變 | ❌ **存活** —— `Type Errors no errors`，全綠 |
+
+第三列是這個 task 最重要的一筆：它證明了守衛在被正確設定之前是裝飾品，
+而且裝飾品的輸出跟真貨一模一樣。
 
 > **CI 的漂移守衛（`contract` job）在 Task 11 一起接上** —— 它需要在 CI 裡起後端，跟 E2E 的環境需求相同，所以放在一起做比較省。
 
