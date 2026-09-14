@@ -1,11 +1,37 @@
 import react from "@vitejs/plugin-react";
+import { VitePWA } from "vite-plugin-pwa";
 // 用 "vitest/config" 而不是 "vite" 的 defineConfig：前者是後者的型別超集，
 // 讓下面的 test 區塊有型別檢查，不需要額外的 /// <reference types="vitest" />。
 import { defineConfig } from "vitest/config";
 
 // https://vite.dev/config/
 export default defineConfig({
-	plugins: [react()],
+	plugins: [
+		react(),
+		VitePWA({
+			registerType: "autoUpdate",
+			manifest: {
+				name: "飲食紀錄",
+				short_name: "飲食",
+				start_url: "/",
+				display: "standalone",
+				background_color: "#ffffff",
+				theme_color: "#ffffff",
+				icons: [
+					{ src: "/icon-192.png", sizes: "192x192", type: "image/png" },
+					{ src: "/icon-512.png", sizes: "512x512", type: "image/png" },
+				],
+			},
+			workbox: {
+				// L1：只快取 app shell（建置產物）。
+				// **不在這裡加 runtimeCaching 快取 API 回應** —— 那是 L2，
+				// 而 L2 需要「顯示陳舊資料時明確標示它是陳舊的」（規格 §8），
+				// 那是 UI 的責任，不是 service worker 設定能單獨完成的事。
+				// 先快取了資料卻沒有標示，比不快取更糟。
+				globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2}"],
+			},
+		}),
+	],
 	server: {
 		proxy: {
 			// 規格決策 1：dev 也同源。瀏覽器看到的一律是 http://localhost:5173/api/...，
