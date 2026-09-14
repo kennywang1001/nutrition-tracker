@@ -11,11 +11,17 @@
 		"preview": "vite preview",
 		"test": "vitest run",
 		"test:watch": "vitest",
-		"typecheck": "tsc -b"
+		"typecheck": "tsc -b",
+		"gen:api": "openapi-typescript http://localhost:8000/openapi.json -o src/api/schema.d.ts"
 	},
 	"dependencies": {
 		"react": "^19.2.8",
 		"react-dom": "^19.2.8"
+	},
+	"overrides": {
+		"openapi-typescript": {
+			"typescript": "$typescript"
+		}
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.13",
@@ -28,6 +34,7 @@
 		"@vitejs/plugin-react": "^6.1.1",
 		"@vitest/coverage-v8": "^5.0.0",
 		"jsdom": "^29.1.1",
+		"openapi-typescript": "^7.13.0",
 		"typescript": "~6.0.2",
 		"vite": "^8.3.0",
 		"vitest": "^5.0.0"
