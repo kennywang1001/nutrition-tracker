@@ -1555,11 +1555,24 @@ git commit -m "feat: API client——Authorization 與 401 攔截
 ### Task 8：登入畫面
 
 **Files:**
-- Modify: `frontend/package.json`（加 react-router）
 - Create: `frontend/src/screens/Login.tsx`
 - Create: `frontend/src/auth/session.ts`
 - Modify: `frontend/src/main.tsx`
 - Create: `frontend/tests/login.test.tsx`
+
+> **⚠️ 這份計畫的第 8 個缺陷就在這裡，而且是重犯的。**
+>
+> 原本的 Files 清單寫「Modify: `frontend/package.json`（加 react-router）」，
+> 而下面這段寫「不裝 Router」。**同一個 task 的兩處互相矛盾** ——
+> 照抄清單的人會裝一個用不到的套件。
+>
+> 這跟上一份計畫（session 撤銷）Task 5 的缺陷是**同一種形狀**：
+> docstring 說「這裡要取鎖」、程式碼範例裡沒有那行。兩次都是我改了一處
+> 忘了改另一處。
+>
+> 記在這裡而不是安靜地修掉，因為「同一種缺陷在兩份計畫裡各出現一次」
+> 本身就是資訊：**一份文件裡的兩個地方講同一件事，就是一個會漂移的介面。**
+> 能合併成一處就合併，不能的話至少讓它們在同一個螢幕裡看得見。
 
 > **這一份計畫不裝 TanStack Query，也不裝 React Router。** 規格決策 4 選它的理由是快取與失效
 > （`/stats/daily`、記完一餐要讓今日總覽重取），而這一份的範圍裡沒有任何
@@ -1737,6 +1750,7 @@ export function Login({ onSuccess }: Props) {
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
+    setCooldown(null);
     setBusy(true);
     try {
       await login(email, password);
@@ -1744,7 +1758,8 @@ export function Login({ onSuccess }: Props) {
     } catch (caught) {
       if (caught instanceof ApiError && caught.retryAfterSeconds !== null) {
         setCooldown(caught.retryAfterSeconds);
-        setError(`${caught.message}（${caught.retryAfterSeconds} 秒後可再試）`);
+        // 只存後端的原始訊息，倒數在渲染時才接上去（見 displayedError）。
+        setError(caught.message);
       } else if (caught instanceof ApiError) {
         // 後端對「帳號不存在」與「密碼錯誤」回一模一樣的 INVALID_CREDENTIALS
         // （規格 §6.3）。直接顯示它的 message，**不要自己加工成更具體的說法** ——
@@ -1759,6 +1774,14 @@ export function Login({ onSuccess }: Props) {
   }
 
   const lockedOut = cooldown !== null && cooldown > 0;
+  // 把「後端的原始訊息」與「倒數」分成兩個 state，渲染時才組起來。
+  //
+  // 計畫原本寫的是 `error.split("（")[0]` —— 從已經組好的字串裡把基礎
+  // 訊息切回來。那依賴訊息裡有全形括號，而且 `noUncheckedIndexedAccess`
+  // 開著時 `[0]` 是 `string | undefined`，過不了 typecheck。
+  // **從組合過的字串裡還原資訊，永遠不如一開始就不要把它們揉在一起。**
+  const displayedError =
+    error === null ? null : lockedOut ? `${error}（${cooldown} 秒後可再試）` : error;
 
   return (
     <form onSubmit={handleSubmit}>
@@ -1781,7 +1804,7 @@ export function Login({ onSuccess }: Props) {
         onChange={(e) => setPassword(e.target.value)}
         required
       />
-      {error !== null && <p role="alert">{lockedOut ? `${error.split("（")[0]}（${cooldown} 秒後可再試）` : error}</p>}
+      {displayedError !== null && <p role="alert">{displayedError}</p>}
       <button type="submit" disabled={busy || lockedOut}>
         登入
       </button>
@@ -1837,6 +1860,27 @@ createRoot(root).render(
 >
 > 記在這裡是為了讓你知道它被考慮過並被否決了，而不是漏了。
 
+> **關於 `.tsx` 測試檔與 `typecheck.include` —— 實測結果跟直覺相反。**
+>
+> Task 4 設的是 `typecheck.include: ["tests/**/*.test.ts"]`，那個 glob
+> **不匹配 `.test.tsx`**。直覺會以為型別層的檢查會靜默跳過這個檔案 ——
+> 這正是這個專案已經踩過兩次的形狀。
+>
+> **實測發現不是這樣。** `typecheck.tsconfig` 指向的 `tsconfig.app.json`
+> 本身就 `include: ["src", "tests"]`，所以 tsc 的 Program 把 `.tsx` 也編進去了；
+> 在 `login.test.tsx` 塞型別錯誤，`npm run test` 仍然 exit 1。
+>
+> **但仍然要修 glob**，理由不同：沒修之前，失敗會混進含糊的
+> `Unhandled Errors ... may cause false positive tests` 桶裡，
+> `Test Files` **完全不會顯示是哪個檔案失敗**；修了之後才是乾淨的
+> `FAIL tests/login.test.tsx`。
+>
+> 也就是說：這裡的問題不是「有沒有抓到」，是「**抓到之後說不說得出是誰**」。
+> 而且原本那條路徑依賴「診斷剛好從整個 Program 漏出來」這個 Vitest
+> 沒有文件保證的行為。
+>
+> 改成 `include: ["tests/**/*.test.?(c|m)[jt]s?(x)"]`。
+
 - [ ] **Step 6: 跑測試與型別檢查**
 
 ```bash
@@ -1863,7 +1907,39 @@ cd frontend && npm run dev
 |---|---|
 | `catch` 裡把 `INVALID_CREDENTIALS` 改成顯示「帳號不存在或密碼錯誤」 | 「不可以出現任何暗示帳號存不存在的字眼」那個斷言 |
 | 拿掉 `disabled={busy \|\| lockedOut}` 的 `lockedOut` | 「429 時停用送出鈕」 |
-| 把 `else` 分支的「無法連線到伺服器」改成 `caught.message` | 「連不上伺服器時說的是連線問題」 |
+| 把 `else` 分支的「無法連線到伺服器」改成 `caught.message` | **❌ 實測存活** —— 見下 |
+
+> **第三個突變的實測結果：存活，而且暴露了一個真正的覆蓋率缺口。**
+>
+> 計畫原本以為「502 + HTML body」那條測試會走到最後的 catch-all `else`。
+> 實際上不會：`parseErrorResponse` 會把解析不了的 body 包成一個帶有
+> 正確訊息的 `ApiError`（Task 5 就是這樣設計的），所以它落在
+> `caught instanceof ApiError` 分支。
+>
+> **那個 `else` 分支只有 `fetch()` 本身 reject 時才會進去** —— 真的斷線、
+> DNS 查不到、CORS 被擋。而那個情境沒有任何測試涵蓋。
+>
+> 補第五條測試：
+>
+> ```tsx
+> it("fetch 本身失敗時說的是連線問題", async () => {
+>   // 這條守的是 catch-all 的 else 分支。502 + HTML 那條走不到這裡 ——
+>   // parseErrorResponse 會把它包成 ApiError（Task 5 的設計），
+>   // 所以它落在 instanceof 那一支。真的斷線才會走到這裡。
+>   vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("Failed to fetch"));
+>   render(<Login onSuccess={vi.fn()} />);
+>
+>   await userEvent.type(screen.getByLabelText("Email"), "a@example.com");
+>   await userEvent.type(screen.getByLabelText("密碼"), "x");
+>   await userEvent.click(screen.getByRole("button", { name: "登入" }));
+>
+>   expect(await screen.findByRole("alert")).toHaveTextContent("無法連線到伺服器");
+> });
+> ```
+>
+> 加完之後同一個突變才會紅。**這是計畫突變表高估的第二次**（第一次在
+> Task 5 的 `isEnvelope`）—— 兩次都是「我以為某條測試會走到某個分支，
+> 但它在更早的地方就被攔截了」。
 
 - [ ] **Step 9: Commit**
 
