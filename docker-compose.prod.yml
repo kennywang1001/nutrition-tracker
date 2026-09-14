@@ -12,9 +12,39 @@
 # 這裡也沒有 volumes：不宣告原始碼掛載，image 裡 COPY 進去的程式碼就是
 # 唯一的來源。
 services:
+  # caddy 整個 service 只定義在這裡，**不寫進共用的 docker-compose.yml**。
+  #
+  # 理由跟 db 的 ports、api 的原始碼掛載一樣（見 docker-compose.yml 的註解）：
+  # 那是一個只有 production 需要的東西。寫進共用檔案的話，純 `docker compose up`
+  # （dev）也會 build 並啟動它 —— 實測確認過，compose 的 service 沒有
+  # profiles 閘門就是每次都起。
+  #
+  # dev 不需要它：Vite 的 server.proxy 已經提供同源，多起一個容器只會讓
+  # HMR 多一層要 debug 的東西，還多一次沒有人用的映像建置。
+  #
+  # 一開始這個 service 寫在共用檔案裡、靠註解說明「dev 不會起它」——
+  # 那句話是假的，而且是實作時才被抓到的。**把它搬到這裡之後那句話才成真。**
+  # 靠註解維持的不變量遲早會漂移，靠檔案位置維持的不會。
   caddy:
+    build:
+      # context 是 repo 根目錄，因為映像需要同時看到 frontend/ 與 caddy/。
+      # frontend/Dockerfile 裡的 COPY 路徑因此都要寫成 frontend/xxx。
+      context: .
+      dockerfile: frontend/Dockerfile
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8080/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
     ports:
-      # 只聽 loopback。對外由 tailscale serve 終結 TLS 之後轉進來。
+      # 只聽 loopback。對外由 tailscale serve 終結 TLS 之後轉進來
+      # （Task 1 路線 A）。走路線 B 的話這裡改成 ${BIND_ADDR}:443:443，
+      # 並在 Caddyfile 加 tls 指令。
       - "127.0.0.1:8080:8080"
 
   api:
