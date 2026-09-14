@@ -22,3 +22,14 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Playwright
+#
+# 根目錄的 .gitignore 已經排除了 frontend/test-results 與
+# frontend/playwright-report——但 Biome 的 vcs.useIgnoreFile 只認
+# biome.jsonc 所在目錄（frontend/）的這一份 .gitignore，不會往上找，
+# 所以這裡要重複列一次，否則 `npm run lint` 的結果會取決於「本機
+# 有沒有跑過 npx playwright test」這種跟程式碼無關的狀態。
+test-results
+playwright-report
+blob-report

@@ -37,3 +37,16 @@ export function clearTokens(options: { keepStorage?: boolean } = {}): void {
 		localStorage.removeItem(REFRESH_TOKEN_KEY);
 	}
 }
+
+// 只在 dev 建置裡存在的測試後門（`import.meta.env.DEV` 在 production
+// 建置時是 false，整段會被 tree-shake 掉）。
+//
+// E2E 需要製造「access token 過期但 refresh token 還活著」的狀態，
+// 而等 15 分鐘不是選項。用 Playwright 的 route 攔截捏造一個 401 也不行——
+// 那攔的是我們自己寫的回應，這條 E2E 就退化成 MSW 了。
+if (import.meta.env.DEV) {
+	(globalThis as unknown as Record<string, unknown>).__forceExpireAccessToken =
+		() => {
+			accessToken = "expired.invalid.token";
+		};
+}

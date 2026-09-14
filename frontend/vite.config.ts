@@ -2,7 +2,7 @@ import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 // 用 "vitest/config" 而不是 "vite" 的 defineConfig：前者是後者的型別超集，
 // 讓下面的 test 區塊有型別檢查，不需要額外的 /// <reference types="vitest" />。
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -51,6 +51,12 @@ export default defineConfig({
 		environment: "jsdom",
 		setupFiles: ["./src/test/setup.ts"],
 		globals: true,
+		// Vitest 的預設 include 是 `**/*.{test,spec}.?(c|m)[jt]s?(x)`，會吃到
+		// Playwright 的 `e2e/auth.spec.ts`（副檔名也叫 .spec.ts）。兩套 runner
+		// 對 `test()` 的定義互不相容，Vitest 硬跑會直接炸掉那個檔案，
+		// 而不是「忽略它」。用 configDefaults.exclude 疊上 "e2e/**"，
+		// 而不是整個蓋掉預設值，保留 node_modules / dist 等既有排除項目。
+		exclude: [...configDefaults.exclude, "e2e/**"],
 		// 讓 expectTypeOf 真的被檢查，而不是一個永遠通過的 no-op。
 		// Vitest 5 的 typecheck.include 預設只認 *.test-d.ts，我們把型別層
 		// 測試跟一般測試放在同一個 *.test.ts 檔案裡，所以要覆寫成同一個
