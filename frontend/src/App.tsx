@@ -1,6 +1,6 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
-import { BrowserRouter, Link, Route, Routes } from "react-router";
+import { BrowserRouter, Link, Route, Routes, useNavigate } from "react-router";
 import { apiFetch } from "./api/client";
 // 建在 api/queries.ts 的模組層，不是這裡的元件 render 裡——直接寫在 render
 // 裡每次重繪都會建一個新的 QueryClient，快取等於沒有。放在 queries.ts
@@ -11,11 +11,16 @@ import { queryClient } from "./api/queries";
 import { logout } from "./auth/session";
 import { getRefreshToken } from "./auth/store";
 import { Login } from "./screens/Login";
+import { LogMeal } from "./screens/LogMeal";
 import { Today } from "./screens/Today";
 
-/** 佔位元件——Task 5 才會換成真正的畫面。 */
-function LogMealPlaceholder() {
-	return <h1>記一餐</h1>;
+/** `/log` 路由：記完一餐之後導回今日總覽。
+ *
+ *  `onSaved` 不直接放「導回今日總覽」以外的邏輯——快取的失效已經在
+ *  `LogMeal` 內部的 mutation `onSuccess` 做掉了，這裡只管畫面切換。 */
+function LogMealRoute() {
+	const navigate = useNavigate();
+	return <LogMeal onSaved={() => navigate("/")} />;
 }
 
 function Nav({ onLoggedOut }: { onLoggedOut: () => void }) {
@@ -62,7 +67,7 @@ export function App() {
 					<Nav onLoggedOut={() => setLoggedIn(false)} />
 					<Routes>
 						<Route path="/" element={<Today />} />
-						<Route path="/log" element={<LogMealPlaceholder />} />
+						<Route path="/log" element={<LogMealRoute />} />
 					</Routes>
 				</BrowserRouter>
 			) : (

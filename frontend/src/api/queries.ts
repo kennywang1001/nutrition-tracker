@@ -16,6 +16,11 @@ export const queryKeys = {
 	supplementsToday: ["supplements", "today"] as const,
 	frequentFoods: ["foods", "frequent"] as const,
 	recentFoods: ["foods", "recent"] as const,
+	/** 單一食物的份量清單。不像上面四個 key，這個不需要跨畫面失效——
+	 *  份量清單只在「記一餐」選了某個食物之後才查，沒有其他畫面會讀它。
+	 *  放進這個檔案不是因為要共用失效，而是延續「query key 只有一個
+	 *  事實來源」這條規矩，不要有些 key 在這裡、有些散在各畫面裡。 */
+	portions: (foodId: number) => ["foods", foodId, "portions"] as const,
 } as const;
 
 /** 整個 app 共用的單一 `QueryClient`。
