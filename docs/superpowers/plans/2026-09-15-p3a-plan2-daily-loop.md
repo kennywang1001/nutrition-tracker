@@ -477,6 +477,7 @@ Run: `cd frontend && npm run test`
 Create `frontend/tests/decimal-containment.test.ts`:
 
 ```ts
+/// <reference types="node" />
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -506,10 +507,40 @@ describe("decimal.js 的使用範圍", () => {
 });
 ```
 
+> **⚠️ 那一行 `/// <reference types="node" />` 不能省（計畫二的第一個缺陷）。**
+>
+> `tsconfig.app.json` 刻意設了 `"types": ["vite/client"]`，**不含 `@types/node`** ——
+> 那是為了讓 `src/` 保持純瀏覽器程式碼。對照 `tsconfig.node.json` 明確設
+> `"types": ["node"]`（給 `vite.config.ts` 用），就看得出那是一個刻意的隔離。
+>
+> 而 `tests/` 透過 `include` 共用 `tsconfig.app.json`，所以在測試裡
+> `import "node:fs"` 會 `TS2591`。
+>
+> **修法是 scoped 的 `/// <reference>`，不是去放寬共用的 `types` 陣列。**
+> 後者會讓 Node 的全域型別漏進 `src/` —— 於是「前端程式碼不小心用了
+> `process.env` 或 `Buffer`」從編譯錯誤變成能跑，而那個錯誤在瀏覽器裡
+> 是執行期才炸。
+>
+> 而且 per-file 的那一行本身是一個**寫在現場的訊號**：「這條測試會碰檔案
+> 系統」。放進共用設定就沒有人看得見了。等到這類測試多到那一行變成噪音
+> 再說 —— 現在只有一條。
+
 - [ ] **Step 8: 驗證這條守衛真的會紅**
 
-在 `src/screens/Today.tsx`（或任何一個 `src/` 底下的檔案）暫時加一行
-`import Decimal from "decimal.js";`，跑 `npm run test`，**確認變紅**，然後拿掉。
+在任何一個 `src/` 底下的現有檔案暫時加一行 `import Decimal from "decimal.js";`
+（加 `void Decimal;` 避開 `noUnusedLocals`），跑 `npm run test`，
+**確認變紅**，然後拿掉。
+
+實測輸出長這樣：
+
+```
+AssertionError: expected [ 'src/App.tsx' ] to deeply equal []
+```
+
+**那個輸出同時驗證了三件事**：`collectSourceFiles` 真的走遍了目錄樹、
+`.replace(/\/g, "/")` 真的把 Windows 的 `src\App.tsx` 正規化成
+`src/App.tsx`、而 `!== "src/lib/decimal.ts"` 的排除沒有把真正的違規也吞掉。
+一條掃描檔案系統的測試有太多種「永遠通過」的壞法，只有紅燈能一次排除。
 
 > **不要跳過。** 一條掃描檔案系統的測試很容易寫成永遠通過的樣子
 > （路徑錯、正規表達式不匹配、`collectSourceFiles` 回空陣列）。
