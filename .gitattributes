@@ -1,0 +1,21 @@
+# 所有文字檔在版控裡與 checkout 之後都是 LF。
+#
+# 為什麼需要這一份（實作 P3-A 計畫二 Task 1 時踩到的）：
+# Windows 上 core.autocrlf=true 會在 checkout 時把 LF 換成 CRLF，而 Biome
+# 的 formatter 要求 LF —— 於是在一個乾淨的 clone 上，`npm run lint` 會報
+# 二十幾個錯，而 CI（Linux runner）完全沒有這個問題。
+#
+# **那是一個「結果取決於你在哪台機器上跑」的檢查，比永遠紅更糟。**
+# 永遠紅至少是誠實的；這個會讓人以為自己的機器壞了，然後去關掉 lint。
+#
+# 只把工作目錄的檔案轉成 LF 是修症狀——下一次 clone 或 checkout 會再來
+# 一次。eol=lf 覆寫 core.autocrlf，讓 checkout 出來就是 LF。
+* text=auto eol=lf
+
+# 二進位檔不要碰
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.svg text eol=lf
+*.woff2 binary

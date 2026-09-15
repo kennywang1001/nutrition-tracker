@@ -44,7 +44,16 @@
 1. **新的測試檔副檔名要確認真的被檢查到。** 這份會加 `.tsx` 測試 —— `typecheck.include` 已經在計畫一改成涵蓋 `?(x)`，但**加完新檔案要用突變確認**（塞一個型別錯誤，確認 `npm run test` 會紅且指得出是哪個檔案）。
 2. **新的產出目錄要同時進 `frontend/.gitignore`**（Biome 的 `vcs.useIgnoreFile` 只讀那一份，不會往上找根目錄）。
 3. **突變表的預測是推測，不是事實。** 計畫一有兩次高估（我以為某條測試會走到某個分支，它在更早就被攔截了）。跑出來跟預測不符就如實回報。
-4. **Windows 上寫檔用 LF。**
+4. **Windows 上寫檔用 LF。** 而且根因已經在 Task 1 修掉了 —— repo 根目錄
+   新增了 `.gitattributes`（`* text=auto eol=lf`）。
+
+   **在那之前，一個乾淨的 clone 在 Windows 上跑 `npm run lint` 會報二十幾個
+   錯**（`core.autocrlf=true` 讓 checkout 把 LF 換成 CRLF，而 Biome 要 LF），
+   **而 CI（Linux）完全沒有這個問題**。那是一個「結果取決於你在哪台機器上跑」
+   的檢查 —— 比永遠紅更糟，因為永遠紅至少是誠實的，這個會讓人以為自己的
+   機器壞了然後去關掉 lint。
+
+   只把工作目錄的檔案轉成 LF 是修症狀，下一次 checkout 會再來一次。
 
 ---
 
@@ -187,11 +196,36 @@ npx playwright test          # 預期 2 passed（計畫一那兩條仍然綠）
 | 未登入時也 render 導覽列與 `<Today>` | 「沒有 token 時顯示登入畫面」 |
 | 登出按鈕只打 API 不清本地狀態 | 「登出之後回到登入畫面」 |
 
+> **Task 1 順帶要修的兩件事（實作時發現）：**
+>
+> **1. `e2e/auth.spec.ts` 的斷言文字要跟著換。** 計畫一那兩條 E2E 斷言的是
+> heading「已登入」，而這個 task 把那個扁平的佔位頁換成了 Router 的
+> 「今日總覽」路由。**斷言的意圖不變**（登入成功後不再停在登入畫面），
+> 只是文字跟著畫面換。改完跑一次確認那兩條仍然綠。
+>
+> **2. repo 根目錄加 `.gitattributes`。** 見本計畫開頭第 4 點 ——
+> 這是在乾淨 clone 上 `npm run lint` 會不會過的根因。
+>
+> ```
+> * text=auto eol=lf
+> *.png binary
+> *.jpg binary
+> *.jpeg binary
+> *.ico binary
+> *.svg text eol=lf
+> *.woff2 binary
+> ```
+>
+> 加完跑 `git add --renormalize .` 確認索引沒有內容變動（如果有，代表
+> 索引裡本來就混著 CRLF，那要另外處理），然後**實測驗證**：
+> `rm frontend/src/App.tsx && git checkout -- frontend/src/App.tsx`，
+> 確認 checkout 出來的是 LF。
+
 - [ ] **Step 7: Commit**
 
 ```bash
-git add frontend/
-git commit -m "feat: React Router 與版面
+git add frontend/ .gitattributes
+git commit -m "feat: React Router 與版面"
 
 計畫一刻意沒裝 Router（只有兩個狀態，裝它等於先建一個只有一條路由的
 路由器）。現在有兩個畫面了。
