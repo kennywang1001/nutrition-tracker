@@ -620,9 +620,13 @@ function mockApi(routes: Record<string, () => Response>) {
 				{ status: 401, headers: { "content-type": "application/json" } },
 			);
 		}
-		const match = Object.keys(routes).find((path) => url.includes(path));
-		if (match === undefined) throw new Error(`測試沒有為這個路徑準備回應：${url}`);
-		return routes[match]!();
+		// 用 Object.entries 一次拿到 handler，而不是先找 key 再回頭索引。
+		// 後者在 noUncheckedIndexedAccess 之下是 `T | undefined`，需要一個
+		// non-null assertion 才過得了型別 —— 而那正是 Biome 的
+		// noNonNullAssertion 在擋的東西。
+		const handler = Object.entries(routes).find(([path]) => url.includes(path))?.[1];
+		if (handler === undefined) throw new Error(`測試沒有為這個路徑準備回應：${url}`);
+		return handler();
 	});
 }
 
@@ -821,6 +825,22 @@ Create `frontend/src/components/MacroBar.tsx` 與 `frontend/src/screens/Today.ts
 > **打卡建議做樂觀更新**（規格 §7.2）：使用者預期「按下去就變了」，而失敗
 > 時 rollback 的成本很低。**但如果樂觀更新讓測試變得難寫，先不要做** ——
 > 這份計畫的驗收標準裡沒有它，YAGNI。
+
+> **⚠️ `tests/app.test.tsx` 的 `beforeEach` 要加 `queryClient.clear()`
+> （實作 Task 4 時才浮出來的既有缺陷）。**
+>
+> Task 1 寫那個檔案時，`Today` 還只是一個 `<h1>` 佔位元件，所以
+> 「測試之間共用同一個 queryClient」這件事完全沒有症狀。
+>
+> 這個 task 把它換成會真的發 query 的 `Today` 之後，前一條測試留下的
+> 快取值（形狀不對的 `[]`）會被下一條讀到，`stats.actual.kcal` 對
+> `undefined` 取值，直接炸掉整個 render。
+>
+> **這就是規格 §6.5「強制登出要清 query 快取」用在測試世界的版本** ——
+> 「下一個登入的使用者」換成「下一個測試」，同一個機制、同一個修法。
+>
+> 順帶一提，這也是「一個缺陷在條件不足時完全沒有症狀」的例子：
+> Task 1 的測試當時全綠，而且綠得有道理。
 
 - [ ] **Step 5: 加一條跨使用者快取的守衛**
 

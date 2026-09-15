@@ -35,10 +35,16 @@ function mockApi(routes: Record<string, () => Response>) {
 					{ status: 401, headers: { "content-type": "application/json" } },
 				);
 			}
-			const match = Object.keys(routes).find((path) => url.includes(path));
-			if (match === undefined)
+			// 用 Object.entries 一次拿到 handler，而不是先找 key 再回頭索引。
+			// 後者在 noUncheckedIndexedAccess 之下是 `T | undefined`，
+			// 需要一個 non-null assertion 才過得了型別——而那正是
+			// Biome 的 noNonNullAssertion 在擋的東西。
+			const handler = Object.entries(routes).find(([path]) =>
+				url.includes(path),
+			)?.[1];
+			if (handler === undefined)
 				throw new Error(`測試沒有為這個路徑準備回應：${url}`);
-			return routes[match]!();
+			return handler();
 		});
 }
 
