@@ -1,3 +1,4 @@
+import { clearQueryCacheOnForcedLogout, queryClient } from "../api/queries";
 import { clearTokens, getRefreshToken, setTokens } from "./store";
 
 /** 分頁**內**的 single-flight：並行的呼叫者共用同一個 promise。 */
@@ -24,8 +25,9 @@ async function performRefresh(): Promise<boolean> {
 
 	if (!response.ok) {
 		// INVALID_TOKEN 可能是「票過期了」，也可能是「重用偵測撤銷了整條鏈」。
-		// 前端分不出來，而處理一律相同（規格 §6.5）。
+		// 前端分不出來，而處理一律相同（規格 §6.5）：清 token、清 query 快取。
 		clearTokens();
+		clearQueryCacheOnForcedLogout(queryClient);
 		return false;
 	}
 

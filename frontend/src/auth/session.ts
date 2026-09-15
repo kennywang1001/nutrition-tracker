@@ -1,4 +1,5 @@
 import { apiFetch } from "../api/client";
+import { clearQueryCacheOnForcedLogout, queryClient } from "../api/queries";
 import { clearTokens, getRefreshToken, setTokens, type Tokens } from "./store";
 
 export async function login(email: string, password: string): Promise<void> {
@@ -29,5 +30,8 @@ export async function logout(): Promise<void> {
 		// 刻意吞掉
 	} finally {
 		clearTokens();
+		// 規格 §6.5：不清 query 快取的話，下一個登入的人會先看到上一個人的
+		// 今日總覽，然後才被重新 fetch 覆蓋掉。
+		clearQueryCacheOnForcedLogout(queryClient);
 	}
 }
