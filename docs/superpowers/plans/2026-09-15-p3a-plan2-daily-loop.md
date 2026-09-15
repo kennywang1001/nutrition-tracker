@@ -915,7 +915,16 @@ plan_id 為 null 的臨時記錄不給打卡按鈕——那種項目一定 done�
 **Files:**
 - Create: `frontend/src/screens/LogMeal.tsx`
 - Modify: `frontend/src/api/queries.ts`
+- **Modify: `frontend/src/App.tsx`** —— 把 `/log` 路由的佔位元件換成真正的
+  `LogMeal`，並在 `onSaved` 時導回 `/`
 - Create: `frontend/tests/log-meal.test.tsx`
+
+> **`App.tsx` 那一行原本漏了（計畫二的第三個缺陷）。** 不接上路由的話，
+> Step 6 的手動驗收（記一餐 → 回到今日總覽看數字變了）**根本走不到** ——
+> 畫面上永遠停在 Task 1 的佔位 `<h1>記一餐</h1>`。
+>
+> 這跟計畫一那個「Files 清單寫加 react-router、內文寫不裝 Router」是
+> 同一類：**Files 清單與內文是兩個講同一件事的地方，就會漂移。**
 
 #### 這個畫面要處理的三個後端事實
 
@@ -1057,6 +1066,19 @@ onSuccess: () => {
 
 > 這一步不能只看測試綠。上表最後一個突變說明了為什麼：**失效那條路徑
 > 沒有任何單元測試守得到。**
+
+**不要只確認「數字變了」，要交叉核對算式。** 實作時實際做到的：
+
+```
+記錄前  curl /api/stats/daily → actual.kcal = "0.00"    UI：熱量 0 / 2300
+記一餐  「媽媽的滷肉飯」（每 100g 220 kcal），份量 1
+記錄後  curl /api/stats/daily → actual.kcal = "2.20"    UI：熱量 2.2 / 2300
+        1g × 220 kcal / 100g = 2.2  ✓
+```
+
+**那個算式才是這個 task 真正要證明的東西**：伺服器是用它自己算出來並凍結
+的 `quantity_g` 算的，前端沒有偷偷算一份。只確認「數字變了」的話，
+前端自己算 `quantity_g` 送上去也會讓數字變 —— 兩種情況在畫面上分不出來。
 
 - [ ] **Step 7: Commit**
 
