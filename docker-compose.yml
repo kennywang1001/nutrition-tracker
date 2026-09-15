@@ -69,6 +69,7 @@ services:
     # 與 production（${BIND_ADDR:?...}，決定 5）完全不同，且跟 JWT_SECRET
     # 一樣有「必填變數要在真正會用到它的那個檔案裡宣告」的限制。
 
+
 volumes:
   pgdata:
   photos:

@@ -353,7 +353,9 @@ Windows + Docker Desktop 上**連跑 25 次一次都沒變紅** —— 那台機
 | asyncpg 日期參數 | 要傳真的 `date` 物件，`$1::date` 配字串會拋 `DataError` |
 | `docker ps` 顯示 `Up` | **不代表活著**。uvicorn reloader 父行程在子行程崩潰時仍活著 |
 | 改環境變數後 `restart` | **不夠**，要 `up -d`（會重建容器） |
+| 在本機起 prod 疊加設定 | 會**接管同名的 dev 容器**（專案名稱相同），dev 的 `db` 會失去 `5433` 的埠發佈。驗證完要 `down` 再 `docker compose up -d` 把 dev 收回來，否則 host 上的 pytest 連不到資料庫 |
 | 改依賴後 | **必須重建映像**，`--reload` 只換程式碼不換依賴 |
+| **新增 migration 後** | 也**必須重建映像**。`Dockerfile` 是 `COPY . .`，migration 檔案是烤進映像的，不是掛載的 —— dev 的原始碼掛載只有 `./app`。症狀是 `relation "xxx" does not exist`，而檔案明明在 repo 裡 |
 
 ---
 

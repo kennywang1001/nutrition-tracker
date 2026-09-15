@@ -1,0 +1,41 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.5.13/schema.json",
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true
+	},
+	"files": {
+		"ignoreUnknown": false,
+		// schema.d.ts 是 `npm run gen:api` 從後端的 openapi.json 產生的，
+		// 排除在 lint/format 之外。手改它沒有意義——下一次重新產生就沒了，
+		// 而且那正是 contract CI job 要抓的漂移。
+		//
+		// （這個檔案是 .jsonc 而不是 .json，就是為了能寫這段註解。
+		// Biome 對 biome.json 不接受 // 註解。）
+		"includes": ["**", "!src/api/schema.d.ts"]
+	},
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab"
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"preset": "recommended"
+		}
+	},
+	"javascript": {
+		"formatter": {
+			"quoteStyle": "double"
+		}
+	},
+	"assist": {
+		"enabled": true,
+		"actions": {
+			"source": {
+				"organizeImports": "on"
+			}
+		}
+	}
+}

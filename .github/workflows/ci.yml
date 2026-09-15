@@ -5,7 +5,49 @@ on:
   pull_request:
 
 jobs:
-  test:
+  changes:
+    # 用 dorny/paths-filter 算出這次變更碰到前端還是後端（或兩者），下面
+    # 四個 job 用 `needs: changes` + `if:` 訂閱這裡算出來的布林值。
+    #
+    # 為什麼不拆成 ci-backend.yml / ci-frontend.yml 兩個 workflow 檔：
+    # `contract` 與 `e2e` 兩個 job 必須在「前端或後端任一變更」時都觸發——
+    # 拆檔案的話，這兩個 job 得原封不動地重複出現在兩個檔案裡（各自用
+    # workflow 層級的 `on.push.paths` 再抄一次 backend 與 frontend 的路徑
+    # 清單），或者自成第三個 workflow、一樣要抄兩份路徑清單。任何一種都
+    # 代表「backend 該碰哪些路徑」這件事要在多處保持同步，改一次漏一處
+    # 就是「只改後端但 contract 沒跑」這個最常見的漂移路徑本身。單一
+    # workflow + 一個 `changes` job，路徑清單只在這裡出現一次。
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'app/**'
+              - 'tests/**'
+              - 'migrations/**'
+              - 'conftest.py'
+              - 'alembic.ini'
+              - 'pyproject.toml'
+              - 'requirements-lock.txt'
+              - '.github/workflows/ci.yml'
+            frontend:
+              - 'frontend/**'
+              - '.github/workflows/ci.yml'
+
+  backend:
+    # 原本的 `test` job。**內容原封不動**，只改了兩件事：
+    #   1. job 的 key 從 `test` 改成 `backend`
+    #   2. 加上 `needs: changes` 與下面的 `if:` 路徑過濾
+    # services / env / steps 一行都不要動——它現在守著 503 個測試、
+    # ruff、mypy、alembic 漂移檢查，以及 -W error。
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
 
     services:
@@ -67,3 +109,116 @@ jobs:
         #
         # CI 才是跑在乾淨環境的那一道，它反而是原本沒開的那一道。
         run: pytest -W error --cov=app --cov-report=term-missing --cov-fail-under=80
+
+  frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test
+      - run: npm run build
+
+  contract:
+    # 規格決策 5 的執法者，也是決策 2（同 repo）唯一的實質理由。
+    # 必須在前後端任一變更時都觸發——否則「只改後端」這個最常見的
+    # 漂移路徑剛好漏掉。
+    needs: changes
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: wallet
+          POSTGRES_PASSWORD: wallet
+          POSTGRES_DB: wallet
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U wallet" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://wallet:wallet@localhost:5432/wallet
+      JWT_SECRET: ci-only-not-a-secret-0123456789abcdef
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: pip install -c requirements-lock.txt -e ".[dev]"
+      - run: alembic upgrade head
+      - name: 起後端
+        run: |
+          uvicorn app.main:app --host 127.0.0.1 --port 8000 &
+          until curl -sf http://127.0.0.1:8000/api/health; do sleep 1; done
+      - name: 重新產生型別並比對
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run gen:api
+          git diff --exit-code src/api/schema.d.ts
+      # git diff --exit-code：有差異就 exit 1。
+      # 這一行就是「後端改了 schema 但前端型別沒跟上」的紅燈。
+
+  e2e:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: wallet
+          POSTGRES_PASSWORD: wallet
+          POSTGRES_DB: wallet
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U wallet" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://wallet:wallet@localhost:5432/wallet
+      JWT_SECRET: ci-only-not-a-secret-0123456789abcdef
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: pip install -c requirements-lock.txt -e ".[dev]"
+      - run: alembic upgrade head
+      - name: 種子資料
+        # E2E 的兩條測試都用這個帳號登入。create-admin 對已存在的 email
+        # 是「提升並重設密碼」，所以重跑 job 不會失敗。
+        run: python -m app.cli create-admin kenny.demo@example.com demo-pass-12345 "示範帳號"
+      - name: 起後端
+        run: |
+          uvicorn app.main:app --host 127.0.0.1 --port 8000 &
+          until curl -sf http://127.0.0.1:8000/api/health; do sleep 1; done
+      - name: Playwright
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run e2e
