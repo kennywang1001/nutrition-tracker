@@ -3,13 +3,16 @@ import { expect, test } from "@playwright/test";
 const EMAIL = "kenny.demo@example.com";
 const PASSWORD = "demo-pass-12345";
 
-test("登入之後看得到已登入的畫面", async ({ page }) => {
+test("登入之後看得到今日總覽", async ({ page }) => {
+	// 計畫二（Task 1）把登入後的畫面從一個扁平的「已登入」佔位頁換成
+	// React Router 的「今日總覽」路由——這裡的斷言跟著換，斷言的意圖
+	// 不變：登入成功後不再停在登入畫面。
 	await page.goto("/");
 	await page.getByLabel("Email").fill(EMAIL);
 	await page.getByLabel("密碼").fill(PASSWORD);
 	await page.getByRole("button", { name: "登入" }).click();
 
-	await expect(page.getByRole("heading", { name: "已登入" })).toBeVisible();
+	await expect(page.getByRole("heading", { name: "今日總覽" })).toBeVisible();
 });
 
 test("access token 過期時會自動換票並重送，使用者不會被踢出去", async ({
@@ -21,7 +24,7 @@ test("access token 過期時會自動換票並重送，使用者不會被踢出�
 	await page.getByLabel("Email").fill(EMAIL);
 	await page.getByLabel("密碼").fill(PASSWORD);
 	await page.getByRole("button", { name: "登入" }).click();
-	await expect(page.getByRole("heading", { name: "已登入" })).toBeVisible();
+	await expect(page.getByRole("heading", { name: "今日總覽" })).toBeVisible();
 
 	// 把記憶體裡的 access token 換成一張無效的，模擬它過期。
 	// refresh token 留著——這正是「票過期但 session 還活著」的狀態。
@@ -32,6 +35,8 @@ test("access token 過期時會自動換票並重送，使用者不會被踢出�
 
 	// 觸發一次需要認證的請求：點「重新整理」打 /api/me。
 	// 不能用登出——/api/auth/logout 不需要 access token，換票邏輯不會被觸發。
+	// 這個按鈕從 main.tsx 搬到了 App.tsx 的導覽列（計畫二 Task 1），
+	// 但行為沒變。
 	const meResponse = page.waitForResponse(
 		(response) =>
 			response.url().includes("/api/me") && response.status() === 200,
@@ -39,5 +44,5 @@ test("access token 過期時會自動換票並重送，使用者不會被踢出�
 	await page.getByRole("button", { name: "重新整理" }).click();
 	await meResponse;
 
-	await expect(page.getByRole("heading", { name: "已登入" })).toBeVisible();
+	await expect(page.getByRole("heading", { name: "今日總覽" })).toBeVisible();
 });
