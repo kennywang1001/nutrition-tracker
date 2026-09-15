@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
+import { queryClient } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 
@@ -10,6 +11,14 @@ beforeEach(() => {
 	clearTokens();
 	resetRefreshStateForTests();
 	vi.restoreAllMocks();
+	// `queryClient` 是模組層的單例（Task 4：`clearQueryCacheOnForcedLogout`
+	// 要在 logout()／refresh 失敗時清的就是這一個 instance），在同一個測試
+	// 檔案裡的多個 it() 之間會留存。不清的話，這裡任一則測試對 /api/stats/daily
+	// 的 mock 回應（形狀常常只是隨手塞的 `[]`）會被 <Today /> 快取住，
+	// 下一則測試一 mount 就讀到上一則的舊快取，值的形狀對不上會直接把
+	// render 炸掉——這正是 §6.5 要清快取的同一個道理，只是這裡的「下一個
+	// 使用者」換成了「下一個測試」。
+	queryClient.clear();
 });
 
 describe("App", () => {

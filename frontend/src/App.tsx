@@ -1,24 +1,19 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
 import { BrowserRouter, Link, Route, Routes } from "react-router";
 import { apiFetch } from "./api/client";
+// 建在 api/queries.ts 的模組層，不是這裡的元件 render 裡——直接寫在 render
+// 裡每次重繪都會建一個新的 QueryClient，快取等於沒有。放在 queries.ts
+// 而不是這個檔案，是為了讓 auth/session.ts 的 logout() 與 auth/refresh.ts
+// 的 refresh 失敗路徑也能拿到同一個 instance 去清快取（規格 §6.5），
+// 又不必回頭 import 這個檔案（那會兜出循環依賴）。
+import { queryClient } from "./api/queries";
 import { logout } from "./auth/session";
 import { getRefreshToken } from "./auth/store";
 import { Login } from "./screens/Login";
+import { Today } from "./screens/Today";
 
-// 建在模組層，不是元件 render 裡——直接寫在 render 裡每次重繪都會建一個
-// 新的 QueryClient，快取等於沒有。
-//
-// INVALID_TOKEN／強制登出時要 clearQueryCacheOnForcedLogout(queryClient)
-// 清掉這個快取（規格 §6.5：不清的話下一個登入的人會先看到上一個人的今日
-// 總覽）——但那是 Task 4 的事，這裡先只接上 Provider。
-const queryClient = new QueryClient();
-
-/** 佔位元件——Task 4、5 才會換成真正的畫面。 */
-function TodayPlaceholder() {
-	return <h1>今日總覽</h1>;
-}
-
+/** 佔位元件——Task 5 才會換成真正的畫面。 */
 function LogMealPlaceholder() {
 	return <h1>記一餐</h1>;
 }
@@ -66,7 +61,7 @@ export function App() {
 				<BrowserRouter>
 					<Nav onLoggedOut={() => setLoggedIn(false)} />
 					<Routes>
-						<Route path="/" element={<TodayPlaceholder />} />
+						<Route path="/" element={<Today />} />
 						<Route path="/log" element={<LogMealPlaceholder />} />
 					</Routes>
 				</BrowserRouter>
