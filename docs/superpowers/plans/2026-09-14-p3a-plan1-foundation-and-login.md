@@ -2240,6 +2240,34 @@ npm install --save-dev @playwright/test
 npx playwright install --with-deps chromium
 ```
 
+> **⚠️ 先處理一件計畫沒預料到的事（第 11 個缺陷）：Vitest 會把
+> `e2e/*.spec.ts` 當成自己的測試檔。**
+>
+> Vitest 的預設 `include` 涵蓋 `**/*.spec.ts`，而 Playwright 的測試檔
+> 副檔名一樣。兩套 runner 的 `test()` 互不相容，`npm run test` 會直接炸。
+>
+> `vite.config.ts` 的 `test` 區塊加：
+>
+> ```ts
+>     // 把 e2e/ 排除掉：Playwright 的測試檔副檔名跟 Vitest 的一樣，
+>     // 不排除的話 npm run test 會去跑它們然後炸掉。
+>     // 用 configDefaults.exclude 疊加而不是整份覆寫——覆寫會連
+>     // node_modules、dist 那些預設排除一起弄掉。
+>     exclude: [...configDefaults.exclude, "e2e/**"],
+> ```
+>
+> （`import { configDefaults } from "vitest/config";`）
+
+> **⚠️ 還有一個：`frontend/.gitignore` 要補 Playwright 的產出。**
+>
+> `biome.jsonc` 開了 `vcs.useIgnoreFile`，而 **Biome 只讀
+> `frontend/.gitignore`，不會往上找 repo 根目錄那一份**。根目錄的
+> `.gitignore` 已經有 `frontend/test-results/` 與 `frontend/playwright-report/`，
+> 但 Biome 看不到 —— 於是 `npm run lint` 會不會過，取決於本機有沒有跑過 e2e。
+>
+> 那是一個**會隨環境改變結果**的 lint，比永遠紅更糟。在
+> `frontend/.gitignore` 也補一份。
+
 - [ ] **Step 2: 設定**
 
 Create `frontend/playwright.config.ts`:
@@ -2302,9 +2330,12 @@ test("access token 過期時會自動換票並重送，使用者不會被踢出�
     (window as any).__forceExpireAccessToken?.();
   });
 
-  // 觸發一次需要認證的請求。這裡用登出：它會打 /api/auth/logout，
-  // 而那個端點**不需要 access token**——換一個真的需要的。
+  // 點「重新整理」打 /api/me。**不能用登出** —— /api/auth/logout 不需要
+  // access token，換票邏輯根本不會被觸發。
   // （第二份計畫有「今日總覽」之後改成點那個分頁。）
+  //
+  // 計畫原本這裡寫的是「這裡用登出……而那個端點不需要 access token
+  // ——換一個真的需要的」，一句話自己推翻自己。那是第 10 個計畫缺陷。
   const meResponse = page.waitForResponse(
     (response) => response.url().includes("/api/me") && response.status() === 200,
   );
@@ -2396,6 +2427,20 @@ Expected: 2 passed
 > 第 2 條會讓 `contract` 與 `e2e`（兩邊都要觸發）變得尷尬 —— 它們得重複
 > 出現在兩個檔案裡，或者自成第三個 workflow。那個取捨要看實際的 YAML
 > 長出來才好判斷，而我沒有寫過這個 repo 的 workflow 分檔。
+>
+> **實作時選的是 `dorny/paths-filter`，理由如下（值得記下來）：**
+>
+> `contract` 與 `e2e` 必須在**前後端任一變更**時都觸發。拆成
+> `ci-backend.yml` / `ci-frontend.yml` 會逼這兩個 job 要嘛重複出現在兩個
+> 檔案裡、要嘛自成第三個 workflow —— 不管哪種，**「backend 該碰哪些路徑」
+> 這份清單都要在多處保持同步**。
+>
+> 而改一次漏一處的後果，**正好就是「只改後端但 contract 沒跑」這個最常見
+> 的漂移路徑本身** —— 也就是說，為了省一次 pytest 而拆檔案，代價是讓
+> 那個守衛可能在最需要它的時候剛好沒被觸發。
+>
+> 單一 `changes` job 把路徑清單收在一處，其餘 job 用 `needs` + `if`
+> 訂閱布林值。一份清單、一個事實來源。
 >
 > **下面的 job 定義本身跟你選哪一條無關**，照抄即可。
 
@@ -2553,20 +2598,52 @@ git push
 > `git diff --exit-code` 很容易因為換行符或 `.gitattributes` 的設定
 > 而永遠是綠的（Windows 上產生 CRLF、CI 上產生 LF）。**這正是這個 repo
 > 已經在 `git add` 時看到過的警告。**
+>
+> **✅ 實測結果（2026-09-14）：真的會紅，而且紅得乾淨。**
+>
+> 在拋棄式分支把 `schema.d.ts` 的 `protein_g` 從 `string` 改成 `number`
+> 推上去，`contract` job 失敗，「重新產生型別並比對」步驟印出的是
+> **單行的語意 diff**（`- protein_g: number;` / `+ protein_g: string;`），
+> 後面接 `Process completed with exit code 1`。
+>
+> **沒有任何換行符雜訊** —— 也就是說這個守衛抓的是真的漂移，不是
+> 線尾巴。分支已刪除。
+>
+> 附帶確認了一件事：本機每次 `git add` 都會印
+> `warning: LF will be replaced by CRLF`，但 `git show :<file>` 拿到的
+> 暫存 blob 仍是純 LF（`autocrlf=true` 只影響未來的 checkout，
+> 不影響已提交的內容）。所以那個警告目前無害 —— **但那是推論，
+> Step 9 的紅燈才是證據。**
 
 ---
 
 ## 完成標準
 
-- [ ] Task 1 的路線 A 或 B 完成，且**在真機上**看到 `isSecureContext` / `serviceWorker` / `locks` 三個 `true`
-- [ ] `frontend/` 的 `npm run lint` / `typecheck` / `test` / `build` 全綠
-- [ ] `schema.d.ts` 進版控，`contract` job **實測驗證過會因為漂移而變紅**
-- [ ] 兩條契約 E2E 綠，且第二條經過突變驗證（拿掉 401 重送會紅）
-- [ ] prod caddy 起得來，`curl /api/nope` 回的是**錯誤信封 JSON 不是 HTML**
-- [ ] 後端 503 個測試不因這個階段而變動，`test_no_static_files_mount_*` 仍然綠
-- [ ] PWA 在手機上裝得起來，飛航模式下開啟看到 app shell
-- [ ] 用 `kenny.demo@example.com` 在手機上真的登入過一次
-- [ ] 各 task 的突變全部實際跑過，結果寫回這份文件
+- [ ] ⏸ **Task 1 的路線 A 或 B 完成，且在真機上看到 `isSecureContext` /
+      `serviceWorker` / `locks` 三個 `true`** —— 待 NAS
+- [x] `frontend/` 的 `npm run lint` / `typecheck` / `test` / `build` 全綠（60 個測試）
+- [x] `schema.d.ts` 進版控，`contract` job **實測驗證過會因為漂移而變紅**
+      （拋棄式分支，乾淨的單行語意 diff，無換行符雜訊）
+- [x] 兩條契約 E2E 綠，且兩個突變都經過驗證（拿掉 401 重送 → 第二條 timeout；
+      拿掉 `server.proxy` → 兩條都紅）
+- [x] prod caddy 起得來，`curl /api/nope` 回的是**錯誤信封 JSON 不是 HTML**，
+      而且 `127.0.0.1:8000` 連不上（api 已不對外）
+- [x] 後端 503 個測試不因這個階段而變動，`test_no_static_files_mount_*` 仍然綠
+- [ ] ⏸ **PWA 在手機上裝得起來，飛航模式下開啟看到 app shell** —— 待 NAS。
+      本機只確認了 `dist/sw.js` 與 `dist/manifest.webmanifest` 有產出來
+- [ ] ⏸ **用 `kenny.demo@example.com` 在手機上真的登入過一次** —— 待 NAS。
+      已在桌機瀏覽器完整驗證過（登入 → 登出 → 連錯 6 次看到 60 秒倒數與停用的送出鈕）
+- [x] 各 task 的突變全部實際跑過，結果寫回這份文件
+- [x] CI 五個 job（changes / backend / frontend / contract / e2e）全綠
+
+> **三個未打勾的都需要真機，而且都不能用 `localhost` 代替** ——
+> `http://localhost` 永遠是 secure context，本機的結果證明不了任何事。
+> 那正是規格 §9.2 第 9 條記錄的假綠燈，真機驗證是它唯一的執法點。
+
+> **⚠️ 合併前要確認一件 repo 設定：** 既有的 CI job 從 `test` 改名成
+> `backend`。如果 GitHub 的分支保護把 `test` 設成 required status check，
+> 那個名字現在不存在了 —— **required checks 的清單要跟著更新**，
+> 否則 PR 會永遠卡在「等待一個不會出現的檢查」。
 
 ---
 
