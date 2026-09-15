@@ -16,6 +16,22 @@ test("記一餐之後，今日總覽的數字真的變了", async ({ page, reque
 	//   2. 數值是字串（規格 §5.1）——後端回 "180.50"，前端的 decimal 處理
 	//      如果退化成 parseFloat，小數會在這裡露出馬腳
 	//
+	// ⚠️ **這條測試的鑑別力依賴 src/api/queries.ts 的 staleTime。**
+	//
+	// staleTime 是 0（TanStack Query 的預設值）時，這條測試會【因為錯誤的
+	// 理由】變綠：React Router 切換路由會讓 Today 整個 unmount／remount，
+	// 而 remount 時只要資料「過期」就會自動重取——跟有沒有呼叫
+	// invalidateQueries 完全無關。實測過：把 LogMeal 的
+	// invalidateQueries(dailyStats) 整行刪掉，這條測試依然綠。
+	//
+	// 現在 staleTime 是 60 秒，而這條測試跑完約 4 秒——remount 時資料還
+	// 新鮮，不會自動重取，所以「數字變了」只可能來自 invalidateQueries。
+	//
+	// **如果有人把 staleTime 調到接近或低於這條測試的執行時間，這條測試
+	// 會靜默地退回「因為 remount 而綠」，而不會有任何東西提醒你。**
+	// 改那個值之前，先把 invalidateQueries 那一行拿掉跑一次，
+	// 確認這條測試仍然會紅。
+	//
 	// 「記一餐」畫面只讀 /api/foods/frequent 與 /api/foods/recent
 	// （見 app/api/routes/foods.py `_my_recorded_foods_stmt`）——兩者都是
 	// 「這個使用者記錄過的食物」的衍生查詢，沒有任何一般搜尋入口。CI 的
