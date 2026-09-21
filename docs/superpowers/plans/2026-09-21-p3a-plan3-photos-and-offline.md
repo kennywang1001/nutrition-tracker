@@ -677,12 +677,39 @@ cd frontend && npx playwright test        # 預期 6 passed
 > 那個上限是實測出來的（`/api/health` 的最高延遲從 1094ms 降到 153ms），
 > 不該為了測試方便而放寬。
 
+> **實測結果（Task 5）：workers 沒有動，維持自動偵測。** 本機（4 核）
+> Playwright 對 6 條測試自動選了 3 個 worker，連續 6 次完整
+> `npx playwright test`（3 次不重啟後端、3 次搭配
+> `docker compose restart api`）都是 6 passed，沒有觀察到 Task 1 記錄
+> 過的那種「送出鈕停在 disabled、5 秒逾時」不穩定，`MAX_CONCURRENT_HASHES`
+> 排隊不是這裡的問題。
+>
+> **但抓到一個不一樣的坑，跟這段原本猜的機制無關：** 在同一個**沒有
+> 重啟**的 dev 容器上，60 秒內連續整套重跑第 4 次時，全部測試（不只
+> 第六條）一起爆炸——`auth.spec.ts`、`daily-loop.spec.ts` 全部逾時或
+> 401/429，`photo-and-limits.spec.ts` 的上傳甚至收到
+> `INVALID_TOKEN`。查後端日誌，原因是**全域限速被前 3 輪的第六條餵到
+> 頂**：`GLOBAL_LIMIT = 20`／60 秒是所有失敗登入共用一個計數器，不分
+> email；每輪第六條貢獻 5 次失敗（第 6 次本身被 `check()` 擋下、不計
+> 入），3 輪之後全域計數來到 15，第 4 輪一開始就把它推過 20——一旦
+> 全域計數器頂到，**連正確密碼的登入也會被 429**（`check()` 在驗密碼
+> 之前就擋，不管帳密對不對），於是整套測試連鎖失敗。
+>
+> **這不是這條測試本身不穩，是同一個長駐容器被 60 秒內連續問了太多
+> 次**——CI 每個 job 都是全新容器，不會遇到這個問題。本機要連續重跑
+> 驗證穩定性時，兩輪之間跑 `docker compose restart api`（或等超過
+> 60 秒）即可；已經在 `photo-and-limits.spec.ts` 的第六條測試裡寫了
+> 註解說明，並把第六條的 email 帶上時間戳（同時也解掉「本機重跑撞到
+> 前一輪還沒過期的每信箱限速視窗」這個更直接的問題）。
+
 - [ ] **Step 3: 突變驗證**
 
-| 突變 | 預期變紅 |
-|---|---|
-| `fetchPhotoBlob` 不帶 Authorization | 第五條 |
-| 登入畫面的 429 分支不設 `cooldown` | 第六條 |
+| 突變 | 預期變紅 | 實測 |
+|---|---|---|
+| `fetchPhotoBlob` 不帶 Authorization（改成 `fetch(path, {})`，繞過 `withAuth`） | 第五條 | ✅ 第五條紅（`meal-photo-{id}` 裡的 `<img>` 5 秒逾時找不到，因為後端回 401、`useMealPhoto` 的 `isError` 變 true）；第六條不受影響 |
+| 登入畫面的 429 分支不設 `cooldown`（只保留 `setError`） | 第六條 | ✅ 第六條紅（`getByRole("alert")` 停在「登入嘗試次數過多，請稍後再試」，沒有「（N 秒後可再試）」，`toContainText("秒後可再試")` 逾時失敗）；第五條不受影響 |
+
+兩次突變都已還原，`git status --short` 乾淨（只剩新增的 `photo-and-limits.spec.ts`）。
 
 - [ ] **Step 4: 推上去看 CI**
 
