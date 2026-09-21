@@ -129,9 +129,17 @@ describe("今日餐點清單", () => {
 		render(wrap(<MealList />));
 		await screen.findByText("滷肉飯");
 
-		for (const img of screen.queryAllByRole("img")) {
-			expect(img.getAttribute("src")).not.toContain("abc123.jpg");
-		}
+		// **不要用 `getByRole("img")`（計畫原本就是這樣寫的，錯的）。**
+		// ARIA 規則下 `alt=""`（裝飾用圖片）會把 img 的 role 改成
+		// presentation，於是它從 accessibility tree 消失、
+		// `queryAllByRole("img")` 找不到它 —— 這條守衛就瞎了。
+		//
+		// 實測踩過：用 `<img src={photo_path} alt="" />` 做突變時，
+		// 原本的寫法「巧合地」通過了。改成直接斷言那個字串從來沒有進到
+		// DOM 之後，同一個突變才會紅。
+		//
+		// 這是這個性質最直接的表達：photo_path 不該被渲染成任何東西的網址。
+		expect(document.body.innerHTML).not.toContain("abc123.jpg");
 	});
 
 	it("沒有照片的餐不顯示照片區塊", async () => {
@@ -179,7 +187,7 @@ npx playwright test        # 預期 4 passed（前兩份的）
 | 突變 | 預期變紅 |
 |---|---|
 | `/api/meals` 加上 `?date=...` | 「不傳 date 參數」 |
-| 把 `photo_path` 直接當成 `<img src>` | 「photo_path 不會被當成網址」 |
+| 把 `photo_path` 直接當成 `<img src>` | 「photo_path 不會被當成網址」。**突變時用 `alt=""`** —— 那是最容易逃掉的形式（見上面的說明），也是 Task 2 最可能真的寫出來的形式 |
 | `photo_path === null` 也顯示照片區塊 | 「沒有照片的餐不顯示照片區塊」 |
 
 - [ ] **Step 5: Commit**
@@ -543,6 +551,18 @@ cd frontend && npx playwright test        # 預期 6 passed
 ```
 
 **如果第六條讓其他測試變得不穩定，那代表限速鎖到了 demo 帳號** —— 回頭檢查那個 email。
+
+> **實作 Task 1 時已經觀察到一次既有的登入不穩定**（2 個 worker 並行、
+> 送出鈕停在 disabled、5 秒逾時，重跑就過）。那**不是**限速 ——
+> 成功的登入會重置計數。比較可能的原因是後端的
+> `MAX_CONCURRENT_HASHES = 2`：Argon2 被刻意限制同時只跑兩個
+> （P4 決定 3，為了不讓 NAS 的記憶體爆掉），所以並行登入會排隊。
+>
+> **第六條 E2E 會連續送 6 次登入**，等於一口氣佔滿那個佇列。
+> 如果加進去之後其他測試開始不穩，**先試把 Playwright 的 worker 數降到 1**
+> （`playwright.config.ts` 的 `workers: 1`），而不是去動後端的並行上限 ——
+> 那個上限是實測出來的（`/api/health` 的最高延遲從 1094ms 降到 153ms），
+> 不該為了測試方便而放寬。
 
 - [ ] **Step 3: 突變驗證**
 

@@ -141,9 +141,16 @@ describe("今日餐點清單", () => {
 		render(wrap(<MealList />));
 		await screen.findByText("滷肉飯");
 
-		for (const img of screen.queryAllByRole("img")) {
-			expect(img.getAttribute("src")).not.toContain("abc123.jpg");
-		}
+		// **不要用 getByRole("img")。** ARIA 規則下 `alt=""`（裝飾用圖片）
+		// 會把 img 的 role 改成 presentation，於是它從 accessibility tree
+		// 消失、`queryAllByRole("img")` 找不到它——這條守衛就瞎了。
+		//
+		// 實測踩過：用 `<img src={photo_path} alt="" />` 做突變時，
+		// 這條測試「巧合地」通過了。
+		//
+		// 直接斷言那個字串從來沒有進到 DOM，是這個性質最直接的表達：
+		// photo_path 不該被渲染成任何東西的網址。
+		expect(document.body.innerHTML).not.toContain("abc123.jpg");
 	});
 
 	it("沒有照片的餐不顯示照片區塊", async () => {
