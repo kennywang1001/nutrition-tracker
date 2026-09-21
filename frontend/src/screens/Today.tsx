@@ -4,6 +4,7 @@ import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
 import { MacroBar } from "../components/MacroBar";
 import { formatMacro } from "../lib/decimal";
+import { MealList } from "./MealList";
 
 type DailyStats = components["schemas"]["DailyStatsResponse"];
 type TodaySupplementItem = components["schemas"]["TodaySupplementItem"];
@@ -136,6 +137,8 @@ export function Today() {
 						/>
 					</div>
 				))}
+
+			<MealList />
 
 			<h2>今日補劑</h2>
 			<ul>

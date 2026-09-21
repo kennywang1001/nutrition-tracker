@@ -14,6 +14,11 @@ import { QueryClient } from "@tanstack/react-query";
 export const queryKeys = {
 	dailyStats: ["stats", "daily"] as const,
 	supplementsToday: ["supplements", "today"] as const,
+	/** 今日餐點清單。跟 `dailyStats` 一樣刻意不帶日期參數——後端的
+	 *  `list_meals` 省略 `?date=` 時也是走 `today_in_timezone(user.timezone)`
+	 *  （`app/days.py`，跟 `/api/stats/daily`、`/api/supplements/today`
+	 *  同一個函式）。記一餐成功後要讓這個 key 失效，清單才會顯示新的一餐。 */
+	meals: ["meals"] as const,
 	frequentFoods: ["foods", "frequent"] as const,
 	recentFoods: ["foods", "recent"] as const,
 	/** 單一食物的份量清單。不像上面四個 key，這個不需要跨畫面失效——

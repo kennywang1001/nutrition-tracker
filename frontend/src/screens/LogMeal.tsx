@@ -105,6 +105,11 @@ export function LogMeal({ onSaved }: Props) {
 			// 常吃/最近吃的排序也變了。
 			queryClient.invalidateQueries({ queryKey: queryKeys.frequentFoods });
 			queryClient.invalidateQueries({ queryKey: queryKeys.recentFoods });
+			// 新記的這一餐要出現在今日餐點清單裡——跟上面 dailyStats 那行
+			// 同一類，而且同樣沒有單元測試守得到（計畫三 Task 1 實測確認
+			// 過：拿掉這一行，本檔案的既有測試依然全線通過）。Task 5 的
+			// E2E 會一起守這一行與 dailyStats 那一行。
+			queryClient.invalidateQueries({ queryKey: queryKeys.meals });
 			setSelectedFood(null);
 			setPortionId(null);
 			setQuantity("1");
