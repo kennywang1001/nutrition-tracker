@@ -170,6 +170,29 @@ Create `frontend/src/screens/MealList.tsx`。**行為要求**：
 
 `src/api/queries.ts` 加 `queryKeys.meals = ["meals"] as const`。
 
+> **⚠️ Task 2 之後會再加一個 `queryKeys.mealPhoto(mealId)`，
+> 那個 key 必須是獨立的命名空間，不要掛在 `"meals"` 底下。**
+>
+> ```ts
+> meals: ["meals"] as const,
+> mealPhoto: (mealId: number) => ["meal-photo", mealId] as const,   // 對
+> // mealPhoto: (mealId) => ["meals", mealId, "photo"]              // 錯
+> ```
+>
+> TanStack Query 的 `invalidateQueries` 是**前綴比對**。巢狀之下，
+> 任何一次 `invalidateQueries({ queryKey: ["meals"] })` 都會連帶失效
+> **每一張已掛載的照片** —— 於是記一餐會順便重新下載清單上所有的照片。
+> 在手機上走 Tailscale、每張約 500KB 時，那不是「無害的多打幾個請求」。
+>
+> **實作 Task 3 時是用測試抓到的**（3 次照片 GET 而不是 2 次）。當時的
+> 修法是在呼叫端加 `exact: true`，但那是靠**每個呼叫端記得** ——
+> 漏一個就靜默回到過度失效，而下面這行 `LogMeal.tsx` 的呼叫正好就漏了。
+>
+> 換成獨立的命名空間之後，前綴比對自然就做對的事，**而且沒有「忘記加
+> `exact`」這個失敗模式**。已驗證：把 key 改回巢狀，Task 3 的
+> 「上傳成功後讓餐點清單與該餐的照片 key 失效」那條測試會紅 ——
+> 不需要額外的守衛。
+
 `src/screens/Today.tsx` 把 `<MealList />` 放在營養素總計下面。
 
 **記一餐送出成功後也要讓 `queryKeys.meals` 失效** —— `src/screens/LogMeal.tsx` 的 `onSuccess` 加一行。
@@ -376,9 +399,15 @@ it("超過 10MB 的檔案在前端就被擋下來，不會送出", async () => {
 	// MAX_PHOTO_BYTES = 10 * 1024 * 1024。
 });
 
-it("上傳成功後讓餐點清單與今日總覽失效", async () => {
-	// 照片不影響營養素，但 MealResponse 的 photo_path 變了 ——
-	// 清單要重取才看得到照片。
+it("上傳成功後讓餐點清單與該餐的照片 key 失效", async () => {
+	// **不包含 dailyStats** —— 照片不影響營養素。
+	//
+	// （計畫原本的標題寫「與今日總覽失效」，跟它自己下一行的註解矛盾。
+	//   那是計畫三的第二個缺陷 —— 同一個 task 裡兩處講同一件事就會漂移，
+	//   這已經是這三份計畫裡的第三次。）
+	//
+	// 要失效的是：MealResponse 的 photo_path 變了，清單要重取才看得到
+	// 照片；以及該餐的照片 blob 本身。
 });
 
 it("後端回 INVALID_PHOTO 時顯示的是「無法識別的圖片」", async () => {
@@ -442,6 +471,29 @@ curl -s -o /tmp/check.jpg -w "%{http_code} %{size_download}\n" \
 ```
 
 **預期 200，而且 size 明顯小於你上傳的原圖**（後端縮到長邊 1280 並重新編碼）。
+
+> **⚠️ 但那個比較證明不了「前端有降尺寸」。**
+>
+> **後端本來就會自己縮到長邊 1280**，不管它收到什麼。所以
+> 「原圖 8.2MB → 取回 570KB」這個落差，在 `shrinkToLongestEdge` 是個
+> no-op 的情況下**一模一樣會出現**。
+>
+> 要真的證明前端那一步跑了，必須量**瀏覽器實際送出去的位元組數** ——
+> 例如用 Playwright 的 `addInitScript` instrument 頁面自己的 `fetch`，
+> 看 `FormData` 裡那個 blob 多大。
+>
+> 實測數字（Task 3 做過）：
+>
+> ```
+> 原圖        8,629,025 bytes  (4032×3024)
+> 前端送出      571,455 bytes  ← 只有量這個才證明得了前端降尺寸
+> 後端存下來    587,174 bytes  (1280×960)
+> ```
+>
+> **這是「量到的東西跟你以為在量的東西不是同一個」的實例。** 第一個與
+> 第三個數字的落差由兩個獨立機制共同造成，而它們**各自都足以單獨造成
+> 那個落差** —— 那正是交接文件 §6 第 5 種（兩個過濾器互相掩護）
+> 在量測上的形狀。
 
 - [ ] **Step 5: Commit**
 
