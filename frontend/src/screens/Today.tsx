@@ -3,7 +3,9 @@ import { apiFetch } from "../api/client";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
 import { MacroBar } from "../components/MacroBar";
+import { formatTime } from "../lib/dates";
 import { formatMacro } from "../lib/decimal";
+import { MealList } from "./MealList";
 
 type DailyStats = components["schemas"]["DailyStatsResponse"];
 type TodaySupplementItem = components["schemas"]["TodaySupplementItem"];
@@ -71,12 +73,29 @@ export function Today() {
 	const stats = statsQuery.data;
 	const supplements = supplementsQuery.data ?? [];
 
+	// 離線 L2（規格 §8、計畫三 Task 4）：**不用 navigator.onLine**——它只
+	// 知道「有沒有連上網路介面」，不知道「連得到這個後端嗎」。這個 app 走
+	// Tailscale，navigator.onLine 為 true 但 tailnet 不通是完全正常的情況。
+	// 用「這次的請求實際失敗了嗎」判斷：statsQuery.isError 為 true 代表
+	// 最近一次嘗試取得 /api/stats/daily 失敗了；`stats !== undefined`
+	// 代表儘管如此，畫面上顯示的仍然是（hydrate 回來的）舊資料，不是空白。
+	// isStale 這裡是冗餘的（任何一次 fetch 失敗都會讓 TanStack Query 把
+	// query 標成 invalidated，isStale 因此必為 true）——留著寫是為了讓
+	// 條件讀起來直接對應規格的措辭「陳舊資料」，不是省略後才成立。
+	const isOfflineStats =
+		statsQuery.isStale && statsQuery.isError && stats !== undefined;
+
 	return (
 		<section>
 			<h1>今日總覽</h1>
 
 			{statsQuery.isLoading && <p>載入中…</p>}
-			{statsQuery.isError && <p>無法載入今日總覽</p>}
+			{statsQuery.isError && stats === undefined && <p>無法載入今日總覽</p>}
+			{isOfflineStats && (
+				<p data-testid="offline-banner">
+					離線資料，最後更新於 {formatTime(statsQuery.dataUpdatedAt)}
+				</p>
+			)}
 
 			{stats &&
 				(stats.target === null ? (
@@ -136,6 +155,8 @@ export function Today() {
 						/>
 					</div>
 				))}
+
+			<MealList />
 
 			<h2>今日補劑</h2>
 			<ul>

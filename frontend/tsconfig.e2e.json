@@ -1,0 +1,42 @@
+// e2e/ 的型別檢查。
+//
+// **在此之前 `tsc -b` 從來沒看過 e2e/。** tsconfig.app.json 只 include
+// ["src", "tests"]、tsconfig.node.json 只 include ["vite.config.ts"]，
+// 所以六條 Playwright 契約 E2E 的型別正確性實際上是靠 Playwright 的
+// esbuild 轉譯與 Biome 撐住 —— 而 esbuild 只做轉譯，不做型別檢查。
+//
+// 這是這三份 P3-A 計畫裡「工具跑了、回報成功、但它從來沒看過那個東西」
+// 的第五個實例（前四個：tsc 不看 tests/、vitest 的 typecheck 指到空殼
+// tsconfig、vitest 吃掉 Playwright 的檔案、Biome 讀不到根 .gitignore）。
+//
+// 用 node 的 types 而不是 vite/client：e2e 跑在 Node 裡，不是瀏覽器。
+{
+	"compilerOptions": {
+		"tsBuildInfoFile": "./e2e_modules/.tmp/tsconfig.e2e.tsbuildinfo",
+		"target": "es2023",
+		// DOM 是必要的：Playwright 的 page.evaluate() callback 跑在瀏覽器裡，
+		// 那段程式碼會用到 document / window / HTMLCanvasElement。
+		// 而 types 用 node（不是 vite/client）：e2e 檔案本身跑在 Node 裡。
+		"lib": ["ES2023", "DOM"],
+		"types": ["node"],
+		"skipLibCheck": true,
+
+		/* Bundler mode */
+		"module": "nodenext",
+		"allowImportingTsExtensions": true,
+		"verbatimModuleSyntax": true,
+		"moduleDetection": "force",
+		"noEmit": true,
+
+		/* Strict */
+		"strict": true,
+		"noUncheckedIndexedAccess": true,
+
+		/* Linting */
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"erasableSyntaxOnly": true,
+		"noFallthroughCasesInSwitch": true
+	},
+	"include": ["e2e"]
+}

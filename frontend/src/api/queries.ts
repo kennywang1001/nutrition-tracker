@@ -14,6 +14,11 @@ import { QueryClient } from "@tanstack/react-query";
 export const queryKeys = {
 	dailyStats: ["stats", "daily"] as const,
 	supplementsToday: ["supplements", "today"] as const,
+	/** 今日餐點清單。跟 `dailyStats` 一樣刻意不帶日期參數——後端的
+	 *  `list_meals` 省略 `?date=` 時也是走 `today_in_timezone(user.timezone)`
+	 *  （`app/days.py`，跟 `/api/stats/daily`、`/api/supplements/today`
+	 *  同一個函式）。記一餐成功後要讓這個 key 失效，清單才會顯示新的一餐。 */
+	meals: ["meals"] as const,
 	frequentFoods: ["foods", "frequent"] as const,
 	recentFoods: ["foods", "recent"] as const,
 	/** 單一食物的份量清單。不像上面四個 key，這個不需要跨畫面失效——
@@ -21,6 +26,22 @@ export const queryKeys = {
 	 *  放進這個檔案不是因為要共用失效，而是延續「query key 只有一個
 	 *  事實來源」這條規矩，不要有些 key 在這裡、有些散在各畫面裡。 */
 	portions: (foodId: number) => ["foods", foodId, "portions"] as const,
+	/** 單一餐的照片 blob（`useMealPhoto`，計畫三 Task 2）。跟 `portions` 一樣
+	 *  放這裡是為了「query key 只有一個事實來源」，不是因為現在就需要跨畫面
+	 *  失效——但上傳照片（Task 3）之後會需要讓這個 key 失效，先放在這裡
+	 *  而不是散在 `photos.ts` 裡，屆時只改一處。 */
+	// **刻意不掛在 "meals" 底下。** TanStack Query 的 invalidateQueries 是
+	// **前綴比對** —— 如果這個 key 是 ["meals", id, "photo"]，那麼任何一次
+	// invalidateQueries({ queryKey: ["meals"] }) 都會連帶失效【每一張
+	// 已掛載的照片】，於是記一餐會順便重新下載清單上所有的照片。
+	//
+	// 在手機上走 Tailscale、每張照片約 500KB 時，那不是「無害的多打幾個
+	// 請求」。實作 Task 3 時用測試抓到的（3 次照片 GET 而不是 2 次）。
+	//
+	// 當時的修法是在呼叫端加 exact: true，但那是靠每個呼叫端記得 ——
+	// 漏一個就靜默回到過度失效。換成獨立的命名空間之後，前綴比對自然
+	// 就做對的事，而且沒有「忘記加 exact」這個失敗模式。
+	mealPhoto: (mealId: number) => ["meal-photo", mealId] as const,
 } as const;
 
 /** 整個 app 共用的單一 `QueryClient`。
