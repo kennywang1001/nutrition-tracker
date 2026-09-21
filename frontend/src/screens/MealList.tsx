@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
+import { useMealPhoto } from "../api/photos";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
 import { formatTime } from "../lib/dates";
@@ -15,14 +16,29 @@ const MEAL_TYPE_LABELS: Record<MealType, string> = {
 	snack: "點心",
 };
 
-/** 照片區塊的佔位版本。**這個 task（計畫三 Task 1）故意不取圖** ——
- *  `photo_path` 是伺服器端的相對路徑，不是 URL（規格 §5.2）。直接塞進
- *  `<img src>` 的話瀏覽器會對它發一個沒有 Authorization 的請求，在 SPA
- *  fallback 之下拿到的不是 404、是整份 index.html。真的取圖要先驗證
- *  JWT，那是 Task 2（`useMealPhoto` / `GET /api/meals/{id}/photo`）的事。
- *  這裡先只顯示「有照片」這個事實，不渲染任何 `<img>`。 */
-function MealPhotoPlaceholder({ mealId }: { mealId: number }) {
-	return <p data-testid={`meal-photo-${mealId}`}>📷 有照片</p>;
+/** 這一餐的照片。**`photo_path` 本身從不出現在這個元件裡** ——
+ *  它是伺服器端的相對路徑，不是 URL（規格 §5.2），唯一的用途是讓呼叫端
+ *  判斷「這一餐有沒有照片」（見 `MealCard` 的 `photo_path !== null`）。
+ *  真的取圖走 `useMealPhoto`：帶 token 打 `GET /api/meals/{id}/photo`，
+ *  拿 blob 轉成 object URL。
+ *
+ *  外層 `data-testid` 在照片還沒載入完（`objectUrl` 仍是 `null`）時就
+ *  先出現——它標的是「這一餐有照片」這個事實，不是「圖已經載好了」。
+ *
+ *  **404（`MEAL_PHOTO_NOT_FOUND`）是正常可達的狀態**（後端註解：DB 有
+ *  `photo_path` 但檔案不在磁碟上，是 `delete_photo()` best-effort 設計下
+ *  可能出現的情況）——`isError` 時就不渲染 `<img>`，不是留一個壞掉的
+ *  URL 在畫面上。 */
+function MealPhoto({ meal }: { meal: Meal }) {
+	const { objectUrl, isError } = useMealPhoto(meal.id);
+	const alt = `${MEAL_TYPE_LABELS[meal.meal_type]}（${formatTime(meal.eaten_at)}）的照片`;
+
+	return (
+		<div data-testid={`meal-photo-${meal.id}`}>
+			{objectUrl !== null && <img src={objectUrl} alt={alt} />}
+			{isError && <p>照片無法顯示</p>}
+		</div>
+	);
 }
 
 function MealCard({ meal }: { meal: Meal }) {
@@ -31,7 +47,7 @@ function MealCard({ meal }: { meal: Meal }) {
 			<h3>
 				{formatTime(meal.eaten_at)} · {MEAL_TYPE_LABELS[meal.meal_type]}
 			</h3>
-			{meal.photo_path !== null && <MealPhotoPlaceholder mealId={meal.id} />}
+			{meal.photo_path !== null && <MealPhoto meal={meal} />}
 			<ul>
 				{meal.items.map((item) => (
 					// 食物名稱留在 <li> 自己的直接文字節點裡，份量另外包一層

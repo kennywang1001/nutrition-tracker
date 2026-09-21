@@ -26,6 +26,11 @@ export const queryKeys = {
 	 *  放進這個檔案不是因為要共用失效，而是延續「query key 只有一個
 	 *  事實來源」這條規矩，不要有些 key 在這裡、有些散在各畫面裡。 */
 	portions: (foodId: number) => ["foods", foodId, "portions"] as const,
+	/** 單一餐的照片 blob（`useMealPhoto`，計畫三 Task 2）。跟 `portions` 一樣
+	 *  放這裡是為了「query key 只有一個事實來源」，不是因為現在就需要跨畫面
+	 *  失效——但上傳照片（Task 3）之後會需要讓這個 key 失效，先放在這裡
+	 *  而不是散在 `photos.ts` 裡，屆時只改一處。 */
+	mealPhoto: (mealId: number) => ["meals", mealId, "photo"] as const,
 } as const;
 
 /** 整個 app 共用的單一 `QueryClient`。
