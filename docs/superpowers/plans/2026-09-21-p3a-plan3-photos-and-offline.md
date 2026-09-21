@@ -276,6 +276,19 @@ describe("useMealPhoto", () => {
 > `renderHook` 來自 `@testing-library/react`。`QueryWrapper` 是一個包了
 > `QueryClientProvider` 的小元件 —— 從 `today.test.tsx` 的 `wrap` 改寫。
 
+> **⚠️ jsdom 沒有 `URL.createObjectURL` / `revokeObjectURL`**（實測確認，
+> jsdom 29.x）。要在 `src/test/setup.ts` 補一個 stub，否則這三條測試
+> 在第一行就炸。
+>
+> **但要清楚那個 stub 證明得了什麼、證明不了什麼：** 一個回
+> `blob:mock-N` 的計數器 + 一個 no-op 的 revoke，只是讓
+> `vi.spyOn(URL, "revokeObjectURL")` 有東西可以包。**它不模擬真正的
+> object URL 註冊表**，所以抓不到「重複 revoke」或「revoke 錯 URL」——
+> 它只證明那個呼叫發生了、而且參數是我們建的那一個。
+>
+> 那個範圍剛好夠守住這個 task 要守的東西（「有沒有呼叫」），但**不要
+> 以為它涵蓋了 object URL 的生命週期**。真正的洩漏行為只有瀏覽器驗得到。
+
 - [ ] **Step 2: 跑測試確認它失敗**
 
 - [ ] **Step 3: 實作**
