@@ -556,14 +556,62 @@ it("連線正常時不顯示「最後更新於」", async () => {
 | 「最後更新於」改用 `Date.now()` | 「顯示最後更新於」那條（如果它有斷言時間值的話） |
 | 「最後更新於」改成永遠顯示 | 「連線正常時不顯示」 |
 
-- [ ] **Step 4: 手動驗證 —— 這一步只能手動**
+- [ ] **Step 4: 手動驗證 —— 這一步只能手動，而且原本寫錯了兩次**
 
-`npm run dev` → 登入 → 看到今日總覽 → **開瀏覽器 DevTools 的 Network，切成 Offline** → 重新整理。
+> **⚠️ 這一步的原始寫法（`npm run dev` + DevTools 切離線 + 重新整理）
+> 在原理上不可能成功。實測踩過，而且會得出相反的結論。**
+>
+> **錯誤一：dev 模式沒有 service worker。**
+> `vite-plugin-pwa` 預設只在 production build 產生 SW（除非設
+> `devOptions.enabled`）。離線時連 `index.html` 都載不到，畫面整個白掉 ——
+> 跟 persist 有沒有生效**完全無關**。
+>
+> **要用 prod 的 caddy stack 驗**：
+> ```bash
+> docker compose --env-file .env.production \
+>   -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+> # 開 http://127.0.0.1:8080
+> ```
+> `127.0.0.1` 跟 `localhost` 一樣是 secure context，所以 SW 會註冊；
+> 而 caddy 同時服務 SPA 與 `/api`，是真正的 production 路徑。
+>
+> **錯誤二：切離線之後不能馬上檢查。** 有兩個等待：
+>
+> 1. **等過 `staleTime`（60 秒）。** hydrate 回來的資料如果還「新鮮」，
+>    TanStack Query **根本不會嘗試重取** —— 沒有請求就沒有失敗，
+>    `isError` 永遠是 false，標示當然不出現。那不是 bug：資料只有幾秒舊的
+>    時候本來就不該標。
+> 2. **等 retry 退避跑完。** TanStack Query 預設 `retry: 3` 加指數退避，
+>    離線的請求要失敗三次（約 7 秒）才會讓 `isError` 變成 true。
 
-**預期：** 數字還在，畫面上有「離線資料，最後更新於 HH:MM」。
+**正確的驗證步驟：**
+
+1. 起 prod stack，開 `http://127.0.0.1:8080`，登入，看到今日總覽
+2. 等 `navigator.serviceWorker.controller !== null`（SW 接管）
+3. **等 62 秒**（過 `staleTime`）
+4. 切離線（DevTools 的 Network → Offline，或 Playwright 的 `context.setOffline(true)`）
+5. **重新整理**
+6. **等** `[data-testid="offline-banner"]` 出現（最多 30 秒）
+
+**預期：** 數字跟離線前一模一樣，而且出現「離線資料，最後更新於 HH:MM」。
+
+實測結果（Task 4）：
+
+```
+[線上] macro-kcal: "熱量476.45 / 230021%"   有標示: false  ✅
+[離線] macro-kcal: "熱量476.45 / 230021%"   有標示: true   ✅
+[離線] 標示內容: "離線資料，最後更新於 下午08:00"
+```
 
 > **這一步不能用單元測試代替。** persist 的 hydrate 發生在 app 啟動時，
 > 而測試裡的 `render()` 跟真的重新載入頁面不是同一件事。
+>
+> **而它的重要性超過「確認功能正常」：** 前兩次用錯誤方法跑出來的都是
+> 「❌ 標示沒出現」。**一個不夠小心的人會就此斷定實作壞了，然後去「修」
+> 一段正確的程式碼** —— 而最順手的修法正是改用 `navigator.onLine`，
+> 也就是這個 task 明文禁止的那一件事。
+>
+> **錯誤的驗證方法不只是驗不到東西，它會主動把你推向錯誤的修改。**
 
 - [ ] **Step 5: Commit**
 

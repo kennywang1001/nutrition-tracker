@@ -1,7 +1,11 @@
-import { QueryClientProvider } from "@tanstack/react-query";
+import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { useState } from "react";
 import { BrowserRouter, Link, Route, Routes, useNavigate } from "react-router";
 import { apiFetch } from "./api/client";
+// 離線 L2（計畫三 Task 4）：跟下面的 queryClient 一樣是模組層單例，不是
+// 這裡的元件 render 裡——建在 render 裡每次重繪都會建一個新的 persister，
+// 節流狀態跟著重置。
+import { offlinePersistOptions } from "./api/persist";
 // 建在 api/queries.ts 的模組層，不是這裡的元件 render 裡——直接寫在 render
 // 裡每次重繪都會建一個新的 QueryClient，快取等於沒有。放在 queries.ts
 // 而不是這個檔案，是為了讓 auth/session.ts 的 logout() 與 auth/refresh.ts
@@ -61,7 +65,10 @@ export function App() {
 	const [loggedIn, setLoggedIn] = useState(getRefreshToken() !== null);
 
 	return (
-		<QueryClientProvider client={queryClient}>
+		<PersistQueryClientProvider
+			client={queryClient}
+			persistOptions={offlinePersistOptions}
+		>
 			{loggedIn ? (
 				<BrowserRouter>
 					<Nav onLoggedOut={() => setLoggedIn(false)} />
@@ -73,6 +80,6 @@ export function App() {
 			) : (
 				<Login onSuccess={() => setLoggedIn(true)} />
 			)}
-		</QueryClientProvider>
+		</PersistQueryClientProvider>
 	);
 }
