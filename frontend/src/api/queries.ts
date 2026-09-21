@@ -1,0 +1,65 @@
+import { QueryClient } from "@tanstack/react-query";
+
+/** 所有 query key 的唯一事實來源。
+ *
+ *  **為什麼集中放：** 記一餐要讓今日總覽失效，那代表兩個畫面共用同一個 key。
+ *  分散寫的話兩邊各拼一次字串，某天其中一邊改了，失效就**靜默失靈** ——
+ *  而症狀是「記完一餐，總覽的數字沒變」，使用者會以為沒記進去。
+ *
+ *  **`dailyStats` 刻意不帶日期參數。** 後端省略 `?date=` 時會用
+ *  `today_in_timezone(user.timezone)`（規格 §5.3、後端 `app/days.py`）——
+ *  前端**不該自己算今天是哪一天**。所以這個 query 沒有參數，
+ *  key 也就沒有參數。
+ */
+export const queryKeys = {
+	dailyStats: ["stats", "daily"] as const,
+	supplementsToday: ["supplements", "today"] as const,
+	frequentFoods: ["foods", "frequent"] as const,
+	recentFoods: ["foods", "recent"] as const,
+	/** 單一食物的份量清單。不像上面四個 key，這個不需要跨畫面失效——
+	 *  份量清單只在「記一餐」選了某個食物之後才查，沒有其他畫面會讀它。
+	 *  放進這個檔案不是因為要共用失效，而是延續「query key 只有一個
+	 *  事實來源」這條規矩，不要有些 key 在這裡、有些散在各畫面裡。 */
+	portions: (foodId: number) => ["foods", foodId, "portions"] as const,
+} as const;
+
+/** 整個 app 共用的單一 `QueryClient`。
+ *
+ *  放在這裡（而不是 `App.tsx` 的模組層）是為了讓 `auth/session.ts` 的
+ *  `logout()` 與 `auth/refresh.ts` 的 refresh 失敗路徑都能拿到同一個
+ *  instance 去清快取，又不必讓那兩個模組回頭 import `App.tsx`
+ *  （那會兜出一個循環依賴：`App.tsx` 本來就 import 它們）。
+ *
+ *  **`staleTime: 60_000`（Task 6 的突變驗證發現、實測補上）：** 沒有這一行時
+ *  `staleTime` 預設是 0，代表任何 query 一 fetch 完就立刻「過期」。React
+ *  Router 把「今日總覽」與「記一餐」放在不同路由，切換路由時前者會整個
+ *  unmount／remount —— 而 remount 時只要資料是「過期」的，TanStack Query
+ *  就會自動重新 fetch，跟有沒有呼叫 `invalidateQueries` 無關。結果是：
+ *  `LogMeal.tsx` 那個 `invalidateQueries({ queryKey: queryKeys.dailyStats })`
+ *  （記完一餐讓今日總覽重取的那一行，程式碼注解說它是「這份計畫的核心」）
+ *  即使被整行刪掉，「記一餐 → 導回今日總覽 → 數字變了」這個 E2E 斷言依然會
+ *  綠燈——remount 觸發的自動重取蓋掉了它。拿掉這一行的當下用突變驗證親自
+ *  確認過（見 `e2e/daily-loop.spec.ts` 附近的說明與 Task 6 的完成報告）。
+ *
+ *  給一個非零的 `staleTime`，remount 時「資料還新鮮」就不會自動重取，
+ *  那條路徑的正確性才真的只剩 `invalidateQueries` 在守——程式碼裡的注解
+ *  講的保證，跟它實際測得到的保證，這樣才是同一件事。60 秒是刻意抓寬的
+ *  數字：使用者在頁面之間切換、打卡幾秒內完成都遠低於這個值，不會讓
+ *  「資料新鮮度」變成使用者感覺得到的問題；同時它也遠遠蓋過任何 E2E
+ *  測試單一操作的耗時，不會讓這裡的修正反過來讓別的測試變得脆弱。 */
+export const queryClient = new QueryClient({
+	defaultOptions: { queries: { staleTime: 60_000 } },
+});
+
+/** 強制登出（或使用者主動登出）時清空 query 快取（規格 §6.5）。
+ *
+ *  **必須清。** 不清的話下一個登入的人會先看到上一個人的今日總覽，
+ *  然後才被重新 fetch 覆蓋掉 —— 那是使用者會親眼看到的跨使用者資料外洩，
+ *  不是理論上的風險。
+ *
+ *  接在兩條路徑上：`auth/session.ts` 的 `logout()`（使用者主動登出）與
+ *  `auth/refresh.ts` 的 refresh 失敗路徑（`INVALID_TOKEN` 導致的強制登出——
+ *  可能是票過期，也可能是重用偵測撤銷了整條鏈，前端分不出來，處理一律相同）。 */
+export function clearQueryCacheOnForcedLogout(client: QueryClient): void {
+	client.clear();
+}
