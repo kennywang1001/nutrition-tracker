@@ -30,7 +30,18 @@ export const queryKeys = {
 	 *  放這裡是為了「query key 只有一個事實來源」，不是因為現在就需要跨畫面
 	 *  失效——但上傳照片（Task 3）之後會需要讓這個 key 失效，先放在這裡
 	 *  而不是散在 `photos.ts` 裡，屆時只改一處。 */
-	mealPhoto: (mealId: number) => ["meals", mealId, "photo"] as const,
+	// **刻意不掛在 "meals" 底下。** TanStack Query 的 invalidateQueries 是
+	// **前綴比對** —— 如果這個 key 是 ["meals", id, "photo"]，那麼任何一次
+	// invalidateQueries({ queryKey: ["meals"] }) 都會連帶失效【每一張
+	// 已掛載的照片】，於是記一餐會順便重新下載清單上所有的照片。
+	//
+	// 在手機上走 Tailscale、每張照片約 500KB 時，那不是「無害的多打幾個
+	// 請求」。實作 Task 3 時用測試抓到的（3 次照片 GET 而不是 2 次）。
+	//
+	// 當時的修法是在呼叫端加 exact: true，但那是靠每個呼叫端記得 ——
+	// 漏一個就靜默回到過度失效。換成獨立的命名空間之後，前綴比對自然
+	// 就做對的事，而且沒有「忘記加 exact」這個失敗模式。
+	mealPhoto: (mealId: number) => ["meal-photo", mealId] as const,
 } as const;
 
 /** 整個 app 共用的單一 `QueryClient`。

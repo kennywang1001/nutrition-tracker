@@ -145,7 +145,7 @@ export function useUploadMealPhoto(mealId: number) {
 	return useMutation({
 		mutationFn: (file: File) => uploadMealPhoto(mealId, file),
 		onSuccess: () => {
-			queryClient.invalidateQueries({ queryKey: queryKeys.meals, exact: true });
+			queryClient.invalidateQueries({ queryKey: queryKeys.meals });
 			queryClient.invalidateQueries({
 				queryKey: queryKeys.mealPhoto(mealId),
 			});
