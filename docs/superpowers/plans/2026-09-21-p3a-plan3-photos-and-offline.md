@@ -717,6 +717,44 @@ CI 的 `e2e` job 會在 Linux 上跑這六條。**429 那條在 CI 上要特別�
 
 ---
 
+> **⚠️ Task 5 順帶補上第五個「工具跑了但它從來沒看過那個東西」。**
+>
+> `npm run typecheck`（`tsc -b`）**從來沒有覆蓋 `e2e/`** ——
+> `tsconfig.app.json` 只 include `["src", "tests"]`、`tsconfig.node.json`
+> 只 include `["vite.config.ts"]`。所以六條契約 E2E 的型別正確性實際上
+> 是靠 Playwright 的 esbuild 轉譯與 Biome 撐住，**而 esbuild 只做轉譯，
+> 不做型別檢查**。
+>
+> 前四個實例：`tsc -b` 不看 `tests/`（計畫一 Task 2）、Vitest 的
+> `typecheck` 指到空殼 tsconfig（計畫一 Task 4）、Vitest 吃掉 Playwright
+> 的測試檔（計畫一 Task 11）、Biome 讀不到根目錄的 `.gitignore`
+> （計畫一 Task 11）。
+>
+> **修法：新增 `tsconfig.e2e.json` 並掛進 root 的 `references`。**
+> `types: ["node"]`（e2e 檔案跑在 Node 裡）、**`lib` 要含 `DOM`**
+> （`page.evaluate()` 的 callback 跑在瀏覽器裡，會用到
+> `document` / `window` / `HTMLCanvasElement`）。
+>
+> **掛上去的當下就抓到 3 個原本隱形的型別錯誤**，三個都是缺 DOM lib
+> 造成的（含一個 `canvas.toBlob` callback 的隱式 `any`）。
+> 已用突變驗證守衛有效：在 `e2e/auth.spec.ts` 塞一個型別錯誤，
+> `tsc -b` 精準報 `TS2322` 並指出檔案與行號。
+
+> **⚠️ 本機連續重跑整套 E2E 會撞到全域限速。**
+>
+> 後端的 `GLOBAL_LIMIT = 20` / 60 秒是**所有失敗登入共用的，不分 email**。
+> 第六條每跑一次就貢獻 5 次失敗，所以 60 秒內連跑三、四輪之後，
+> **所有**測試（不只第六條）都會一起紅 —— 連其他測試的合法登入都被
+> `check()` 在驗密碼之前擋掉。
+>
+> **那不是測試不穩，是長駐容器的狀態累積。** 給第六條用時間戳 email
+> 只解決「每信箱視窗」那一半，解不掉全域那一半。
+>
+> 本機重跑之間 `docker compose restart api` 即可（限速計數器在記憶體裡，
+> 重啟歸零）。**CI 不受影響** —— 每個 job 都是全新容器。
+
+---
+
 ## 完成標準
 
 - [ ] 前端 `lint` / `typecheck` / `test` / `build` 全綠
