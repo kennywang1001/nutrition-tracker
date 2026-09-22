@@ -12,7 +12,7 @@
 // 用 node 的 types 而不是 vite/client：e2e 跑在 Node 裡，不是瀏覽器。
 {
 	"compilerOptions": {
-		"tsBuildInfoFile": "./e2e_modules/.tmp/tsconfig.e2e.tsbuildinfo",
+		"tsBuildInfoFile": "./node_modules/.tmp/tsconfig.e2e.tsbuildinfo",
 		"target": "es2023",
 		// DOM 是必要的：Playwright 的 page.evaluate() callback 跑在瀏覽器裡，
 		// 那段程式碼會用到 document / window / HTMLCanvasElement。
