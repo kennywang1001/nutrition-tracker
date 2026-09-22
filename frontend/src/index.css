@@ -48,3 +48,22 @@ body {
 	color: #111;
 	font-weight: 600;
 }
+
+/* 圖的「大小」由 CSS 決定，但每一根柱子的「高度」不是——那是在
+   TrendChart.tsx 裡算成 SVG 屬性的。理由見那個檔案的 docstring：
+   jsdom 不做版面計算，交給 CSS 的話幾何就測不到。 */
+.trend-chart {
+	width: 100%;
+	height: auto;
+	display: block;
+}
+
+.trend-bar {
+	fill: #4a7;
+}
+
+.trend-target {
+	stroke: #c33;
+	stroke-width: 2;
+	stroke-dasharray: 4 3;
+}
