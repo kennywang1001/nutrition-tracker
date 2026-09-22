@@ -1,0 +1,50 @@
+/* 這個專案的第一份樣式表（P3-B 計畫一 Task 3）。
+   純 class 選擇器，沒有 CSS modules、沒有 Tailwind——P3-B 不需要那些設定。 */
+
+:root {
+	/* 底部 tab bar 的高度，加上 iPhone home indicator 的安全區。
+	   下面的 main 用同一個變數補 padding，兩個數字因此不可能漂移。 */
+	--tab-bar-height: 56px;
+	--safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+body {
+	margin: 0;
+	font-family: system-ui, -apple-system, "Noto Sans TC", sans-serif;
+}
+
+/* tab bar 是 position: fixed，會蓋住內容的最後一行——而「今天最後吃的
+   那一餐」正好就在那個位置（規格 §3.1）。這裡補回等高的空間。 */
+.app-main {
+	padding: 0 12px calc(var(--tab-bar-height) + var(--safe-bottom) + 12px);
+}
+
+.tab-bar {
+	position: fixed;
+	bottom: 0;
+	left: 0;
+	right: 0;
+	display: flex;
+	/* 有 home indicator 的機子（iPhone X 之後），最底下一排會被系統的
+	   手勢區遮掉一截。墊高這個量之後才看得完整（規格 §3.1）。 */
+	padding-bottom: var(--safe-bottom);
+	border-top: 1px solid #ddd;
+	background: #fff;
+}
+
+.tab {
+	flex: 1;
+	/* 44px 是可點選區的下限；這裡給 56 是為了讓中文標籤不會貼邊。 */
+	min-height: var(--tab-bar-height);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	text-decoration: none;
+	color: #555;
+	font-size: 14px;
+}
+
+.tab[aria-current="page"] {
+	color: #111;
+	font-weight: 600;
+}
