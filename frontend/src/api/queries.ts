@@ -19,6 +19,23 @@ export const queryKeys = {
 	 *  （`app/days.py`，跟 `/api/stats/daily`、`/api/supplements/today`
 	 *  同一個函式）。記一餐成功後要讓這個 key 失效，清單才會顯示新的一餐。 */
 	meals: ["meals"] as const,
+	/** 趨勢：一段期間的逐日統計。
+	 *
+	 *  **帶 from / to 兩個參數，而它們來自 `stats/daily` 回應裡的 `date`**
+	 *  （規格 §4.1）——`GET /api/stats/range` 的 from/to 都是必填，跟
+	 *  `stats/daily` 不一樣，而「今天是哪一天」只有伺服器知道。
+	 *
+	 *  跟 `dailyStats` 同在 `["stats"]` 底下是刻意的：記一餐之後要一次
+	 *  失效掉所有期間的趨勢（見下面的 `rangeStatsAll`），而那個前綴
+	 *  不會碰到 `dailyStats`。 */
+	rangeStats: (from: string, to: string) =>
+		["stats", "range", from, to] as const,
+	/** 「所有期間的趨勢」這個前綴，給 `invalidateQueries` 用。
+	 *
+	 *  寫成一個具名的 key 而不是在呼叫端手打 `["stats", "range"]`，
+	 *  理由跟這個檔案頂端說的一樣：兩邊各拼一次字串，某天其中一邊改了，
+	 *  失效就靜默失靈。 */
+	rangeStatsAll: ["stats", "range"] as const,
 	frequentFoods: ["foods", "frequent"] as const,
 	recentFoods: ["foods", "recent"] as const,
 	/** 單一食物的份量清單。不像上面四個 key，這個不需要跨畫面失效——

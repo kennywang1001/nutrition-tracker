@@ -18,6 +18,7 @@ import { TabBar } from "./components/TabBar";
 import { Login } from "./screens/Login";
 import { LogMeal } from "./screens/LogMeal";
 import { Today } from "./screens/Today";
+import { Trend } from "./screens/Trend";
 
 /** `/log` 路由：記完一餐之後導回今日總覽。
  *
@@ -81,6 +82,7 @@ export function App() {
 						<Routes>
 							<Route path="/" element={<Today />} />
 							<Route path="/log" element={<LogMealRoute />} />
+							<Route path="/trend" element={<Trend />} />
 						</Routes>
 					</main>
 					<TabBar />
