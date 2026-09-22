@@ -929,16 +929,65 @@ cd frontend && npx vitest run tests/tab-bar.test.tsx
 
 Expected: PASS，3 則。
 
-- [ ] **Step 6: 突變驗證 —— 確認 `end` 真的被守著**
+- [ ] **Step 6: 突變驗證 —— 但標的不是 `end`**
 
-把 `TABS` 裡 `{ to: "/", label: "今日總覽", end: true }` 的 `end: true` 拿掉。
+> ## ⚠️ 這一步原本的寫法是錯的（實測過）
+>
+> 原本寫：「把 `TABS` 裡 `{ to: "/", ..., end: true }` 的 `end: true` 拿掉，
+> 預期『在 /log 時亮的是記一餐』那條紅」。
+>
+> **實測：3 則全綠。** react-router 8.3.1 的 `NavLink` 對 `to="/"` 有內建
+> 特例，跟 `end` 無關（`dist/development/lib/dom/lib.js`）：
+>
+> ```js
+> const endSlashPosition = toPathname !== "/" && toPathname.endsWith("/")
+>   ? toPathname.length - 1 : toPathname.length;
+> isActive = locationPathname === toPathname
+>   || (!end && locationPathname.startsWith(toPathname)
+>       && locationPathname.charAt(endSlashPosition) === "/");
+> ```
+>
+> `toPathname === "/"` 時 `endSlashPosition` 是 1，非精確分支要求
+> `locationPathname.charAt(1) === "/"` —— 對 `/log` 那是 `"l"`，恆為 false。
+> **所以 `end` 對根路由那一格是無作用的保險。** 留在程式碼裡是因為它精確
+> 表達意圖、也不排除將來函式庫改掉那個行為，但它不是那條測試的守衛。
+>
+> **這是這份計畫第三次出現「沒有驗證過的突變預期」**（Task 1、Task 2 各一次）。
+
+**真正的突變標的：把 `NavLink` 換成手寫比對** —— 那正是 `TabBar` 的
+docstring 主張要避開的作法。把 `TabBar.tsx` 暫時改成：
+
+```tsx
+import { Link, useLocation } from "react-router";
+// ...
+export function TabBar() {
+	const location = useLocation();
+	return (
+		<nav className="tab-bar" aria-label="主要導覽">
+			{TABS.map((tab) => (
+				<Link
+					key={tab.to}
+					to={tab.to}
+					className="tab"
+					aria-current={
+						location.pathname.startsWith(tab.to) ? "page" : undefined
+					}
+				>
+					{tab.label}
+				</Link>
+			))}
+		</nav>
+	);
+}
+```
 
 ```bash
 cd frontend && npx vitest run tests/tab-bar.test.tsx
 ```
 
-Expected: **「在 /log 時亮的是記一餐，不是今日總覽」那條紅**
-（今日總覽也拿到了 `aria-current="page"`）。
+Expected（實測確認）：**「目前所在的那一格標成 aria-current」與「在 /log 時
+亮的是記一餐，不是今日總覽」兩條都紅** —— `"/log".startsWith("/")` 為真，
+今日總覽也亮了。
 
 改回來，重跑確認綠。
 
