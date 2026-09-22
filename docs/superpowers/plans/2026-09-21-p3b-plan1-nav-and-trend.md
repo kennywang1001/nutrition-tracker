@@ -263,9 +263,16 @@ cd frontend && npm run test 2>&1 | tail -20
 ```
 
 Expected: `Test Files` 與 `Tests` 的數字**跟 Step 1 一模一樣**，全綠。
+這一步做完時還沒有新增任何測試，所以基準線是 `34` / `138`。
 
 **如果數字變少了：** 有檔案因為語法錯誤整個沒跑起來。Vitest 會把它報成
 `Unhandled Errors`，那一行很容易在輸出裡被滑過去 —— 回去看完整輸出。
+
+> **`Test Files` 是實際檔案數的兩倍。** `vite.config.ts` 的
+> `typecheck.include` 跟一般的 include 蓋到同一組檔案，所以每個檔案被算
+> 兩次（一次執行、一次交給 tsc）。`Tests` 也一樣加倍。
+> 實測：17 個檔案 → `34`，加上 Step 7 的新檔案變成 18 → `36`；
+> 138 → 加 3 則新測試變成 `144`。**算數字時要記得除以二。**
 
 - [ ] **Step 7: 突變驗證 —— 確認共用的 mock 真的還在驗 Authorization**
 
@@ -281,13 +288,41 @@ Expected: `Test Files` 與 `Tests` 的數字**跟 Step 1 一模一樣**，全綠
 cd frontend && npm run test 2>&1 | tail -20
 ```
 
-Expected: **至少有一則測試紅**（`auth-refresh` 或 `client` 相關的那些依賴
-401 觸發換票）。
+Expected: **`tests/mock-api-helper.test.ts` 的「沒帶 Authorization 就回 401
+信封」那一則紅**（`expected 200 to be 401`），其他全綠。
 
 看到紅之後**改回來**，再跑一次確認全綠。
 
-> 如果它**沒有紅**，那代表「所有請求都要帶 token」這個保證在抽取之後失去了
-> 守衛 —— 停下來報告，不要繼續。
+> ## ⚠️ 這一步的原始寫法是錯的，而它揭出一個原本就存在的洞
+>
+> **原本寫的 Expected 是「至少有一則測試紅（`auth-refresh` 或 `client`
+> 相關的那些依賴 401 觸發換票）」。實測：138 則測試全部照樣綠。**
+>
+> 那是寫計畫的人（我）猜的，沒有查證。實際情況：
+>
+> - **用這個 mock 的 6 個檔案，`beforeEach` 都是 `clearTokens()` 緊接著
+>   `setTokens()`，而且沒有任何一則測試在 render 之後清掉 token。**
+>   所以 mock 裡「沒帶 header 就回 401」那個分支在它們裡面從來沒被走過。
+> - `auth-refresh.test.ts` 與 `client.test.ts` 用**自己 inline 的**
+>   `vi.spyOn(globalThis, "fetch")`，跟 `helpers/mock-api.ts` 完全無關。
+>
+> 而重構前 5 個檔案裡各自抄的那份 mock，401 檢查邏輯逐字元相同 ——
+> **這是原本就存在的死碼分支，不是抽取造成的迴歸**，只是第一次有人對它
+> 做突變測試才揭出來。
+>
+> **舊註解那句「這個保證零鑑別力」也是誇大的。** 不是零：
+> `tests/client.test.ts` 的「帶上 Authorization」與
+> `tests/meal-photo.test.tsx` 的「帶著 Authorization 取圖」都在守
+> （兩者合起來蓋住 `src/api/client.ts` 的 `fetchWithAuthRetry` 內核）。
+> 那個 401 檢查是**後備防線**，不是主守衛。
+>
+> **所以 Task 1 多做了一件計畫原本沒有的事：** 新增
+> `tests/mock-api-helper.test.ts`（3 則）守住那道後備防線本身，並把
+> `mock-api.ts` 裡那句誇大的 docstring 改成講實話。
+>
+> 補那則測試的理由很具體：**下一個跑覆蓋率的人會看到一個沒被觸及的分支，
+> 而「清掉死碼」是很現實的下一步** —— 清掉之後這個 mock 會開始靜默接受
+> 未認證的請求，那 6 個檔案的測試在 `apiFetch` 不再附上 token 時依然會綠。
 
 - [ ] **Step 8: lint 與型別**
 
@@ -298,6 +333,13 @@ cd frontend && npm run lint && npm run typecheck
 Expected: 兩個都是 exit 0。
 
 - [ ] **Step 9: Commit**
+
+> **這個 Task 實際的 commit 是 `abc9d91`，訊息跟下面這份草稿不同** ——
+> 草稿裡「依賴 401 換票的測試確實轉紅」那句不是事實（見 Step 7 的實測），
+> 而且實際的 commit 還包含了 Step 7 補出來的那個新測試檔。
+> 下面保留草稿，是為了讓「計畫原本打算 commit 什麼」跟「實際 commit 了
+> 什麼」的差距看得出來。**照 Step 7 的實測結果寫 commit message，
+> 不要照抄這一份。**
 
 ```bash
 git add frontend/tests/
