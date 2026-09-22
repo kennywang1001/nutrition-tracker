@@ -28,13 +28,32 @@ const BAR_WIDTH_RATIO = 0.6;
  *  **不要寫成 `day.target?.kcal ?? 0`** —— 那會把兩層壓成一層，然後畫出
  *  一條貼地的線，讀起來是「今天的目標是 0 大卡」。
  *
- *  ## 沒有 `role="group"` / `role="img"`
+ *  ## `role="img"` 是必要的，Biome 那兩條規則在這裡是誤判
  *
- *  計畫草稿原本在 `<svg>` 上寫 `role="group"`、在每根 `<rect>` 上寫
- *  `role="img"`。Biome 的 `lint/a11y/useSemanticElements` 與
- *  `lint/a11y/noInteractiveElementToNoninteractiveRole` 兩條規則會擋下這個
- *  寫法。既有測試只斷言 `aria-label`／`data-testid`／幾何屬性，不斷言
- *  `role`，所以拿掉這兩個屬性、只留 `aria-label`。
+ *  Biome 的 `a11y/useSemanticElements`（建議把 `<svg role="group">` 換成
+ *  `<fieldset>`）與 `a11y/noInteractiveElementToNoninteractiveRole`
+ *  （把 `<rect>` 當成互動元素）會擋下這個寫法。兩條在這裡都不成立：
+ *  `<rect>` 不是互動元素，`<svg>` 也不該變成 `<fieldset>`。
+ *
+ *  **不能為了讓 lint 過就把 `role` 拿掉。** 實測過（`tests/trend-chart.test.tsx`
+ *  的「每根柱子都是一個可以按角色找到的 img」那條）：
+ *
+ *  | 寫法 | `getAllByRole("img")` |
+ *  |---|---|
+ *  | `<rect aria-label="…">` | **找不到** |
+ *  | `<rect role="img" aria-label="…">` | 找到 |
+ *
+ *  `aria-label` 放在沒有語意角色的元素上，輔助技術多半直接忽略它 ——
+ *  SVG 的 `<rect>` 預設不對應任何 accessible role。所以拿掉 `role` 等於
+ *  把這張圖對螢幕閱讀器的可讀性整個拿掉，而**既有測試全部用
+ *  `getByTestId`，一條都不會紅**。
+ *
+ *  （`<title>` 子元素那條路也試過：jsdom 裡 `getByTitle` 找不到它，
+ *  所以在這個測試環境下無法驗證，不採用。）
+ *
+ *  這件事在實作時真的發生過一次 —— 那是 `alt=""` 那一課的同一個形狀：
+ *  **測試查得到的那個東西，跟使用者（或螢幕閱讀器）拿得到的那個東西，
+ *  必須真的是同一個。** 所以現在有一條測試專門斷言 `role`。
  */
 export function TrendChart({ days }: { days: readonly TrendDay[] }) {
 	// y 軸上限：期間內實際值與目標值的最大值。目標可能整組是 null，
@@ -62,10 +81,12 @@ export function TrendChart({ days }: { days: readonly TrendDay[] }) {
 	};
 
 	return (
+		// biome-ignore lint/a11y/useSemanticElements: 它建議的替代品是 <fieldset>，對一張 SVG 圖表沒有意義
 		<svg
 			viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
 			className="trend-chart"
 			data-testid="trend-chart"
+			role="group"
 			aria-label="最近幾天的熱量"
 		>
 			{days.map((day, index) => {
@@ -82,8 +103,10 @@ export function TrendChart({ days }: { days: readonly TrendDay[] }) {
 
 				return (
 					<g key={day.date}>
+						{/* biome-ignore lint/a11y/noInteractiveElementToNoninteractiveRole: rect 不是互動元素，這是規則的誤判；拿掉 role 會讓柱子對螢幕閱讀器消失，見檔頭說明 */}
 						<rect
 							data-testid={`trend-bar-${day.date}`}
+							role="img"
 							aria-label={label}
 							x={x}
 							y={VIEW_HEIGHT - height}

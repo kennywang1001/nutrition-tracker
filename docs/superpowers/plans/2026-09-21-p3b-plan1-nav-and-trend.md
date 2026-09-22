@@ -1154,6 +1154,66 @@ EOF
 
 ## Task 4: TrendChart —— 純渲染的 SVG 長條圖
 
+> ## 實測記錄（已執行完畢，commit `55b9b18` + 後續修正）
+>
+> ### Step 7 的三件事全部成立，第三件是重點
+>
+> `height={height}` 改成 `height={40}` 之後：
+>
+> | 測試 | 結果 |
+> |---|---|
+> | 柱子的高度比例等於數值的比例 | 紅（`expected 1 to be close to 2`） |
+> | 全部是 0 又沒有目標時不會炸 | 紅（`expected 40 to be +0`） |
+> | **每根柱子的 aria-label 帶得出那天的數字** | **照樣綠** |
+>
+> 第三列就是規格 §4.6 要證明的事：**一份只讀 `aria-label` 的測試，對
+> 「圖畫得對不對」零鑑別力。**
+>
+> ### Step 8 也成立
+>
+> `targetKcal` 壓成 `day.target?.kcal ?? "0"` 之後兩條紅：label 變成
+> 「目標 0 大卡」，而且多畫出一條 `y1="160" y2="160"` 的貼地目標線。
+>
+> ### ⚠️ 但 Step 4 的程式碼草稿過不了 `npm run lint`，而「修好它」把無障礙弄壞了
+>
+> Biome 的 `a11y/useSemanticElements`（建議 `<svg role="group">` 換成
+> `<fieldset>`）與 `a11y/noInteractiveElementToNoninteractiveRole`
+> （把 `<rect>` 當互動元素）會擋下草稿的寫法。**兩條在這裡都是誤判。**
+>
+> 第一次的處理是把兩個 `role` 屬性拿掉，理由是「既有測試只斷言
+> `aria-label` / `data-testid` / 幾何屬性，不斷言 `role`」。
+>
+> **那個理由是反的，而且它真的弄壞了東西。** 實測（`<svg>` 裡三根 rect）：
+>
+> ```
+> <rect aria-label="…">                 → getAllByRole("img") 找不到
+> <rect role="img" aria-label="…">      → 找到
+> <rect><title>…</title></rect>         → jsdom 裡 getByTitle 也找不到
+> ```
+>
+> `aria-label` 放在沒有語意角色的元素上，輔助技術多半忽略它 ——
+> SVG 的 `<rect>` 預設不對應任何 accessible role。所以拿掉 `role` 等於把
+> 這張圖對螢幕閱讀器的可讀性整個拿掉，而**全部 7 則測試照樣綠**。
+>
+> **缺一條斷言 `role` 的測試不是「role 可以拿掉」的許可，缺那條測試才是
+> 缺陷。** 正確的處理是：
+>
+> 1. 兩個 `role` 都留著，用具名的 `biome-ignore` 加上理由
+> 2. **補一條測試斷言 `getAllByRole("img")` 找得到每根柱子**
+>    （已補，突變驗證過：拿掉 `role="img"` → 只有那一則紅）
+>
+> ### 一個 JSX 的小陷阱，順帶記一筆
+>
+> `// biome-ignore` 寫在 JSX children 位置會被當成**文字**，裡面的
+> `<rect>` 會被解析成開始標籤 → parse error。那個位置要用
+> `{/* biome-ignore … */}`。`<svg>` 那個在 `return (` 之後、屬於運算式
+> 位置，`//` 形式是合法的。
+>
+> **而那次失敗的輸出形狀值得記住：** vitest 同時印出
+> `FAIL tests/trend-chart.test.tsx (0 test)` 與 `Tests 8 passed (8)` ——
+> **只 grep `Tests ` 會看到「8 passed」而完全錯過整個檔案 transform 失敗。**
+> 驗證時必須一起 grep `FAIL` 與 `Unhandled`。
+
 **這個 Task 不碰任何查詢。** `TrendChart` 收到一個陣列就畫，拿不到資料時
 是呼叫端的事（Task 5）。
 
