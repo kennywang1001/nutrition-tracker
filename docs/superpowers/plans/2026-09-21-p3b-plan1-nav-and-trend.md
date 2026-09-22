@@ -2075,6 +2075,46 @@ EOF
 
 ## Task 6: 記一餐讓趨勢失效，加契約 E2E
 
+> ## 實測記錄（已執行完畢）
+>
+> ### Step 4 的突變成立
+>
+> 刪掉 `invalidateQueries({ queryKey: queryKeys.rangeStatsAll })` 之後，
+> `e2e/trend.spec.ts` 紅，症狀正是預期的那個 —— 回到趨勢時最後一根柱子的
+> `aria-label` 前後一模一樣：
+>
+> ```
+> 14 × locator resolved to <rect … data-testid="trend-bar-2026-09-22"
+>        aria-label="9/22，900 大卡，目標 2300 大卡">
+>    - unexpected value "9/22，900 大卡，目標 2300 大卡"
+> ```
+>
+> ### ⚠️ Step 1 與 Step 2 的程式碼草稿有三處錯，兩處是選擇器、一處是 schema
+>
+> | 計畫寫的 | 實際 |
+> |---|---|
+> | `invalidateQueries({ queryKey: ["stats", "range"] })` | 改用 `queryKeys.rangeStatsAll` —— 這個檔案頂端的規矩是「query key 只有一個事實來源」，在呼叫端手打字面陣列正是它要避免的事。**計畫的註解自己也說要用具名 key，程式碼片段跟註解不一致。** |
+> | `getByLabel("公克")` | `getByLabel("份量")`（`<label htmlFor="quantity">份量</label>`） |
+> | `getByRole("button", { name: "送出" })` | `getByRole("button", { name: "記錄" })` |
+> | `items: [{ food_id, grams: "100.00" }]` | `items: [{ food_id, quantity: "100.00" }]` |
+>
+> **最後一列是實質錯誤，不是措辭問題。** `app/schemas/meal.py` 的
+> `MealItemCreateRequest` 只有 `food_id` / `quantity` / `portion_id`，
+> **沒有 `grams`** —— `grams` 是 `PortionCreateRequest`（食物的份量定義）
+> 的欄位。寫計畫的人把兩個 schema 搞混了。照抄會讓種子資料那個
+> `expect(seedResponse.status()).toBe(201)` 直接吃 422（缺必填的
+> `quantity`），而那個紅燈看起來會像「E2E 環境壞了」。
+>
+> ### 最終驗證
+>
+> ```
+>  Test Files  44 passed (44)
+>       Tests  196 passed (196)
+> Type Errors  no errors
+>
+> Playwright: 7 passed
+> ```
+
 **Files:**
 - Modify: `frontend/src/screens/LogMeal.tsx`
 - Create: `frontend/e2e/trend.spec.ts`
