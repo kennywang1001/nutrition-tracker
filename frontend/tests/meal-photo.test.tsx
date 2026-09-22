@@ -5,11 +5,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useMealPhoto } from "../src/api/photos";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
+import { mockApiByPath as mockApi } from "./helpers/mock-api";
 
-// helper 三兄弟（QueryWrapper / mockApi / json）從 today.test.tsx 的
-// wrap / mockApi / json 改寫——`renderHook` 的 `wrapper` 選項要的是一個
-// 接受 `children` 的元件，不是 `wrap()` 那樣直接回一段 JSX 的函式。
-// `retry: false` 跟 `wrap()` 同一個理由：測試裡的假失敗不該被
+// QueryWrapper 從 today.test.tsx 的 wrap 改寫——`renderHook` 的 `wrapper`
+// 選項要的是一個接受 `children` 的元件，不是 `wrap()` 那樣直接回一段 JSX
+// 的函式。`retry: false` 跟 `wrap()` 同一個理由：測試裡的假失敗不該被
 // TanStack Query 的預設重試拖慢或蓋掉。
 
 function QueryWrapper({ children }: { children: ReactNode }) {
@@ -17,35 +17,6 @@ function QueryWrapper({ children }: { children: ReactNode }) {
 		defaultOptions: { queries: { retry: false } },
 	});
 	return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
-}
-
-/** 依 URL 分派的 fetch mock。**一律先驗 Authorization** ——
- *  沒帶就回 401 信封。這是規格 §9.2 第 2 條：mock 不檢查 header 的話，
- *  「所有請求都要帶 token」這個保證零鑑別力。 */
-function mockApi(routes: Record<string, () => Response>) {
-	return vi
-		.spyOn(globalThis, "fetch")
-		.mockImplementation(async (input, init) => {
-			const url = typeof input === "string" ? input : String(input);
-			if (!new Headers(init?.headers).has("authorization")) {
-				return new Response(
-					JSON.stringify({
-						error: {
-							code: "NOT_AUTHENTICATED",
-							message: "需要登入",
-							details: {},
-						},
-					}),
-					{ status: 401, headers: { "content-type": "application/json" } },
-				);
-			}
-			const handler = Object.entries(routes).find(([path]) =>
-				url.includes(path),
-			)?.[1];
-			if (handler === undefined)
-				throw new Error(`測試沒有為這個路徑準備回應：${url}`);
-			return handler();
-		});
 }
 
 beforeEach(() => {

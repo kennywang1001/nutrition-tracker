@@ -11,11 +11,12 @@ import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { formatTime } from "../src/lib/dates";
 import { Today } from "../src/screens/Today";
+import { json, mockApiByPath as mockApi } from "./helpers/mock-api";
 
-// helper 三兄弟（wrap / mockApi / json）從 today.test.tsx 改寫——`wrap` 這裡
-// 額外接一個 QueryClient 參數（今日總覽的離線行為只有在「兩個不同的
-// QueryClient 透過同一份 localStorage 交接」時才驗得到：同一個 client
-// 重新 render 不會證明持久化真的發生，只會證明記憶體裡的快取沒被清掉）。
+// wrap 從 today.test.tsx 改寫——這裡額外接一個 QueryClient 參數（今日總覽的
+// 離線行為只有在「兩個不同的 QueryClient 透過同一份 localStorage 交接」時
+// 才驗得到：同一個 client 重新 render 不會證明持久化真的發生，只會證明
+// 記憶體裡的快取沒被清掉）。
 function wrap(client: QueryClient, children: ReactNode) {
 	return (
 		<PersistQueryClientProvider
@@ -25,39 +26,6 @@ function wrap(client: QueryClient, children: ReactNode) {
 			{children}
 		</PersistQueryClientProvider>
 	);
-}
-
-function mockApi(routes: Record<string, () => Response>) {
-	return vi
-		.spyOn(globalThis, "fetch")
-		.mockImplementation(async (input, init) => {
-			const url = typeof input === "string" ? input : String(input);
-			if (!new Headers(init?.headers).has("authorization")) {
-				return new Response(
-					JSON.stringify({
-						error: {
-							code: "NOT_AUTHENTICATED",
-							message: "需要登入",
-							details: {},
-						},
-					}),
-					{ status: 401, headers: { "content-type": "application/json" } },
-				);
-			}
-			const handler = Object.entries(routes).find(([path]) =>
-				url.includes(path),
-			)?.[1];
-			if (handler === undefined)
-				throw new Error(`測試沒有為這個路徑準備回應：${url}`);
-			return handler();
-		});
-}
-
-function json(body: unknown) {
-	return new Response(JSON.stringify(body), {
-		status: 200,
-		headers: { "content-type": "application/json" },
-	});
 }
 
 const STATS_WITH_TARGET = {

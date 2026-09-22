@@ -5,55 +5,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { MealList } from "../src/screens/MealList";
-
-// helper 三兄弟（wrap / mockApi / json）從 today.test.tsx 複製過來——刻意
-// 不抽成共用模組，理由同 log-meal.test.tsx 開頭的註解。
+import { json, mockApiByPath as mockApi } from "./helpers/mock-api";
 
 function wrap(children: ReactNode) {
 	const client = new QueryClient({
 		defaultOptions: { queries: { retry: false } },
 	});
 	return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
-}
-
-/** 依 URL 分派的 fetch mock。**一律先驗 Authorization** ——
- *  沒帶就回 401 信封。這是規格 §9.2 第 2 條：mock 不檢查 header 的話，
- *  「所有請求都要帶 token」這個保證零鑑別力。 */
-function mockApi(routes: Record<string, () => Response>) {
-	return vi
-		.spyOn(globalThis, "fetch")
-		.mockImplementation(async (input, init) => {
-			const url = typeof input === "string" ? input : String(input);
-			if (!new Headers(init?.headers).has("authorization")) {
-				return new Response(
-					JSON.stringify({
-						error: {
-							code: "NOT_AUTHENTICATED",
-							message: "需要登入",
-							details: {},
-						},
-					}),
-					{ status: 401, headers: { "content-type": "application/json" } },
-				);
-			}
-			// 用 Object.entries 一次拿到 handler，而不是先找 key 再回頭索引。
-			// 後者在 noUncheckedIndexedAccess 之下是 `T | undefined`，
-			// 需要一個 non-null assertion 才過得了型別——而那正是
-			// Biome 的 noNonNullAssertion 在擋的東西。
-			const handler = Object.entries(routes).find(([path]) =>
-				url.includes(path),
-			)?.[1];
-			if (handler === undefined)
-				throw new Error(`測試沒有為這個路徑準備回應：${url}`);
-			return handler();
-		});
-}
-
-function json(body: unknown) {
-	return new Response(JSON.stringify(body), {
-		status: 200,
-		headers: { "content-type": "application/json" },
-	});
 }
 
 const MEALS = [
