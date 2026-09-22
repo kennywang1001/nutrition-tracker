@@ -366,6 +366,50 @@ EOF
 
 ## Task 2: `shiftDays` —— 曆法加減，而且結構上不可能受時區影響
 
+> ## 實測記錄（已執行完畢，commit `f7a1f99` + `3613e52`）
+>
+> **這一節的 Step 1 與 Step 3 原本互相矛盾，照抄做不完。** 記在這裡是因為
+> 它揭出的問題比 Task 2 本身重要。
+>
+> ### 一、計畫給的實作過不了計畫給的測試
+>
+> Step 3 的 docstring 裡用 `getDate()` 當例句解釋 bug，而 Step 1 的掃描
+> 測試禁止整個檔案出現 `getDate` 這個子字串 —— **照抄實作，Step 4 就紅了**，
+> 還沒開始 Step 5 的突變。
+>
+> 那個守衛太鈍：**它分不出「程式碼在呼叫這個東西」與「註解在解釋不要呼叫
+> 這個東西」。** 於是模組被迫用迂迴的說法描述自己的規則，而同一個名字寫在
+> `civil-date.test.ts` 的註解裡卻完全沒事（掃描只讀 `src/`）——
+> **能講的人不需要講，該講的人不能講。**
+>
+> 修法：掃描前先剝掉註解（`stripComments`）。docstring 因此可以直接貼出
+> 錯誤寫法的程式碼區塊。
+>
+> ### 二、剝註解是新的失敗面，所以多了兩條測試
+>
+> `stripComments` 不是通用的 TS parser。剝太多的話，「沒有非 UTC accessor」
+> 會因為**什麼都沒看到**而變綠。所以補了：
+>
+> - 「去掉註解之後，`Date.UTC` 與兩個函式都還在掃描的視野裡」
+> - 「掃描看的是程式碼，不是註解」
+>
+> ### 三、三個突變的實測結果
+>
+> | 突變 | 結果 |
+> |---|---|
+> | `shiftDays` 改用 `new Date(isoDate)` + `setDate(getDate())` | **六條行為測試全部照樣綠**（本機是 UTC+8，`date +%Z%z` → `+0800`），只有掃描那條紅（`['getDate','setDate']`）—— 正是規格 §11.4 說的「時區遮住了它」 |
+> | `stripComments` 改成 `return ""` | 「沒有任何非 UTC 的 Date accessor」**依然綠**（什麼都沒看到），只有新加的兩條紅 |
+> | 把 `Date.UTC` 整段拿掉 | 「`Date.UTC` 與兩個函式都還在」紅 |
+>
+> **第二列是這個 Task 最重要的產出**：它是那條掃描測試自己的註解所警告的
+> 說謊綠燈的實例，而且現在有東西守著它了。
+>
+> ### 四、一處測試標題跟行為不符，已改
+>
+> 「去掉註解之後程式碼還在（釘住 stripComments 不會吃太多）」實際上做兩件事
+> （釘住剝註解、**以及**正面斷言真的在用 `Date.UTC`），舊名字只講了一件。
+> 已改成「去掉註解之後，`Date.UTC` 與兩個函式都還在掃描的視野裡」。
+
 **Files:**
 - Create: `frontend/src/lib/civil-date.ts`
 - Create: `frontend/tests/civil-date.test.ts`
@@ -562,7 +606,14 @@ export function formatCivilDate(isoDate: string): string {
 cd frontend && npx vitest run tests/civil-date.test.ts
 ```
 
-Expected: PASS，9 則測試。
+Expected: PASS。
+
+> **計畫原本寫「9 則」—— 數錯了，實際是 8 則**（`shiftDays` 6 條、
+> `formatCivilDate` 1 條、掃描 1 條）。而 Step 5 之後又補了 2 條
+> （見這一節開頭的實測記錄），最終是 **10 則**。
+>
+> 注意 `npm run test` 報的 `Tests` 數字是**實際則數的兩倍**（每個檔案
+> 被跑兩次：一次執行、一次交給 tsc）。
 
 - [ ] **Step 5: 突變驗證 —— 這一步是整個 Task 的重點**
 
@@ -653,7 +704,8 @@ cd frontend && npx vitest run tests/civil-date.test.ts
 cd frontend && npm run lint && npm run typecheck && npm run test 2>&1 | tail -10
 ```
 
-Expected: 三個都綠；`Tests` 比 Task 1 記錄的數字多 9。
+Expected: 三個都綠。實測：`Test Files 38` / `Tests 164` / `Type Errors no errors`
+（Task 1 結束時是 36 / 144；多 1 個檔案 = +2，多 10 則測試 = +20）。
 
 - [ ] **Step 8: Commit**
 
