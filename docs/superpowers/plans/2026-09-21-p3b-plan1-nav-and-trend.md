@@ -1665,6 +1665,41 @@ EOF
 
 ## Task 5: Trend 畫面 —— 日期錨點與查詢
 
+> ## 實測記錄（已執行完畢，commit `e82bf53` + 後續修正）
+>
+> ### ⚠️ 計畫給的 mock 日期讓這個 Task 的核心測試在某一天失去鑑別力
+>
+> 計畫的測試把 mock 的「今天」寫死成 `2026-09-21` —— **而這份計畫本身就是
+> 2026-09-21 寫的。** 也就是說在寫它的那一天，「from / to 是從 stats/daily
+> 回的 date 推出來的」這條測試的鑑別力**是零**：錯誤的實作
+> （`new Date()` 自己算今天）會算出一模一樣的 `from` / `to`，斷言照樣綠。
+>
+> 隔一天執行才碰巧有效（實測於 2026-09-22，突變確實轉紅）。
+>
+> **一條「只在某一天失效、而且沒有任何東西會提醒你」的測試是最糟的那種。**
+> 已改成 `2019-07-04`（`from` 是 `2019-06-28`）—— 真實的今天永遠不可能
+> 等於它。下面 Step 2 的程式碼已經是改過的版本。
+>
+> ### Step 6 的突變會紅兩條，不是一條
+>
+> 計畫只寫了「from / to 是從 stats/daily 回的 date 推出來的」會紅。實際上
+> 「錨點還沒回來之前不打 range」也會紅 —— 突變讓 `today` / `from` 變成恆為
+> 非 null 的字串，`enabled: from !== null && today !== null` 因此恆真，
+> range query 不再等錨點就直接發。
+>
+> 那是正確的連帶效應，不是問題。記在這裡是為了下一個人不要以為只該紅一條。
+>
+> ### `apiFetch` 回的是 `T | null`，不是 `T | undefined`
+>
+> 計畫草稿的 `range === undefined` / `range !== undefined` **過不了 `tsc`**：
+> `apiFetch<T>`（`src/api/client.ts`）的回傳型別是 `Promise<T | null>`
+> （204 用 `null` 表示），所以 `rangeQuery.data` 是
+> `RangeStats | null | undefined`，`=== undefined` narrow 不掉 `null` 分支，
+> 三處報 `'range' is possibly 'null'`。
+>
+> 已改用這個專案在 `Today.tsx` 就已經在用的 truthy 慣例
+> （`const stats = statsQuery.data; ... {stats && (...)}`）。
+
 **Files:**
 - Create: `frontend/src/screens/Trend.tsx`
 - Create: `frontend/tests/trend.test.tsx`
