@@ -18,7 +18,8 @@ describe("共用的 fetch mock", () => {
 		//
 		// **這個檢查不是「所有請求都要帶 token」的主守衛** —— 那件事由
 		// tests/client.test.ts 的「帶上 Authorization」與
-		// tests/meal-photo.test.tsx 的同名斷言守著（兩者合起來蓋住
+		// tests/meal-photo.test.tsx 的「帶著 Authorization 取圖」守著
+		// （前者驗 apiFetch、後者驗 fetchPhotoBlob，兩者合起來蓋住
 		// src/api/client.ts 的 fetchWithAuthRetry 內核）。這裡守的是
 		// 那道後備防線本身還在。
 		mockApi([{ path: "/api/anything", handler: () => json({ ok: true }) }]);

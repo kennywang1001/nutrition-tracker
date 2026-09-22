@@ -12,7 +12,8 @@ export type Route = {
  *  沒帶就回 401 信封 —— 這是**後備防線**，不是主守衛。
  *
  *  「所有請求都要帶 token」由 `tests/client.test.ts` 的「帶上 Authorization」
- *  與 `tests/meal-photo.test.tsx` 的同名斷言守著（兩者合起來蓋住
+ *  與 `tests/meal-photo.test.tsx` 的「帶著 Authorization 取圖」守著
+ *  （前者驗 `apiFetch`、後者驗 `fetchPhotoBlob`，兩者合起來蓋住
  *  `src/api/client.ts` 的 `fetchWithAuthRetry` 內核）。舊版的註解寫
  *  「mock 不檢查 header 的話這個保證零鑑別力」—— 那句話誇大了，不是零。
  *

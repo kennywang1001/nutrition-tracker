@@ -255,6 +255,27 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 		mockApi({
 			"/api/stats/daily": () => json(STATS_WITH_TARGET),
 			"/api/supplements/today": () => json([]),
+			// **照片這條必須排在 `/api/meals` 前面。** 比對是
+			// `url.includes(path)` 加上「第一個符合的就用」，而
+			// `"/api/meals/11/photo".includes("/api/meals")` 為真 ——
+			// 排在後面的話，泛用的 `/api/meals` 會把照片請求吃掉，
+			// 下面那個假 JPEG 的 handler **永遠不會被呼叫到**。
+			//
+			// 這不是假設：把這個 handler 換成 `throw` 之後，這個檔案的
+			// 8 則測試依然全綠（P3-B 計畫一 Task 1 的審查發現的）。
+			// 當時測試還是綠的，因為 `useMealPhoto` 只要拿到 200 就
+			// `blob()` 成功、`createObjectURL` 給出一個 url，`<img>` 就出現，
+			// 而下面的斷言只看 localStorage 裡有沒有 `"meal-photo"` 這個
+			// key —— 那個 key 是 React Query 決定的，跟 fetch 回什麼無關。
+			//
+			// 也就是說：這條測試宣稱要守的事（照片 query 不進 localStorage）
+			// 確實守到了，但它同時留下一條死路由。下次有人依賴這個 handler
+			// 的回應內容時會非常難查。
+			"/api/meals/11/photo": () =>
+				new Response(new Blob(["fake-jpeg-bytes"], { type: "image/jpeg" }), {
+					status: 200,
+					headers: { "content-type": "image/jpeg" },
+				}),
 			"/api/meals": () =>
 				json([
 					{
@@ -270,11 +291,6 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 						carb_g: "1.00",
 					},
 				]),
-			"/api/meals/11/photo": () =>
-				new Response(new Blob(["fake-jpeg-bytes"], { type: "image/jpeg" }), {
-					status: 200,
-					headers: { "content-type": "image/jpeg" },
-				}),
 		});
 
 		render(
