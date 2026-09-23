@@ -1,6 +1,6 @@
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { useState } from "react";
-import { BrowserRouter, Link, Route, Routes, useNavigate } from "react-router";
+import { BrowserRouter, Route, Routes, useNavigate } from "react-router";
 import { apiFetch } from "./api/client";
 // 離線 L2（計畫三 Task 4）：跟下面的 queryClient 一樣是模組層單例，不是
 // 這裡的元件 render 裡——建在 render 裡每次重繪都會建一個新的 persister，
@@ -14,9 +14,11 @@ import { offlinePersistOptions } from "./api/persist";
 import { queryClient } from "./api/queries";
 import { logout } from "./auth/session";
 import { getRefreshToken } from "./auth/store";
+import { TabBar } from "./components/TabBar";
 import { Login } from "./screens/Login";
 import { LogMeal } from "./screens/LogMeal";
 import { Today } from "./screens/Today";
+import { Trend } from "./screens/Trend";
 
 /** `/log` 路由：記完一餐之後導回今日總覽。
  *
@@ -30,12 +32,16 @@ function LogMealRoute() {
 function Nav({ onLoggedOut }: { onLoggedOut: () => void }) {
 	// 「重新整理」按鈕從 main.tsx 搬過來，不是刪掉——計畫一的
 	// 「access token 過期時會自動換票並重送」E2E 依賴它打 /api/me。
+	//
+	// **不要改成 useMe() 的 refetch。** staleTime 是 60 秒，改了之後按下去
+	// 什麼都不會發生，而 e2e/auth.spec.ts 那條測試不會紅——它只是不再
+	// 測到任何東西（規格 §8.1）。
+	//
+	// 導覽連結搬到 <TabBar>（P3-B 計畫一 Task 3），這裡只剩下兩個動作。
 	const [displayName, setDisplayName] = useState<string | null>(null);
 
 	return (
 		<nav>
-			<Link to="/">今日總覽</Link>
-			<Link to="/log">記一餐</Link>
 			<button
 				type="button"
 				onClick={async () => {
@@ -72,10 +78,14 @@ export function App() {
 			{loggedIn ? (
 				<BrowserRouter>
 					<Nav onLoggedOut={() => setLoggedIn(false)} />
-					<Routes>
-						<Route path="/" element={<Today />} />
-						<Route path="/log" element={<LogMealRoute />} />
-					</Routes>
+					<main className="app-main">
+						<Routes>
+							<Route path="/" element={<Today />} />
+							<Route path="/log" element={<LogMealRoute />} />
+							<Route path="/trend" element={<Trend />} />
+						</Routes>
+					</main>
+					<TabBar />
 				</BrowserRouter>
 			) : (
 				<Login onSuccess={() => setLoggedIn(true)} />

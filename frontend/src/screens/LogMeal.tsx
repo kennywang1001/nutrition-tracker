@@ -102,6 +102,17 @@ export function LogMeal({ onSaved }: Props) {
 			// 這一行是這份計畫的核心。少了它，記完一餐回到總覽會看到舊數字，
 			// 使用者會以為沒記進去——然後再記一次。
 			queryClient.invalidateQueries({ queryKey: queryKeys.dailyStats });
+			// 記完一餐，趨勢圖上「今天」那根柱子也變了。不加這一行的話，
+			// 記完切到趨勢看到的是舊的數字。
+			//
+			// **用前綴 `["stats", "range"]` 是刻意的**：rangeStats 的 key 帶
+			// from / to 兩個參數，要失效的是「所有期間」。這個前綴不會碰到
+			// `["stats", "daily"]`（規格 §7.2）。
+			//
+			// **而這一行是那條路徑唯一的守衛。** staleTime 是 60 秒，切換路由
+			// 的 unmount／remount 不會自動重取（計畫二 Task 6 為此補上的），
+			// 所以刪掉它，e2e/trend.spec.ts 會紅。
+			queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatsAll });
 			// 常吃/最近吃的排序也變了。
 			queryClient.invalidateQueries({ queryKey: queryKeys.frequentFoods });
 			queryClient.invalidateQueries({ queryKey: queryKeys.recentFoods });

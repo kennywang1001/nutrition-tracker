@@ -7,6 +7,7 @@ import { MAX_PHOTO_BYTES } from "../src/api/photos";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { MealList } from "../src/screens/MealList";
+import { json, mockApi } from "./helpers/mock-api";
 
 // ⚠️ jsdom 沒有實作 canvas 的 2D 繪圖 context——`canvas.getContext("2d")`
 // 在這裡是 `null`。上傳流程真的用到 canvas 的那一步已經抽成獨立模組
@@ -19,60 +20,11 @@ vi.mock("../src/lib/resize-image", () => ({
 	shrinkToLongestEdge: vi.fn((file: File) => Promise.resolve(file)),
 }));
 
-// helper 們跟 meal-list.test.tsx 的 wrap / json 同一個理由——刻意不抽成
-// 共用模組。這裡的 mockApi 比 meal-list.test.tsx 那份多認一個 HTTP
-// method：同一個路徑 `/api/meals/{id}/photo` 底下 GET 用來取圖、POST 用來
-// 上傳，只比對路徑分不出兩者。
-
 function wrap(children: ReactNode) {
 	const client = new QueryClient({
 		defaultOptions: { queries: { retry: false } },
 	});
 	return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
-}
-
-type Route = { method: string; path: string; handler: () => Response };
-
-/** 依 (method, path) 分派的 fetch mock。**一律先驗 Authorization**——
- *  理由跟 meal-list.test.tsx 的 mockApi 一樣（規格 §9.2 第 2 條）。
- *
- *  `routes` 用陣列、依序比對第一個符合的——`/api/meals/11/photo` 這個
- *  URL 同時「包含」`/api/meals`，所以呼叫端要把更具體的路徑排在前面，
- *  否則泛用的 `/api/meals` 路由會搶先吃掉照片端點的請求。 */
-function mockApi(routes: Route[]) {
-	return vi
-		.spyOn(globalThis, "fetch")
-		.mockImplementation(async (input, init) => {
-			const url = typeof input === "string" ? input : String(input);
-			if (!new Headers(init?.headers).has("authorization")) {
-				return new Response(
-					JSON.stringify({
-						error: {
-							code: "NOT_AUTHENTICATED",
-							message: "需要登入",
-							details: {},
-						},
-					}),
-					{ status: 401, headers: { "content-type": "application/json" } },
-				);
-			}
-			const method = (init?.method ?? "GET").toUpperCase();
-			const route = routes.find(
-				(candidate) =>
-					candidate.method === method && url.includes(candidate.path),
-			);
-			if (route === undefined) {
-				throw new Error(`測試沒有為這個路徑準備回應：${method} ${url}`);
-			}
-			return route.handler();
-		});
-}
-
-function json(body: unknown, status = 200) {
-	return new Response(JSON.stringify(body), {
-		status,
-		headers: { "content-type": "application/json" },
-	});
 }
 
 function meal(overrides: Record<string, unknown> = {}) {

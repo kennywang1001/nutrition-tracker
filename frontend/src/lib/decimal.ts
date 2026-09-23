@@ -40,3 +40,18 @@ export function ratioOf(
 	if (targetValue.isZero()) return null;
 	return new Decimal(actual).dividedBy(targetValue).toNumber();
 }
+
+/** 一組數值的最大值。空陣列回 `"0"`。
+ *
+ *  給 `TrendChart` 算 y 軸上限用。**放在這裡而不是圖表元件裡**，是因為
+ *  比較兩個 `Numeric` 必須經過 `Decimal` —— 用 `Math.max(...values.map(Number))`
+ *  就是把浮點誤差請回來，而這個模組存在的理由正是把它擋在外面。 */
+export function maxOf(values: readonly Numeric[]): Numeric {
+	return values
+		.reduce(
+			(largest, value) =>
+				new Decimal(value).greaterThan(largest) ? new Decimal(value) : largest,
+			new Decimal(0),
+		)
+		.toString();
+}
