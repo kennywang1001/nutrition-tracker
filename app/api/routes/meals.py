@@ -78,8 +78,22 @@ async def _resolve_item(
     """
     food, revision = await load_visible_food(db, payload.food_id, user)
     if revision is None:
-        # 食物存在也看得到，但沒有生效版本 —— 正常流程不會發生（沒有
-        # current_revision_id 的食物本來就查不到），純粹防禦性。
+        # 食物存在也看得到，但沒有生效版本。
+        #
+        # **這不是防禦性的，正常流程走得到。** 原本這裡寫「沒有
+        # current_revision_id 的食物本來就查不到」—— 那句話是錯的：
+        # `search_foods`、`list_frequent_foods`、`list_recent_foods` 三個端點
+        # 都用 `outerjoin(FoodRevision, Food.current_revision_id == ...)`，
+        # **沒有任何一個過濾掉 revision 是 NULL 的食物**，它們只是把
+        # `FoodResponse.nutrition` 回成 `null`（那也正是那個欄位可為 null
+        # 的原因：「全域食物的初版被駁回就會是這個狀態」）。
+        #
+        # 實測過（P3-B 計畫二開工前）：手動插一筆 `current_revision_id`
+        # 是 NULL 的全域食物，`GET /api/foods?scope=global` 確實回傳它
+        # （`nutrition: null`），而拿它打這個端點得到 409。
+        #
+        # 所以前端必須把這種食物擋在「可以選」之外，並且仍然要具名處理
+        # 這個 409 —— 搜尋到送出之間，食物有可能剛好失去生效版本。
         raise ConflictError("FOOD_HAS_NO_REVISION", "這個食物目前沒有生效的版本")
 
     quantity = payload.quantity
