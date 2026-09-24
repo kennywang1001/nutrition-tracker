@@ -37,6 +37,8 @@ class FoodCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     brand: str | None = Field(default=None, max_length=100)
     nutrition: NutritionInput
+    # 只有管理員能建立全域食物
+    is_global: bool = False
 
 
 class FoodResponse(BaseModel):

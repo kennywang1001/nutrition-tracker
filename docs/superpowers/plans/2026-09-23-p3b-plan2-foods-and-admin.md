@@ -1746,43 +1746,209 @@ Postgres 的預設是 NULLS DISTINCT（兩個 NULL 互不相等，於是同名�
 E2E 依賴外部狀態 —— 而 Task 1 剛剛才修掉「本機與 CI 的帳號角色不一致」
 那個完全相同形狀的問題。
 
-- [ ] **Step 1b: 實作 `is_global`（後端）**
-- [ ] **Step 2–5**：寫四條 E2E、跑、突變驗證、commit
+- [x] **Step 1b: 實作 `is_global`（後端）**
+
+照計畫寫的四件事做，照抄 `create_portion` 的模式：
+
+1. `FoodCreateRequest` 加 `is_global: bool = False`（`app/schemas/food.py`）
+2. `create_food` 加管理員檢查，逐字沿用 `create_portion` 那句「這是角色不符，
+   不是擁有權不符——所以是 403 而不是 404」的註解語氣，訊息改成
+   「只有管理員能建立全域食物」
+3. `owner_id` 改成 `None if payload.is_global else user.id`
+4. 三則新測試（`tests/test_foods_create.py`）：
+   `test_an_admin_can_create_a_global_food`、
+   `test_a_normal_user_cannot_create_a_global_food`、
+   `test_create_food_without_is_global_defaults_to_a_private_food`
+
+**額外處理的一個細節，計畫沒點名：** `create_food` 原本判斷「這個名字是不是
+已經建過」的前置 SELECT 是 `Food.owner_id == user.id`——對全域食物來說這個
+條件永遠不成立（全域食物的 `owner_id` 是 `NULL`，不是任何使用者的 id），
+所以原封不動的話，兩個管理員各自建一個同名全域食物，前置 SELECT 檢查不到
+彼此，會一路撞進 `db.flush()` 才被 `uq_foods_owner_id_name_brand` 擋下來
+（仍然是 409，行為上沒錯，只是繞了遠路，且是本來就已知「可能是死碼」的
+那條 except 分支，見 `test_a_concurrent_duplicate_name_returns_409_not_500`
+的說明）。改成 `Food.owner_id.is_not_distinct_from(owner_id)`（`owner_id`
+是 `None if payload.is_global else user.id`），讓前置檢查對全域食物也用
+正確的「跟誰比對重複」的邏輯，跟 `create_portion` 沒有這個問題（份量的重複
+判斷是 `food_id` + `label`，不看 owner）不同，食物的重複判斷本來就是
+`owner_id` + `name` + `brand`，owner_id 用錯值的話「同一個管理員建兩筆同名
+全域食物」在前置檢查這一層是抓不到的。
+
+**後端測試結果：** `pytest tests/test_foods_create.py` 10 則全綠（既有 7 則
++ 新增 3 則）；全套 `pytest -q` 512 passed（基準線 509 + 3）。`ruff check .`
+與 `mypy app` 都乾淨。
+
+- [x] **Step 2–5**：寫四條 E2E、跑、突變驗證、commit
+
+**Files 實際落地：**
+- `frontend/e2e/foods.spec.ts`：第 1 條
+- `frontend/e2e/admin.spec.ts`：第 2、3、4 條
+
+**Playwright 全套結果（含既有 7 條）：11 passed**（既有 7 條 + 新增 4 條）。
+
+### 第 2、3 條的兩個身分：兩個 `browser.newContext()`
+
+選這個而不是同一個 `page` 先登出再登入，理由寫進了 `admin.spec.ts` 的
+註解：這裡要模擬的本來就是「兩個人」（提案者與審核者）同時存在——第 2 條
+「佇列看到新舊並排」這件事本身就是要在 MEMBER 送出之後、ADMIN 審核之前
+的那個時間點觀察，用兩個獨立 context 更貼近真實情境，也讓兩邊各自的
+`queryClient`（模組層單例，跟著各自的 page 走）不會把上一個身分看到的
+資料帶到下一個身分的畫面上。
+
+### 一個原本沒預期到、需要另外解決的問題：如何在不汙染請求計數的前提下
+### 讓 MEMBER 到達 `/admin/revisions`
+
+`TabBar` 對非管理員不顯示「審核」那一格，所以沒有連結可以點；規格 §3.3
+要求「不做前端導向」，讓非管理員直接輸入網址時也能看到 403。但
+`access token` 只放在記憶體（`auth/store.ts`）——如果真的用 `page.goto()`
+模擬「直接輸入網址」，那是一次整頁重新載入，記憶體裡的 token 被重置成
+`null`，第一個打出去的請求會先天然地 401（沒有 token）→ 換票一次
+（這是任何角色、任何整頁重新載入後第一次打 API 都會發生的正常行為，
+跟 `e2e/auth.spec.ts`「access token 過期時會自動換票」那條驗的是同一個
+機制）。這次換票**跟這條測試要驗的「403 不該觸發換票」完全無關**，卻會
+被同一個 request 計數器一起算進去，讓斷言測不準。
+
+解法是在 `admin.spec.ts` 加一個 `navigateWithoutReload()`：MEMBER 先用畫面
+正常登入（這一步本身不是整頁重新載入，`login()` 內部的 mutation 直接把
+拿到的 token 寫進記憶體），這時 token 已經在記憶體裡；接著用
+`page.evaluate(() => { history.pushState(...); dispatchEvent(new
+PopStateEvent("popstate")) })` 換路由——手動呼叫 `pushState` 之後，
+`history` 套件（react-router 8 底層用的那個，v5）不會自動知道網址變了，
+但它有訂閱原生的 `popstate` 事件，補發一個 `popstate` 能讓它讀到新的
+`window.location` 並通知 react-router 重新比對路由。用 debug 腳本量過：
+這樣換到 `/admin/revisions` 之後，`GET /api/admin/food-revisions` 確實
+打出去且拿到 403，而**整個過程 `/api/auth/refresh` 一次都沒被打**——
+乾淨地把「403 觸不觸發換票」跟「整頁重新載入的 bootstrap 換票」這兩件事
+分開了。
+
+### 一個實測發現：畫面顯示「需要管理員權限」之前，`isLoading` 會先撐好幾秒
+
+第一次跑第 4 條時，用預設的 5 秒斷言逾時等不到「需要管理員權限」出現，
+用 debug 腳本（`page.on("request"/"response")`）量過原因：`queryClient`
+沒有覆寫 `retry`，TanStack Query v5 對任何錯誤（不分狀態碼）預設重試 3 次、
+指數退避（約 1s／2s／4s），畫面在重試期間 `revisionsQuery.isLoading` 一直
+是 `true`，停在「載入中…」，要等所有重試都失敗、`isError` 變 `true` 之後
+才會顯示錯誤訊息，實測總共要等到 7–8 秒才會出現。這是既有行為（4xx 一律
+重試，不是這個 task 的範圍），**不是去改 `queryClient` 的 retry 設定去配合
+測試**，是把斷言的逾時放寬到 `{ timeout: 15_000 }`。重試次數不影響「換票
+次數是不是 0」這件事——每一次重試都是同一支 `apiFetch`，`client.ts` 對
+每一次 403 的判斷都一樣。
+
+### 一個實測發現：第 3 條用 `page.reload()` 讀「駁回理由」第一次是空的
+
+第一次寫第 3 條時，`memberPage.reload()` 之後編輯歷史只看得到最原始那筆
+「已通過」，駁回的那筆完全不見。直接打 API 重現整個 propose → reject
+流程（不經過畫面）確認**後端沒有問題**：`GET /api/foods/{id}/revisions`
+在 reject 之後確實回兩筆，被駁回的那筆帶著 `reject_reason`。問題在前端：
+`PersistQueryClientProvider`（`api/persist.ts`）把 member 自己在 propose
+**之前**那次瀏覽（只有 1 筆）持久化到 `localStorage` 過；`queryClient` 的
+`staleTime` 是 60 秒（`api/queries.ts`），`page.reload()` restore 回來的
+那份快照在 60 秒視窗內被當成「還新鮮」，不會自動重打 API——member 自己
+propose 成功後有 `invalidateQueries`，但那次的新狀態有沒有趕在
+`reload()` 前被節流寫回 `localStorage` 純粹是時間賽跑，不可靠。
+
+修法是 `reload()` 之前先 `localStorage.removeItem("nutrition-tracker-
+offline-cache")`（`persist.ts` 的 `OFFLINE_CACHE_STORAGE_KEY`，兩處字面值
+要記得一起改）——**不能整個 `localStorage.clear()`**，refresh token 也放
+在 `localStorage`（`auth/store.ts`），清掉會讓 `reload()` 之後掉回登入
+畫面。清掉這一個 key 之後，`reload()` 沒有快照可以 restore，保證是一次
+真的打 API 拿最新資料，同一則測試回到綠燈。
+
+**這個發現值得記進 `docs/handover.md` §6（綠燈說謊）候選清單**：一條 E2E
+用 `page.reload()` 想看到「另一個 session 剛寫入的最新狀態」，如果那個頁面
+之前瀏覽過同一份資料且開著離線持久化，`staleTime` 視窗內 reload 讀到的
+可能是 reload 之前那次瀏覽的舊快照，不是真的重新打 API——症狀是「明明
+後端資料是對的，畫面卻讀不到」，很容易誤判成後端或 invalidate 邏輯有問題。
+
+### 突變（一）：`require_admin` 拿掉角色檢查
 
 > **必須成立：** 把 `app/api/deps.py` 的 `require_admin` 改成不檢查角色，
 > **第 4 條必須紅**。
 >
-> **實測填回：** ——
+> **實測填回：**
+>
+> 把 `require_admin` 的 `if user.role is not UserRole.ADMIN: raise
+> ForbiddenError(...)` 整段拿掉、直接 `return user`，重新 build 並跑
+> `e2e/admin.spec.ts -g "非管理員打"`，確實紅：
+>
+> ```
+> Error: expect(locator).toBeVisible() failed
+> Locator: getByText('需要管理員權限')
+> Expected: visible
+> Timeout: 15000ms
+> Error: element(s) not found
+> ```
+>
+> 紅的原因跟預期一致：拿掉角色檢查之後，MEMBER 打
+> `GET /api/admin/food-revisions` 拿到 200（跟審核佇列本身的資料），
+> 畫面渲染出佇列內容而不是錯誤訊息，所以「需要管理員權限」這段文字
+> 從頭到尾沒有出現過，等到逾時。改回原本的檢查、重新 build 之後，
+> `admin.spec.ts` 全部 3 則回到綠燈。
+
+### 突變（二）：`client.ts` 的 `=== 401` 改成 `>= 401`
 
 > **必須成立：** 把 `client.ts` 的 `=== 401` 改成 `>= 401`，
 > **第 4 條必須紅，而且紅在請求計數那一行**（不是文字斷言）。
 >
-> **實測填回：** ——
+> **實測填回：**
+>
+> ```
+> Error: expect(received).toHaveLength(expected)
+>
+> Expected length: 0
+> Received length: 4
+> Received array:  ["http://localhost:5173/api/auth/refresh", "http://localhost:5173/api/auth/refresh", "http://localhost:5173/api/auth/refresh", "http://localhost:5173/api/auth/refresh"]
+>
+>     at F:\wallet\frontend\e2e\admin.spec.ts:265:23
+> ```
+>
+> **確實紅在請求計數那一行，不是文字斷言**——`await expect(page.getByText
+> ("需要管理員權限")).toBeVisible({ timeout: 15_000 })` 那一行照樣通過
+> （畫面上還是顯示「需要管理員權限」，跟突變前一模一樣），紅的是後面的
+> `expect(refreshCalls).toHaveLength(0)`。收到 4 次 `/api/auth/refresh`
+> 是因為 TanStack Query 對這支 query 重試 3 次（見上面「`isLoading` 會先
+> 撐好幾秒」那個發現）——原始請求 + 3 次重試，一共 4 次 403，每一次在
+> `>= 401` 的條件下都會觸發一次換票。這正是計畫要這條測試守住的東西：
+> 畫面上的文字（第一個 `expect`）在突變前後完全一樣，只有請求計數能
+> 分辨兩者。改回 `=== 401` 之後，同一則測試與整個 `admin.spec.ts`
+> 都回到綠燈；`git diff app/api/deps.py frontend/src/api/client.ts`
+> 確認兩個突變都已經乾淨地還原，沒有殘留。
 
 ---
 
 ## 收尾
 
-- [ ] **把每一處「實測填回」都填上**
+- [x] **把每一處「實測填回」都填上**
 
 這份計畫刻意不預測哪條測試會紅。**每一個「實測填回：——」都要換成實際看到的
 測試名稱與訊息。** 留空的話，下一個人會以為那個突變沒有做。
 
-- [ ] **跟預期不同的都寫進計畫**
+Task 8 的兩個「實測填回」都已經換成實際的測試名稱、錯誤訊息與逐字的
+`Received length` 數字（見 Task 8 章節內文）。
+
+- [x] **跟預期不同的都寫進計畫**
 
 特別是「必須成立」的突變跑完全綠的那些 —— 那是發現，不是障礙。
 
-- [ ] **更新交接文件**
+Task 8 這裡兩個突變都紅了（不是「跑完全綠」那種發現），但過程中另外撞到
+三個沒預期到、需要另外處理的問題，都已經寫進 Task 8 章節：
+（一）SPA 換路由避開 bootstrap 換票汙染請求計數、
+（二）TanStack Query 預設重試讓「需要管理員權限」要等 7–8 秒才出現、
+（三）`page.reload()` 在離線持久化 + `staleTime` 下讀到舊快照。
 
-`docs/handover.md` §6（綠燈說謊）要補這一輪的新項目。計畫一已經有四個候選：
+- [x] **更新交接文件（Task 8 自己這部分）**
 
-1. 一個 mock 裡的守衛，它守的那條路徑在所有使用它的測試裡從來沒被走過
-2. 原始碼掃描守衛太鈍，分不出「程式碼在呼叫它」與「註解在解釋不要呼叫它」；
-   而剝掉註解之後，剝太多又會讓它什麼都沒看到而變綠
-3. 為了讓 lint 過而拿掉 `role="img"`，圖對螢幕閱讀器整個消失而所有測試照樣綠
-4. 一條測試的 mock 日期剛好等於執行日，於是它在那一天鑑別力為零
+`docs/handover.md` §6（綠燈說謊）已經補上這一輪的兩個新項目（第 17、18 種：
+`page.reload()` 讀到離線持久化的舊快照、兩種行為的畫面結果完全一樣只有
+數請求分得出來），標題數字也從「十六種」改成「十八種」。§7 也補了
+`ruff format` 沒有被 CI 強制那一條。
 
-§7 要補：`ruff format` 沒有被 CI 強制（只跑 `ruff check`），所以不要在不相干的
-改動裡跑 format。
+**計畫一的四個候選（一個 mock 裡從沒被走過的守衛、原始碼掃描守衛的鈍感、
+拿掉 `role="img"`、mock 日期等於執行日）還沒有補進 `docs/handover.md`**——
+那是計畫一自己的產出，不在 Task 8 的查證範圍內，這裡沒有杜撰內容硬補，
+留給讀過計畫一完成報告的人補上。
 
 - [ ] **開 PR**
+
+不在這次執行範圍內——沒有被要求開 PR，只要求 commit 到目前分支
+（`feat/p3b-foods-and-admin`）。
