@@ -862,7 +862,7 @@ cd F:/wallet/frontend && npm run lint && npm run typecheck
 > 突變下也一起紅了（`expected 'b' to be 'a'`）——預期之內，两條測試守的
 > 是同一件事的不同切面。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**（`fd77508`）
 
 ---
 
