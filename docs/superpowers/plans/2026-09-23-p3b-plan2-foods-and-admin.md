@@ -1351,7 +1351,7 @@ This could be because the text is broken up by multiple elements.
 > 全線通過，沒有觀察到「拿掉實作」那個自然狀態下的紅燈。補這個洞的是
 > Step 2–6 的兩個突變：兩條都親眼見過紅，而且紅的原因跟預期一致。
 
-- [x] **Step 2–6**：實作、驗證、突變、commit
+- [x] **Step 2–6**：實作、驗證、突變、commit（`38be072`）
 
 **設計決定（計畫沒指定的部分）：**
 
