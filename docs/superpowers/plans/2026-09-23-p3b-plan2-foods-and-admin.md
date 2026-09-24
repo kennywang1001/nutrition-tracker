@@ -1697,7 +1697,56 @@ expect(refreshCalls).toHaveLength(0);
 > **不要假設選項 3 存在。** 開工前的查證只確認了 `POST /api/foods` 一律建
 > 私人食物。
 
-- [ ] **Step 1: 先查證全域食物怎麼建，把答案寫進這一節**
+- [x] **Step 1: 先查證全域食物怎麼建** —— 已查證，答案在下面
+
+### 結論：`POST /api/foods` 加 `is_global`，照抄同一個檔案裡份量的作法
+
+**不是新發明，是補上一個既有模式的缺口。** `create_portion`
+（`app/api/routes/foods.py`）已經有完整的全域建立流程：
+
+```python
+    if payload.is_global and user.role is not UserRole.ADMIN:
+        # 這是角色不符，不是擁有權不符 —— 所以是 403 而不是 404。
+        # 資源存在、使用者也看得到，只是不能做這個動作。
+        raise ForbiddenError("FORBIDDEN", "只有管理員能建立全域份量")
+
+    portion = FoodPortion(
+        food_id=food.id,
+        owner_id=None if payload.is_global else user.id,
+        ...
+    )
+```
+
+而 `PortionCreateRequest` 有 `is_global: bool = False`（註解：「只有管理員能
+建立全域份量」）。
+
+**食物缺的就是這一段。** 所以：
+
+1. `FoodCreateRequest` 加 `is_global: bool = False`，註解照 `PortionCreateRequest`
+   的語氣寫
+2. `create_food` 加同一段管理員檢查，訊息改成「只有管理員能建立全域食物」
+3. `owner_id` 改成 `None if payload.is_global else user.id`
+4. 後端測試：管理員建得出全域食物、一般使用者拿到 403、預設仍是私人食物
+
+**這個 task 不做對應的 UI。** `/foods/new`（Task 4）維持只建私人食物 ——
+全域食物庫的建立介面是另一件事，而 P3-B 的範圍已經夠大了。這樣做仍然
+補上了那個部署缺口（管理員可以用 API 建共用食物庫），而不是只開一個
+測試用的後門。
+
+### 兩個查證過、不要假設的細節
+
+**（一）唯一約束對全域食物有效。** `Food.__table_args__` 的
+`uq_foods_owner_id_name_brand` 帶 `postgresql_nulls_not_distinct=True` ——
+Postgres 的預設是 NULLS DISTINCT（兩個 NULL 互不相等，於是同名全域食物
+不會撞約束），**這裡明確反轉了**。所以 `409 FOOD_EXISTS` 對全域食物一樣
+會發生，E2E 的食物名要帶 `Date.now()`。
+
+**（二）為什麼 E2E 要自己建全域食物，而不是靠種子。** `daily-loop.spec.ts`
+已經立下這個前例（自己用 API 建食物、記一筆歷史餐點）。靠種子的話，
+E2E 依賴外部狀態 —— 而 Task 1 剛剛才修掉「本機與 CI 的帳號角色不一致」
+那個完全相同形狀的問題。
+
+- [ ] **Step 1b: 實作 `is_global`（後端）**
 - [ ] **Step 2–5**：寫四條 E2E、跑、突變驗證、commit
 
 > **必須成立：** 把 `app/api/deps.py` 的 `require_admin` 改成不檢查角色，
