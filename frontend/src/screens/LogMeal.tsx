@@ -1,9 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { apiFetch } from "../api/client";
+import { ApiError } from "../api/errors";
+import { useFoodSearch } from "../api/foods";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
+import { FoodResultList } from "../components/FoodResultList";
 import { formatMacro } from "../lib/decimal";
+import { useDebounced } from "../lib/use-debounced";
 
 type Food = components["schemas"]["FoodResponse"];
 type Portion = components["schemas"]["PortionResponse"];
@@ -19,14 +23,34 @@ const MEAL_TYPES: Array<{ value: MealType; label: string }> = [
 	{ value: "snack", label: "點心" },
 ];
 
-/** 一個食物項目的營養素預覽。
+/** `FoodResponse.nutrition` 為 `null` 時要顯示的說明。跟 `FoodDetail.tsx`
+ *  「目前生效的營養素」區塊的空狀態用同一句文字——不重寫一份是為了不讓
+ *  兩處的說法飄走。 */
+const NO_REVISION_MESSAGE = "這個食物還沒有生效的營養素資料";
+
+/** 一個食物項目的營養素預覽，同時決定這個食物能不能被選。
  *
  *  **`nutrition` 可以是 `null`**（`FoodResponse.nutrition` 的註解：「沒有生效
  *  版本時為 None——全域食物的初版被駁回就會是這個狀態」）。這不是理論上的
- *  邊界情況，是後端明寫的合法狀態，所以這個食物仍然要能被選、只是不顯示
- *  預覽——不能 `nutrition!.kcal` 直接取值，那種食物會讓畫面直接炸掉。 */
+ *  邊界情況，是後端明寫的合法狀態。
+ *
+ *  **這種食物不能被選。** 舊版這裡的註解寫「仍然要能被選、只是不顯示
+ *  預覽」——那句話是錯的，而且是實測確認過的錯：`search_foods` /
+ *  `list_frequent_foods` / `list_recent_foods` 三個列表端點都用
+ *  `outerjoin`，沒有一個把它過濾掉，所以這種食物「查得到」；但
+ *  `POST /api/meals` 對它一律回 `409 FOOD_HAS_NO_REVISION`
+ *  （`app/api/routes/meals.py`），所以「記不了」。照舊版寫法做的話，
+ *  使用者會選了食物、填好份量、按下「記錄」，然後看到 `onError` 的通用
+ *  訊息「記錄失敗，請再試一次」——而再試一次永遠不會成功。
+ *
+ *  所以按鈕（見 `selectFood` 的呼叫端）要 `disabled`，這裡旁邊要講清楚
+ *  原因。`409 FOOD_HAS_NO_REVISION` 仍然要具名處理（見 `saveMeal` 的
+ *  `onError`）——disabled 擋的是送出當下已知的狀態，搜尋到送出之間，
+ *  食物有可能剛好失去生效版本，具名 409 是後備，兩者都要。 */
 function NutritionPreview({ nutrition }: { nutrition: Food["nutrition"] }) {
-	if (nutrition === null) return null;
+	if (nutrition === null) {
+		return <span className="food-no-nutrition">{NO_REVISION_MESSAGE}</span>;
+	}
 	return <span>{formatMacro(nutrition.kcal)} kcal</span>;
 }
 
@@ -50,6 +74,7 @@ export function LogMeal({ onSaved }: Props) {
 	const [quantity, setQuantity] = useState("1");
 	const [mealType, setMealType] = useState<MealType>("snack");
 	const [error, setError] = useState<string | null>(null);
+	const [searchInput, setSearchInput] = useState("");
 
 	// P1 規格第 11 節：這兩個端點的索引就是為了這個畫面顧的——
 	// 「記一餐」是每天走最多次的路徑（規格 §7.1）。
@@ -61,6 +86,14 @@ export function LogMeal({ onSaved }: Props) {
 		queryKey: queryKeys.recentFoods,
 		queryFn: () => apiFetch<Food[]>("/api/foods/recent"),
 	});
+
+	// 規格 §5.4：跟食物庫共用同一支 useFoodSearch query hook，不共用元件——
+	// 兩邊選完之後的去向不一樣（這裡進份量輸入，食物庫進詳情頁）。
+	// 這裡不給 scope 選擇器：記一餐要的是「這個字能不能找到食物」，
+	// 不是像食物庫那樣要瀏覽「我建立的」跟「公開的」的差異。
+	const debouncedSearch = useDebounced(searchInput, 300);
+	const hasSearchQuery = debouncedSearch.trim() !== "";
+	const searchQuery = useFoodSearch(debouncedSearch, "all");
 
 	const portionsQuery = useQuery({
 		queryKey: queryKeys.portions(selectedFood?.id ?? 0),
@@ -127,14 +160,63 @@ export function LogMeal({ onSaved }: Props) {
 			setError(null);
 			onSaved();
 		},
-		onError: () => setError("記錄失敗，請再試一次"),
+		onError: (caught: unknown) => {
+			// disabled 按鈕擋的是送出當下已知的狀態；搜尋到送出之間，
+			// 食物有可能剛好失去生效版本（例如它的提案在這段時間被駁回），
+			// 所以這個 409 仍然要具名處理，不能只靠前端擋（規格 §5.5）。
+			if (
+				caught instanceof ApiError &&
+				caught.code === "FOOD_HAS_NO_REVISION"
+			) {
+				// 訊息直接用後端回的——跟 FoodDetail.tsx 處理
+				// REVISION_PENDING 同一個理由：前端重寫一份只會有兩份文字
+				// 互相飄走的風險。
+				setError(caught.message);
+				return;
+			}
+			setError("記錄失敗，請再試一次");
+		},
 	});
+
+	function selectFood(food: Food) {
+		setSelectedFood(food);
+		setPortionId(null);
+	}
 
 	const foods = dedupeById([frequentQuery.data ?? [], recentQuery.data ?? []]);
 
 	return (
 		<section>
 			<h1>記一餐</h1>
+
+			<div>
+				<label htmlFor="food-search-input">搜尋食物</label>
+				<input
+					id="food-search-input"
+					type="text"
+					value={searchInput}
+					onChange={(event) => setSearchInput(event.target.value)}
+				/>
+			</div>
+
+			{hasSearchQuery && (
+				<>
+					{searchQuery.isLoading && <p>搜尋中…</p>}
+					<FoodResultList
+						foods={searchQuery.data ?? []}
+						noNutritionMessage={NO_REVISION_MESSAGE}
+						renderAction={(food) => (
+							<button
+								type="button"
+								disabled={food.nutrition === null}
+								onClick={() => selectFood(food)}
+							>
+								{food.name}
+							</button>
+						)}
+					/>
+				</>
+			)}
 
 			{frequentQuery.isLoading && <p>載入中…</p>}
 
@@ -143,10 +225,8 @@ export function LogMeal({ onSaved }: Props) {
 					<li key={food.id}>
 						<button
 							type="button"
-							onClick={() => {
-								setSelectedFood(food);
-								setPortionId(null);
-							}}
+							disabled={food.nutrition === null}
+							onClick={() => selectFood(food)}
 						>
 							{food.name}
 						</button>

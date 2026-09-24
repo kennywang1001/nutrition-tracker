@@ -1307,8 +1307,15 @@ This could be because the text is broken up by multiple elements.
 **Files:**
 - Modify: `frontend/src/screens/LogMeal.tsx`
 - Modify: `frontend/tests/log-meal.test.tsx`
+- Modify: `frontend/src/components/FoodResultList.tsx`（**跟計畫不一致的地方**：
+  這份清單原本沒列這一個檔案。實作時發現 Task 3 的 `FoodResultList` 對
+  `nutrition === null` 的說明文字是寫死的「尚無營養素資料」，而記一餐這邊
+  要的文字不一樣（見下面「`FoodResultList` 的 disabled 差異怎麼表達」），
+  所以加了一個可選的 `noNutritionMessage` prop——純新增、有預設值，
+  `FoodLibrary.tsx` 的呼叫端不用改，`tests/food-library.test.tsx` 原封不動
+  全綠。）
 
-- [ ] **Step 1: 寫失敗的測試**
+- [x] **Step 1: 寫失敗的測試**
 
 要測的行為：
 
@@ -1337,16 +1344,105 @@ This could be because the text is broken up by multiple elements.
 >
 > 那段舊註解也要改掉 —— 它現在說的是一件會害人的事。
 
-- [ ] **Step 2–6**：實作、驗證、突變、commit
+> **跟計畫不一致的地方（流程，不是內容，跟 Task 3/4/5 Step 2 同一種）：**
+> `LogMeal.tsx` 的改動與 `tests/log-meal.test.tsx` 新增的四則測試是同一段
+> 時間內一起寫出來的，不是嚴格「先寫測試、跑一次看紅、再寫實作」——第一次
+> 跑 `tests/log-meal.test.tsx` 時 16 則（8 條 × 2，開工前必讀第 4 點）就已經
+> 全線通過，沒有觀察到「拿掉實作」那個自然狀態下的紅燈。補這個洞的是
+> Step 2–6 的兩個突變：兩條都親眼見過紅，而且紅的原因跟預期一致。
+
+- [x] **Step 2–6**：實作、驗證、突變、commit
+
+**設計決定（計畫沒指定的部分）：**
+
+- **搜尋框不帶 scope 選擇器**，`useFoodSearch(debouncedSearch, "all")` 的
+  `scope` 寫死 `"all"`。規格 §5.4 只寫「走 `useFoodSearch(q, scope)`」，
+  沒有要求記一餐要有 scope 三選一——記一餐要的是「這個字能不能找到食物」，
+  不是像食物庫那樣要瀏覽「我建立的」跟「公開的」的差異。
+- **`FoodResultList` 加一個可選的 `noNutritionMessage` prop**（預設「尚無
+  營養素資料」，即 Task 3 食物庫原本的文字）。記一餐傳入
+  `NO_REVISION_MESSAGE`（「這個食物還沒有生效的營養素資料」，跟
+  `FoodDetail.tsx` 用同一句）。理由見下面「`FoodResultList` 的 disabled
+  差異」那一段。
+- **常吃/最近吃清單也加了 `disabled`**，不是只有搜尋結果。常吃/最近吃跟
+  搜尋走的是同一組後端端點的同一種行為（`list_frequent_foods` /
+  `list_recent_foods` 跟 `search_foods` 一樣用 `outerjoin`，都不過濾
+  `nutrition === null` 的食物），所以這個問題不是只有搜尋結果會遇到，
+  `tests/log-meal.test.tsx` 既有的 `FREQUENT_FOODS[1]`（id 2，
+  `nutrition: null`）就是常吃清單裡的這種食物。只擋搜尋結果、不擋常吃/
+  最近吃，會讓同一個 bug 從另一個入口繼續發生。
+- **`selectFood` 一個函式，兩處呼叫**（常吃/最近吃的按鈕、搜尋結果
+  `renderAction` 裡的按鈕都呼叫它）——這是「從搜尋結果選一個食物，行為跟
+  從常吃選一個完全一樣」的具體實作方式：不是兩份邏輯湊巧一樣，是同一份
+  邏輯被呼叫兩次。
 
 > **必須成立：** 把第 3 條的 `disabled` 拿掉，**Step 1 第 3 條必須紅**。
 >
-> **實測填回：** ——
+> **實測填回：**
+>
+> 把常吃/最近吃清單那顆按鈕的 `disabled={food.nutrition === null}` 整個
+> 屬性拿掉，確實紅：
+>
+> ```
+> FAIL tests/log-meal.test.tsx > 記一餐 > nutrition === null 的食物不能被選——按鈕 disabled，並顯示原因
+> Error: expect(element).toBeDisabled()
+>
+> Received element is not disabled:
+>   <button
+>   type="button"
+> />
+>  ❯ tests/log-meal.test.tsx:186:18
+>    expect(button).toBeDisabled();
+> ```
+>
+> 紅的原因跟預期一致：按鈕確實還能點。改回來之後同一則測試回到綠燈
+> （16 則全綠，8 條 × 2，開工前必讀第 4 點）。
 
 > **必須成立：** 把 `409 FOOD_HAS_NO_REVISION` 的具名處理拿掉，
 > **Step 1 第 4 條必須紅**。
 >
-> **實測填回：** ——
+> **實測填回：**
+>
+> 把 `saveMeal` 的 `onError` 從具名分支改回舊版的
+> `onError: () => setError("記錄失敗，請再試一次")`，確實紅：
+>
+> ```
+> FAIL tests/log-meal.test.tsx > 記一餐 > 409 FOOD_HAS_NO_REVISION 顯示具名訊息，不是通用的「記錄失敗，請再試一次」
+> TestingLibraryElementError: Unable to find an element with the text: 這個食物目前沒有生效的版本.
+>  ❯ tests/log-meal.test.tsx:218:17
+>    await screen.findByText("這個食物目前沒有生效的版本"),
+> ```
+>
+> 畫面改顯示通用的「記錄失敗，請再試一次」（render 輸出裡看得到那段文字），
+> 紅的原因跟預期一致：具名處理被拿掉、退回通用錯誤。
+>
+> 附帶：這個突變同時讓 `ApiError` 這個 import 變成沒用到，vitest 的
+> typecheck 那一份額外報了一個 `Unhandled Source Error`
+> （`'ApiError' is declared but its value is never read.`）——這是突變本身
+> 的副作用（暫時拿掉唯一的使用處），不是這條測試要驗的東西，改回來之後
+> 一併消失。改回來後同一則測試回到綠燈（16 則全綠）。
+
+### `FoodResultList` 的 `disabled` 差異怎麼表達
+
+`FoodResultList`（Task 3）原本對 `nutrition === null` 的處理是「顯示 +
+標示」：`<span className="food-no-nutrition">尚無營養素資料</span>`，字面值
+寫死在元件裡。食物庫那邊這樣做是刻意的——那種食物照常點得進詳情頁（規格
+§5.5），標示只是資訊性的。
+
+記一餐這邊，`renderAction` 回傳的按鈕本身已經自己判斷
+`disabled={food.nutrition === null}`（`disabled` 由呼叫端決定，`renderAction`
+本來就是 render prop，呼叫端本來就有 `food` 可以判斷）。但**旁邊的說明文字**
+是 `FoodResultList` 自己畫的，呼叫端管不到——如果照舊沿用「尚無營養素資料」，
+文字沒有講清楚「所以你選不了」，跟食物庫那邊資訊性的標示語氣混在一起也不對。
+
+所以加了一個可選的 `noNutritionMessage` prop（預設「尚無營養素資料」，讓
+`FoodLibrary.tsx` 不用改），記一餐傳入「這個食物還沒有生效的營養素資料」。
+選這個做法而不是讓呼叫端在 `renderAction` 裡自己畫一段說明文字的理由：
+`disabled` 是「這一筆」的事，`renderAction` 天然管得到；但「說明文字要不要
+顯示、跟哪個食物的 `nutrition === null` 綁在一起」是 `FoodResultList` 已經
+在算的邏輯（它已經在判斷 `food.nutrition === null` 來決定要不要畫那個
+`<span>`），再讓呼叫端重算一次同一個條件只是把同一個判斷式複製一份，
+兩處未來有機會各自飄走。
 
 ---
 
