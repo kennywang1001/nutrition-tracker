@@ -1053,7 +1053,7 @@ export function FoodResultList({ foods, renderAction }: Props) {
 - Create: `frontend/tests/new-food.test.tsx`
 - Modify: `frontend/src/App.tsx`
 
-- [ ] **Step 1: 寫失敗的測試**
+- [x] **Step 1: 寫失敗的測試**
 
 要測的行為：
 
@@ -1071,16 +1071,76 @@ export function FoodResultList({ foods, renderAction }: Props) {
 > 於是「同名同品牌」的唯一約束對 `""` 與 `null` 是兩個不同的值 ——
 > 使用者會建出兩筆看起來一模一樣的食物。
 
-- [ ] **Step 2–6**：實作、路由、驗證、突變、commit
+> **跟計畫不一致的地方（流程，不是內容，跟 Task 3 Step 2 同一種）：**
+> `NewFood.tsx` 與 `tests/new-food.test.tsx` 是同一段時間內一起寫出來的，
+> 不是嚴格「先寫測試、跑一次看紅、再寫實作」——第一次跑
+> `tests/new-food.test.tsx` 時 10 則（5 條 × 2，開工前必讀第 4 點）就已經
+> 全線通過，沒有觀察到「拿掉實作」那個自然狀態下的紅燈。補這個洞的是
+> Step 2–6 的兩個突變：兩條都親眼見過紅，而且紅的原因跟預期一致——那兩個
+> 紅燈本身就是「這份測試有鑑別力」的證據，取得證據的順序跟計畫寫的不同。
+
+- [x] **Step 2–6**：實作、路由、驗證、突變、commit
+
+**跟計畫不一致的地方（設計決定，計畫沒指定）：**
+
+- **第 5 條的測試方式：** 用 `MemoryRouter` 掛一個真的 `<Route path="/foods/new">`
+  與一個假的 `<Route path="/foods/:id">`（渲染 `food-detail:{id}`），送出成功後
+  斷言畫面出現 `food-detail:99`。**不是 mock `useNavigate` 斷言「有被呼叫」**——
+  mock 只能驗證「呼叫過某個函式」，驗不到「react-router 真的把 URL 解析成
+  `/foods/99` 並比對到 `:id` 路由」；用真的 `MemoryRouter` + 真的 `<Routes>`，
+  斷言的是實際導航結果，不是實作細節。
+- **`NewFood` 自己呼叫 `useNavigate`，不像 `LogMeal` 用 `onSaved` callback
+  交給 `App.tsx` 的 route wrapper：** `LogMeal` 導去的是一個固定路徑
+  （`"/"`），`onSaved` 因此可以是一個不知道「導去哪裡」的通用 callback。
+  這裡導去的路徑（`/foods/${created.id}`）需要 mutation 回應本體的 `id`，
+  那是這個畫面自己才知道的事，硬拆成 callback 只是多一層轉發，
+  沒有解耦到什麼。`App.tsx` 因此不需要一個 `NewFoodRoute` wrapper，
+  直接 `<Route path="/foods/new" element={<NewFood />} />`（跟 `FoodLibrary`
+  一樣）。
+- **422 欄位錯誤的測試情境：** 前端只對齊 `kcal`/`protein_g`/`fat_g`/`carb_g`
+  的上下限（0–10000 / 0–1000），刻意不重做 `decimal_places=2` 的檢查——
+  測試送 `kcal = "12.345"`（在範圍內，前端會放行）觸發後端的 422，
+  這樣「前端驗證是為了少一個往返，不是為了取代它」這句話才有一個測得到
+  的具體案例，不然前端擋掉的範圍如果跟後端的驗證範圍完全重疊，這條測試
+  永遠打不到真正的後端 422。
 
 > **必須成立：** 把 `409 FOOD_EXISTS` 的具名處理拿掉（改成一律顯示
 > 「建立失敗」），**Step 1 第 3 條必須紅**。
 >
-> **實測填回：** ——
+> **實測填回：**
+>
+> ```
+> FAIL tests/new-food.test.tsx > 新增食物 /foods/new > 409 FOOD_EXISTS 顯示「你已經建過同名的食物了」，不是通用錯誤
+> TestingLibraryElementError: Unable to find an element with the text: 你已經建過同名的食物了.
+>  ❯ tests/new-food.test.tsx:193:17  expect(await screen.findByText("你已經建過同名的食物了"))...
+> ```
+>
+> 拿掉 `caught.code === "FOOD_EXISTS"` 那個分支之後，畫面改顯示通用的
+> 「建立失敗，請再試一次」（從渲染輸出裡看得到那段文字），跟預期一致：
+> 紅燈的原因確實是「具名處理被拿掉、退回通用錯誤」，不是別的意外原因。
 
 > **必須成立：** 把空 `brand` 從 `null` 改成 `""`，**Step 1 第 2 條必須紅**。
 >
-> **實測填回：** ——
+> **實測填回：**
+>
+> ```
+> FAIL tests/new-food.test.tsx > 新增食物 /foods/new > brand 留空時送的是 null，不是空字串
+> AssertionError: expected '' to be null
+>
+> - Expected:
+> null
+>
+> + Received:
+> ""
+>
+>  ❯ tests/new-food.test.tsx:165:22  expect(body.brand).toBeNull()
+> ```
+>
+> 把 `brand: brand.trim() === "" ? null : brand.trim()` 改成
+> `brand: brand.trim()` 之後，送出的 body 裡 `brand` 確實變成 `""`，
+> 紅燈的原因跟預期一致。兩個突變都親眼看過紅、改回來之後親眼看過綠
+> （`npx vitest run tests/new-food.test.tsx` → `Tests 10 passed (10)`，
+> 5 條測試 × 2，開工前必讀第 4 點）。
 
 **前端的輸入驗證要對齊 `NutritionInput` 的上下限**（`kcal` 0–10000，三個
 巨量營養素 0–1000，都是 `max_digits=8, decimal_places=2`），**但後端的 422

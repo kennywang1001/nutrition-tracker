@@ -18,6 +18,7 @@ import { TabBar } from "./components/TabBar";
 import { FoodLibrary } from "./screens/FoodLibrary";
 import { Login } from "./screens/Login";
 import { LogMeal } from "./screens/LogMeal";
+import { NewFood } from "./screens/NewFood";
 import { Today } from "./screens/Today";
 import { Trend } from "./screens/Trend";
 
@@ -85,6 +86,9 @@ export function App() {
 							<Route path="/log" element={<LogMealRoute />} />
 							<Route path="/trend" element={<Trend />} />
 							<Route path="/foods" element={<FoodLibrary />} />
+							{/* `/foods/:id` 是 Task 5 才存在——NewFood 送出成功後會導到
+								這個路徑，現在沒有比對到的路由會是空白畫面，那是刻意的。 */}
+							<Route path="/foods/new" element={<NewFood />} />
 						</Routes>
 					</main>
 					<TabBar />
