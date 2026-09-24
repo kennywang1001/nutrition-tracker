@@ -1632,7 +1632,7 @@ export function useMe() {
 > 三個突變都親眼看過紅、改回來之後親眼看過綠（`npx vitest run
 > tests/admin-revisions.test.tsx` → `Tests 12 passed (12)`，6 條 × 2）。
 
-- [x] **Step 6: Commit**
+- [x] **Step 6: Commit**（`14b27a4`）
 
 ---
 
