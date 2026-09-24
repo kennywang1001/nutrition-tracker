@@ -1042,7 +1042,7 @@ export function FoodResultList({ foods, renderAction }: Props) {
 > 真正的 TypeError，「typecheck」那一份撞到型別錯誤，兩份**各自**紅，
 > 對應總結裡 `Test Files 1 failed | 1 passed (2)`（2 = 這個檔案的兩份）。
 
-- [x] **Step 7: Commit**（`__PENDING__`）
+- [x] **Step 7: Commit**（`13a5574`）
 
 ---
 
