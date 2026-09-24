@@ -95,17 +95,42 @@ async def test_create_regular_user_refuses_to_demote_an_admin(db_session):
 
     提升是可逆的（再跑一次 `create-admin`）；在「你不知道它發生了」的情況下
     降級不是。所以這裡拒絕，而且要留著原本的密碼不動。
+
+    ## 為什麼是 `select()` 而不是 `refresh()`
+
+    這一條要守的不只是「有拋例外」，還有**拋之前一個欄位都沒被碰過**。
+    `_upsert_account` 把那個 `raise` 放在三行賦值之前，理由是：沒 commit
+    不代表沒寫出去 —— ORM 物件一旦髒了，同一個 session 後續任何一次
+    autoflush 都會把它送進資料庫。
+
+    **而 `db_session.refresh()` 驗不到那件事。** 實測過（P3-B 計畫二 Task 1）：
+
+    ```
+    弄髒物件 → refresh() → 密碼有變 = False，名字回到資料庫裡的值
+    弄髒物件 → select()  → 密碼有變 = True，名字是被改掉的那個
+    ```
+
+    `refresh()` 會先把物件標成過期（同時移出 dirty 集合）再發 SELECT，
+    髒值從頭到尾沒有機會被寫出去。所以用 `refresh()` 寫的版本，即使把
+    `raise` 延後到賦值之後，這條測試**依然全綠** —— 那個安全性質等於沒有
+    守衛。
+
+    `select()` 會觸發 autoflush，髒值會真的落到資料庫，這條才抓得到。
     """
     admin = await create_user(db_session, email="boss@example.com", role=UserRole.ADMIN)
+    await db_session.commit()
     original_hash = admin.password_hash
 
     with pytest.raises(ValueError, match="已經是管理員"):
         await create_regular_user(db_session, "boss@example.com", "a-new-password", "老闆")
 
-    await db_session.refresh(admin)
-    assert admin.role is UserRole.ADMIN
+    # 刻意用 select（會 autoflush）而不是 refresh（不會）—— 見 docstring。
+    stored = await db_session.scalar(select(User).where(User.email == "boss@example.com"))
+    assert stored is not None
+    assert stored.role is UserRole.ADMIN
     # 拒絕的意思是「什麼都沒做」，不是「角色沒改但密碼改了」
-    assert admin.password_hash == original_hash
+    assert stored.password_hash == original_hash
+    assert stored.display_name != "老闆"
 
 
 async def test_create_regular_user_rejects_a_short_password(db_session):

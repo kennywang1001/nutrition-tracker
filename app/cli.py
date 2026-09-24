@@ -54,8 +54,15 @@ async def _upsert_account(
 
     if user is not None and on_existing_admin is not None and user.role is UserRole.ADMIN:
         # 在 **任何** 欄位被改之前就退出。拋在賦值之後的話，雖然沒 commit，
-        # 但 db_session 裡那個物件已經髒了，同一個 session 後續的 flush
-        # 會把它寫出去 —— 測試裡的 refresh 會讀回改過的值。
+        # 但這個 session 裡的物件已經髒了 —— 之後任何一次 autoflush
+        # （例如同一個 session 再發一條 SELECT）都會把它送進資料庫。
+        #
+        # 實測過（P3-B 計畫二 Task 1）：弄髒物件之後
+        #   session.refresh(obj)          → 髒值被丟掉，讀回資料庫裡的值
+        #   session.scalar(select(...))   → autoflush，髒值真的寫進去了
+        #
+        # 所以 `tests/test_cli.py` 那條測試刻意用 select 而不是 refresh ——
+        # 用 refresh 的話，把這個 raise 延後到賦值之後，測試依然全綠。
         raise ValueError(on_existing_admin)
 
     if user is None:

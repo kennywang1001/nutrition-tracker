@@ -443,8 +443,46 @@ cd F:/wallet && ./.venv/Scripts/python.exe -m pytest tests/test_cli.py -q 2>&1 |
 > 這一條在驗註解說的那件事：沒 commit 不代表沒改到 —— ORM 物件已經髒了，
 > 同一個 session 後續的 flush 會把它寫出去。
 >
-> **實測填回：** —— 執行時填進來。**如果它全綠，那是一個發現**（代表那段
-> 註解的理由不成立，或 `db_session` fixture 的行為跟預期不同），停下來報告。
+> ### 實測結果：計畫給的測試驗不到這件事，已修
+>
+> **這個突變原本是全綠的**，而那不是因為註解的理由不成立 —— 是因為測試用
+> 錯了讀取方式。
+>
+> 計畫 Step 1 給的測試用 `await db_session.refresh(admin)` 讀回狀態。
+> 實測（把物件弄髒之後分別用兩種方式讀）：
+>
+> ```
+> refresh() → 密碼有變 = False，名字回到資料庫裡的值     ← 髒值被丟掉
+> select()  → 密碼有變 = True，名字是被改掉的那個        ← autoflush 寫進去了
+> ```
+>
+> `refresh()` 會先把物件標成過期（同時移出 dirty 集合）再發 SELECT，
+> **髒值從頭到尾沒有機會被寫出去**。所以用 `refresh()` 寫的測試，
+> 即使把 `raise` 延後到賦值之後，也**永遠是綠的** —— 那個安全性質等於沒有
+> 守衛。
+>
+> 已改成 `db_session.scalar(select(User).where(...))`（會觸發 autoflush）。
+> 改完之後同一個突變確實紅：
+>
+> ```
+> assert stored.role is UserRole.ADMIN
+> E  AssertionError: assert <UserRole.USER: 'user'> is <UserRole.ADMIN: 'admin'>
+> FAILED tests/test_cli.py::test_create_regular_user_refuses_to_demote_an_admin
+> ```
+>
+> `app/cli.py` 那段註解最後一句原本寫「測試裡的 refresh 會讀回改過的值」——
+> 那句話是假的，也一併改掉了。
+>
+> ### 另外：字面照做那個突變會以錯誤的理由變紅
+>
+> 把整個 `if …: raise …` 區塊原封不動搬到賦值之後，條件裡的
+> `user.role is UserRole.ADMIN` 會讀到**已經被 `user.role = role` 覆寫過**
+> 的值，於是條件恆不成立、`raise` 根本不會觸發 —— 失敗訊息是
+> `DID NOT RAISE ValueError`，跟突變（一）一模一樣。
+>
+> 要驗到「延後拋出」這件事，突變必須寫成先算好 `should_reject`、賦值之後
+> 再拋。**這一節記下來是因為下一個人照字面做會得到一個看起來對、理由卻
+> 錯的紅燈。**
 
 - [ ] **Step 6: CI 多種一個非管理員帳號**
 
