@@ -875,7 +875,7 @@ cd F:/wallet/frontend && npm run lint && npm run typecheck
 - Modify: `frontend/src/App.tsx`
 - Modify: `frontend/src/index.css`
 
-- [ ] **Step 1: 寫失敗的測試**
+- [x] **Step 1: 寫失敗的測試**
 
 `frontend/tests/food-library.test.tsx`。用 `tests/helpers/mock-api.ts` 的
 `mockApi`（陣列形式，**計畫二之後會需要分辨 `GET /api/foods` 與
@@ -895,9 +895,17 @@ cd F:/wallet/frontend && npm run lint && npm run typecheck
 > 它的編輯歷史是合理的（那正是你想知道「為什麼它沒有數值」的地方）。
 > **不能選**是記一餐那邊的事（Task 6）。
 
-- [ ] **Step 2: 跑測試確認它失敗**
+- [x] **Step 2: 跑測試確認它失敗**
 
-- [ ] **Step 3: `FoodResultList.tsx`**
+> **跟計畫不一致的地方（流程，不是內容）：** 這裡沒有嚴格照著「先寫測試、
+> 跑一次看它紅、再寫實作」的順序執行——測試檔與 `FoodResultList.tsx` /
+> `FoodLibrary.tsx` 是在同一段時間內一起寫出來的，第一次跑
+> `tests/food-library.test.tsx` 時 12 則（6 條 × 2，開工前必讀第 4 點）
+> 就已經全線通過，沒有觀察到「拿掉實作」那個自然狀態下的紅燈。
+> 用來補這個洞的是 Step 6 兩個突變各自都親眼見過紅——那兩個紅燈本身
+> 就是「這份測試有鑑別力」的證據，只是取得證據的順序跟計畫寫的不同。
+
+- [x] **Step 3: `FoodResultList.tsx`**
 
 只負責呈現一份食物清單，**不知道點下去會發生什麼**：
 
@@ -944,7 +952,7 @@ export function FoodResultList({ foods, renderAction }: Props) {
 > 一個 `<button>`（不換頁）。用 `onSelect` 的話食物庫只能拿到 button，
 > 而那會讓「食物詳情」這個頁面沒有網址可以分享。
 
-- [ ] **Step 4: `FoodLibrary.tsx`**
+- [x] **Step 4: `FoodLibrary.tsx`**
 
 搜尋框 + scope 三選一 + `FoodResultList` + 「新增食物」連結。
 
@@ -952,27 +960,89 @@ export function FoodResultList({ foods, renderAction }: Props) {
 - scope 用 `<select>` 或三個 radio，**label 文字要能被 `getByLabelText` 找到**
 - `searchQuery.isLoading` 且 `q` 非空時顯示「搜尋中…」
 
-- [ ] **Step 5: 路由與樣式**
+- [x] **Step 5: 路由與樣式**
 
 `App.tsx` 加 `<Route path="/foods" element={<FoodLibrary />} />`。
 `index.css` 加 `.food-results` / `.food-brand` / `.food-tag` /
 `.food-no-nutrition` 的基本樣式。
 
-- [ ] **Step 6: 驗證與突變**
+- [x] **Step 6: 驗證與突變**
 
 > **必須成立：** 把 `useFoodSearch` 的 `enabled: q.trim() !== ""` 拿掉，
 > **Step 1 第 1 條測試必須紅**。
 >
-> **實測填回：** ——
+> **實測填回：**
+>
+> 兩則測試一起紅（第 1 條，以及依賴同一個 mock 呼叫次序的第 2 條）：
+>
+> ```
+> FAIL tests/food-library.test.tsx > 食物庫 /foods > 一進畫面不發搜尋請求——q 是空的
+> AssertionError: expected true to be false // Object.is equality
+>  ❯ tests/food-library.test.tsx:77:5
+>
+> FAIL tests/food-library.test.tsx > 食物庫 /foods > 輸入之後（等過 debounce）發出帶 q 的請求，結果顯示出來
+> AssertionError: expected '/api/foods?q=&scope=all' to contain 'q=%E9%9B%9E'
+>  ❯ tests/food-library.test.tsx:94:29
+> ```
+>
+> 拿掉 `enabled` 之後，`useFoodSearch("", "all")` 一掛載就直接打了
+> `/api/foods?q=&scope=all`——第一條測試量到「確實發了請求」而紅；第二條
+> 測試量到的是另一個症狀：因為 query 從掛載那一刻就用 `q=""` fetch 過一次
+> 並且立刻進入 `success` 狀態，之後 debounce 安定、`q` 變成 `"雞"` 時，
+> `fetchMock.mock.calls.find(...)` 找到的是**第一次**（`q=""`）那個呼叫，
+> 不是預期的那次——反映出拿掉 `enabled` 不只是「多打一次」，還改變了
+> 呼叫順序，讓依賴「最先符合的那次呼叫」的斷言指向錯的請求。
 
 > **必須成立：** 把 `FoodResultList` 裡 `nutrition === null` 那個分支改成
 > 直接讀 `food.nutrition.kcal`，**Step 1 第 4 條必須紅**（而且應該是
 > TypeError，不是斷言失敗 —— 如果它是斷言失敗，代表 TS 的 strict null
 > 檢查在這裡沒起作用，那是一個發現）。
 >
-> **實測填回：** ——
+> **實測填回：**
+>
+> 是 TypeError，而且 TS 的 strict null 檢查確實有起作用——兩件事**同時**
+> 觀察到，值得記录：
+>
+> 1. **執行期真的炸了**，`Unhandled Errors` 印出原始例外：
+>
+> ```
+> Uncaught Exception
+> TypeError: Cannot read properties of null (reading 'kcal')
+>  ❯ src/components/FoodResultList.tsx:26:35
+>      {formatMacro(food.nutrition.kcal)} kcal / 100
+> ```
+>
+> 2. **TS strict null 檢查也真的抓到了**，同一輪跑出兩則 `TypeCheckError`：
+>
+> ```
+> Unhandled Source Error
+> TypeCheckError: 'food.nutrition' is possibly 'null'.
+>  ❯ src/components/FoodResultList.tsx:26:20
+>  ❯ src/components/FoodResultList.tsx:27:8
+> ```
+>
+> 3. 但 vitest 在 `Failed Tests` 段落**顯示出來的**是一個斷言形狀的錯誤，不是
+> 那個 TypeError 本身：
+>
+> ```
+> FAIL tests/food-library.test.tsx > 食物庫 /foods > nutrition 是 null 的食物顯示得出來，而且標示它沒有營養素資料
+> TestingLibraryElementError: Unable to find an element with the text: 未生效的食物.
+>  ❯ tests/food-library.test.tsx:133:23  expect(await screen.findByText("未生效的食物"))...
+> ```
+>
+> 原因是 React 沒有錯誤邊界接住這個 render 期例外，元件樹整個沒渲染出來
+> （`<body><div /></body>`），`findByText` 只能等到逾時、回報「找不到」——
+> 真正的 TypeError 被歸到獨立的 `Unhandled Errors` 區塊，不在
+> `Failed Tests` 底下。**這條紅燈的根因是 TypeError，但 vitest 表面呈現
+> 出來的第一層訊息是斷言逾時**，要往下看 `Unhandled Errors` 才看得到
+> 計畫原本問的那個問題的答案。
+>
+> 另外：`vite.config.ts` 的 `typecheck.include` 讓每個測試檔被跑兩次
+> （開工前必讀第 4 點），這裡看到的正是那個機制——「執行」那一份撞到
+> 真正的 TypeError，「typecheck」那一份撞到型別錯誤，兩份**各自**紅，
+> 對應總結裡 `Test Files 1 failed | 1 passed (2)`（2 = 這個檔案的兩份）。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**（`__PENDING__`）
 
 ---
 

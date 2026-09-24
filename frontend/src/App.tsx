@@ -15,6 +15,7 @@ import { queryClient } from "./api/queries";
 import { logout } from "./auth/session";
 import { getRefreshToken } from "./auth/store";
 import { TabBar } from "./components/TabBar";
+import { FoodLibrary } from "./screens/FoodLibrary";
 import { Login } from "./screens/Login";
 import { LogMeal } from "./screens/LogMeal";
 import { Today } from "./screens/Today";
@@ -83,6 +84,7 @@ export function App() {
 							<Route path="/" element={<Today />} />
 							<Route path="/log" element={<LogMealRoute />} />
 							<Route path="/trend" element={<Trend />} />
+							<Route path="/foods" element={<FoodLibrary />} />
 						</Routes>
 					</main>
 					<TabBar />
