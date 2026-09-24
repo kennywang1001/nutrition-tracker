@@ -1079,7 +1079,7 @@ export function FoodResultList({ foods, renderAction }: Props) {
 > Step 2–6 的兩個突變：兩條都親眼見過紅，而且紅的原因跟預期一致——那兩個
 > 紅燈本身就是「這份測試有鑑別力」的證據，取得證據的順序跟計畫寫的不同。
 
-- [x] **Step 2–6**：實作、路由、驗證、突變、commit
+- [x] **Step 2–6**：實作、路由、驗證、突變、commit（`a8745a8`）
 
 **跟計畫不一致的地方（設計決定，計畫沒指定）：**
 
