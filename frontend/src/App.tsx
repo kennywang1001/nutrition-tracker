@@ -15,6 +15,7 @@ import { queryClient } from "./api/queries";
 import { logout } from "./auth/session";
 import { getRefreshToken } from "./auth/store";
 import { TabBar } from "./components/TabBar";
+import { FoodDetail } from "./screens/FoodDetail";
 import { FoodLibrary } from "./screens/FoodLibrary";
 import { Login } from "./screens/Login";
 import { LogMeal } from "./screens/LogMeal";
@@ -86,9 +87,14 @@ export function App() {
 							<Route path="/log" element={<LogMealRoute />} />
 							<Route path="/trend" element={<Trend />} />
 							<Route path="/foods" element={<FoodLibrary />} />
-							{/* `/foods/:id` 是 Task 5 才存在——NewFood 送出成功後會導到
-								這個路徑，現在沒有比對到的路由會是空白畫面，那是刻意的。 */}
+							{/* 順序在這裡不像後端 foods.py 的 /frequent /recent 那樣要緊
+								（那是 FastAPI 依宣告順序比對）——react-router 依「靜態片段
+								比動態片段更具體」排名，不是宣告順序，實測過
+								（matchRoutes([{path:"/foods/:id"},{path:"/foods/new"}],
+								"/foods/new") 即使 :id 排在前面，命中的仍然是 "/foods/new"）。
+								兩個路由誰先誰後寫在這裡純粹是可讀性。 */}
 							<Route path="/foods/new" element={<NewFood />} />
+							<Route path="/foods/:id" element={<FoodDetail />} />
 						</Routes>
 					</main>
 					<TabBar />

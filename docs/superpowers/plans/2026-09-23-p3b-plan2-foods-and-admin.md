@@ -1155,7 +1155,7 @@ export function FoodResultList({ foods, renderAction }: Props) {
 - Create: `frontend/tests/food-detail.test.tsx`
 - Modify: `frontend/src/App.tsx`
 
-- [ ] **Step 1: 寫失敗的測試**
+- [x] **Step 1: 寫失敗的測試**
 
 要測的行為：
 
@@ -1167,6 +1167,15 @@ export function FoodResultList({ foods, renderAction }: Props) {
 4. **`is_global === false` 時，送出前的說明是「立刻生效」**
 5. **`is_global === true` 時，送出前的說明是「送審」**
 6. `409 REVISION_PENDING` 顯示「這個食物已經有一筆待審的編輯，請等審核完成」
+
+> **跟計畫不一致的地方（流程，不是內容，跟 Task 3/4 Step 2 同一種）：**
+> `FoodDetail.tsx` 與 `tests/food-detail.test.tsx` 是同一段時間內一起寫出來
+> 的，不是嚴格「先寫測試、跑一次看紅、再寫實作」——第一次跑
+> `tests/food-detail.test.tsx` 時有一則真的紅了（見下面），不是全綠：
+> 「編輯歷史每一筆顯示…」那條找不到 `已通過`——原因不是這條測試沒鑑別力，
+> 是實作本身有一個 render 期的文字合併 bug（見 Step 2–6 下面單獨一節）。
+> 修完之後 14 則（7 條 × 2，開工前必讀第 4 點）全綠。取得「這份測試有鑑別力」
+> 的證據，一部分來自這個意外的紅燈，一部分來自下面兩個刻意的突變。
 
 > 第 3 條的 `reject_reason` 不是裝飾。沒有它，送審就是一個回了 201 之後
 > 永遠沒有下文的黑洞 —— 使用者不知道提案被駁回了，更不知道為什麼。
@@ -1185,19 +1194,111 @@ is_global === false  ⟹  owner_id 不是 null
 
 它依賴可見性過濾這個**外部保證**，不是依賴這個回應本身帶的資訊。
 
-- [ ] **Step 2–6**：實作、路由、驗證、突變、commit
+- [x] **Step 2–6**：實作、路由、驗證、突變、commit
+
+### 意外先紅了一次：`getByText` 找不到「已通過」——不是測試錯了，是文字被黏住了
+
+第一次跑 `tests/food-detail.test.tsx` 時，「編輯歷史每一筆顯示…」那條就紅了，
+不是全綠。原始實作把 `status` 標籤跟「目前生效」標記寫在同一個 `<p>` 裡：
+
+```tsx
+<p>
+	{STATUS_LABEL[revision.status]}
+	{revision.is_current && "・目前生效"}
+</p>
+```
+
+`is_current: true` 的那一筆，兩個文字節點沒有元素邊界地黏在一起，
+`<p>` 的 `textContent` 變成 `"已通過・目前生效"`，不是 `"已通過"`。
+RTL 的 `getByText` 預設是**精確比對整個節點的 textContent**，所以：
+
+```
+TestingLibraryElementError: Unable to find an element with the text: 已通過.
+This could be because the text is broken up by multiple elements.
+```
+
+修法是把 status 跟「目前生效」各自包一層 `<span>`，讓 status 那個 `<span>`
+自己的 `textContent` 就是精確的 `"已通過"`：
+
+```tsx
+<p>
+	<span>{STATUS_LABEL[revision.status]}</span>
+	{revision.is_current && <span>・目前生效</span>}
+</p>
+```
+
+修完之後同一則測試綠了。**這條記錄下來是因為它剛好印證了計畫一直在講的
+「測試有沒有鑑別力，要親眼看紅才算數」**——只是這次紅燈不是刻意的突變，
+是實作本身的一個 render 期小 bug，測試第一次跑就抓到了。
+
+### 突變（一）：把「兩種送出結果」的判斷從 `is_global` 改成常數
 
 > **必須成立：** 把「兩種送出結果」的判斷從 `is_global` 改成常數（永遠顯示
 > 「立刻生效」），**Step 1 第 5 條必須紅**。
 >
-> **實測填回：** ——
+> **實測填回：**
+>
+> 把 `{food.is_global ? (…) : (…)}` 改成 `{false ? (…) : (…)}`（等同永遠走
+> 「立刻生效」那個分支），確實紅：
+>
+> ```
+> FAIL tests/food-detail.test.tsx > 食物詳情 /foods/:id > is_global === true 時，送出前的說明是「送審」
+> TestingLibraryElementError: Unable to find an element with the text: /送審/.
+>  ❯ tests/food-detail.test.tsx:205:23
+>    expect(await screen.findByText(/送審/)).toBeInTheDocument();
+> ```
+>
+> 紅的原因跟預期一致：`GLOBAL_FOOD`（`is_global: true`）進來，畫面卻顯示
+> 「這是你自己的食物，送出後立刻生效」，找不到「送審」兩個字。改回
+> `food.is_global` 之後同一則測試回到綠燈（14 則全綠）。
+
+### 突變（二）：把 `reject_reason` 那一段刪掉
 
 > **必須成立：** 把 `reject_reason` 那一段刪掉，**Step 1 第 3 條必須紅**。
 >
-> **實測填回：** ——
+> **實測填回：**
+>
+> 把 `{revision.status === "rejected" && revision.reject_reason !== null && (<p>駁回原因：{revision.reject_reason}</p>)}`
+> 整段拿掉之後，確實紅：
+>
+> ```
+> FAIL tests/food-detail.test.tsx > 食物詳情 /foods/:id > 編輯歷史每一筆顯示 status / change_note / created_at，被駁回的那筆顯示 reject_reason
+> TestingLibraryElementError: Unable to find an element with the text: 駁回原因：數值跟包裝標示不符.
+>  ❯ tests/food-detail.test.tsx:187:23
+> ```
+>
+> 紅的原因跟預期一致：被駁回的那一筆（`status: "rejected"`, `reject_reason: "數值跟包裝標示不符"`）
+> 不再顯示駁回原因。補回那一段之後同一則測試回到綠燈（14 則全綠）。
+
+兩個突變都親眼看過紅、改回來之後親眼看過綠（`npx vitest run tests/food-detail.test.tsx` →
+`Tests 14 passed (14)`，7 條 × 2，開工前必讀第 4 點）。
 
 提議修改成功後要失效 `queryKeys.food(id)`（前綴會一起打到 `portions` 與
-`foodRevisions`，那是刻意的，見 Task 2 Step 1 的註解）。
+`foodRevisions`，那是刻意的，見 Task 2 Step 1 的註解）——`FoodDetail.tsx` 的
+`proposeRevision` mutation 的 `onSuccess` 就是這樣做的，只呼叫一次
+`invalidateQueries({ queryKey: queryKeys.food(foodId) })`。
+
+**另一個跟計畫不一致的地方（設計決定，計畫沒指定）：** 提議修改表單的
+`NUMERIC_FIELDS` / `BASE_UNITS` / `describeFieldErrors` 都是從
+`NewFood.tsx`（Task 4）匯出後直接重用，不是各寫一份——兩個表單填的是同一個
+`NutritionInput`／處理的是同一個 `VALIDATION_ERROR` 信封，沒有理由分岔成
+兩份可能會各自飄走的邏輯。`NewFood.tsx` 因此多了三個 `export`，行為本身
+沒有改變（既有的 `tests/new-food.test.tsx` 10 則原封不動全綠）。
+
+**還有一個容易踩的地方，實測確認過：** `useParams()` 的 `id` 是
+`string | undefined`，`Number(undefined)` 是 `NaN`。`api/foods.ts` 的
+`useFood` / `useFoodRevisions` 加了 `enabled: Number.isFinite(foodId)`
+擋住這個情境真的打出 `/api/foods/NaN`；`FoodDetail.tsx` 自己也在拿到
+`!Number.isFinite(foodId)` 時提前回傳「找不到這個食物」，不讓三個 query
+永遠停在 loading。
+
+**路由順序**：`App.tsx` 把 `/foods/new` 跟 `/foods/:id` 都加了進去，順序是
+`new` 在前、`:id` 在後。用 `matchRoutes` 實測過這件事在 react-router 8
+**不像後端 FastAPI 那樣依宣告順序**——`matchRoutes([{path:"/foods/:id"},
+{path:"/foods/new"}], "/foods/new")` 即使 `:id` 排在前面，命中的仍然是
+`"/foods/new"`（react-router 依「靜態片段比動態片段更具體」排名）。原本
+想寫一個「宣告順序陷阱」的註解類比後端的 `/frequent` `/recent`，實測後
+發現那個類比是錯的，已經把 `App.tsx` 裡的註解改成講實際驗過的事實。
 
 ---
 

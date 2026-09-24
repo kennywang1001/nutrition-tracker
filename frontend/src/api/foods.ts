@@ -23,10 +23,15 @@ export function useFoodSearch(q: string, scope: FoodScope) {
 	});
 }
 
+/** `useParams()`（Task 5）回傳的是 `string | undefined`——`Number(undefined)`
+ *  是 `NaN`，沒有這個 `enabled` 的話會真的打出 `/api/foods/NaN`。呼叫端
+ *  傳一個非法的 `foodId` 時，這支 hook 就是不發請求，而不是各自在畫面裡
+ *  重複判斷一次。 */
 export function useFood(foodId: number) {
 	return useQuery({
 		queryKey: queryKeys.food(foodId),
 		queryFn: () => apiFetch<Food>(`/api/foods/${foodId}`),
+		enabled: Number.isFinite(foodId),
 	});
 }
 
@@ -34,5 +39,6 @@ export function useFoodRevisions(foodId: number) {
 	return useQuery({
 		queryKey: queryKeys.foodRevisions(foodId),
 		queryFn: () => apiFetch<Revision[]>(`/api/foods/${foodId}/revisions`),
+		enabled: Number.isFinite(foodId),
 	});
 }

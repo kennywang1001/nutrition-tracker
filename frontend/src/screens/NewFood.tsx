@@ -8,18 +8,20 @@ import type { components } from "../api/schema";
 type Food = components["schemas"]["FoodResponse"];
 type BaseUnit = components["schemas"]["BaseUnit"];
 
-const BASE_UNITS: ReadonlyArray<{ value: BaseUnit; label: string }> = [
+// 匯出給 FoodDetail.tsx（提議修改，Task 5）重用——兩個表單填的都是同一個
+// NutritionInput，欄位、label、上下限沒有理由各寫一份。
+export const BASE_UNITS: ReadonlyArray<{ value: BaseUnit; label: string }> = [
 	{ value: "g", label: "克（g）" },
 	{ value: "ml", label: "毫升（ml）" },
 ];
 
-type NumericField = "kcal" | "protein_g" | "fat_g" | "carb_g";
+export type NumericField = "kcal" | "protein_g" | "fat_g" | "carb_g";
 
 // NutritionInput 的上下限（app/schemas/food.py）：kcal 0–10000，其餘三個
 // 巨量營養素 0–1000，都是 max_digits=8, decimal_places=2。這裡只對齊
 // 上下限（少一個往返），**刻意不重做 decimal_places 檢查**——後端的 422
 // 仍然要能顯示，前端驗證不是拿來取代它的（規格 §5.2）。
-const NUMERIC_FIELDS: ReadonlyArray<{
+export const NUMERIC_FIELDS: ReadonlyArray<{
 	field: NumericField;
 	label: string;
 	max: number;
@@ -34,8 +36,11 @@ const NUMERIC_FIELDS: ReadonlyArray<{
  *  `loc` / `msg` / `type`）轉成人看得懂的一行行文字。
  *
  *  `ApiError.details` 的型別是 `Record<string, unknown>`——後端的信封
- *  沒有另外給欄位錯誤一個專屬型別，這裡要自己做執行期窄化，不能假設形狀。 */
-function describeFieldErrors(error: ApiError): string[] {
+ *  沒有另外給欄位錯誤一個專屬型別，這裡要自己做執行期窄化，不能假設形狀。
+ *
+ *  匯出給 `FoodDetail.tsx`（Task 5）重用——422 的欄位錯誤信封是同一個
+ *  `RevisionCreateRequest.nutrition` 形狀，沒有理由重寫一份窄化邏輯。 */
+export function describeFieldErrors(error: ApiError): string[] {
 	const raw = error.details.errors;
 	if (!Array.isArray(raw) || raw.length === 0) return [error.message];
 	return raw.map((item) => {
