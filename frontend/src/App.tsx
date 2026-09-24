@@ -15,6 +15,7 @@ import { queryClient } from "./api/queries";
 import { logout } from "./auth/session";
 import { getRefreshToken } from "./auth/store";
 import { TabBar } from "./components/TabBar";
+import { AdminRevisions } from "./screens/AdminRevisions";
 import { FoodDetail } from "./screens/FoodDetail";
 import { FoodLibrary } from "./screens/FoodLibrary";
 import { Login } from "./screens/Login";
@@ -95,6 +96,11 @@ export function App() {
 								兩個路由誰先誰後寫在這裡純粹是可讀性。 */}
 							<Route path="/foods/new" element={<NewFood />} />
 							<Route path="/foods/:id" element={<FoodDetail />} />
+							{/* 不做前端導向：非管理員直接輸入這個網址時，讓它照常渲染、
+								讓 GET /api/admin/food-revisions 打出去、讓後端的
+								require_admin 回 403（見 AdminRevisions.tsx 的說明、
+								規格 §3.3）。 */}
+							<Route path="/admin/revisions" element={<AdminRevisions />} />
 						</Routes>
 					</main>
 					<TabBar />

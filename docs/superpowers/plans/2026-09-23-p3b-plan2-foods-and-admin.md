@@ -1456,7 +1456,7 @@ This could be because the text is broken up by multiple elements.
 - Modify: `frontend/tests/tab-bar.test.tsx`
 - Modify: `frontend/src/App.tsx`
 
-- [ ] **Step 1: `useMe`**
+- [x] **Step 1: `useMe`**
 
 ```ts
 export function useMe() {
@@ -1467,7 +1467,7 @@ export function useMe() {
 }
 ```
 
-- [ ] **Step 2: TabBar 第五格**
+- [x] **Step 2: TabBar 第五格**
 
 `TabBar` 自己呼叫 `useMe()`，`role === "admin"` 時多一格「審核」。
 
@@ -1481,7 +1481,7 @@ export function useMe() {
 新增的測試：管理員看得到第五格、一般使用者看不到、`useMe` 還在載入時看不到
 （不要先閃一下再消失）。
 
-- [ ] **Step 3: 審核佇列畫面**
+- [x] **Step 3: 審核佇列畫面**
 
 `GET /api/admin/food-revisions` 回的 `PendingRevisionResponse` **已經把新舊
 並排算好了** —— 每一筆同時帶提案的四個數值與目前生效的四個數值
@@ -1498,6 +1498,29 @@ export function useMe() {
 再回頭修正，在 409 時會讓人以為自己審過了。成功之後讓 `pendingRevisions`、
 `food(food_id)`、`foodRevisions(food_id)` 三個 key 失效。
 
+> **跟計畫不一致的地方（設計決定，計畫要求去讀 `api/queries.ts` 的註解
+> 之後自己判斷）：實作只失效兩個 key，不是三個。**
+>
+> 讀 `api/queries.ts` 裡 `food` 那個 key 的註解：「**刻意是 `portions` 與
+> `foodRevisions` 的前綴**……一次 `invalidateQueries({ queryKey:
+> queryKeys.food(id) })` 打到三個正是要的行為」。`queryKeys.food(foodId)`
+> 是 `["foods", foodId]`，`queryKeys.foodRevisions(foodId)` 是
+> `["foods", foodId, "revisions"]`——後者的字面就是前者加一段。TanStack
+> Query 的 `invalidateQueries` 預設是前綴比對，所以單獨
+> `invalidateQueries({ queryKey: queryKeys.food(foodId) })` 本來就會連帶
+> 打到 `foodRevisions(foodId)`（也會打到 `portions(foodId)`）。
+>
+> `FoodDetail.tsx`（Task 5）的 `proposeRevision.onSuccess` 已經是這樣做的
+> ——那個檔案的註解也明講「刻意只失效這一個 key」。`AdminRevisions.tsx`
+> 沿用同一個判斷：只呼叫 `invalidateQueries({ queryKey:
+> queryKeys.pendingRevisions })` 與 `invalidateQueries({ queryKey:
+> queryKeys.food(food_id) })` 兩次。額外呼叫
+> `invalidateQueries({ queryKey: queryKeys.foodRevisions(food_id) })`
+> 不會讓任何 query 多重取一次（同一個前綴已經被上一行打過），只會讓
+> 「審核通過之後要失效哪些 key」這件事在 `FoodDetail.tsx` 與
+> `AdminRevisions.tsx` 兩處各寫一份、未來有機會各自飄走。判斷寫進了
+> `AdminRevisions.tsx` 的 `invalidateAfterReview()` 註解裡。
+
 要測的行為：
 
 1. 新舊數值並排顯示；食物沒有生效版本時 `current_*` 是 `null`，要顯示「—」
@@ -1510,7 +1533,32 @@ export function useMe() {
 
 > 第 5 條會真的發生：兩個分頁開著同一個佇列，或兩個管理員同時在看。
 
-- [ ] **Step 4: 路由**
+> **跟計畫不一致的地方（發現，不是障礙）：第 5、6 條的字面文字跟後端實際
+> 訊息對不上。**
+>
+> 開工前必讀第 1 條說「計畫的文字不是權威」。實際讀
+> `app/api/routes/admin_foods.py` 的 `_load_pending`：
+>
+> ```python
+> raise NotFoundError("REVISION_NOT_FOUND", "找不到該編輯提案")
+> raise ConflictError("REVISION_NOT_PENDING", "這筆提案已經審核過了")
+> ```
+>
+> 跟計畫這裡寫的「顯示『已經被審過了』」「顯示『找不到這筆提案』」都只差
+> 幾個字，不是同一句。對照 Task 4／5 的先例（`FOOD_EXISTS`「你已經建過
+> 同名的食物了」、`REVISION_PENDING`「這個食物已經有一筆待審的編輯，請等
+> 審核完成」兩處計畫文字都跟後端訊息逐字相同，而且兩個畫面都是直接顯示
+> `caught.message`，不在前端重寫一份），這裡沿用同一個慣例：`FORBIDDEN`
+> 恰好逐字相同直接顯示；`REVISION_NOT_FOUND`／`REVISION_NOT_PENDING`
+> 兩個也一律顯示 `caught.message`（後端的真正文字），不是計畫這裡寫的
+> 字面。理由跟 `FoodDetail.tsx` 處理 `REVISION_PENDING` 時寫的一樣：
+> 前端另外刻一份翻譯，只會製造出「畫面上的字」與「後端真正會送什麼」
+> 兩份永遠對不上的文字。判斷與後端原文都寫進了 `AdminRevisions.tsx` 的
+> `describeMutationError` 註解裡；測試也用後端的真正文字去 mock（不是
+> 計畫這裡的字面），這樣測試才是在驗證實作跟真正的後端行為一致，而不是
+> 驗證一個只存在於前端 mock 裡的字串。
+
+- [x] **Step 4: 路由**
 
 `App.tsx` 加 `<Route path="/admin/revisions" element={<AdminRevisions />} />`。
 
@@ -1522,7 +1570,7 @@ export function useMe() {
 > 把後端的 `require_admin` 整個拿掉，那條測試依然綠。而 redirect 之後
 > 403 那條路徑就再也走不到，也就測不到。
 
-- [ ] **Step 5: 驗證與突變**
+- [x] **Step 5: 驗證與突變**
 
 > **必須成立：** 把後端 `app/api/deps.py` 的 `require_admin` 暫時改成直接
 > `return user`（不檢查角色），**Task 8 的 E2E 4 必須紅**。
@@ -1533,9 +1581,58 @@ export function useMe() {
 > **必須成立：** 把管理員 tab 的 `role === "admin"` 判斷改成常數 `true`，
 > **Step 2 那條「一般使用者看不到第五格」必須紅**。
 >
-> **實測填回：** ——
+> **實測填回：**
+>
+> 把 `TabBar.tsx` 的 `const isAdmin = meQuery.data?.role === "admin";` 改成
+> `const isAdmin = true;`，**兩條測試一起紅**（不只計畫點名的那一條，
+> 額外寫的「載入中不閃現」那條守的是同一件事的另一個切面，一起紅是預期的）：
+>
+> ```
+> FAIL tests/tab-bar.test.tsx > TabBar > 一般使用者看不到「審核」
+> Error: expect(element).not.toBeInTheDocument()
+> expected document not to contain element, found <a class="tab" href="/admin/revisions">審核</a> instead
+>  ❯ tests/tab-bar.test.tsx:126:58
+>
+> FAIL tests/tab-bar.test.tsx > TabBar > useMe 還在載入時看不到「審核」——不要先閃一下再消失
+> Error: expect(element).not.toBeInTheDocument()
+> expected document not to contain element, found <a class="tab" href="/admin/revisions">審核</a> instead
+>  ❯ tests/tab-bar.test.tsx:139:58
+> ```
+>
+> 紅的原因跟預期一致：一般使用者（與還在載入中的畫面）都看到了「審核」
+> 連結。附帶：這個突變讓 `meQuery` 變成宣告了卻沒用到，vitest 的 typecheck
+> 那一份額外報了一個 `Unhandled Source Error`
+> （`'meQuery' is declared but its value is never read.`）——是突變本身的
+> 副作用，不是這兩條測試要驗的東西，改回來之後一併消失。改回來後
+> `tests/tab-bar.test.tsx` 回到綠燈（12 則，6 條 × 2，開工前必讀第 4 點）。
+>
+> **另外對 `AdminRevisions.tsx` 自己的測試也做了三個計畫沒有點名的突變**
+> （第一次跑 `tests/admin-revisions.test.tsx` 6 則全綠，沒有觀察到自然的
+> 紅燈，跟 Task 3–6 的 Step 2 是同一種情況——用突變補那個洞）：
+>
+> 1. `displayCurrent` 拿掉 `value === null` 判斷、直接 `formatMacro(value as string)`：
+>    「新舊數值並排顯示…」那條紅，`Unhandled Errors` 印出
+>    `[DecimalError] Invalid argument: null`（`Failed Tests` 表面顯示的是
+>    `findByTestId("revision-10")` 逾時——跟 Task 3 Step 6 記錄過的同一種
+>    現象：render 期例外沒有錯誤邊界接住，真正原因要往下翻）。
+> 2. `handleReject` 拿掉「理由是空字串就擋下來」那段：「駁回沒填理由時
+>    送不出去」那條紅——但紅的訊息不是「找不到請輸入駁回理由」的斷言
+>    逾時本身最有資訊量的部分，而是畫面改顯示「操作失敗，請再試一次」；
+>    往下看才知道原因是**請求真的送出去了**，打到 mock 沒配置的
+>    `/reject` 路徑，mock-api 丟出「測試沒有為這個路徑準備回應」，
+>    被 mutation 的 `onError` 接住、`describeMutationError` 判斷不是
+>    `ApiError` 而顯示通用文案。這條紅燈證明的正是「送不出去」這件事：
+>    拿掉守衛之後請求確實被送出去了。
+> 3. `approve` mutation 的 `onError` 拿掉「`REVISION_NOT_PENDING` 時重新
+>    載入佇列」那段：「409 REVISION_NOT_PENDING 顯示已經審核過，並重新
+>    載入佇列」那條紅在 `listCalls` 那一行（`AssertionError: expected 1
+>    to be greater than or equal to 2`）——訊息本身還是有顯示出來，只有
+>    「重新載入」這半件事沒發生，紅得很精確。
+>
+> 三個突變都親眼看過紅、改回來之後親眼看過綠（`npx vitest run
+> tests/admin-revisions.test.tsx` → `Tests 12 passed (12)`，6 條 × 2）。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ---
 

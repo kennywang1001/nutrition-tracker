@@ -1,4 +1,5 @@
 import { NavLink } from "react-router";
+import { useMe } from "../api/me";
 
 type Tab = { to: string; label: string; end?: boolean };
 
@@ -28,7 +29,20 @@ const TABS: readonly Tab[] = [
 	{ to: "/foods", label: "食物庫" },
 ];
 
+/** 管理員限定的第五格（規格 §3.1、Task 7）。
+ *
+ *  **`TabBar` 自己呼叫 `useMe()`，不是從 `App` 往下傳 `role`。** 從 `App`
+ *  傳的話只是把同一個資料依賴往上推一層，還會讓 `App`（現在完全不需要
+ *  知道使用者角色）多一個它用不到的 query（Task 7 計畫的決定）。
+ *
+ *  `role === "admin"` 用 `meQuery.data?.role`，不是 `meQuery.data!.role`
+ *  或另外判斷 `isLoading`：`useMe()` 還在載入或失敗時 `data` 是
+ *  `undefined`，`undefined?.role === "admin"` 自然是 `false`——第五格
+ *  一開始就不畫，不是畫出來再拿掉，不會有「先閃一下再消失」這件事。 */
 export function TabBar() {
+	const meQuery = useMe();
+	const isAdmin = meQuery.data?.role === "admin";
+
 	return (
 		<nav className="tab-bar" aria-label="主要導覽">
 			{TABS.map((tab) => (
@@ -36,6 +50,11 @@ export function TabBar() {
 					{tab.label}
 				</NavLink>
 			))}
+			{isAdmin && (
+				<NavLink to="/admin/revisions" className="tab">
+					審核
+				</NavLink>
+			)}
 		</nav>
 	);
 }
