@@ -54,6 +54,26 @@ const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 type OfflinePersistOptions = PersistQueryClientProviderProps["persistOptions"];
 
+/** 不進離線快取的 query 命名空間。
+ *
+ *  **`meal-photo`：** 照片 blob 是 IndexedDB 的量級。`localStorage` 有 5MB
+ *  上限，一張照片（前端降尺寸後也還有幾百 KB）就可能把它塞爆，而且 Blob
+ *  本身也無法有意義地 JSON.stringify。
+ *
+ *  **`food-search`：** 使用者每敲一個字都會產生一組新的 query key，結果在
+ *  `localStorage` 裡越堆越多。
+ *
+ *  兩者塞爆的症狀一樣惡劣：`setItem` 丟 `QuotaExceededError`，於是**整份
+ *  離線快取都寫不進去** —— 不是「搜尋結果存不了」，是連今日總覽也一起沒了。
+ *  而那個失敗發生在背景的節流寫入裡，畫面上完全看不出來。
+ *
+ *  兩個 key 都刻意用獨立的第一段命名空間（不掛在 `"meals"` / `"foods"`
+ *  底下，見 `api/queries.ts`），所以這裡直接認 `queryKey[0]`。 */
+const NOT_PERSISTED: ReadonlySet<unknown> = new Set([
+	"meal-photo",
+	"food-search",
+]);
+
 /** 每次呼叫回一組**獨立**的 persist 設定，包含一個新的 persister
  *  instance（有自己的節流狀態）。
  *
@@ -75,14 +95,7 @@ export function createOfflinePersistOptions(
 		dehydrateOptions: {
 			shouldDehydrateQuery: (query) =>
 				defaultShouldDehydrateQuery(query) &&
-				// **照片 blob 不快取。** 那是 IndexedDB 的量級，規格沒有要求
-				// 離線時看得到照片；`localStorage` 有 5MB 上限，一張照片
-				// （前端降尺寸後也還有幾百 KB，見計畫三 Task 3）就可能把它
-				// 塞爆，而且 Blob 本身也無法有意義地 JSON.stringify。
-				// `queryKeys.mealPhoto` 刻意是獨立的 `["meal-photo", mealId]`
-				// 命名空間（不掛在 `"meals"` 底下，見 `api/queries.ts`），
-				// 這裡直接認 queryKey 的第一段。
-				query.queryKey[0] !== "meal-photo",
+				!NOT_PERSISTED.has(query.queryKey[0]),
 		},
 	};
 }

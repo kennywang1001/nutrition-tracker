@@ -638,7 +638,7 @@ EOF
 - Modify: `frontend/src/api/persist.ts`
 - Modify: `frontend/tests/offline.test.tsx`
 
-- [ ] **Step 1: 加 query key**
+- [x] **Step 1: 加 query key**
 
 `frontend/src/api/queries.ts` 的 `queryKeys` 裡加（放在 `portions` 附近，
 因為它們是同一族）：
@@ -675,7 +675,7 @@ import type { components } from "./schema";
 type FoodScope = components["schemas"]["FoodScope"];
 ```
 
-- [ ] **Step 2: 持久化排除改成命名空間清單**
+- [x] **Step 2: 持久化排除改成命名空間清單**
 
 先寫失敗的測試。`frontend/tests/offline.test.tsx` 既有那條「照片 blob 不會被
 寫進 localStorage」的斷言是：
@@ -721,7 +721,7 @@ const NOT_PERSISTED: ReadonlySet<unknown> = new Set(["meal-photo", "food-search"
 
 並把判斷改成 `!NOT_PERSISTED.has(query.queryKey[0])`。
 
-- [ ] **Step 3: debounce hook**
+- [x] **Step 3: debounce hook**
 
 `frontend/src/lib/use-debounced.ts`：
 
@@ -759,7 +759,7 @@ export function useDebounced<T>(value: T, delayMs: number): T {
 > 第 4 條是這個 hook 存在的理由。只有 1–3 的話，一個「每次都延遲 300ms 但
 > 每一次都會送出」的實作也會全綠 —— 那是 delay，不是 debounce。
 
-- [ ] **Step 4: `foods.ts`**
+- [x] **Step 4: `foods.ts`**
 
 ```ts
 import { useQuery } from "@tanstack/react-query";
@@ -807,24 +807,60 @@ export function useFoodRevisions(foodId: number) {
 > **`encodeURIComponent` 不是裝飾。** 中文食物名在 query string 裡必須編碼，
 > 而且 `&` 或 `#` 出現在搜尋字串裡會把 URL 切斷。
 
-- [ ] **Step 5: 驗證**
+- [x] **Step 5: 驗證**
 
 ```bash
 cd F:/wallet/frontend && npm run test 2>&1 | grep -E "Test Files|Tests |Type Errors|FAIL|Unhandled"
 cd F:/wallet/frontend && npm run lint && npm run typecheck
 ```
 
-- [ ] **Step 6: 突變驗證**
+- [x] **Step 6: 突變驗證**
 
 > **必須成立（一）：** 把 `queryKeys.foodSearch` 改成掛在 `["foods", "search", q, scope]`
 > 底下，**Step 2 那條持久化排除的測試必須紅**。
 >
-> **實測填回：** ——
+> **實測填回：**
+>
+> 第一版測試（用 `persisted.map((query) => query.queryKey[0]).not.toContain
+> ("food-search")`）對這個突變**完全綠**——不是因為排除還有效，是因為斷言
+> 寫死了字面值 `"food-search"`。突變把 key 的第一段改成 `"foods"` 之後，
+> `queryKey[0]` 已經不等於 `"food-search"`，斷言自然「沒找到」而通過；
+> 同一個突變也讓 `persist.ts` 的 `NOT_PERSISTED.has("foods")` 為 `false`，
+> 排除確實失效、搜尋結果確實被寫進 localStorage 了——**兩件事同時發生，
+> 而字面值比對兩件都測不到**。這是跟計畫原文警告的假綠燈（query 根本沒
+> 進 client）不同的另一種假綠燈：namespace 改名的突變會連斷言用的字面值
+> 一起改跑掉。
+>
+> 已改成用 `queryKeys.foodSearch("雞", "all")` 實際產生的 key 做深比對
+> （`JSON.stringify` 相等），不寫死字面值。改完之後同一個突變確實紅：
+>
+> ```
+> FAIL tests/offline.test.tsx > 離線 L2：持久化與「最後更新於」 > food-search 的搜尋結果不會被寫進 localStorage
+> AssertionError: expected true to be false
+>  ❯ tests/offline.test.tsx:391:7
+> ```
+>
+> （`persisted.some((query) => JSON.stringify(query.queryKey) === searchKeyJson)`
+> 讀到 `true`——那組搜尋結果真的被持久化了。）
 
 > **必須成立（二）：** 把 `useDebounced` 的 `setTimeout` 換成直接
 > `setSettled(value)`（也就是拿掉 debounce），**Step 3 第 4 條測試必須紅**。
 >
-> **實測填回：** ——
+> **實測填回：**
+>
+> ```
+> FAIL tests/use-debounced.test.ts > useDebounced > 連續改三次只會安定一次——這是 debounce 的定義，不是 throttle
+> AssertionError: expected 'd' to be 'a' // Object.is equality
+>  ❯ tests/use-debounced.test.ts:76:26
+> ```
+>
+> 拿掉 debounce 之後每次 `rerender` 都立刻安定，所以三次連續改動之後
+> （還沒推進任何計時器）讀到的已經是最後一次的 `"d"`，而不是預期中「還沒
+> 安定、應該還是 `"a"`」。
+>
+> 附帶：第 2 條（「值變了之後、時間還沒到之前，回傳的還是舊值」）在這個
+> 突變下也一起紅了（`expected 'b' to be 'a'`）——預期之內，两條測試守的
+> 是同一件事的不同切面。
 
 - [ ] **Step 7: Commit**
 

@@ -7,6 +7,7 @@ import {
 	createOfflinePersistOptions,
 	OFFLINE_CACHE_STORAGE_KEY,
 } from "../src/api/persist";
+import { queryKeys } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { formatTime } from "../src/lib/dates";
@@ -316,5 +317,80 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 				"meal-photo",
 			);
 		});
+	});
+
+	it("food-search 的搜尋結果不會被寫進 localStorage", async () => {
+		// **不渲染 FoodLibrary**（Task 3 才存在）—— 這條測試要驗的是
+		// `shouldDehydrateQuery` 的行為，不是那個畫面。用真畫面會把兩件事
+		// 綁在一起，而且會讓 Task 2 等 Task 3。
+		//
+		// 直接用 `setQueryData` 把一筆 food-search 的結果塞進 client：
+		// `setQueryData` 會把那個 query 的狀態設成 "success"，而
+		// `defaultShouldDehydrateQuery` 只看 `state.status === "success"`
+		// ——跟真的打一次 `useFoodSearch` 對持久化層來說是等價的輸入。
+		//
+		// **這是避免假綠燈的關鍵**：如果這條測試從沒讓 food-search 這個
+		// query 進到 client 裡，那麼「persisted 裡沒有 food-search」會因為
+		// 「client 裡本來就沒有這個 query」而綠，跟排除有沒有生效無關。
+		// 這裡明確呼叫 setQueryData，之後再驗證 stats/daily 確實被排進
+		// persisted 清單（證明 persist 真的跑過一輪、不是因為整個持久化
+		// 都沒觸發才巧合地綠），food-search 才不在清單裡才有意義。
+		mockApi({
+			"/api/stats/daily": () => json(STATS_WITH_TARGET),
+			"/api/supplements/today": () => json([]),
+			"/api/meals": () => json([]),
+		});
+		const client = newTestClient();
+		render(wrap(client, <Today />));
+		await screen.findByText(/1800/);
+
+		const searchKey = queryKeys.foodSearch("雞", "all");
+		client.setQueryData(searchKey, [
+			{
+				id: 1,
+				name: "雞胸肉",
+				brand: null,
+				is_global: true,
+				nutrition: null,
+			},
+		]);
+
+		// **比對用 `queryKeys.foodSearch(...)` 產生的實際 key 做深比對，
+		// 不是寫死 `queryKey[0] === "food-search"` 這個字面值。**
+		//
+		// 原因是實測到的一個假綠燈：Step 6 突變（一）把 `foodSearch` 的 key
+		// 從 `["food-search", q, scope]` 改成掛到 `["foods", "search", q,
+		// scope]` 底下（`persist.ts` 的排除沒有跟著改）。那個突變之後，
+		// 搜尋結果真的被寫進了 localStorage——排除確實失效了。但如果這裡
+		// 用 `queryKey[0] === "food-search"` 這個寫死的字面值去檢查，
+		// 突變後的 key 第一段變成 `"foods"`，同一個斷言會**同時**失去
+		// 鑑別力：它既抓不到「exclusion 失效」，也抓不到「namespace 被
+		// 改名」，兩件事一起發生時反而全綠。改成用 `queryKeys.foodSearch`
+		// 實際產生的 key 做深比對之後，不管 namespace 長什麼樣子，
+		// 只要那組特定的搜尋結果進了 persisted 清單，這裡就會紅。
+		const searchKeyJson = JSON.stringify(searchKey);
+
+		await waitFor(
+			() => {
+				const raw = localStorage.getItem(OFFLINE_CACHE_STORAGE_KEY);
+				expect(raw).not.toBeNull();
+				const persisted: { queryKey: unknown[] }[] = JSON.parse(raw ?? "{}")
+					.clientState.queries;
+				// stats/daily 在——證明這一輪 persist 真的把東西寫進去了。
+				expect(
+					persisted.some(
+						(query) =>
+							Array.isArray(query.queryKey) && query.queryKey[0] === "stats",
+					),
+				).toBe(true);
+				// food-search 的搜尋結果不該在。
+				expect(
+					persisted.some(
+						(query) => JSON.stringify(query.queryKey) === searchKeyJson,
+					),
+				).toBe(false);
+			},
+			{ timeout: 3000 },
+		);
 	});
 });

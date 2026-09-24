@@ -1,4 +1,7 @@
 import { QueryClient } from "@tanstack/react-query";
+import type { components } from "./schema";
+
+type FoodScope = components["schemas"]["FoodScope"];
 
 /** 所有 query key 的唯一事實來源。
  *
@@ -43,6 +46,27 @@ export const queryKeys = {
 	 *  放進這個檔案不是因為要共用失效，而是延續「query key 只有一個
 	 *  事實來源」這條規矩，不要有些 key 在這裡、有些散在各畫面裡。 */
 	portions: (foodId: number) => ["foods", foodId, "portions"] as const,
+	/** 目前登入者。Task 7 的 tab bar 要用它的 `role` 決定第五格出不出現。 */
+	me: ["me"] as const,
+	/** 單一食物。**刻意是 `portions` 與 `foodRevisions` 的前綴。**
+	 *
+	 *  審核通過之後，那個食物的目前數值、份量、編輯歷史都該重取 ——
+	 *  一次 `invalidateQueries({ queryKey: queryKeys.food(id) })` 打到三個
+	 *  正是要的行為（規格 §7.1）。 */
+	food: (foodId: number) => ["foods", foodId] as const,
+	foodRevisions: (foodId: number) => ["foods", foodId, "revisions"] as const,
+	/** 全庫搜尋的結果。**刻意不掛在 `["foods"]` 底下**，沿用
+	 *  `mealPhoto` 的前例（見下面那段註解）。
+	 *
+	 *  掛下去的話，任何一次 `invalidateQueries({ queryKey: ["foods"] })` 都會
+	 *  連帶炸掉**每一組已掛載的搜尋結果與份量清單**。獨立命名空間之後，
+	 *  前綴比對自然就做對的事，而且沒有「忘記加 `exact: true`」這個失敗模式。
+	 *
+	 *  它也**不進離線持久化**（`api/persist.ts`）—— 理由見那個檔案。 */
+	foodSearch: (q: string, scope: FoodScope) =>
+		["food-search", q, scope] as const,
+	/** 待審提案清單（管理員）。 */
+	pendingRevisions: ["admin", "food-revisions"] as const,
 	/** 單一餐的照片 blob（`useMealPhoto`，計畫三 Task 2）。跟 `portions` 一樣
 	 *  放這裡是為了「query key 只有一個事實來源」，不是因為現在就需要跨畫面
 	 *  失效——但上傳照片（Task 3）之後會需要讓這個 key 失效，先放在這裡
