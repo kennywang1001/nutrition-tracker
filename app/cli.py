@@ -30,13 +30,19 @@ DEFAULT_ORPHAN_MIN_AGE_HOURS = 24.0
 logger = logging.getLogger(__name__)
 
 
-async def create_admin(
-    db: AsyncSession, email: str, password: str, display_name: str
+async def _upsert_account(
+    db: AsyncSession,
+    email: str,
+    password: str,
+    display_name: str,
+    *,
+    role: UserRole,
+    on_existing_admin: str | None = None,
 ) -> tuple[User, bool]:
-    """建立管理員帳號；若 email 已存在則提升為管理員並更新密碼。
+    """建立或更新一個帳號。
 
-    回傳 (user, created)，created 為 False 代表是提升既有帳號 —— 打錯 email 時
-    會靜默重設別人的密碼，所以呼叫端必須把這件事講清楚。
+    `on_existing_admin` 不是 `None` 時，遇到既有的管理員就拋
+    `ValueError(on_existing_admin)` 而**什麼都不改** —— 見 `create_regular_user`。
     """
     if len(password) < MIN_PASSWORD_LENGTH:
         raise ValueError(f"密碼至少 {MIN_PASSWORD_LENGTH} 個字元")
@@ -45,17 +51,61 @@ async def create_admin(
 
     user = await db.scalar(select(User).where(User.email == email))
     created = user is None
+
+    if user is not None and on_existing_admin is not None and user.role is UserRole.ADMIN:
+        # 在 **任何** 欄位被改之前就退出。拋在賦值之後的話，雖然沒 commit，
+        # 但 db_session 裡那個物件已經髒了，同一個 session 後續的 flush
+        # 會把它寫出去 —— 測試裡的 refresh 會讀回改過的值。
+        raise ValueError(on_existing_admin)
+
     if user is None:
         user = User(email=email, display_name=display_name)
         db.add(user)
 
     user.password_hash = hash_password(password)
     user.display_name = display_name
-    user.role = UserRole.ADMIN
+    user.role = role
 
     await db.commit()
     await db.refresh(user)
     return user, created
+
+
+async def create_admin(
+    db: AsyncSession, email: str, password: str, display_name: str
+) -> tuple[User, bool]:
+    """建立管理員帳號；若 email 已存在則提升為管理員並更新密碼。
+
+    回傳 (user, created)，created 為 False 代表是提升既有帳號 —— 打錯 email 時
+    會靜默重設別人的密碼，所以呼叫端必須把這件事講清楚。
+    """
+    return await _upsert_account(db, email, password, display_name, role=UserRole.ADMIN)
+
+
+async def create_regular_user(
+    db: AsyncSession, email: str, password: str, display_name: str
+) -> tuple[User, bool]:
+    """建立一般使用者帳號；若 email 已存在且本來就是一般使用者，更新密碼與名稱。
+
+    回傳 (user, created)。
+
+    **對既有管理員的行為刻意跟 `create_admin` 不對稱：拒絕，而且什麼都不改。**
+
+    `create_admin` 對既有帳號是「提升」。如果這裡對既有帳號是「降級」，那麼
+    打錯一個 email 就會把管理員默默降成一般使用者 —— 而那件事沒有任何畫面會
+    顯示出來，要到下一次登入發現進不去審核佇列才知道。
+
+    提升是可逆的（再跑一次 `create-admin`）；在「你不知道它發生了」的情況下
+    降級不是。真的要降級，請明確地用資料庫改，那至少是一個你知道自己在做的動作。
+    """
+    return await _upsert_account(
+        db,
+        email,
+        password,
+        display_name,
+        role=UserRole.USER,
+        on_existing_admin="這個 email 已經是管理員，不會被降級；真要降級請直接改資料庫",
+    )
 
 
 @dataclass(frozen=True)
@@ -212,6 +262,13 @@ def build_parser() -> argparse.ArgumentParser:
     create_admin_parser.add_argument("password")
     create_admin_parser.add_argument("display_name")
 
+    create_user_parser = subparsers.add_parser(
+        "create-user", help="建立或更新一般使用者帳號（不會降級既有的管理員）"
+    )
+    create_user_parser.add_argument("email")
+    create_user_parser.add_argument("password")
+    create_user_parser.add_argument("display_name")
+
     cleanup_parser = subparsers.add_parser(
         "cleanup-photos", help="清理 photo_dir 底下沒被引用的孤兒照片"
     )
@@ -244,6 +301,15 @@ async def _run_create_admin(email: str, password: str, display_name: str) -> Non
             print(f"既有帳號已提升為管理員，密碼已重設：{user.email} (id={user.id})")
 
 
+async def _run_create_user(email: str, password: str, display_name: str) -> None:
+    async with SessionLocal() as db:
+        user, created = await create_regular_user(db, email, password, display_name)
+        if created:
+            print(f"一般使用者帳號已建立：{user.email} (id={user.id})")
+        else:
+            print(f"既有帳號的密碼已重設：{user.email} (id={user.id})")
+
+
 async def _run_cleanup_photos(*, dry_run: bool, min_age_hours: float) -> None:
     async with SessionLocal() as db:
         result = await cleanup_orphan_photos(db, dry_run=dry_run, min_age_hours=min_age_hours)
@@ -270,6 +336,8 @@ async def _main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     if args.command == "create-admin":
         await _run_create_admin(args.email, args.password, args.display_name)
+    elif args.command == "create-user":
+        await _run_create_user(args.email, args.password, args.display_name)
     elif args.command == "cleanup-photos":
         await _run_cleanup_photos(dry_run=args.dry_run, min_age_hours=args.min_age_hours)
     elif args.command == "cleanup-sessions":

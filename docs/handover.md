@@ -73,7 +73,7 @@ app/
   stats.py             統計彙總核心（SQL 分桶）
   ratelimit.py         登入速率限制（記憶體，單容器）
   food_visibility.py   食物/份量的分層可見性（共用）
-  cli.py               create-admin / cleanup-photos / cleanup-sessions
+  cli.py               create-admin / create-user / cleanup-photos / cleanup-sessions
   storage/photos.py    照片的所有檔案讀寫（規格第 8 節：集中在單一模組）
   security/tokens.py   JWT 編解碼（access / refresh 兩組，refresh 強制帶 jti）
   security/sessions.py refresh session 的生命週期：簽發 / 輪替 / 重用偵測 / 撤銷

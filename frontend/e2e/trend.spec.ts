@@ -1,7 +1,5 @@
 import { expect, test } from "@playwright/test";
-
-const EMAIL = "kenny.demo@example.com";
-const PASSWORD = "demo-pass-12345";
+import { ADMIN } from "./accounts.ts";
 
 test("記一餐之後，趨勢圖上今天那根柱子跟著變", async ({ page, request }) => {
 	// **這條守的是 LogMeal.tsx 那一行 invalidateQueries(rangeStatsAll)。**
@@ -19,7 +17,7 @@ test("記一餐之後，趨勢圖上今天那根柱子跟著變", async ({ page,
 	// 讓它進「最近吃」清單——真正要驗的那次 invalidateQueries 仍然是
 	// 透過 UI 觸發的。
 	const loginResponse = await request.post("/api/auth/login", {
-		data: { email: EMAIL, password: PASSWORD },
+		data: { email: ADMIN.email, password: ADMIN.password },
 	});
 	const { access_token: accessToken } = (await loginResponse.json()) as {
 		access_token: string;
@@ -67,8 +65,8 @@ test("記一餐之後，趨勢圖上今天那根柱子跟著變", async ({ page,
 	expect(seedResponse.status()).toBe(201);
 
 	await page.goto("/");
-	await page.getByLabel("Email").fill(EMAIL);
-	await page.getByLabel("密碼").fill(PASSWORD);
+	await page.getByLabel("Email").fill(ADMIN.email);
+	await page.getByLabel("密碼").fill(ADMIN.password);
 	await page.getByRole("button", { name: "登入" }).click();
 
 	// 趨勢畫面：讀「今天」那根柱子的 aria-label。期間的最後一天就是今天，

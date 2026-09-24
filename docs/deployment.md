@@ -145,6 +145,25 @@ docker compose --env-file .env.production \
 > 如果輸出是「既有帳號已提升為管理員，**密碼已重設**」，代表那個 email
 > 已經存在 —— 打錯 email 會靜默重設別人的密碼，所以看到這行要停下來確認。
 
+#### 建立一般使用者帳號
+
+```bash
+docker compose --env-file .env.production \
+  -f docker-compose.yml -f docker-compose.prod.yml \
+  exec api python -m app.cli create-user you@example.com '密碼' '名字'
+```
+
+預期輸出：`一般使用者帳號已建立：you@example.com (id=2)`；email 已存在時是
+「既有帳號的密碼已重設」。
+
+> **跟 `create-admin` 刻意不對稱：** `create-admin` 對既有 email 是「提升」
+> （拿掉管理員身分需要另外處理），`create-user` 對既有的管理員帳號是**拒絕，
+> 而且什麼都不改**（會印錯誤並以非零狀態碼結束）。打錯一個 email 讓管理員被
+> 這個指令默默降級，不會有任何畫面顯示出來，要到下一次登入發現進不去審核
+> 佇列才知道——提升是可逆的（再跑一次 `create-admin`），不知情的降級不是。
+> 真的要把一個管理員降成一般使用者，請直接改資料庫，那至少是一個你知道
+> 自己在做的動作。
+
 ### 9. 從手機確認
 
 手機（在 tailnet 裡）開 `http://100.x.y.z:8000/docs`，應該看得到 API 文件。

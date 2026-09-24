@@ -4,7 +4,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select
 
-from app.cli import build_parser, cleanup_expired_sessions, create_admin
+from app.cli import build_parser, cleanup_expired_sessions, create_admin, create_regular_user
 from app.models.session import RefreshSession
 from app.models.user import User, UserRole
 from app.security.password import verify_password
@@ -60,6 +60,82 @@ async def test_create_admin_reports_created_false_for_an_existing_email(db_sessi
     _, created = await create_admin(db_session, "boss@example.com", "a-good-password", "老闆")
 
     assert created is False
+
+
+async def test_create_regular_user_creates_a_user(db_session):
+    await create_regular_user(db_session, "member@example.com", "a-good-password", "成員")
+
+    user = await db_session.scalar(select(User).where(User.email == "member@example.com"))
+    assert user is not None
+    assert user.role is UserRole.USER
+    assert verify_password("a-good-password", user.password_hash)
+
+
+async def test_create_regular_user_updates_an_existing_regular_user(db_session):
+    """重跑種子不該失敗 —— 這個指令要能冪等地把密碼設回已知的值。"""
+    existing = await create_user(db_session, email="member@example.com", role=UserRole.USER)
+
+    user, created = await create_regular_user(
+        db_session, "member@example.com", "a-new-password", "新名字"
+    )
+
+    assert created is False
+    await db_session.refresh(existing)
+    assert existing.role is UserRole.USER
+    assert existing.display_name == "新名字"
+    assert verify_password("a-new-password", existing.password_hash)
+
+
+async def test_create_regular_user_refuses_to_demote_an_admin(db_session):
+    """**這一條是這個 task 最重要的行為。**
+
+    `create_admin` 對既有帳號是「提升」。如果這個指令對既有帳號是「降級」，
+    那麼打錯一個 email 就會把管理員默默降成一般使用者 —— 而那件事沒有任何
+    畫面會顯示出來，要到下一次登入發現進不去審核佇列才知道。
+
+    提升是可逆的（再跑一次 `create-admin`）；在「你不知道它發生了」的情況下
+    降級不是。所以這裡拒絕，而且要留著原本的密碼不動。
+    """
+    admin = await create_user(db_session, email="boss@example.com", role=UserRole.ADMIN)
+    original_hash = admin.password_hash
+
+    with pytest.raises(ValueError, match="已經是管理員"):
+        await create_regular_user(db_session, "boss@example.com", "a-new-password", "老闆")
+
+    await db_session.refresh(admin)
+    assert admin.role is UserRole.ADMIN
+    # 拒絕的意思是「什麼都沒做」，不是「角色沒改但密碼改了」
+    assert admin.password_hash == original_hash
+
+
+async def test_create_regular_user_rejects_a_short_password(db_session):
+    with pytest.raises(ValueError, match="密碼至少 8 個字元"):
+        await create_regular_user(db_session, "member@example.com", "short", "成員")
+
+
+async def test_create_regular_user_matches_an_existing_user_despite_whitespace_and_case(
+    db_session,
+):
+    """跟 create_admin 用同一套正規化 —— 兩個指令對「同一個 email」的判斷
+    不一致的話，會出現「create-admin 提升了 A，create-user 卻建出了 A 的分身」。
+    """
+    existing = await create_user(db_session, email="member@example.com", role=UserRole.USER)
+
+    _, created = await create_regular_user(
+        db_session, "  MEMBER@Example.COM  ", "a-good-password", "成員"
+    )
+
+    assert created is False
+    await db_session.refresh(existing)
+    assert verify_password("a-good-password", existing.password_hash)
+
+
+def test_parser_accepts_create_user():
+    args = build_parser().parse_args(
+        ["create-user", "member@example.com", "a-good-password", "成員"]
+    )
+    assert args.command == "create-user"
+    assert args.email == "member@example.com"
 
 
 def _session_row(user_id: int, *, expires_at: datetime) -> RefreshSession:

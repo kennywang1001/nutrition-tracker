@@ -1,15 +1,13 @@
 import { expect, test } from "@playwright/test";
-
-const EMAIL = "kenny.demo@example.com";
-const PASSWORD = "demo-pass-12345";
+import { ADMIN } from "./accounts.ts";
 
 test("登入之後看得到今日總覽", async ({ page }) => {
 	// 計畫二（Task 1）把登入後的畫面從一個扁平的「已登入」佔位頁換成
 	// React Router 的「今日總覽」路由——這裡的斷言跟著換，斷言的意圖
 	// 不變：登入成功後不再停在登入畫面。
 	await page.goto("/");
-	await page.getByLabel("Email").fill(EMAIL);
-	await page.getByLabel("密碼").fill(PASSWORD);
+	await page.getByLabel("Email").fill(ADMIN.email);
+	await page.getByLabel("密碼").fill(ADMIN.password);
 	await page.getByRole("button", { name: "登入" }).click();
 
 	await expect(page.getByRole("heading", { name: "今日總覽" })).toBeVisible();
@@ -21,8 +19,8 @@ test("access token 過期時會自動換票並重送，使用者不會被踢出�
 	// 規格 §9.1：這條守的是「401 → refresh → 重送」這個跟後端的約定。
 	// MSW 證明不了它——MSW 的 401 是我們自己寫的。
 	await page.goto("/");
-	await page.getByLabel("Email").fill(EMAIL);
-	await page.getByLabel("密碼").fill(PASSWORD);
+	await page.getByLabel("Email").fill(ADMIN.email);
+	await page.getByLabel("密碼").fill(ADMIN.password);
 	await page.getByRole("button", { name: "登入" }).click();
 	await expect(page.getByRole("heading", { name: "今日總覽" })).toBeVisible();
 
