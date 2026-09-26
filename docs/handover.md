@@ -43,7 +43,7 @@
 | P0 骨架 | Docker Compose + CI + repo 結構 | ✅ 隨 P1 長出來 |
 | P1 核心 | 資料模型 + CRUD API + 測試框架 | ✅ |
 | P2 AI 分析 | 拍照 → 辨識 → 估算 → **驗證** → 落庫 | ⬜ |
-| **P3 介面** | **PWA（TypeScript + React）** | ⬜ **下一步** |
+| **P3 介面** | **PWA（TypeScript + React）** | 🟡 **P3-A ✅、P3-B 計畫一 ✅、計畫二待 PR** |
 | P4 上線 | NAS 部署 + Tailscale | ✅ |
 
 > **P4 早於 P2/P3 完成是刻意的，但當初的理由有瑕疵。**
@@ -221,7 +221,7 @@ userland proxy 對發佈的埠做 SNAT）。按 IP 限速會把 tailnet 上所�
 
 ---
 
-## 6. 這個專案最有價值的產出：十八種「綠燈說謊」
+## 6. 這個專案最有價值的產出：二十五種「綠燈說謊」
 
 **每一種的機制都不同，而且都是實測踩到的，不是理論。**
 新加的任何測試都應該對照這份清單檢查一次。
@@ -355,6 +355,96 @@ refresh token 也放在 `localStorage`，一起清掉會讓 `reload()` 後掉回
 3 次，每次重試在 `>= 401` 下都各自觸發一次換票；但這不影響「數請求能不能
 分辨兩種行為」這個結論，正確版本下這個數字永遠是 0。）
 
+### 第 19～25 種是 P3-B 兩份計畫長出來的
+
+（編號只是識別，不是時間順序 —— 第 19～23 種發生在第 17、18 種之前。）
+
+**第 19 種：一個守衛所守的那條路徑，在所有使用它的測試裡從來沒被走過。**
+前端六個畫面測試共用的 fetch mock，開頭一律檢查 `Authorization` 標頭，
+沒帶就回 401 信封，docstring 寫著它在守「所有請求都要帶 token」。把那個
+檢查改成 `if (false)`，**138 則測試全部照樣綠** —— 那六個檔案的
+`beforeEach` 都是 `clearTokens()` 緊接著 `setTokens()`，沒有任何一則測試
+在 render 之後清掉 token，所以那條分支從來沒被走過。
+
+而它的 docstring 說「mock 不檢查 header 的話這個保證零鑑別力」也是誇大的：
+`client.test.ts` 的「帶上 Authorization」與 `meal-photo.test.tsx` 的
+「帶著 Authorization 取圖」一直在守那件事。那個 401 檢查是**後備防線**。
+**一道沒有人走過的後備防線，會在下一個跑覆蓋率的人手上被當成死碼清掉。**
+
+**第 20 種：原始碼掃描守衛分不出「程式碼在呼叫它」與「註解在解釋不要呼叫
+它」；而剝掉註解之後，剝太多又會讓它什麼都沒看到而變綠。**
+`lib/civil-date.ts` 禁止任何本地時間的 `Date` accessor，由一條掃描整個
+檔案原始碼的測試守著。結果那個模組**寫不出自己禁止什麼** —— docstring
+裡的 `getDate()` 例句會讓掃描紅。而同一個名字寫在測試檔的註解裡完全沒事
+（掃描只讀 `src/`）：**能講的人不需要講，該講的人不能講。**
+
+修法是掃描前先剝註解，而那開了新的失敗面：把 `stripComments` 改成
+`return ""`，「沒有任何非 UTC 的 Date accessor」**依然綠** —— 它什麼都
+沒看到。**守衛自己的前處理可以把它變成假綠燈**，所以那個前處理也要有
+自己的守衛（斷言剝完之後真正的程式碼還在視野裡）。
+
+**第 21 種：為了讓 lint 過而拿掉無障礙屬性，圖對螢幕閱讀器整個消失，
+而所有測試照樣綠。** Biome 的 `a11y/noInteractiveElementToNoninteractiveRole`
+把 SVG 的 `<rect role="img">` 判成錯（誤判，`<rect>` 不是互動元素）。
+為了讓 `npm run lint` 過而拿掉 `role`，7 則測試全綠 —— 它們一律用
+`getByTestId`。實測三種寫法：
+
+```
+<rect aria-label="…">             → getAllByRole("img") 找不到
+<rect role="img" aria-label="…">  → 找到
+<rect><title>…</title></rect>     → jsdom 裡 getByTitle 也找不到
+```
+
+`aria-label` 放在沒有語意角色的元素上，輔助技術多半忽略它。
+**缺一條斷言 `role` 的測試不是「role 可以拿掉」的許可，缺那條測試才是
+缺陷。** 跟 P3-A 的 `alt=""` 是同一課的推廣版。
+
+**第 22 種：測試的 mock 日期剛好等於執行日，於是它在那一天鑑別力為零。**
+趨勢畫面的核心保證是「日期錨點來自伺服器，不是前端算的今天」，測試把
+mock 的「今天」寫死成 `2026-09-21` —— **而那份計畫就是 2026-09-21 寫的。**
+在寫它的那一天，錯誤的實作（`new Date()` 自己算今天）會算出一模一樣的
+`from` / `to`，斷言照樣綠。隔一天執行才碰巧有效。
+**一條「只在某一天失效、而且沒有任何東西會提醒你」的測試是最糟的那種。**
+修法是挑一個真實的今天永遠不可能等於的日期（`2019-07-04`）。
+
+**第 23 種：突變同時打掉「被守的東西」與「斷言看得見它的能力」，兩者
+互相抵銷成全綠。** 一條測試要驗「搜尋結果不會被寫進離線快取」，斷言寫成
+`persisted.map(q => q.queryKey[0]).not.toContain("food-search")`。突變把
+key 的命名空間從 `["food-search", …]` 改成 `["foods", "search", …]`：
+排除**確實失效了**（搜尋結果真的被寫進 `localStorage`），但斷言用的字面值
+同時也對不上了。兩件事被同一個突變一起打中，淨結果是綠。
+
+修法是對 `queryKeys.foodSearch(…)` **實際產生的 key** 做深比對，不寫死
+命名空間字面值；再加一條正向斷言（別的 query 確實有被持久化）證明這一輪
+persist 真的跑過。**斷言不要跟突變的標的共用同一個字面值。**
+
+**第 24 種：用 `session.refresh()` 驗「髒物件沒有外洩」，而 `refresh()`
+刻意不 autoflush —— 這類測試永遠驗不到 autoflush 洩漏。** CLI 的
+`create-user` 對既有管理員要「拒絕，而且什麼都不改」，那個 `raise` 因此
+放在任何欄位賦值之前。測試用 `db_session.refresh(admin)` 讀回狀態，
+於是把 `raise` 延後到賦值之後**依然全綠**。實測兩種讀法：
+
+```
+弄髒物件 → refresh() → 密碼有變 = False，名字回到資料庫裡的值
+弄髒物件 → select()  → 密碼有變 = True，名字是被改掉的那個
+```
+
+`refresh()` 會先把物件標成過期（同時移出 dirty 集合）再發 SELECT，髒值
+從頭到尾沒有機會被寫出去。換成 `select()`（會觸發 autoflush）之後，
+同一個突變才紅。**「沒 commit」不等於「沒寫出去」，而驗證這件事必須用
+會 autoflush 的讀法。**
+
+**第 25 種：E2E 少一個同步點時，紅燈的訊息指向的正是它要守的那個東西。**
+`trend.spec.ts` 在按下「記錄」之後**直接點「趨勢」連結**，中間沒有任何
+等待。存檔還在飛的時候點走，`LogMeal` 就被卸載了。單獨跑永遠綠；整套
+11 條用 4 個 worker 平行跑時約一半機率紅。
+
+**而它紅的形式最惡劣：** 訊息是「柱子的 `aria-label` 沒變」，看起來像是
+`invalidateQueries(rangeStatsAll)` 壞了 —— 那正是這條測試要守的東西 ——
+實際上是那一餐根本沒存進去。**一個會把你指向錯誤地方的紅燈，比沒有紅燈
+更貴。** `daily-loop.spec.ts` 沒有這個問題，因為它送出後直接斷言
+`macro-kcal`，Playwright 的自動重試隱含地等到了導頁完成。
+
 ### 由此長出的幾條規矩
 
 1. **綠燈在被觀察到失敗之前不算證據。** 每個守衛都要突變過。
@@ -401,6 +491,14 @@ refresh token 也放在 `localStorage`，一起清掉會讓 `reload()` 後掉回
 | 改依賴後 | **必須重建映像**，`--reload` 只換程式碼不換依賴 |
 | **新增 migration 後** | 也**必須重建映像**。`Dockerfile` 是 `COPY . .`，migration 檔案是烤進映像的，不是掛載的 —— dev 的原始碼掛載只有 `./app`。症狀是 `relation "xxx" does not exist`，而檔案明明在 repo 裡 |
 | `ruff format` | **CI 只跑 `ruff check .`，沒有跑 `ruff format --check`**。這個 repo 有既有的格式差異，跑 `ruff format` 會把一堆跟你這次改動無關的行重排進 diff 裡。不要在不相干的改動裡順手跑它 |
+| vitest 的 `Test Files` / `Tests` | **都是實際數量的兩倍**。`vite.config.ts` 的 `typecheck.include` 跟一般 include 蓋到同一組檔案，每個檔案被跑兩次（一次執行、一次交給 tsc）。算數字時要除以二 |
+| 只 grep `Tests ` 那一行 | **會漏掉整個檔案沒編譯成功**。一個 transform parse error 讓 vitest 同時印出 `FAIL tests/x.test.tsx (0 test)` 與 `Tests 8 passed (8)`。驗證要一起 grep `FAIL` 與 `Unhandled` |
+| render 期例外的錯誤訊息 | `Failed Tests` 第一層顯示的是 `TestingLibraryElementError`（找不到元素），**真正的 `TypeError` 在要往下翻的 `Unhandled Errors` 區塊** —— 元件樹整個沒畫出來，沒有 error boundary 接住 |
+| `// biome-ignore` 在 JSX children 位置 | **會被當成文字**，裡面的 `<rect>` 之類會被解析成開始標籤 → parse error。那個位置要用 `{/* biome-ignore … */}`；`return (` 之後屬於運算式位置，`//` 形式合法 |
+| Windows Python 改 markdown | 文字模式寫入會把**整份檔案**轉成 CRLF，跟 `.gitattributes`（`* text=auto eol=lf`）衝突，整個 diff 變成雜訊。用 `newline="
+"` |
+| `tsBuildInfoFile` | 要放在**被 gitignore 蓋到的目錄**（這個 repo 是 `./node_modules/.tmp/`）。`tsconfig.e2e.json` 原本指向 `./e2e_modules/.tmp/`，於是那個 build cache 一直被 git 追蹤，每跑一次 typecheck 就多一個 modified |
+| react-router 的路由順序 | **依片段具體程度排名，不依宣告順序** —— 跟 FastAPI 完全不是同一種機制。`/foods/:id` 排在 `/foods/new` 前面，`/foods/new` 仍然命中靜態路徑（用 `matchRoutes` 實測過） |
 
 ---
 
@@ -424,6 +522,22 @@ refresh token 也放在 `localStorage`，一起清掉會讓 `reload()` 後掉回
 規格：[session 撤銷設計](superpowers/specs/2026-09-11-session-revocation-design.md)
 計畫：[實作計畫](superpowers/plans/2026-09-11-session-revocation.md)（含 20 條突變的實測結果）
 
+### 8.1a P3-B 是在一個沒有成立的前提下做完的
+
+P3-A 規格說「趨勢圖要看什麼、食物庫要怎麼找，這些問題在累積了兩週真實
+資料之後才有答案」。**那個前提到現在仍然沒有成立** —— 整個 P3 從來沒有
+被部署到 NAS，也就沒有被真的每天用過。
+
+底下這四件事**不得以 localhost 的結果代替標記完成**（`127.0.0.1` 是
+secure context，所以本機上這些能力全部可用，那個綠燈證明不了手機上的情況）：
+
+1. Plan 1 Task 1 的 HTTPS（`tailscale serve` 或 `tailscale cert` + caddy）
+2. 真機的 `isSecureContext` / `serviceWorker` / `navigator.locks` 驗證
+3. PWA 安裝、standalone、飛航模式檢查
+4. 一次真的用手機登入
+
+**做完這四件、真的用兩週之後，回頭看趨勢圖那一節。**
+
 ### 8.1b 仍需優先處理
 
 **`/api/auth/refresh` 與 `/api/auth/logout` 都沒有限速。** 兩者都是未認證、
@@ -445,6 +559,15 @@ refresh token 也放在 `localStorage`，一起清掉會讓 `reload()` 後掉回
 - **`GET /api/foods/frequent` 的可見性過濾今天是空轉的** ——
   `POST /api/meals` 已經擋住記錄看不到的食物。保留它是為了日後的
   「刪除食物 / 取消分享」，**但今天抓不到任何突變**（已在計畫裡誠實記錄）。
+- **建立全域食物只有 API，沒有 UI**（P3-B 計畫二 Task 8 加了
+  `POST /api/foods` 的 `is_global`，管理員限定）。`/foods/new` 仍然只建
+  私人食物。共用食物庫的建立介面留給之後。
+- **份量管理沒有 UI**（`POST /api/foods/{id}/portions` 存在，食物詳情頁
+  只唯讀顯示）。記一餐因此只能敲公克數，敲不出「一碗 = 150g」。
+- **趨勢圖是刻意的最小版**：七天、只有熱量、實際對目標。指標切換、期間
+  切換、自由日期選取都沒做 —— 理由是「要看什麼」在真的每天用過兩週之前
+  就是猜（P3-B 規格 §1.1、§12）。而**那兩週還沒發生**，見下。
+- **編輯自己已送出的提案**：後端沒有這個端點，目前只能等審核結果。
 
 ---
 
