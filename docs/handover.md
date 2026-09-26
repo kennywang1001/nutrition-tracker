@@ -498,6 +498,7 @@ persist 真的跑過。**斷言不要跟突變的標的共用同一個字面值�
 | Windows Python 改 markdown | 文字模式寫入會把**整份檔案**轉成 CRLF，跟 `.gitattributes`（`* text=auto eol=lf`）衝突，整個 diff 變成雜訊。用 `newline="
 "` |
 | `tsBuildInfoFile` | 要放在**被 gitignore 蓋到的目錄**（這個 repo 是 `./node_modules/.tmp/`）。`tsconfig.e2e.json` 原本指向 `./e2e_modules/.tmp/`，於是那個 build cache 一直被 git 追蹤，每跑一次 typecheck 就多一個 modified |
+| 改了後端的 request/response schema | **一定要 `npm run gen:api` 重新產生 `frontend/src/api/schema.d.ts`**，而**本機沒有任何東西會提醒你**。唯一的守衛是 CI 的 `contract` job（它起後端、重新產生、`git diff --exit-code`）。P3-B 計畫二 Task 8 加了 `FoodCreateRequest.is_global` 卻沒重新產生，backend / frontend / e2e 三個 job 全過，只有 contract 紅 |
 | react-router 的路由順序 | **依片段具體程度排名，不依宣告順序** —— 跟 FastAPI 完全不是同一種機制。`/foods/:id` 排在 `/foods/new` 前面，`/foods/new` 仍然命中靜態路徑（用 `matchRoutes` 實測過） |
 
 ---

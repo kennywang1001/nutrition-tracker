@@ -863,6 +863,11 @@ export interface components {
             /** Brand */
             brand?: string | null;
             nutrition: components["schemas"]["NutritionInput"];
+            /**
+             * Is Global
+             * @default false
+             */
+            is_global: boolean;
         };
         /** FoodResponse */
         FoodResponse: {
