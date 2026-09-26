@@ -195,7 +195,7 @@ carb_g        Decimal, 預設 0, 0–1000
 - Modify: `frontend/src/index.css`
 - Create: `frontend/e2e/mobile-form-zoom.spec.ts`
 
-- [ ] **Step 1: 先寫守衛（這次真的先寫，而且它現在就該紅）**
+- [x] **Step 1: 先寫守衛（這次真的先寫，而且它現在就該紅）**
 
 建 `frontend/e2e/mobile-form-zoom.spec.ts`。
 
@@ -221,7 +221,7 @@ carb_g        Decimal, 預設 0, 0–1000
 `button` 不在此限（iOS 不會因為按鈕字級放大），但**如果你想一起納入也可以** ——
 在註解裡說明你的選擇。
 
-- [ ] **Step 2: 跑它，確認它現在就紅**
+- [x] **Step 2: 跑它，確認它現在就紅**
 
 ```bash
 cd F:/wallet && docker compose up -d
@@ -231,7 +231,20 @@ cd F:/wallet/frontend && npx playwright test e2e/mobile-form-zoom.spec.ts --repo
 **這一步跟前幾份計畫不同：這條測試在寫實作之前就該紅**，因為缺陷現在真的存在。
 如果它一開始就綠，**停下來報告** —— 代表斷言沒抓到東西。
 
-- [ ] **Step 3: 修**
+**實測填回（2026-09-26，修 CSS 之前）：** 兩條測試都紅。
+
+```
+Error: 登入畫面 的 <input id="email" name="" type="email"> computed font-size 是 13.3333px，
+低於 iOS Safari 的 16px 門檻——會觸發自動放大。
+```
+```
+Error: 食物庫畫面 的 <input id="food-search-input" name="" type="text"> computed font-size 是 13.3333px，
+低於 iOS Safari 的 16px 門檻——會觸發自動放大。
+```
+
+跟開工前查證的量測值（13.3333px）完全吻合。
+
+- [x] **Step 3: 修**
 
 `frontend/src/index.css` 加：
 
@@ -253,16 +266,27 @@ textarea {
 **放在哪裡、要不要一併調整周邊間距由你決定** —— 16px 比原本的 13.33px 大，
 表單會變高一點。如果那讓某個畫面變得難看，一起調，並在報告裡說明。
 
-- [ ] **Step 4: 跑守衛，確認它綠**
+- [x] **Step 4: 跑守衛，確認它綠**（連跑兩次確認不是碰巧綠一次）
 
-- [ ] **Step 5: 突變驗證**
+- [x] **Step 5: 突變驗證**
 
 > **必須成立：** 把 `font-size: 16px` 改成 `15px`，Step 1 那條測試必須紅，
 > 而且訊息要指出是哪一個控制項、實際幾 px。
 >
-> **實測填回：** ——
+> **實測填回：** 成立。兩條測試都紅：
+>
+> ```
+> Error: 登入畫面 的 <input id="email" name="" type="email"> computed font-size 是 15px，
+> 低於 iOS Safari 的 16px 門檻——會觸發自動放大。
+> ```
+> ```
+> Error: 食物庫畫面 的 <input id="food-search-input" name="" type="text"> computed font-size 是 15px，
+> 低於 iOS Safari 的 16px 門檻——會觸發自動放大。
+> ```
+>
+> 訊息同時指出控制項（id/tag/type）與實際 px。驗證後已改回 16px。
 
-- [ ] **Step 6: 全套驗證與 commit**
+- [x] **Step 6: 全套驗證與 commit**
 
 ```bash
 cd F:/wallet/frontend && npm run test 2>&1 | grep -E "Test Files|Tests |Type Errors|FAIL|Unhandled"
