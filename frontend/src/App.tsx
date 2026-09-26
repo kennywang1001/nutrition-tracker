@@ -21,16 +21,21 @@ import { FoodLibrary } from "./screens/FoodLibrary";
 import { Login } from "./screens/Login";
 import { LogMeal } from "./screens/LogMeal";
 import { NewFood } from "./screens/NewFood";
+import { Supplements } from "./screens/Supplements";
 import { Today } from "./screens/Today";
 import { Trend } from "./screens/Trend";
 
-/** `/log` 路由：記完一餐之後導回今日總覽。
+/** `/` 路由（P3-C Task 3：記一餐變成首頁，使用者原話「記一餐應該放在
+ *  首頁」）：記完一餐之後導去 `/today`，不是導回自己。
  *
- *  `onSaved` 不直接放「導回今日總覽」以外的邏輯——快取的失效已經在
+ *  **故意不導回 `/`。** 使用者記完一餐要的是立刻看到「數字變了」（今日
+ *  總覽），導回記一餐本身等於畫面上什麼都沒發生——使用者會以為沒記進去。
+ *
+ *  `onSaved` 不直接放「導向哪裡」以外的邏輯——快取的失效已經在
  *  `LogMeal` 內部的 mutation `onSuccess` 做掉了，這裡只管畫面切換。 */
 function LogMealRoute() {
 	const navigate = useNavigate();
-	return <LogMeal onSaved={() => navigate("/")} />;
+	return <LogMeal onSaved={() => navigate("/today")} />;
 }
 
 function Nav({ onLoggedOut }: { onLoggedOut: () => void }) {
@@ -84,8 +89,10 @@ export function App() {
 					<Nav onLoggedOut={() => setLoggedIn(false)} />
 					<main className="app-main">
 						<Routes>
-							<Route path="/" element={<Today />} />
-							<Route path="/log" element={<LogMealRoute />} />
+							{/* P3-C Task 3：首頁從今日總覽換成記一餐，今日總覽搬到
+								/today（使用者原話「記一餐應該放在首頁」）。 */}
+							<Route path="/" element={<LogMealRoute />} />
+							<Route path="/today" element={<Today />} />
 							<Route path="/trend" element={<Trend />} />
 							<Route path="/foods" element={<FoodLibrary />} />
 							{/* 順序在這裡不像後端 foods.py 的 /frequent /recent 那樣要緊
@@ -96,6 +103,11 @@ export function App() {
 								兩個路由誰先誰後寫在這裡純粹是可讀性。 */}
 							<Route path="/foods/new" element={<NewFood />} />
 							<Route path="/foods/:id" element={<FoodDetail />} />
+							{/* 補劑（P3-C Task 2）：新增「我有在使用的」＋「當天有吃就點
+								一份進去」。刻意不加第六個 tab，入口在 Today.tsx 的
+								「今日補劑」區塊（計畫的說明：320px 寬度下 tab bar 每格
+								只剩 53px，加不下去）。 */}
+							<Route path="/supplements" element={<Supplements />} />
 							{/* 不做前端導向：非管理員直接輸入這個網址時，讓它照常渲染、
 								讓 GET /api/admin/food-revisions 打出去、讓後端的
 								require_admin 回 403（見 AdminRevisions.tsx 的說明、

@@ -63,15 +63,21 @@ type OfflinePersistOptions = PersistQueryClientProviderProps["persistOptions"];
  *  **`food-search`：** 使用者每敲一個字都會產生一組新的 query key，結果在
  *  `localStorage` 裡越堆越多。
  *
- *  兩者塞爆的症狀一樣惡劣：`setItem` 丟 `QuotaExceededError`，於是**整份
+ *  **`supplement-search`（P3-C Task 2）：跟 `food-search` 一模一樣的理由**——
+ *  `Supplements.tsx` 的搜尋框也是每敲一個字就一組新 key（`useSupplementSearch`，
+ *  `api/supplements.ts`），會在 `localStorage` 裡累積出跟食物搜尋一樣的
+ *  失敗模式，所以比照辦理排除。
+ *
+ *  三者塞爆的症狀一樣惡劣：`setItem` 丟 `QuotaExceededError`，於是**整份
  *  離線快取都寫不進去** —— 不是「搜尋結果存不了」，是連今日總覽也一起沒了。
  *  而那個失敗發生在背景的節流寫入裡，畫面上完全看不出來。
  *
- *  兩個 key 都刻意用獨立的第一段命名空間（不掛在 `"meals"` / `"foods"`
- *  底下，見 `api/queries.ts`），所以這裡直接認 `queryKey[0]`。 */
+ *  三個 key 都刻意用獨立的第一段命名空間（不掛在 `"meals"` / `"foods"` /
+ *  `"supplements"` 底下，見 `api/queries.ts`），所以這裡直接認 `queryKey[0]`。 */
 const NOT_PERSISTED: ReadonlySet<unknown> = new Set([
 	"meal-photo",
 	"food-search",
+	"supplement-search",
 ]);
 
 /** 每次呼叫回一組**獨立**的 persist 設定，包含一個新的 persister

@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
+import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { queryKeys } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
@@ -9,11 +10,18 @@ import { clearTokens, setTokens } from "../src/auth/store";
 import { Today } from "../src/screens/Today";
 import { json, mockApiByPath as mockApi } from "./helpers/mock-api";
 
+// 需要 MemoryRouter：P3-C Task 2 在「今日補劑」區塊加了一個連到
+// /supplements 的 <Link>，不掛 Router 會直接炸掉（跟 food-library.test.tsx
+// 需要 MemoryRouter 的理由一樣）。
 function wrap(children: ReactNode) {
 	const client = new QueryClient({
 		defaultOptions: { queries: { retry: false } },
 	});
-	return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+	return (
+		<QueryClientProvider client={client}>
+			<MemoryRouter>{children}</MemoryRouter>
+		</QueryClientProvider>
+	);
 }
 
 const STATS_WITH_TARGET = {

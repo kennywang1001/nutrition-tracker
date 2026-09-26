@@ -93,8 +93,11 @@ test("記一餐之後，趨勢圖上今天那根柱子跟著變", async ({ page,
 	await page.getByRole("button", { name: "記錄" }).click();
 
 	// **等記錄真的完成再走。** `LogMeal` 的 mutation `onSuccess` 會呼叫
-	// `onSaved()`，由 `LogMealRoute` 導回今日總覽——那個標題出現就是
-	// 「POST /api/meals 成功、而且失效已經發出」的同步點。
+	// `onSaved()`，由 `LogMealRoute` 導去 `/today`（P3-C Task 3：首頁換成
+	// 記一餐之後，記完一餐要導去今日總覽，不是導回自己）——「今日總覽」
+	// 那個標題出現就是「POST /api/meals 成功、而且失效已經發出」的同步點，
+	// 跟這條測試被寫下來時（Task 3 之前 onSaved 導回 `/`）用的是同一個
+	// 訊號，只是目的地換了。
 	//
 	// ⚠️ **不可以省略這一步直接點「趨勢」。** 那樣沒有任何東西等存檔，
 	// 點走會在請求還在飛的時候把 `LogMeal` 卸載掉。

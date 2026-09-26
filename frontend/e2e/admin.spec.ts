@@ -106,6 +106,18 @@ test("送審編輯 → 管理員登入 → 佇列看到新舊並排 → 通過 �
 	const memberPage = await memberContext.newPage();
 	await login(memberPage, MEMBER);
 	await memberPage.getByRole("link", { name: "食物庫" }).click();
+	// **等食物庫真的掛載完成再填搜尋框。** P3-C Task 3 之後首頁是記一餐，
+	// 它跟食物庫剛好用同一個可存取名稱「搜尋食物」（各自的 <label>）。
+	// 如果不等，`getByLabel("搜尋食物")` 在路由真正切換完成之前會抓到
+	// 記一餐畫面上還沒卸載的那個輸入框、把字填在那裡，接著記一餐卸載、
+	// 食物庫掛載出一個全新的空白搜尋框，這裡的 fill 就白填了——後面
+	// 「找得到剛建立的食物」會因為搜尋框其實是空的而永遠等不到，逾時
+	// 訊息卻只會說『連結找不到』，看起來像食物庫壞了，實際上是這裡少了
+	// 一個同步點（跟 e2e/trend.spec.ts 那個「送出就立刻點下一個連結」的
+	// 坑是同一類問題）。
+	await expect(
+		memberPage.getByRole("heading", { name: "食物庫" }),
+	).toBeVisible();
 	await memberPage.getByLabel("搜尋食物").fill(foodName);
 	await memberPage.getByRole("link", { name: foodName }).click();
 
@@ -139,6 +151,13 @@ test("送審編輯 → 管理員登入 → 佇列看到新舊並排 → 通過 �
 	await expect(row).not.toBeVisible();
 
 	await adminPage.getByRole("link", { name: "食物庫" }).click();
+	// 這裡的前一頁是「審核」（AdminRevisions），沒有同名的「搜尋食物」
+	// 欄位可以搶——理論上不會撞到上面那個坑，但既然要等，就跟上面用
+	// 同一個習慣：明確等食物庫掛載完成，不要依賴「反正這裡沒有同名
+	// 元素」這個現在成立、以後不保證成立的前提。
+	await expect(
+		adminPage.getByRole("heading", { name: "食物庫" }),
+	).toBeVisible();
 	await adminPage.getByLabel("搜尋食物").fill(foodName);
 	await expect(adminPage.getByText("250 kcal / 100g")).toBeVisible();
 
@@ -159,6 +178,12 @@ test("駁回 → 提案者在食物庫的編輯歷史看得到駁回理由", asy
 	const memberPage = await memberContext.newPage();
 	await login(memberPage, MEMBER);
 	await memberPage.getByRole("link", { name: "食物庫" }).click();
+	// 同一個坑，見上面「送審編輯」測試裡第一次點「食物庫」之後的說明：
+	// 首頁（記一餐）跟食物庫共用「搜尋食物」這個可存取名稱，不等食物庫的
+	// heading 出現就填搜尋框，會把字填進記一餐畫面正要被卸載的那個輸入框。
+	await expect(
+		memberPage.getByRole("heading", { name: "食物庫" }),
+	).toBeVisible();
 	await memberPage.getByLabel("搜尋食物").fill(foodName);
 	await memberPage.getByRole("link", { name: foodName }).click();
 
@@ -238,7 +263,9 @@ test("非管理員打 admin 端點 → 403 且沒有多打一次 /api/auth/refre
 	});
 
 	await login(page, MEMBER);
-	await expect(page.getByRole("heading", { name: "今日總覽" })).toBeVisible();
+	// P3-C Task 3：首頁從今日總覽換成記一餐，登入後的落地頁跟著換——這裡
+	// 只是要確認登入成功，不特別在乎落在哪一頁，斷言跟著換掉。
+	await expect(page.getByRole("heading", { name: "記一餐" })).toBeVisible();
 
 	// MEMBER 看不到「審核」那個 tab（TabBar 的第五格是管理員限定），
 	// 所以沒有連結可以點——這裡模擬的是「直接輸入網址」，但刻意不用

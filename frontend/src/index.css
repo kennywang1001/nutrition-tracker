@@ -100,3 +100,16 @@ body {
 	color: #b33;
 	font-size: 13px;
 }
+
+/* **iOS Safari 的門檻值，不是品味。** computed font-size < 16px 的輸入框
+   被點進去時，iOS Safari 會自動把整頁放大——版面因此比視窗寬，使用者得
+   往旁邊滑。這是 app 第一次被真的用（2026-09-26）回報的第一個問題。
+
+   Chromium 不做這個放大，所以本機、CI、Playwright 全部看不見。
+   守衛在 e2e/mobile-form-zoom.spec.ts，它釘的是「字級 ≥ 16px」這條規則，
+   不是「頁面有沒有被放大」那個在 Chromium 裡永遠不會發生的症狀。 */
+input,
+select,
+textarea {
+	font-size: 16px;
+}

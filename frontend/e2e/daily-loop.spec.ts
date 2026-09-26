@@ -79,12 +79,21 @@ test("記一餐之後，今日總覽的數字真的變了", async ({ page, reque
 
 	await login(page);
 
+	// P3-C Task 3：首頁從今日總覽換成記一餐——登入後落地的是記一餐畫面，
+	// 要先切到今日總覽才讀得到基準值。
+	await page.getByRole("link", { name: "今日總覽" }).click();
 	const before = await page.getByTestId("macro-kcal").textContent();
 
 	await page.getByRole("link", { name: "記一餐" }).click();
 	await page.getByText(foodName).click();
 	await page.getByRole("button", { name: "記錄" }).click();
 
+	// 記錄成功後 LogMealRoute 的 onSaved 導去 /today（Task 3：記完一餐要
+	// 讓使用者看到數字變了，不是導回記一餐自己）。這裡沒有另外顯式等
+	// 「今日總覽」標題出現——跟原本一樣，靠下面這個斷言本身的自動重試
+	// 隱含地等到導頁完成：`macro-kcal` 這個 testid 只存在於 /today，
+	// 在導頁完成之前 Playwright 找不到它、會一直重試，直到 onSaved
+	// 導頁完成、元素出現、文字真的變了為止。
 	await expect(page.getByTestId("macro-kcal")).not.toHaveText(before ?? "");
 });
 
@@ -103,6 +112,9 @@ test("今日總覽不帶 date 參數——日界線由伺服器決定", async ({
 	});
 
 	await login(page);
+	// P3-C Task 3：首頁換成記一餐，/api/stats/daily 只在 /today 掛載時才打，
+	// 要先切過去。
+	await page.getByRole("link", { name: "今日總覽" }).click();
 	await expect(page.getByTestId("macro-kcal")).toBeVisible();
 
 	expect(statsRequests.length).toBeGreaterThan(0);
