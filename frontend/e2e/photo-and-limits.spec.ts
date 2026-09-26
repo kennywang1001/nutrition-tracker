@@ -119,6 +119,10 @@ test("照片上傳之後，取回來的是圖不是 404", async ({ page, request
 	await page.getByLabel("密碼").fill(ADMIN.password);
 	await page.getByRole("button", { name: "登入" }).click();
 
+	// P3-C Task 3：首頁從今日總覽換成記一餐，MealList／照片在 /today，
+	// 要先切過去才看得到。
+	await page.getByRole("link", { name: "今日總覽" }).click();
+
 	const photoContainer = page.getByTestId(`meal-photo-${meal.id}`);
 	await expect(photoContainer.locator("img")).toBeVisible();
 	const src = await photoContainer.locator("img").getAttribute("src");

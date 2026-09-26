@@ -49,7 +49,7 @@ beforeEach(() => {
 describe("TabBar", () => {
 	it("四個目的地都在", async () => {
 		renderAt("/");
-		for (const name of ["今日總覽", "記一餐", "趨勢", "食物庫"]) {
+		for (const name of ["記一餐", "今日總覽", "趨勢", "食物庫"]) {
 			expect(await screen.findByRole("link", { name })).toBeInTheDocument();
 		}
 	});
@@ -70,16 +70,22 @@ describe("TabBar", () => {
 		);
 	});
 
-	it("在 /log 時亮的是記一餐，不是今日總覽", async () => {
+	it("在 /today 時亮的是今日總覽，不是記一餐", async () => {
 		// 上面那條測試（停在 /trend）只檢查趨勢那一格亮著，**沒檢查別格暗著**
-		// ——把每一格都標成 aria-current 的實作照樣會綠。這條補那個洞。
+		// ——把每一格都標成 aria-current 的實作照樣會綠。這條補那個洞，而且
+		// 挑的是最容易踩雷的那一格：`/` 現在是記一餐（P3-C Task 3：記一餐
+		// 變成首頁），如果哪天有人把 NavLink 換成 `<Link>` +
+		// `useLocation()` + `startsWith`，`"/today".startsWith("/")` 為真，
+		// 記一餐會被誤判成也在啟用中。
 		//
-		// ## 它守的不是 `end`（實測過，計畫原本寫錯了）
+		// （這條測試原本停在 `/log`，守的是「今日總覽 vs 記一餐」；P3-C
+		// Task 3 把路由換成 `/` = 記一餐、`/today` = 今日總覽之後，`/log`
+		// 不再是任何一格的目的地，改守 `/today`，角色互換但驗的道理不變。）
 		//
-		// 計畫原本說「拿掉 TABS 裡 `/` 那一格的 `end: true`，這條會紅」。
-		// **實測：3 則全綠。** react-router 8.3.1 的 NavLink 對 `to="/"` 有
-		// 內建特例，跟 `end` 無關 ——
-		// `node_modules/react-router/dist/development/lib/dom/lib.js`：
+		// ## 它守的不是 `end`（實測過，計畫一原本寫錯了，這裡沿用同一個結論）
+		//
+		// react-router 8.3.1 的 NavLink 對 `to="/"` 有內建特例，跟 `end` 無關
+		// ——`node_modules/react-router/dist/development/lib/dom/lib.js`：
 		//
 		//   const endSlashPosition = toPathname !== "/" && toPathname.endsWith("/")
 		//     ? toPathname.length - 1 : toPathname.length;
@@ -88,7 +94,7 @@ describe("TabBar", () => {
 		//         && locationPathname.charAt(endSlashPosition) === "/");
 		//
 		// `toPathname === "/"` 時 endSlashPosition 是 1，於是非精確分支要求
-		// `locationPathname.charAt(1) === "/"` —— 對 `/log` 那是 "l"，恆為
+		// `locationPathname.charAt(1) === "/"` —— 對 `/today` 那是 "t"，恆為
 		// false。**所以 `end` 對根路由那一格是無作用的保險**（留著是因為它
 		// 精確表達意圖，而且不排除將來 react-router 改掉這個內建行為）。
 		//
@@ -97,16 +103,15 @@ describe("TabBar", () => {
 		// 那正是 TabBar 的 docstring 主張的架構選擇。實測過的突變：
 		// 把 NavLink 換成 `<Link>` 加 `useLocation()` 加
 		// `location.pathname.startsWith(tab.to)`，**這條與上面那條都紅**
-		// （`/log`.startsWith("/") 為真，今日總覽也亮了）。
+		// （`/today`.startsWith("/") 為真，記一餐也亮了）。
 		//
 		// 也就是說：這條測試有鑑別力，只是標的跟計畫寫的不是同一個。
-		renderAt("/log");
+		renderAt("/today");
 
-		expect(await screen.findByRole("link", { name: "記一餐" })).toHaveAttribute(
-			"aria-current",
-			"page",
-		);
-		expect(screen.getByRole("link", { name: "今日總覽" })).not.toHaveAttribute(
+		expect(
+			await screen.findByRole("link", { name: "今日總覽" }),
+		).toHaveAttribute("aria-current", "page");
+		expect(screen.getByRole("link", { name: "記一餐" })).not.toHaveAttribute(
 			"aria-current",
 		);
 	});

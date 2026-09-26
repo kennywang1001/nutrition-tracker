@@ -561,12 +561,51 @@ tab bar 現在 4 格（管理員 5 格）。加到 6 格在 320px 寬度下每�
 
 > **必須成立：** 把 `onSaved` 的導向從 `/today` 改回 `/`，至少一條測試紅。
 >
-> **實測填回：** ——
+> **實測填回（2026-09-26）：成立。** `frontend/src/App.tsx` 的
+> `LogMealRoute` 改成 `navigate("/")` 之後，Playwright 三條 E2E 一起紅
+> （`daily-loop.spec.ts`、`foods.spec.ts`、`trend.spec.ts`）：
+> ```
+> Error: expect(locator).not.toHaveText(expected) failed
+> Locator: getByTestId('macro-kcal')
+>  ❯ e2e\daily-loop.spec.ts:97:51
+> ```
+> ```
+> Error: expect(locator).toBeVisible() failed
+> Locator: getByRole('heading', { name: '今日總覽' })
+>  ❯ e2e\foods.spec.ts:53:60
+>  ❯ e2e\trend.spec.ts:115:60
+> ```
+> 三條的訊息都指向正確的地方：記完一餐之後畫面卡在記一餐（因為
+> onSaved 導回了自己），今日總覽的 heading／`macro-kcal` 因此永遠等不到。
+> 這個 task 沒有任何 vitest 單元測試守這個導向目標（`LogMealRoute` 只在
+> `App.tsx` 裡被用到，`tests/log-meal.test.tsx` 測的是 `<LogMeal>` 本身、
+> 用 `vi.fn()` 假的 `onSaved`，看不到真正導去哪裡）——**這條突變只能靠
+> E2E 驗**，這件事本身也回答了「daily-loop 與 trend 改完之後還守得到
+> 原本要守的東西嗎」那個問題：守得到，而且是唯一守得到的地方。
+> 驗證後已改回 `navigate("/today")`。
 
 > **必須成立：** 把 tab bar 第一格改回今日總覽（`end: true` 那格），
 > 至少一條測試紅。
 >
-> **實測填回：** ——
+> **實測填回（2026-09-26）：成立。** 把 `TabBar.tsx` 的 `TABS[0]` 改回
+> `{ to: "/", label: "今日總覽", end: true }`（`to: "/today"` 那格的
+> label 對應改回「記一餐」，`to` 不變——模擬「只有 label 跟語意被改
+> 回去、路由沒有一起改」這個最常見的疏漏），`tests/tab-bar.test.tsx`
+> 那條「在 /today 時亮的是今日總覽，不是記一餐」紅：
+> ```
+> Error: expect(element).toHaveAttribute("aria-current", "page")
+> Expected the element to have attribute:
+>   aria-current="page"
+> Received:
+>   null
+>  ❯ tests/tab-bar.test.tsx:113:5
+> ```
+> 因為 `to="/today"` 那格的 label 被換成「今日總覽」之後，畫面上再也
+> 沒有 `name: "今日總覽"` 的連結精確對應 `/today`（`to="/"` 那格雖然
+> `label` 也叫「今日總覽」，但 `end: true` 讓它在 `/today` 不會亮），
+> `findByRole("link", { name: "今日總覽" })` 找到的是 `to="/"` 那個
+> 未啟用的連結。驗證後已改回 `{ to: "/", label: "記一餐", end: true }`
+> 與 `{ to: "/today", label: "今日總覽" }`。
 
 ### 一個容易漏的地方
 
@@ -574,6 +613,88 @@ tab bar 現在 4 格（管理員 5 格）。加到 6 格在 320px 寬度下每�
 換成 `/` = 記一餐之後，`end` 仍然要留在 `/` 那一格（不是跟著「今日總覽」
 這個標籤走）。**計畫一 Task 3 實測過：`end` 對 `to="/"` 在 react-router 8
 其實是無作用的保險**（NavLink 對 `to="/"` 有內建特例），但留著表達意圖。
+
+### 跟計畫不一致 / 執行中額外發現的事（2026-09-26）
+
+**1. 受影響的檔案比計畫列的多得多。** 計畫原文只點名
+`e2e/auth.spec.ts`、`e2e/daily-loop.spec.ts`、`e2e/trend.spec.ts`、
+`tests/app.test.tsx`。實際跑出來，路由對調（`/` 今日總覽→記一餐、
+`/log`→`/today`）牽動了**每一支會經過首頁、或直接斷言「今日總覽」/
+「記一餐」的 E2E**：
+
+- `e2e/admin.spec.ts`（第三條測試的落地頁斷言）
+- `e2e/foods.spec.ts`（要先切到 `/today` 才讀得到基準熱量）
+- `e2e/mobile-form-zoom.spec.ts`（`login()` 的落地頁斷言、`/supplements`
+  測試要先切到今日總覽才看得到「新增補劑」入口）
+- `e2e/photo-and-limits.spec.ts`（`meal-photo-*` 這個 testid 在
+  `/today` 上，登入後不再直接可見）
+- `e2e/supplements.spec.ts`（同樣要先切到 `/today`）
+- `tests/tab-bar.test.tsx`（`/log` 這個路徑已經不存在，原本守在那裡的
+  「不要自己拿 useLocation 比字串」測試改守 `/today`）
+
+跑 vitest 只紅了一條（`tests/tab-bar.test.tsx`），因為 vitest 完全不
+碰路由以外的 E2E 斷言；上面這一長串是跑 `npx playwright test` 之後才
+浮出來的，跟計畫寫「已知會受影響的」清單的落差本身就是這個 task 標題
+說的「實際情況以你跑出來的為準」。
+
+**2. `tests/app.test.tsx` 沒有紅，但那是因為斷言寫得太弱，不是行為沒變。**
+「有 token 時顯示今日總覽，而不是登入畫面」原本只斷言
+`queryByRole("heading", { name: "登入" })` 不存在——首頁換成記一餐之後
+這個斷言照樣成立（登入畫面確實不見了），所以這條測試**不會自動變
+紅**。但它的標題與意圖已經跟實際行為脫節（首頁現在顯示的是記一餐，
+不是今日總覽）。已經把標題改成「有 token 時顯示記一餐（首頁），而不是
+登入畫面」，並加一行 `getByRole("heading", { name: "記一餐" })` 的正面
+斷言——這樣行為的意圖有被真的驗到，而不是巧合地綠。
+
+**3. 一個計畫完全沒預料到的競態：首頁與食物庫共用「搜尋食物」這個可
+存取名稱，會讓既有的「食物庫」E2E 出現機率性逾時，而且訊息會指向
+錯誤的地方。** 這是這個 task 唯一真正花時間除錯的地方，記錄如下：
+
+`e2e/admin.spec.ts` 的「駁回」測試在改完路由之後，Playwright 連跑
+15 條裡穩定紅一條，逾時等 `getByRole('link', { name: foodName })`：
+```
+Error: locator.click: Test ended.
+Call log:
+  - waiting for getByRole('link', { name: 'E2E 全域食物駁回 ...' })
+```
+訊息看起來像是「食物庫的搜尋壞了、或者食物沒建成功」。**追下去發現
+完全是另一回事：** 測試的寫法是 `login()`（落地在首頁）→ 立刻點
+「食物庫」連結 → **不等任何同步訊號** → 立刻 `getByLabel("搜尋食物")
+.fill(foodName)`。這個寫法在改路由之前一直是安全的，因為舊首頁
+（`Today`）畫面上沒有任何叫「搜尋食物」的欄位——Playwright 的
+`getByLabel` 自動等待機制因此**別無選擇，只能等到食物庫真的掛載完成**
+才找得到目標，行為正確純屬「首頁沒有同名元素」這個巧合。
+
+**首頁換成記一餐之後，這個巧合消失了**：`LogMeal.tsx` 自己也有一個
+`<label htmlFor="food-search-input">搜尋食物</label>`（記一餐的食物
+搜尋框）。點下「食物庫」連結之後，react-router 的路由切換不是跟
+`.click()` 的 resolve 同步發生的——如果 `.fill()` 在記一餐畫面卸載
+完成之前就執行，`getByLabel("搜尋食物")` 會抓到**還沒被卸載的記一餐
+搜尋框**、把食物名填在那裡；接著記一餐才真正卸載、食物庫掛載出一個
+全新的空白搜尋框，剛剛的 `.fill()` 等於白填。後面等食物連結出現自然
+永遠等不到——而逾時訊息只會說「連結找不到」，不會提示「搜尋框其實
+是空的」，第一眼很容易誤判成食物庫的搜尋或建立食物本身壞了。
+
+用 debug 腳本（直接用 Playwright API 手動重播同一個流程、印出
+`inputValue()`）重現過：拿掉中間的等待、用 `browser.newContext()` +
+MEMBER 登入 + 點食物庫 + 立刻填搜尋框，兩秒後讀回的 `inputValue()`
+是空字串 `""`，而不是預期的搜尋字串。**跟 `e2e/trend.spec.ts` 那個
+「送出就立刻點下一個連結」的坑是同一個類別**：路由/資料還在飛的時候
+就跟下一步互動，而且巧合地綠太久，紅的時候訊息還指向錯地方。
+
+**修法：** 在 `e2e/admin.spec.ts` 兩條測試裡、每一次點「食物庫」連結
+之後、填「搜尋食物」之前，加一行明確等待
+`getByRole("heading", { name: "食物庫" }).toBeVisible()`，強迫
+Playwright 確認舊路由（記一餐）真的卸載完、食物庫真的掛載完，才開始
+跟搜尋框互動。加完之後 Playwright 連跑三輪（4–6 worker 平行）全部
+15/15 綠，沒有再復發。
+
+**這個坑不會出現在計畫原本點名的 `daily-loop.spec.ts` / `trend.spec.ts`
+/ `foods.spec.ts` 里**——它們要嘛不透過「食物庫」進場、要嘛在點「食物
+庫」之前的畫面（`FoodDetail`、`AdminRevisions`）本來就沒有「搜尋食物」
+這個標籤可以搶，所以沒有同一種巧合可以被打破。這正是為什麼計畫的
+「已知會受影響的」清單沒漏到它——**這個風險是路由重排之後才第一次
+成立的，寫計畫的時候它還不存在。**
 
 ---
 

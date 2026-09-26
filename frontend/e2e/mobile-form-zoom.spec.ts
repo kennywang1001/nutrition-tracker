@@ -24,7 +24,8 @@ async function login(page: Page) {
 	await page.getByLabel("Email").fill(ADMIN.email);
 	await page.getByLabel("密碼").fill(ADMIN.password);
 	await page.getByRole("button", { name: "登入" }).click();
-	await expect(page.getByRole("heading", { name: "今日總覽" })).toBeVisible();
+	// P3-C Task 3：首頁從今日總覽換成記一餐，登入後的落地頁跟著換。
+	await expect(page.getByRole("heading", { name: "記一餐" })).toBeVisible();
 }
 
 /** 走過目前畫面上「這一刻」存在的每一個 input / select / textarea，斷言
@@ -129,6 +130,10 @@ test("登入後的 /supplements 畫面，表單控制項字級 ≥16px（P3-C Ta
 	// 完全沒設過字級，實測比推論可靠）。
 	await login(page);
 
+	// 「新增補劑」的入口在 Today.tsx 的「今日補劑」區塊（Task 2）。首頁換成
+	// 記一餐之後（Task 3），登入後不再直接落在今日總覽，要先切過去才看得到
+	// 那個連結。
+	await page.getByRole("link", { name: "今日總覽" }).click();
 	await page.getByRole("link", { name: "新增補劑" }).click();
 	await expect(page.getByRole("heading", { name: "補劑" })).toBeVisible();
 	// **只等「補劑」這個 h1 出現還不夠。** 實測踩到的坑：`Today.tsx` 的

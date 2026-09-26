@@ -14,6 +14,9 @@ test("新增補劑 → 今天吃了 → 今日總覽看得到它", async ({ page
 	// POST /api/supplements（新增）→ POST /api/supplement-intakes
 	// （plan_id: null 的臨時記錄）→ 今日總覽讀得到。
 	await login(page);
+	// P3-C Task 3：首頁從今日總覽換成記一餐，要先切過去才看得到
+	// 「今日補劑」區塊與「新增補劑」的入口。
+	await page.getByRole("link", { name: "今日總覽" }).click();
 	await expect(page.getByRole("heading", { name: "今日總覽" })).toBeVisible();
 
 	// 入口是「今日補劑」區塊的連結，不是第六個 tab（計畫 Task 2 的說明）。

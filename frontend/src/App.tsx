@@ -25,13 +25,17 @@ import { Supplements } from "./screens/Supplements";
 import { Today } from "./screens/Today";
 import { Trend } from "./screens/Trend";
 
-/** `/log` 路由：記完一餐之後導回今日總覽。
+/** `/` 路由（P3-C Task 3：記一餐變成首頁，使用者原話「記一餐應該放在
+ *  首頁」）：記完一餐之後導去 `/today`，不是導回自己。
  *
- *  `onSaved` 不直接放「導回今日總覽」以外的邏輯——快取的失效已經在
+ *  **故意不導回 `/`。** 使用者記完一餐要的是立刻看到「數字變了」（今日
+ *  總覽），導回記一餐本身等於畫面上什麼都沒發生——使用者會以為沒記進去。
+ *
+ *  `onSaved` 不直接放「導向哪裡」以外的邏輯——快取的失效已經在
  *  `LogMeal` 內部的 mutation `onSuccess` 做掉了，這裡只管畫面切換。 */
 function LogMealRoute() {
 	const navigate = useNavigate();
-	return <LogMeal onSaved={() => navigate("/")} />;
+	return <LogMeal onSaved={() => navigate("/today")} />;
 }
 
 function Nav({ onLoggedOut }: { onLoggedOut: () => void }) {
@@ -85,8 +89,10 @@ export function App() {
 					<Nav onLoggedOut={() => setLoggedIn(false)} />
 					<main className="app-main">
 						<Routes>
-							<Route path="/" element={<Today />} />
-							<Route path="/log" element={<LogMealRoute />} />
+							{/* P3-C Task 3：首頁從今日總覽換成記一餐，今日總覽搬到
+								/today（使用者原話「記一餐應該放在首頁」）。 */}
+							<Route path="/" element={<LogMealRoute />} />
+							<Route path="/today" element={<Today />} />
 							<Route path="/trend" element={<Trend />} />
 							<Route path="/foods" element={<FoodLibrary />} />
 							{/* 順序在這裡不像後端 foods.py 的 /frequent /recent 那樣要緊

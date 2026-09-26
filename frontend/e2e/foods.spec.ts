@@ -20,6 +20,8 @@ test("建立食物 → 在記一餐搜尋得到 → 記一筆 → 今日總覽�
 	// 沒有任何一支既有的單元測試或 E2E 覆蓋過「建立」到「搜尋得到」這一段。
 	await login(page);
 
+	// P3-C Task 3：首頁從今日總覽換成記一餐，要先切過去才讀得到基準值。
+	await page.getByRole("link", { name: "今日總覽" }).click();
 	await expect(page.getByRole("heading", { name: "今日總覽" })).toBeVisible();
 	const before = await page.getByTestId("macro-kcal").textContent();
 
@@ -46,7 +48,8 @@ test("建立食物 → 在記一餐搜尋得到 → 記一筆 → 今日總覽�
 	await page.getByRole("button", { name: foodName }).click();
 	await page.getByRole("button", { name: "記錄" }).click();
 
-	// 記錄成功後 LogMealRoute 的 onSaved 導回「/」。
+	// 記錄成功後 LogMealRoute 的 onSaved 導去「/today」（P3-C Task 3：首頁
+	// 換成記一餐之後，記完一餐要導去今日總覽，不是導回自己）。
 	await expect(page.getByRole("heading", { name: "今日總覽" })).toBeVisible();
 	await expect(page.getByTestId("macro-kcal")).not.toHaveText(before ?? "");
 });
