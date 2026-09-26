@@ -505,6 +505,78 @@ tab bar 現在 4 格（管理員 5 格）。加到 6 格在 320px 寬度下每�
 
 ---
 
+## Task 3: 記一餐變成首頁
+
+### 來源同樣是真實使用
+
+> 「記一餐應該放在首頁 並且加入 常用食物的選項表」
+
+**後半句不用做新東西。** `LogMeal` 已經有常吃／最近吃清單
+（`/api/foods/frequent` + `/api/foods/recent`，`dedupeById` 合併）。
+使用者看不到內容是因為正式站只有 1 筆記錄 —— 那份清單是從記錄歷史推導的，
+用幾天就會長出來。**不要另外做一個「收藏」機制**：後端沒有那個概念，
+而使用者要的「常用」跟「最近常吃」在語意上是同一件事。
+
+（如果之後確認要的是手動釘選的最愛，那是另一份規格 —— 要加欄位與端點。）
+
+**Files:**
+- Modify: `frontend/src/App.tsx`
+- Modify: `frontend/src/components/TabBar.tsx`
+- Modify: `frontend/e2e/auth.spec.ts`
+- Modify: `frontend/e2e/daily-loop.spec.ts`
+- Modify: `frontend/e2e/trend.spec.ts`
+- 可能還有：`frontend/tests/app.test.tsx`、`frontend/e2e/*.spec.ts` 其他幾支
+
+### 要改成什麼
+
+| 現在 | 改成 |
+|---|---|
+| `/` = `Today` | `/` = `LogMeal` |
+| `/log` = `LogMeal` | `/today` = `Today` |
+| tab：今日總覽・記一餐・趨勢・食物庫 | **記一餐**・今日總覽・趨勢・食物庫 |
+
+### ⚠️ 這個 task 會讓既有 E2E 紅，而且它們**應該**紅
+
+行為真的變了。**逐條看清楚每一條為什麼紅，再決定怎麼改。不要為了讓它綠而改。**
+
+已知會受影響的（寫計畫時查的，**實際情況以你跑出來的為準**）：
+
+- `e2e/auth.spec.ts` 有三處 `getByRole("heading", { name: "今日總覽" })`
+  斷言「登入後看到今日總覽」。登入後的落地頁變成記一餐，那三處要改成
+  記一餐的 heading —— **而那正是這個 task 要驗的行為**，不是遷就。
+- `e2e/daily-loop.spec.ts`、`e2e/trend.spec.ts` 都會點「記一餐」連結、
+  然後依賴 `onSaved` 導頁。見下。
+- `frontend/tests/app.test.tsx` 有幾則驗登入後顯示什麼。
+
+### `onSaved` 的去向要一起改
+
+`LogMealRoute` 的 `onSaved` 現在 `navigate("/")`。首頁變成記一餐之後，
+**記完一餐導回記一餐頁是錯的** —— 使用者要看到數字變了。應該導去 `/today`。
+
+**而那個導向正是 `daily-loop.spec.ts` 與 `trend.spec.ts` 在守的路徑**
+（它們送出後等今日總覽出現，那是「存檔完成」的同步點）。改完要確認那兩條
+仍然有效，而不是變成「剛好還是綠的」。
+
+### 突變
+
+> **必須成立：** 把 `onSaved` 的導向從 `/today` 改回 `/`，至少一條測試紅。
+>
+> **實測填回：** ——
+
+> **必須成立：** 把 tab bar 第一格改回今日總覽（`end: true` 那格），
+> 至少一條測試紅。
+>
+> **實測填回：** ——
+
+### 一個容易漏的地方
+
+`TabBar` 的 `end` 屬性：現在 `/` 那格是 `{ to: "/", end: true }`。
+換成 `/` = 記一餐之後，`end` 仍然要留在 `/` 那一格（不是跟著「今日總覽」
+這個標籤走）。**計畫一 Task 3 實測過：`end` 對 `to="/"` 在 react-router 8
+其實是無作用的保險**（NavLink 對 `to="/"` 有內建特例），但留著表達意圖。
+
+---
+
 ## 收尾
 
 - [x] 把每一處「實測填回」都填上
