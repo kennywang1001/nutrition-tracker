@@ -153,6 +153,42 @@ tailscale cert "$(tailscale status --json | jq -r .Self.DNSName | sed 's/\.$//')
 - `serve` 存在**且** `cert` 成功發憑證 → **走路線 A**
 - 其中任一失敗 → **走路線 B**
 
+> ## ⚠️ 這個判斷樹是錯的（2026-09-26 實測）
+>
+> **路線 B 也需要 `tailscale cert`** —— 它就是靠 `cert` 產出憑證檔給 caddy 用。
+> 所以「`cert` 失敗 → 走路線 B」邏輯上不成立：`cert` 失敗的時候，**兩條路
+> 都走不了**。
+>
+> 兩種失敗的意義完全不同，原本的判斷樹把它們混成一件事：
+>
+> | 失敗 | 真正的意義 |
+> |---|---|
+> | `serve` 子指令不存在（舊版 Tailscale） | **這才是選路線 B 的訊號** |
+> | `cert` 回 `tailnet does not have HTTPS enabled` | **兩條路都不能走**，先去管理後台開 HTTPS |
+> | `cert` 回 `Access denied: cert access denied` | 權限問題，不是能力問題。跑 `sudo tailscale set --operator=$USER` |
+>
+> **實測遇到的順序（三次才問出答案）：**
+>
+> 1. `tailscale serve --help` → 存在（1.58.2），`--bg` / `--https` 的語法跟計畫寫的一致
+> 2. `tailscale cert <name>` → `Access denied: cert access denied`
+>    —— 這是權限，不是能力。**這一步很容易被誤讀成「cert 不行，走路線 B」**
+> 3. `sudo tailscale set --operator=wangkc1001` 之後再試
+>    → `500: tailnet does not have HTTPS enabled`
+>    —— 規格 §4.2 警告過的第二個條件（「預設是關的」）
+> 4. 在 https://login.tailscale.com/admin/dns 啟用 HTTPS Certificates 之後
+>    → `Wrote public cert to kennywang.tailc1f9e9.ts.net.crt` ✅
+>
+> **結論：走路線 A。**
+>
+> 另外兩件實測記錄：
+>
+> - **用 `tailscale set --operator=$USER`，不要用 `tailscale up --operator=`。**
+>   `set` 只改指定的那一項；`up` 會重新套用整組設定。這台的 prefs 很單純
+>   （沒有 advertised routes、沒有 exit node），但那是查過才知道的。
+> - **Synology 沒有 `visudo`**（只裝了 `/usr/bin/sudo`）。要改 sudoers 又想要
+>   安全網的話，用 `sudo -i` 開一個 root shell 並**保持開著**再改 ——
+>   那個 shell 已經是 root，不經過 `sudo`，改壞了還救得回來。
+
 **走完之後把另一條路線整段從這份計畫刪掉**，不要留著兩份互相矛盾的指示 —— 那正是上一份計畫踩過的坑（docstring 說要取鎖、程式碼範例沒那行）。
 
 ---
