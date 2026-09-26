@@ -2,6 +2,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	createOfflinePersistOptions,
@@ -18,13 +19,17 @@ import { json, mockApiByPath as mockApi } from "./helpers/mock-api";
 // 離線行為只有在「兩個不同的 QueryClient 透過同一份 localStorage 交接」時
 // 才驗得到：同一個 client 重新 render 不會證明持久化真的發生，只會證明
 // 記憶體裡的快取沒被清掉）。
+//
+// 需要 MemoryRouter：P3-C Task 2 在「今日補劑」區塊加了一個連到
+// /supplements 的 <Link>，不掛 Router 會直接炸掉（跟 today.test.tsx 同一個
+// 理由）。
 function wrap(client: QueryClient, children: ReactNode) {
 	return (
 		<PersistQueryClientProvider
 			client={client}
 			persistOptions={createOfflinePersistOptions(window.localStorage)}
 		>
-			{children}
+			<MemoryRouter>{children}</MemoryRouter>
 		</PersistQueryClientProvider>
 	);
 }

@@ -17,6 +17,23 @@ type FoodScope = components["schemas"]["FoodScope"];
 export const queryKeys = {
 	dailyStats: ["stats", "daily"] as const,
 	supplementsToday: ["supplements", "today"] as const,
+	/** 補劑搜尋的結果。**獨立命名空間，理由跟下面的 `foodSearch` 一樣**：
+	 *  掛在 `supplementsToday`（或任何補劑相關 key）底下的話，打卡／取消
+	 *  之後的 `invalidateQueries({ queryKey: supplementsToday })` 會因為
+	 *  前綴比對連帶打掉每一組已掛載的搜尋結果——那不是這次要的行為
+	 *  （打卡不會改變「哪些補劑找得到」）。
+	 *
+	 *  **也因為同一個理由不進離線持久化**（`api/persist.ts` 的
+	 *  `NOT_PERSISTED`）：使用者每敲一個字就是一組新 key，堆在
+	 *  `localStorage` 裡的失敗模式跟 `food-search` 完全一樣——
+	 *  `setItem` 丟 `QuotaExceededError` 時炸的是整份離線快取，不只是
+	 *  補劑搜尋本身。
+	 *
+	 *  **跟 `foodSearch` 不同的地方：這裡沒有 `scope` 參數。**
+	 *  `Supplements.tsx`（Task 2）不做食物庫那種「全部／公開／我建立的」
+	 *  三選一——使用者只要求「新增我有在使用的」＋「當天有吃就點一份」，
+	 *  沒有要求依擁有權篩選，後端 `scope` 省略時預設 `all` 已經夠用。 */
+	supplementSearch: (q: string) => ["supplement-search", q] as const,
 	/** 今日餐點清單。跟 `dailyStats` 一樣刻意不帶日期參數——後端的
 	 *  `list_meals` 省略 `?date=` 時也是走 `today_in_timezone(user.timezone)`
 	 *  （`app/days.py`，跟 `/api/stats/daily`、`/api/supplements/today`

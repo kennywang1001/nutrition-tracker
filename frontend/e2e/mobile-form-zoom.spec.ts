@@ -116,3 +116,41 @@ test("登入後的食物庫／新增食物／記一餐畫面，表單控制項�
 		"記一餐畫面（已選擇食物，含份量與餐別欄位）",
 	);
 });
+
+test("登入後的 /supplements 畫面，表單控制項字級 ≥16px（P3-C Task 2 之後）", async ({
+	page,
+}) => {
+	// 計畫 Task 1 Step 1 原文就寫著「至少：登入、記一餐、食物庫、新增食物、
+	// /supplements（Task 2 之後）」——Task 2 完成後補上這一條，理由跟其他
+	// 畫面一樣：Task 2 新增的表單控制項（新增補劑的六個欄位、搜尋框）
+	// 一律吃到 index.css 那條全域的 16px 規則，但只有真的走過畫面才驗得到
+	// ——那條 CSS 規則是選擇器層級的，沒有走過的畫面理論上不會漏，可是
+	// 「理論上不會漏」不是這個守衛存在的理由（守衛存在正是因為 CSS 曾經
+	// 完全沒設過字級，實測比推論可靠）。
+	await login(page);
+
+	await page.getByRole("link", { name: "新增補劑" }).click();
+	await expect(page.getByRole("heading", { name: "補劑" })).toBeVisible();
+	// **只等「補劑」這個 h1 出現還不夠。** 實測踩到的坑：`Today.tsx` 的
+	// 「今日補劑」區塊是 `<h2>`，`getByRole` 的 name 比對預設是子字串——
+	// 「今日補劑」包含「補劑」，理論上會讓上面那行的 toBeVisible() 提早
+	// 滿足。實測發現真正的原因不是這個（strict mode 會在兩個都存在時直接
+	// 報錯，不會悄悄選一個），而是：ADMIN 帳號累積了大量歷史餐點
+	// （每次跑 e2e 都會留下新的一筆），`Today.tsx` 的 `MealList` 因此掛著
+	// 為數不少的 `MealPhotoUpload`（每筆餐點一個隱藏的
+	// `<input type="file">`）。換頁時 React 移除舊的路由子樹跟掛載新路由
+	// 是同一次 commit，但 DOM 量大時，Playwright 的斷言可能在那次 commit
+	// 「正在進行中」的瞬間就採到快照，數到舊畫面還沒清乾淨的 file input
+	// （`window.getComputedStyle` 對那個瞬間仍抓得到節點，但下一行
+	// `.evaluate()` 真正執行時節點已經被拔掉，回傳空字串→NaN，斷言用
+	// 「哪個欄位、幾 px」報錯反而讓人誤以為是新增補劑表單的欄位壞了）。
+	// 這裡明確等「今日補劑」（Today.tsx 專屬、Supplements.tsx 不會出現的
+	// 標題）從畫面上消失，強迫 Playwright 確認舊路由的整棵子樹（含所有
+	// file input）真的卸載完了，才開始數新畫面的控制項。
+	await expect(
+		page.getByRole("heading", { name: "今日補劑", exact: true }),
+	).not.toBeVisible();
+	// 新增補劑表單（名稱／品牌／單位／每份份量／熱量／蛋白質／脂肪／
+	// 碳水化合物，共八個欄位）＋搜尋補劑欄位，一次量完。
+	await expectFormControlsAtLeast16px(page, "補劑畫面");
+});

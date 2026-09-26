@@ -150,6 +150,30 @@ carb_g        Decimal, 預設 0, 0–1000
 > **`SupplementResponse` 有 `is_global`，跟 `FoodResponse` 一樣沒有 `owner_id`。**
 > 全域補劑的建立權限請去讀 `app/api/routes/supplements.py` 的 `create_supplement`
 > 確認（食物那邊是 Task 8 才加 `is_global`，補劑不一定有）。
+>
+> **實測填回（2026-09-26，Task 2）：確認過，補劑完全沒有全域建立的路徑。**
+> `create_supplement`（`app/api/routes/supplements.py`）不分角色，一律
+> `owner_id=user.id`：
+> ```python
+> supplement = Supplement(
+>     name=payload.name,
+>     brand=payload.brand,
+>     owner_id=user.id,
+>     ...
+> )
+> ```
+> 對照食物的 `create_food`（`app/api/routes/foods.py`）：那邊 `FoodCreateRequest`
+> 有 `is_global` 欄位，`is_global=True` 且非管理員會被擋成
+> `403 FORBIDDEN`（`只有管理員能建立全域食物`），`owner_id = None if
+> payload.is_global else user.id`。**`SupplementCreateRequest` 根本沒有
+> `is_global` 這個欄位**——不是「管理員才能建全域補劑」，是「這個 API
+> 目前完全沒有建立全域補劑的手段」，即使是管理員也一樣。`Supplement`
+> model 的欄位註解寫「NULL = 全域補劑（管理員維護）」，暗示曾經設計過
+> 這個角色，但目前的路由沒有實作它。
+>
+> 對這個 task 的影響：`Supplements.tsx` 的「新增補劑」表單**不需要、也不
+> 應該**有任何 `is_global` 或角色相關的 UI——後端目前唯一支援的建立方式
+> 就是私人補劑，跟 `NewFood.tsx` 的私人食物創建同一個形狀。
 
 ### 既有前端形狀
 
@@ -331,23 +355,27 @@ tab bar 現在 4 格（管理員 5 格）。加到 6 格在 320px 寬度下每�
 **改成從「今日補劑」那一區進去** —— 那是使用者會看到補劑的地方，也是他們
 想「加一個」的當下。
 
-- [ ] **Step 1: query key 與資料層**
+- [x] **Step 1: query key 與資料層**
 
-`queryKeys` 加（`supplementsToday` 已經存在，不要重複）：
-
-```ts
-supplementSearch: (q: string) => ["supplement-search", q] as const,
-```
+`queryKeys` 加了 `supplementSearch`（`supplementsToday` 沒有重複定義）。
 
 > **獨立命名空間**，理由跟 `food-search` 一樣（`api/queries.ts` 裡有那段註解）。
 > **而且它也不該進離線持久化** —— 去看 `api/persist.ts` 的 `NOT_PERSISTED`，
 > 判斷要不要把它加進去，並在報告裡說明你的判斷。
+>
+> **判斷（2026-09-26）：加進去了。** 理由跟 `food-search` 完全一樣——
+> `useSupplementSearch` 每敲一個字就是一組新的 query key，會在
+> `localStorage` 裡累積出跟食物搜尋一模一樣的失敗模式：`setItem` 丟
+> `QuotaExceededError` 時炸的是**整份**離線快取，不只是補劑搜尋本身。
+> 已加進 `frontend/src/api/persist.ts` 的 `NOT_PERSISTED`。
 
-`frontend/src/api/supplements.ts`：`useSupplementSearch(q)`。
-形狀照 `api/foods.ts` 的 `useFoodSearch`（含 `enabled: q.trim() !== ""`
-與 `encodeURIComponent`）。
+`frontend/src/api/supplements.ts`：`useSupplementSearch(q)` 與
+`useTodaySupplements()`。形狀照 `api/foods.ts` 的 `useFoodSearch`（含
+`enabled: q.trim() !== ""` 與 `encodeURIComponent`），但**刻意沒有 `scope`
+參數**——`Supplements.tsx` 不做食物庫那種三選一，後端 `scope` 省略時
+預設 `all` 已經夠用。
 
-- [ ] **Step 2: 寫測試**
+- [x] **Step 2: 寫測試**
 
 必須成立的行為：
 
@@ -360,39 +388,126 @@ supplementSearch: (q: string) => ["supplement-search", q] as const,
 
 > 第 3 條是這個 task 的核心。`plan_id` 不是 `null` 的話會變成「對某個計畫打卡」，
 > 而使用者根本沒有計畫 —— 後端會怎麼回應請實測，不要假設。
+>
+> **實測填回（2026-09-26）：** `app/api/routes/supplement_intakes.py` 的
+> `create_intake`：`plan_id` 非 null 時會呼叫 `_load_owned_plan` 依擁有權
+> 載入該計畫，找不到或不是自己的一律 `404 NOT_FOUND`；找得到但
+> `plan.supplement_id != supplement.id` 則是 `422
+> PLAN_SUPPLEMENT_MISMATCH`。也就是說對一個沒有任何計畫的使用者，隨便塞
+> 一個 `plan_id`（例如 `1`）幾乎必然打到 `404`（那個 id 對這個使用者不
+> 存在）。這個 task 的測試沒有走真的後端（vitest 是 mock fetch），所以
+> 這個行為在單元測試層是「假設後端這樣做」，但這個假設已經對照原始碼
+> 逐行確認過，不是憑空猜的。
 
-- [ ] **Step 3–5: 實作、路由、Today 的入口**
+`frontend/tests/supplements.test.tsx` 六則測試涵蓋以上 5 條行為
+（第 3 條拆成「送出的 body 形狀」與「supplementsToday 失效」兩則）。
 
-`Today.tsx` 的「今日補劑」區塊加一個連到 `/supplements` 的連結。
-文字自己決定，但要讓「我想加一個我在吃的補劑」的人找得到。
+- [x] **Step 3–5: 實作、路由、Today 的入口**
 
-- [ ] **Step 6: 突變驗證**
+`Today.tsx` 的「今日補劑」區塊加了一個連到 `/supplements` 的連結，文字是
+「新增補劑」。
+
+- [x] **Step 6: 突變驗證**
 
 > **必須成立：** 把「今天吃了」送出的 `plan_id` 從 `null` 改成 `1`，
 > 至少一條測試紅。
 >
-> **實測填回：** ——
+> **實測填回（2026-09-26）：成立。** `tests/supplements.test.tsx` 的
+> 「「今天吃了」送出的 plan_id 是 null，dose 是 "1"，taken_at 是 ISO 字串」
+> 這條紅：
+> ```
+> AssertionError: expected 1 to be null
+> - Expected: null
+> + Received: 1
+>  ❯ tests/supplements.test.tsx:208:24
+>    expect(body.plan_id).toBeNull();
+> ```
+> 驗證後已改回 `null`。
 
 > **必須成立：** 拿掉 `supplementsToday` 的失效，至少一條測試紅。
 >
-> **實測填回：** ——
+> **實測填回（2026-09-26）：成立。** 把 `checkIn` mutation 的
+> `onSuccess` 裡 `invalidateQueries({ queryKey: queryKeys.supplementsToday })`
+> 整段拿掉（只留 `dailyStats` 那一行），「記錄成功後 supplementsToday
+> 失效——今日總覽要看得到新記的這一筆」這條紅在：
+> ```
+> await waitFor(() => expect(todayCallCount).toBeGreaterThanOrEqual(2));
+> ```
+> （`todayCallCount` 停在 1，代表 `/api/supplements/today` 沒有被重新
+> fetch。）驗證後已加回那一行 `invalidateQueries`。
 
-- [ ] **Step 7: 契約 E2E**
+- [x] **Step 7: 契約 E2E**
 
-一條：**新增一個補劑 → 點「今天吃了」 → 今日總覽看得到它**。
+一條：**新增一個補劑 → 點「今天吃了」 → 今日總覽看得到它**
+（`e2e/supplements.spec.ts`）。
 
-用 `e2e/accounts.ts` 的 `ADMIN`。補劑名稱要帶 `Date.now()`
+用 `e2e/accounts.ts` 的 `ADMIN`。補劑名稱帶 `Date.now()`
 （`POST /api/supplements` 大概也有唯一約束，**去確認**）。
+
+> **實測填回（2026-09-26）：確認過，唯一約束存在。**
+> `app/models/supplement.py` 的 `Supplement.__table_args__`：
+> `UniqueConstraint("owner_id", "name", "brand", name=
+> "uq_supplements_owner_id_name_brand", postgresql_nulls_not_distinct=True)`。
+> 違反時 `create_supplement` 捕捉 `IntegrityError`，回
+> `409 SUPPLEMENT_EXISTS`（「你已經建過同名同品牌的補劑了」）。跟食物的
+> `FOOD_EXISTS` 是同一種形狀。補劑名稱帶 `Date.now()` 是必要的，不是保險。
 
 > **送出後要等存檔完成再導頁。** `e2e/trend.spec.ts` 踩過：按下送出就立刻
 > 點下一個連結，請求還在飛的時候元件被卸載，單獨跑永遠綠、平行跑約一半
 > 機率紅，而且紅的訊息會指向錯誤的地方。
+>
+> **實作方式：** `e2e/supplements.spec.ts` 沒有用「等某個 UI 訊號出現」
+> 這種間接的同步點，而是直接用 `page.waitForResponse` 等
+> `POST /api/supplements` 與 `POST /api/supplement-intakes` 兩次請求各自
+> 的回應完成，再往下一步走。
+
+### 跟計畫不一致 / 執行中額外發現的事（2026-09-26）
+
+這三件都是計畫沒寫、實作過程中撞到才發現的，照第 2 條鐵律停下來記在這裡，
+不是悄悄修掉當作沒發生過：
+
+1. **`Today.tsx` 加了 `<Link>` 之後，兩個既有測試檔直接炸掉。**
+   `tests/today.test.tsx` 與 `tests/offline.test.tsx` 原本的 `wrap()`
+   都只包 `QueryClientProvider`（`offline.test.tsx` 還多包一層
+   `PersistQueryClientProvider`），沒有 `MemoryRouter`。`<Link>`
+   在沒有 Router context 時會直接拋錯（`Cannot destructure property
+   'basename' of 'React$1.useContext(...)' as it is null`），兩個檔案
+   全部測試（5 + 5 則）一次全紅。已經在兩個檔案的 `wrap()` 裡各加一層
+   `MemoryRouter`，兩邊都補了註解說明理由，修完後兩個檔案照原本的行為
+   全綠。這不是這個 task 測試範圍內的東西，但既有測試被我加的程式碼
+   連帶弄壞，屬於「發現跟預期不一樣就要處理」，不能放著不管。
+
+2. **`e2e/mobile-form-zoom.spec.ts` 新增的 `/supplements` 測試第一次執行
+   時真的紅了，但紅的原因不是產品碼，是測試自己的同步點不夠。** 錯誤是
+   `<input id="meal-photo-upload-208" ...>` 的 computed font-size 是空
+   字串（NaN），而這個 `id` 屬於 `Today.tsx` 的 `MealList` /
+   `MealPhotoUpload`，不該出現在 `/supplements` 畫面。追下去發現：
+   ADMIN 帳號跑過大量 e2e 之後累積了很多筆歷史餐點，`MealList` 因此掛著
+   為數不少的隱藏 `<input type="file">`；換頁時 React 移除舊路由子樹
+   跟掛載新路由是同一次 commit，但 DOM 量大時，原本「等新畫面的 heading
+   出現」這個同步點（沿用自食物庫那幾條測試、原本夠用）在這裡不夠——
+   斷言拿到的是舊畫面正在被拆除過程中的一個瞬間快照，`.evaluate()`
+   真正執行時節點已經被拔掉。**修法：改成明確等 `Today.tsx` 專屬的
+   `<h2>今日補劑</h2>`（`exact: true`）從畫面上消失，而不是只等新畫面
+   的 heading 出現**——前者保證整棵舊子樹（含所有 file input）真的卸載
+   完了。修好後連續本機跑了 4 次、平行跑了 2 次全綠，沒有再復發。
+   這也印證了第 1 條鐵律：這條紅燈第一次出現時，訊息（file input 的
+   font-size 是 NaN）差點被誤讀成「新增補劑表單有欄位漏設定字級」，
+   實際原因完全是另一回事。
+
+3. **`Supplements.tsx` 的搜尋區塊標題與輸入框的 label 原本都寫「搜尋
+   補劑」，重複的可存取名稱雖然不會讓 `getByLabelText` 失準（它只認
+   `<label>`），但為了避免之後任何人用 `getByRole("heading", ...)` 或
+   `getByText` 時撞名，已經把 `<h2>` 的文字改成「找補劑，今天吃了就點
+   一份」，label 維持「搜尋補劑」。這不是紅燈逼出來的，是寫測試時手動
+   注意到的，記在這裡是因為它跟第 2 點是同一類風險（accessible name
+   的字串重疊）。
 
 ---
 
 ## 收尾
 
-- [ ] 把每一處「實測填回」都填上
+- [x] 把每一處「實測填回」都填上
 - [ ] **部署到 NAS 並請使用者在真機確認**：
 
 ```bash
