@@ -1,12 +1,10 @@
 import { expect, test } from "@playwright/test";
-
-const EMAIL = "kenny.demo@example.com";
-const PASSWORD = "demo-pass-12345";
+import { ADMIN } from "./accounts.ts";
 
 async function login(page: import("@playwright/test").Page) {
 	await page.goto("/");
-	await page.getByLabel("Email").fill(EMAIL);
-	await page.getByLabel("密碼").fill(PASSWORD);
+	await page.getByLabel("Email").fill(ADMIN.email);
+	await page.getByLabel("密碼").fill(ADMIN.password);
 	await page.getByRole("button", { name: "登入" }).click();
 }
 
@@ -44,7 +42,7 @@ test("記一餐之後，今日總覽的數字真的變了", async ({ page, reque
 	// 不再依賴外部種子資料（本機的 dev 資料庫已經有資料，這段對它只是
 	// 多開一個不相干的食物，不影響既有資料）。
 	const loginResponse = await request.post("/api/auth/login", {
-		data: { email: EMAIL, password: PASSWORD },
+		data: { email: ADMIN.email, password: ADMIN.password },
 	});
 	const { access_token: accessToken } = (await loginResponse.json()) as {
 		access_token: string;

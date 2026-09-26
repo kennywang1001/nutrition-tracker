@@ -209,9 +209,15 @@ jobs:
       - run: pip install -c requirements-lock.txt -e ".[dev]"
       - run: alembic upgrade head
       - name: 種子資料
-        # E2E 的兩條測試都用這個帳號登入。create-admin 對已存在的 email
-        # 是「提升並重設密碼」，所以重跑 job 不會失敗。
-        run: python -m app.cli create-admin kenny.demo@example.com demo-pass-12345 "示範帳號"
+        # E2E 用兩個帳號，角色是**測試內容的一部分**，不是巧合：
+        #   kenny.demo  → 管理員，審核佇列那幾條要用
+        #   e2e.member  → 一般使用者，「非管理員拿到 403」那條要用
+        #
+        # 兩個指令對既有 email 都是冪等的（create-admin 提升並重設密碼，
+        # create-user 更新密碼但拒絕降級管理員），所以重跑 job 不會失敗。
+        run: |
+          python -m app.cli create-admin kenny.demo@example.com demo-pass-12345 "示範帳號"
+          python -m app.cli create-user e2e.member@example.com member-pass-12345 "一般成員"
       - name: 起後端
         run: |
           uvicorn app.main:app --host 127.0.0.1 --port 8000 &

@@ -1,6 +1,7 @@
 from sqlalchemy import select
 
 from app.models.food import Food, FoodRevision, RevisionStatus
+from app.models.user import UserRole
 from app.security.tokens import create_access_token
 from tests.factories import create_food, create_user
 
@@ -192,3 +193,66 @@ async def test_a_concurrent_duplicate_name_returns_409_not_500(client, db_sessio
     after = await client.get("/api/foods", headers=headers, params={"q": "撞名"})
     assert after.status_code == 200
     assert len(after.json()) == 1
+
+
+async def test_an_admin_can_create_a_global_food(client, db_session):
+    """照抄 `create_portion` 已經有的模式（`test_an_admin_can_create_a_global_portion`）。"""
+    admin = await create_user(db_session, role=UserRole.ADMIN)
+
+    response = await client.post(
+        "/api/foods",
+        headers=auth(admin),
+        json={
+            "name": "全域滷肉飯",
+            "nutrition": {"kcal": "180", "protein_g": "6", "fat_g": "7", "carb_g": "22"},
+            "is_global": True,
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["is_global"] is True
+
+    food = await db_session.scalar(select(Food).where(Food.id == body["id"]))
+    assert food is not None
+    assert food.owner_id is None
+
+
+async def test_a_normal_user_cannot_create_a_global_food(client, db_session):
+    """照抄 `test_a_normal_user_cannot_create_a_global_portion`：角色不符，403 不是 404。"""
+    user = await create_user(db_session)
+
+    response = await client.post(
+        "/api/foods",
+        headers=auth(user),
+        json={
+            "name": "全域滷肉飯",
+            "nutrition": {"kcal": "180", "protein_g": "6", "fat_g": "7", "carb_g": "22"},
+            "is_global": True,
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "FORBIDDEN"
+
+
+async def test_create_food_without_is_global_defaults_to_a_private_food(client, db_session):
+    """不帶 `is_global` 時（既有呼叫端的行為）仍然是私人食物 —— 加欄位不能改變預設行為。"""
+    user = await create_user(db_session)
+
+    response = await client.post(
+        "/api/foods",
+        headers=auth(user),
+        json={
+            "name": "預設私人食物",
+            "nutrition": {"kcal": "1", "protein_g": "1", "fat_g": "1", "carb_g": "1"},
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["is_global"] is False
+
+    food = await db_session.scalar(select(Food).where(Food.id == body["id"]))
+    assert food is not None
+    assert food.owner_id == user.id

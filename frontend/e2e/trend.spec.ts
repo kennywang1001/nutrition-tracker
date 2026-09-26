@@ -1,7 +1,5 @@
 import { expect, test } from "@playwright/test";
-
-const EMAIL = "kenny.demo@example.com";
-const PASSWORD = "demo-pass-12345";
+import { ADMIN } from "./accounts.ts";
 
 test("記一餐之後，趨勢圖上今天那根柱子跟著變", async ({ page, request }) => {
 	// **這條守的是 LogMeal.tsx 那一行 invalidateQueries(rangeStatsAll)。**
@@ -19,7 +17,7 @@ test("記一餐之後，趨勢圖上今天那根柱子跟著變", async ({ page,
 	// 讓它進「最近吃」清單——真正要驗的那次 invalidateQueries 仍然是
 	// 透過 UI 觸發的。
 	const loginResponse = await request.post("/api/auth/login", {
-		data: { email: EMAIL, password: PASSWORD },
+		data: { email: ADMIN.email, password: ADMIN.password },
 	});
 	const { access_token: accessToken } = (await loginResponse.json()) as {
 		access_token: string;
@@ -67,8 +65,8 @@ test("記一餐之後，趨勢圖上今天那根柱子跟著變", async ({ page,
 	expect(seedResponse.status()).toBe(201);
 
 	await page.goto("/");
-	await page.getByLabel("Email").fill(EMAIL);
-	await page.getByLabel("密碼").fill(PASSWORD);
+	await page.getByLabel("Email").fill(ADMIN.email);
+	await page.getByLabel("密碼").fill(ADMIN.password);
 	await page.getByRole("button", { name: "登入" }).click();
 
 	// 趨勢畫面：讀「今天」那根柱子的 aria-label。期間的最後一天就是今天，
@@ -93,6 +91,25 @@ test("記一餐之後，趨勢圖上今天那根柱子跟著變", async ({ page,
 	await page.getByText(foodName).first().click();
 	await page.getByLabel("份量").fill("250");
 	await page.getByRole("button", { name: "記錄" }).click();
+
+	// **等記錄真的完成再走。** `LogMeal` 的 mutation `onSuccess` 會呼叫
+	// `onSaved()`，由 `LogMealRoute` 導回今日總覽——那個標題出現就是
+	// 「POST /api/meals 成功、而且失效已經發出」的同步點。
+	//
+	// ⚠️ **不可以省略這一步直接點「趨勢」。** 那樣沒有任何東西等存檔，
+	// 點走會在請求還在飛的時候把 `LogMeal` 卸載掉。
+	//
+	// 實測過（P3-B 計畫二 Task 8 之後）：原本就是直接點「趨勢」，單獨跑
+	// 永遠綠，但整套 11 條用 4 個 worker 平行跑時約一半的機率紅——API
+	// 變慢就輸掉那個 race。
+	//
+	// **而它紅的形式最惡劣：** 訊息是「柱子的 aria-label 沒變」，看起來
+	// 像是 `invalidateQueries(rangeStatsAll)` 壞了（那正是這條測試要守的
+	// 東西），實際上是那一餐根本沒存進去。一個會把你指向錯誤地方的紅燈。
+	//
+	// `daily-loop.spec.ts` 沒有這個問題，因為它送出後直接斷言
+	// `macro-kcal`，Playwright 的自動重試隱含地等到了導頁完成。
+	await expect(page.getByRole("heading", { name: "今日總覽" })).toBeVisible();
 
 	// 回到趨勢，同一根柱子的數字必須變了。
 	await page.getByRole("link", { name: "趨勢" }).click();

@@ -45,9 +45,16 @@ async def create_food(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> FoodResponse:
+    if payload.is_global and user.role is not UserRole.ADMIN:
+        # 這是角色不符，不是擁有權不符 —— 所以是 403 而不是 404。
+        # 資源存在、使用者也看得到，只是不能做這個動作。
+        raise ForbiddenError("FORBIDDEN", "只有管理員能建立全域食物")
+
+    owner_id = None if payload.is_global else user.id
+
     existing = await db.scalar(
         select(Food).where(
-            Food.owner_id == user.id,
+            Food.owner_id.is_not_distinct_from(owner_id),
             Food.name == payload.name,
             Food.brand.is_not_distinct_from(payload.brand),
         )
@@ -58,7 +65,7 @@ async def create_food(
     food = Food(
         name=payload.name,
         brand=payload.brand,
-        owner_id=user.id,
+        owner_id=owner_id,
         created_by=user.id,
     )
     db.add(food)

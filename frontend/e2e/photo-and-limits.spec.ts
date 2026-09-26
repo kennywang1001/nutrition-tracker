@@ -1,7 +1,5 @@
 import { expect, test } from "@playwright/test";
-
-const EMAIL = "kenny.demo@example.com";
-const PASSWORD = "demo-pass-12345";
+import { ADMIN } from "./accounts.ts";
 
 // 規格 §9.1 最後兩條契約 E2E（前四條在 auth.spec.ts 與 daily-loop.spec.ts）。
 // 這兩條各自守一個 fetch mock 證明不了的後端保證：
@@ -50,7 +48,7 @@ test("照片上傳之後，取回來的是圖不是 404", async ({ page, request
 	// `python -m app.cli create-admin` 建帳號，沒有任何食物或餐點資料，
 	// 這裡自己用 API 建一個食物、記一筆餐，讓照片有地方掛。
 	const loginResponse = await request.post("/api/auth/login", {
-		data: { email: EMAIL, password: PASSWORD },
+		data: { email: ADMIN.email, password: ADMIN.password },
 	});
 	const { access_token: accessToken } = (await loginResponse.json()) as {
 		access_token: string;
@@ -117,8 +115,8 @@ test("照片上傳之後，取回來的是圖不是 404", async ({ page, request
 	// `fetchPhotoBlob` 漏帶標頭，後端會回 401，`MealPhoto` 就會改顯示
 	// 「照片無法顯示」而不是 `<img>`（見 src/screens/MealList.tsx）。
 	await page.goto("/");
-	await page.getByLabel("Email").fill(EMAIL);
-	await page.getByLabel("密碼").fill(PASSWORD);
+	await page.getByLabel("Email").fill(ADMIN.email);
+	await page.getByLabel("密碼").fill(ADMIN.password);
 	await page.getByRole("button", { name: "登入" }).click();
 
 	const photoContainer = page.getByTestId(`meal-photo-${meal.id}`);

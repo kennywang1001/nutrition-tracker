@@ -94,6 +94,25 @@ P3-A 那四個畫面現在跑不完整的原因。所以這份規格把「全庫
 **這四件事不得以 localhost 的結果代替標記完成。** `127.0.0.1` 是 secure
 context，所以在本機上這些能力全部可用 —— 那個綠燈證明不了手機上的情況。
 
+### 2.1 寫計畫二時才發現的兩個系統缺口
+
+兩個都不是這份規格原本知道的，兩個都擋著這份規格自己要求的東西：
+
+**（一）系統造不出非管理員帳號。** `app/cli.py` 只有 `create-admin`，而它
+一律設 `role = ADMIN`，對既有帳號是「提升」。所以 §11.2 那條守衛
+（E2E「非管理員打 admin 端點得到 403」）**寫不出來** —— 造不出非管理員。
+
+順帶揭出本機與 CI 不一致：CI 的 e2e job 一直用 `create-admin` 種
+`kenny.demo@example.com`，所以在 CI 它是管理員；本機 dev 資料庫裡它是一般
+使用者。那個差異之前沒有任何測試碰得到，所以也沒有人發現。
+
+**（二）系統造不出全域食物。** `POST /api/foods` 一律建立 `owner_id = 自己`
+的私人食物，而**私人食物的編輯直接生效、不送審**（`propose_revision` 的
+`is_own_private_food` 分支）。所以 §6 的整個審核流程需要一個
+`owner_id IS NULL` 的食物，而沒有任何 API 建得出來。
+
+這也代表部署之後沒有任何辦法建立共用的食物庫 —— 不只是測試的問題。
+
 ---
 
 ## 3. 導覽
@@ -399,10 +418,30 @@ is_global === false  ⟹  owner_id 不是 null
 `FoodResponse.nutrition` 的型別是 `NutritionResponse | None`，註解寫著
 「沒有生效版本時為 None —— 全域食物的初版被駁回就會是這個狀態」。
 
-這種食物**記不了**（沒有 `current_revision_id` 可以釘）。所以：
+這種食物**記不了**。實測確認過（寫計畫二時用真 API 打的）：
 
-- 食物詳情要顯示「這個食物還沒有生效的營養素資料」，而不是一片空白或 `NaN`
-- **搜尋結果裡這種食物不能被選** —— 在記一餐與食物庫兩邊都是
+```
+# 手動插一筆 current_revision_id 是 NULL 的全域食物
+GET /api/foods?scope=global   → {'id': 66, 'is_global': True, 'nutrition': None}   查得到
+POST /api/meals (food_id=66)  → 409 FOOD_HAS_NO_REVISION                           記不了
+```
+
+三個列表端點（`search_foods` / `list_frequent_foods` / `list_recent_foods`）
+都用 `outerjoin`，**沒有任何一個過濾掉這種食物**。
+
+> 後端 `meals.py` 對那個 409 原本註解寫「正常流程不會發生（沒有
+> `current_revision_id` 的食物本來就查不到）」—— 那句話是錯的，已修。
+
+所以：
+
+- 食物詳情與搜尋結果要顯示「尚無營養素資料」，而不是一片空白或 `NaN`
+- **記一餐那邊不能被選**（按鈕 disabled 並說明原因）
+- **食物庫那邊照常點得進詳情頁** —— 這份規格原本寫「兩邊都不能被選」，
+  寫計畫二時改了：詳情頁正是你想知道「為什麼它沒有數值」的地方（看編輯歷史
+  與駁回理由），擋住它等於把唯一的答案也擋住。「不能被選」要擋的是
+  「填完表單才發現送不出去」，那只發生在記一餐。
+- **409 仍然要具名處理**，不能只靠前端擋 —— 搜尋到送出之間，食物有可能
+  剛好失去生效版本
 
 ---
 
@@ -558,6 +597,8 @@ tab bar 需要 `role`，所以會另外引入 `useMe()` 這個 query。**兩者�
 
 | 端點 | 狀態 | code | UI |
 |---|---|---|---|
+| `POST /api/foods` | 409 | `FOOD_EXISTS` | 你已經建過同名的食物了 |
+| `POST /api/meals` | 409 | `FOOD_HAS_NO_REVISION` | 這個食物目前沒有生效的版本 |
 | `POST /api/foods/{id}/revisions` | 409 | `REVISION_PENDING` | 這個食物已經有一筆待審編輯，請等審核完成 |
 | `POST .../approve` `.../reject` | 409 | `REVISION_NOT_PENDING` | 已經被審過了，重新載入佇列 |
 | `POST .../approve` `.../reject` | 404 | `REVISION_NOT_FOUND` | 找不到這筆提案 |

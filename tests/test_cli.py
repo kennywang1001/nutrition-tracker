@@ -4,7 +4,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select
 
-from app.cli import build_parser, cleanup_expired_sessions, create_admin
+from app.cli import build_parser, cleanup_expired_sessions, create_admin, create_regular_user
 from app.models.session import RefreshSession
 from app.models.user import User, UserRole
 from app.security.password import verify_password
@@ -60,6 +60,107 @@ async def test_create_admin_reports_created_false_for_an_existing_email(db_sessi
     _, created = await create_admin(db_session, "boss@example.com", "a-good-password", "老闆")
 
     assert created is False
+
+
+async def test_create_regular_user_creates_a_user(db_session):
+    await create_regular_user(db_session, "member@example.com", "a-good-password", "成員")
+
+    user = await db_session.scalar(select(User).where(User.email == "member@example.com"))
+    assert user is not None
+    assert user.role is UserRole.USER
+    assert verify_password("a-good-password", user.password_hash)
+
+
+async def test_create_regular_user_updates_an_existing_regular_user(db_session):
+    """重跑種子不該失敗 —— 這個指令要能冪等地把密碼設回已知的值。"""
+    existing = await create_user(db_session, email="member@example.com", role=UserRole.USER)
+
+    user, created = await create_regular_user(
+        db_session, "member@example.com", "a-new-password", "新名字"
+    )
+
+    assert created is False
+    await db_session.refresh(existing)
+    assert existing.role is UserRole.USER
+    assert existing.display_name == "新名字"
+    assert verify_password("a-new-password", existing.password_hash)
+
+
+async def test_create_regular_user_refuses_to_demote_an_admin(db_session):
+    """**這一條是這個 task 最重要的行為。**
+
+    `create_admin` 對既有帳號是「提升」。如果這個指令對既有帳號是「降級」，
+    那麼打錯一個 email 就會把管理員默默降成一般使用者 —— 而那件事沒有任何
+    畫面會顯示出來，要到下一次登入發現進不去審核佇列才知道。
+
+    提升是可逆的（再跑一次 `create-admin`）；在「你不知道它發生了」的情況下
+    降級不是。所以這裡拒絕，而且要留著原本的密碼不動。
+
+    ## 為什麼是 `select()` 而不是 `refresh()`
+
+    這一條要守的不只是「有拋例外」，還有**拋之前一個欄位都沒被碰過**。
+    `_upsert_account` 把那個 `raise` 放在三行賦值之前，理由是：沒 commit
+    不代表沒寫出去 —— ORM 物件一旦髒了，同一個 session 後續任何一次
+    autoflush 都會把它送進資料庫。
+
+    **而 `db_session.refresh()` 驗不到那件事。** 實測過（P3-B 計畫二 Task 1）：
+
+    ```
+    弄髒物件 → refresh() → 密碼有變 = False，名字回到資料庫裡的值
+    弄髒物件 → select()  → 密碼有變 = True，名字是被改掉的那個
+    ```
+
+    `refresh()` 會先把物件標成過期（同時移出 dirty 集合）再發 SELECT，
+    髒值從頭到尾沒有機會被寫出去。所以用 `refresh()` 寫的版本，即使把
+    `raise` 延後到賦值之後，這條測試**依然全綠** —— 那個安全性質等於沒有
+    守衛。
+
+    `select()` 會觸發 autoflush，髒值會真的落到資料庫，這條才抓得到。
+    """
+    admin = await create_user(db_session, email="boss@example.com", role=UserRole.ADMIN)
+    await db_session.commit()
+    original_hash = admin.password_hash
+
+    with pytest.raises(ValueError, match="已經是管理員"):
+        await create_regular_user(db_session, "boss@example.com", "a-new-password", "老闆")
+
+    # 刻意用 select（會 autoflush）而不是 refresh（不會）—— 見 docstring。
+    stored = await db_session.scalar(select(User).where(User.email == "boss@example.com"))
+    assert stored is not None
+    assert stored.role is UserRole.ADMIN
+    # 拒絕的意思是「什麼都沒做」，不是「角色沒改但密碼改了」
+    assert stored.password_hash == original_hash
+    assert stored.display_name != "老闆"
+
+
+async def test_create_regular_user_rejects_a_short_password(db_session):
+    with pytest.raises(ValueError, match="密碼至少 8 個字元"):
+        await create_regular_user(db_session, "member@example.com", "short", "成員")
+
+
+async def test_create_regular_user_matches_an_existing_user_despite_whitespace_and_case(
+    db_session,
+):
+    """跟 create_admin 用同一套正規化 —— 兩個指令對「同一個 email」的判斷
+    不一致的話，會出現「create-admin 提升了 A，create-user 卻建出了 A 的分身」。
+    """
+    existing = await create_user(db_session, email="member@example.com", role=UserRole.USER)
+
+    _, created = await create_regular_user(
+        db_session, "  MEMBER@Example.COM  ", "a-good-password", "成員"
+    )
+
+    assert created is False
+    await db_session.refresh(existing)
+    assert verify_password("a-good-password", existing.password_hash)
+
+
+def test_parser_accepts_create_user():
+    args = build_parser().parse_args(
+        ["create-user", "member@example.com", "a-good-password", "成員"]
+    )
+    assert args.command == "create-user"
+    assert args.email == "member@example.com"
 
 
 def _session_row(user_id: int, *, expires_at: datetime) -> RefreshSession:

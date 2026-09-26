@@ -15,8 +15,12 @@ import { queryClient } from "./api/queries";
 import { logout } from "./auth/session";
 import { getRefreshToken } from "./auth/store";
 import { TabBar } from "./components/TabBar";
+import { AdminRevisions } from "./screens/AdminRevisions";
+import { FoodDetail } from "./screens/FoodDetail";
+import { FoodLibrary } from "./screens/FoodLibrary";
 import { Login } from "./screens/Login";
 import { LogMeal } from "./screens/LogMeal";
+import { NewFood } from "./screens/NewFood";
 import { Today } from "./screens/Today";
 import { Trend } from "./screens/Trend";
 
@@ -83,6 +87,20 @@ export function App() {
 							<Route path="/" element={<Today />} />
 							<Route path="/log" element={<LogMealRoute />} />
 							<Route path="/trend" element={<Trend />} />
+							<Route path="/foods" element={<FoodLibrary />} />
+							{/* 順序在這裡不像後端 foods.py 的 /frequent /recent 那樣要緊
+								（那是 FastAPI 依宣告順序比對）——react-router 依「靜態片段
+								比動態片段更具體」排名，不是宣告順序，實測過
+								（matchRoutes([{path:"/foods/:id"},{path:"/foods/new"}],
+								"/foods/new") 即使 :id 排在前面，命中的仍然是 "/foods/new"）。
+								兩個路由誰先誰後寫在這裡純粹是可讀性。 */}
+							<Route path="/foods/new" element={<NewFood />} />
+							<Route path="/foods/:id" element={<FoodDetail />} />
+							{/* 不做前端導向：非管理員直接輸入這個網址時，讓它照常渲染、
+								讓 GET /api/admin/food-revisions 打出去、讓後端的
+								require_admin 回 403（見 AdminRevisions.tsx 的說明、
+								規格 §3.3）。 */}
+							<Route path="/admin/revisions" element={<AdminRevisions />} />
 						</Routes>
 					</main>
 					<TabBar />
