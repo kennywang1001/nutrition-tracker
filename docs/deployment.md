@@ -51,13 +51,20 @@ cp .env.production.example .env.production
 openssl rand -hex 32
 ```
 
-把產生的 64 字元十六進位字串填進 `.env.production` 的 `JWT_SECRET`，
-把上一步的 `100.x.y.z` 填進 `BIND_ADDR`：
+把產生的 64 字元十六進位字串填進 `.env.production` 的 `JWT_SECRET`：
 
 ```
 JWT_SECRET=<剛才產生的 64 字元>
-BIND_ADDR=100.x.y.z
+BIND_ADDR=127.0.0.1
 ```
+
+> **`BIND_ADDR` 現在是死設定**（2026-09-26 實測發現）。改走 Task 1 路線 A
+> 之後，`docker-compose.prod.yml` 裡 caddy 綁的是寫死的 `127.0.0.1:8080:8080`、
+> api 的 ports 是 `!reset []`，**沒有任何地方真的讀 `BIND_ADDR`** ——
+> 它只剩下註解裡的兩處提及。`.env.production.example` 還列著它，是漂移。
+>
+> 填什麼都不影響，填 `127.0.0.1` 是為了讓它至少不誤導（對外入口是
+> `tailscale serve`，不是任何一個綁在 tailnet 位址上的埠）。
 
 > **不要**把這個檔案改名成 `.env` —— 那個名字是本機開發用的，
 > 而且 `docker compose` 只會自動讀 `.env`，兩者混在一起遲早出事。
@@ -164,9 +171,45 @@ docker compose --env-file .env.production \
 > 真的要把一個管理員降成一般使用者，請直接改資料庫，那至少是一個你知道
 > 自己在做的動作。
 
-### 9. 從手機確認
+### 9. 開對外入口（Task 1 路線 A）
 
-手機（在 tailnet 裡）開 `http://100.x.y.z:8000/docs`，應該看得到 API 文件。
+api 與 caddy 都只綁 loopback，所以到這裡為止**從 NAS 以外連不到任何東西**
+—— 那是刻意的。對外的唯一入口是 `tailscale serve`：
+
+```bash
+tailscale serve --bg --https 443 http://127.0.0.1:8080
+tailscale serve status
+```
+
+**前置條件（2026-09-26 實測踩過，兩個都要）：**
+
+1. **這個使用者要是 tailscale operator**，否則 `serve` 與 `cert` 都會回
+   `Access denied`。一次性設定：
+   `sudo tailscale set --operator=$USER`
+   （用 `set` 不要用 `up --operator=` —— `set` 只改指定那一項，
+   `up` 會重新套用整組設定。）
+2. **tailnet 要啟用 HTTPS 憑證**：https://login.tailscale.com/admin/dns
+   的 **HTTPS Certificates** → Enable。**預設是關的**，沒開的話
+   `tailscale cert` 會回 `500: tailnet does not have HTTPS enabled`。
+   啟用會把機器名稱寫進公開的憑證透明度日誌 —— 洩漏的是「存在這個名稱」，
+   不是存取權（機器仍然只在 tailnet 內）。
+
+### 10. 從手機確認
+
+手機（在 tailnet 裡）開 `https://<機器名>.<tailnet>.ts.net`。
+
+**而且要在瀏覽器 console 跑這一行：**
+
+```js
+console.log(window.isSecureContext, !!navigator.serviceWorker, !!navigator.locks)
+```
+
+預期 `true true true`。
+
+> **這一步不能用本機的結果代替。** `localhost` 與 `127.0.0.1` **永遠**是
+> secure context，所以在 NAS 上或開發機上怎麼測都會是 `true` ——
+> 證明不了手機上的情況。沒有在真機上看到這三個 `true`，
+> PWA（service worker、離線快取、加到主畫面）就是裝不起來的。
 
 ---
 
