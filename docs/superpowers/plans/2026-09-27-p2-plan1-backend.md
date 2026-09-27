@@ -1,0 +1,813 @@
+# P2 計畫一：AI 分析的後端 Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** 做出 `POST /api/ai/analyze` —— 文字或圖片進去，一份的營養素估算加上一致性檢查出來，而且不落庫。
+
+**Architecture:** LLM 藏在一個 Protocol 後面，由 FastAPI 依賴注入提供，所以測試能斷言「它一次都沒被呼叫」。一致性檢查是純函式，不碰網路。每日額度直接數 `ai_analyses` 的今日列數 —— 計數器與紀錄是同一份資料。
+
+**Tech Stack:** Python 3.12 · FastAPI · SQLAlchemy 2.0 async · Alembic · Pydantic v2 · anthropic SDK · pytest
+
+**規格：** [2026-09-27-p2-ai-analysis-design.md](../specs/2026-09-27-p2-ai-analysis-design.md)
+
+---
+
+## 這份計畫只做後端
+
+規格 §10 說明了為什麼：前端需要一個真的能打的端點才寫得出有意義的 E2E，
+而 mock 一個還不存在的 API 形狀正是這個專案踩過的「兩處講同一件事然後漂移」。
+
+前端（兩個入口、確認／修改、一致性標記的顯示）是計畫二。
+
+---
+
+## 開工前必讀
+
+### 1. 計畫的文字不是權威
+
+發現實際情況跟這份計畫寫的不一樣就**停下來報告**，不要硬做，也不要自己悄悄
+改方向繼續。前三份計畫每一個 task 的最有價值產出都是這種回報。
+
+### 2. 突變步驟不預測哪一條測試會紅
+
+> **必須成立：** 把 X 改成 Y 之後，至少一條測試紅，原因是 Z。
+>
+> **實測填回：** ——
+
+**跑完全綠是一個發現，不是障礙。** 停下來報告。
+
+### 3. 指令（Windows + Git Bash）
+
+`ruff` / `mypy` / `pytest` 都不在 PATH 上，要用 venv 裡的：
+
+```bash
+cd F:/wallet && ./.venv/Scripts/python.exe -m pytest tests/test_ai_analyze.py -q
+cd F:/wallet && ./.venv/Scripts/python.exe -m pytest -q          # 全套約 70 秒
+cd F:/wallet && ./.venv/Scripts/ruff.exe check .
+cd F:/wallet && ./.venv/Scripts/mypy.exe app
+```
+
+**不要跑 `ruff format`** —— CI 只跑 `ruff check .`，而這個 repo 有既有的格式
+差異，跑 format 會重排一堆跟你無關的行。
+
+### 4. 基準線
+
+```
+後端 pytest  512 passed
+ruff check   All checks passed
+mypy app     no issues in 50 source files
+```
+
+### 5. 加了 migration 之後要重建映像
+
+`Dockerfile` 是 `COPY . .`，migration 檔案是烤進映像的，不是掛載的 ——
+dev 的原始碼掛載只有 `./app`。症狀是 `relation "xxx" does not exist`，
+而檔案明明在 repo 裡（handover §7）。
+
+---
+
+## 開工前已經查證過的事實
+
+**每一項都是實際讀原始碼確認的。**
+
+| 事實 | 出處 |
+|---|---|
+| `anthropic` **不在相依裡**，要加 | `pyproject.toml` |
+| `pillow` 已經是相依（照片縮圖在用） | 同上 |
+| `ServiceUnavailableError` / `TooManyRequestsError` / `PayloadTooLargeError` / `UnprocessableEntityError` **都已存在** | `app/errors.py` |
+| 最新 migration 是 `0007_create_refresh_sessions`，**下一個是 0008** | `migrations/versions/` |
+| migration 檔頭格式：`revision: str = "0007"` / `down_revision: str | None = "0006"` | `migrations/versions/0007_*.py` |
+| `day_bounds(day: date, tz_name: str) -> tuple[datetime, datetime]`、`today_in_timezone(tz_name: str) -> date` | `app/days.py` |
+| `food_revisions` 已有 `source` / `ai_confidence` / `ai_raw_response`，`create_food` **從來沒碰過它們** | `app/models/food.py`、`app/api/routes/foods.py` |
+| `FoodCreateRequest` 目前是 `name` / `brand` / `nutrition` / `is_global` | `app/schemas/food.py` |
+| `NutritionInput` 是**每 100g/ml** 的數值，`kcal` 0–10000、三個巨量 0–1000，都 `max_digits=8, decimal_places=2` | 同上 |
+| 照片上限 `MAX_PHOTO_BYTES = 10 * 1024 * 1024`，錯誤碼 `PHOTO_TOO_LARGE` / `INVALID_PHOTO` | `app/api/routes/meals.py` |
+| `settings.jwt_secret` **沒有預設值**（fail closed）；`photo_dir` 有預設 | `app/config.py` |
+
+### 一個必須照抄的既有模式
+
+`app/security/sessions.py` 的 `_reject() -> NoReturn` **在拋出例外之前先
+`commit()`**。理由是重用偵測的紀錄必須留下，即使這次請求以錯誤結束。
+
+**這份計畫的「失敗的呼叫也要記帳」需要完全相同的處理** —— 去讀那個函式，
+照它的形狀寫。**不照做的後果是：LLM 回了垃圾（那次一樣花了錢），而
+`ai_analyses` 裡沒有紀錄，額度也沒有扣。**
+
+---
+
+## 檔案結構
+
+**新增：**
+
+| 檔案 | 責任 |
+|---|---|
+| `app/ai/__init__.py` | 空 |
+| `app/ai/consistency.py` | Atwater 一致性檢查。**純函式，不 import 任何網路或資料庫的東西** |
+| `app/ai/estimator.py` | `NutritionEstimator` Protocol、`RawEstimate` 資料型別、Anthropic 實作 |
+| `app/models/ai_analysis.py` | `AiAnalysis` 資料表 |
+| `app/schemas/ai.py` | 請求與回應 |
+| `app/api/routes/ai.py` | `POST /api/ai/analyze` |
+| `migrations/versions/0008_create_ai_analyses.py` | migration |
+| `tests/test_ai_consistency.py` | Task 3 |
+| `tests/test_ai_analyze.py` | Task 5 |
+| `tests/test_foods_ai_source.py` | Task 6 |
+
+**修改：**
+
+| 檔案 | 改什麼 | Task |
+|---|---|---|
+| `pyproject.toml` | 加 `anthropic` | 1 |
+| `requirements-lock.txt` | 同步 | 1 |
+| `app/config.py` | `anthropic_api_key` / `ai_model` / `ai_daily_limit` | 1 |
+| `app/main.py` | 掛 `ai.router` | 5 |
+| `app/schemas/food.py` | `FoodCreateRequest` 加三個欄位 | 6 |
+| `app/api/routes/foods.py` | `create_food` 寫入那三個欄位 | 6 |
+| `.env.production.example` | 加 `ANTHROPIC_API_KEY` | 1 |
+| `docs/deployment.md` | 說明 AI 是選配 | 1 |
+
+---
+
+## Task 1: 相依、設定、與「沒有 key 就關閉」
+
+**Files:**
+- Modify: `pyproject.toml`
+- Modify: `requirements-lock.txt`
+- Modify: `app/config.py`
+- Modify: `.env.production.example`
+- Modify: `docs/deployment.md`
+- Test: `tests/test_config.py`（如果不存在就建）
+
+### `anthropic_api_key` 刻意跟 `jwt_secret` 相反
+
+`jwt_secret` 沒有預設值，是 **fail closed** —— 沒設就崩潰，因為「沒有密鑰」
+等於「任何人都能偽造 token」。
+
+`anthropic_api_key` 有預設值 `None`，**沒設就是功能關閉**。理由不同：
+沒有 AI key 不會讓系統變得不安全，只是少一個功能。讓整個 app 因為少一個
+選配功能而起不來是錯的取捨。
+
+**但「關閉」必須是明講的**（`503 AI_NOT_CONFIGURED`），不是一個看起來壞掉
+的樣子。
+
+- [ ] **Step 1: 寫失敗的測試**
+
+`tests/test_config.py`（先確認這個檔案存不存在，**存在的話加進去不要覆蓋**）：
+
+```python
+from app.config import Settings
+
+
+def test_anthropic_key_defaults_to_none():
+    """沒設 AI key 不該讓整個 app 起不來——它是選配功能，不是安全性設定。
+
+    跟 jwt_secret 刻意相反：那個沒有預設值（fail closed），因為「沒有密鑰」
+    等於「任何人都能偽造 token」。少一個 AI 功能不會讓系統變得不安全。
+    """
+    settings = Settings(jwt_secret="x" * 32)
+
+    assert settings.anthropic_api_key is None
+    assert settings.ai_daily_limit == 20
+    assert settings.ai_model == "claude-sonnet-5"
+
+
+def test_ai_daily_limit_must_be_positive():
+    """0 或負數會讓每日上限的比較變成一個永遠成立或永遠不成立的條件——
+    兩種都不是「關閉 AI」的正確表達方式（那是不設 key）。
+    """
+    import pytest
+
+    with pytest.raises(ValueError):
+        Settings(jwt_secret="x" * 32, ai_daily_limit=0)
+```
+
+- [ ] **Step 2: 跑測試確認它失敗**
+
+```bash
+cd F:/wallet && ./.venv/Scripts/python.exe -m pytest tests/test_config.py -q 2>&1 | tail -5
+```
+
+Expected: FAIL（`Settings` 沒有 `anthropic_api_key` 這個屬性，或
+`extra="ignore"` 讓它被吞掉 —— **看清楚實際的失敗訊息，它會告訴你
+`model_config` 的 `extra` 設定對這個測試的影響**）。
+
+- [ ] **Step 3: 加設定**
+
+`app/config.py` 的 `Settings` 裡，`photo_dir` 之後加：
+
+```python
+    # **刻意跟 jwt_secret 相反：有預設值。**
+    #
+    # jwt_secret 沒有預設是 fail closed —— 沒設等於任何人都能偽造 token，
+    # 那種情況下安靜地跑起來比崩潰更糟。
+    #
+    # AI 不一樣：沒有 key 不會讓系統變得不安全，只是少一個功能。讓整個 app
+    # 因為少一個選配功能而起不來是錯的取捨（規格 §4.1）。
+    #
+    # 但「關閉」必須是明講的 —— 端點回 503 AI_NOT_CONFIGURED，
+    # 不是一個看起來壞掉的樣子。
+    anthropic_api_key: str | None = None
+    ai_model: str = "claude-sonnet-5"
+    # 規格 §7：只算真的呼叫 LLM 的次數，失敗的也算（一樣花了錢）。
+    ai_daily_limit: int = Field(20, gt=0)
+```
+
+- [ ] **Step 4: 加相依**
+
+`pyproject.toml` 的 `dependencies` 加 `"anthropic>=0.40"`。
+
+然後更新 lock：
+
+```bash
+cd F:/wallet && ./.venv/Scripts/python.exe -m pip install -e ".[dev]" 2>&1 | tail -3
+cd F:/wallet && ./.venv/Scripts/python.exe -m pip freeze > requirements-lock.txt
+```
+
+> **`pip freeze` 會把整個環境的套件都寫進去。** 跑完用
+> `git diff requirements-lock.txt` 看清楚多了什麼 —— 只該多 `anthropic`
+> 與它的相依。如果多了一堆不相干的東西，**停下來報告**（代表 venv 裡有
+> 手動裝過的東西）。
+
+- [ ] **Step 5: 跑測試確認全綠**
+
+- [ ] **Step 6: 文件**
+
+`.env.production.example` 加：
+
+```
+# 選配：沒設的話 AI 分析功能整個關閉（端點回 503 AI_NOT_CONFIGURED），
+# 其他功能不受影響。
+ANTHROPIC_API_KEY=
+```
+
+`docs/deployment.md` 的「產生密鑰並填設定」那一節補一段說明 AI 是選配、
+沒設會怎樣。**去讀那一節現在怎麼寫，用同樣的語氣。**
+
+- [ ] **Step 7: 驗證與 commit**
+
+```bash
+cd F:/wallet && ./.venv/Scripts/python.exe -m pytest -q 2>&1 | tail -3
+cd F:/wallet && ./.venv/Scripts/ruff.exe check . && ./.venv/Scripts/mypy.exe app
+```
+
+---
+
+## Task 2: `ai_analyses` 資料表
+
+**Files:**
+- Create: `app/models/ai_analysis.py`
+- Create: `migrations/versions/0008_create_ai_analyses.py`
+- Test: `tests/test_ai_analysis_model.py`
+
+- [ ] **Step 1: 寫 model**
+
+`app/models/ai_analysis.py`。**去讀 `app/models/session.py` 看這個專案的
+model 長什麼樣**（命名慣例、`Mapped` 的用法、`__table_args__` 的寫法），
+照它的形狀寫。
+
+```python
+class AiAnalysis(Base):
+    """每一次真的呼叫 LLM 就寫一列 —— 成功與失敗都寫。
+
+    **它同時是每日額度的計數器。** 規格 §7.2：額度直接數這張表今天的列數，
+    不另設計數器 —— 計數器與實際紀錄不可能對不上，因為它們是同一份資料。
+
+    既有的 `app/ratelimit.py` 是記憶體計數、重啟歸零（handover §8.2）。
+    對「防濫用」可接受，對**花錢**不行：每次部署、每次 NAS 重開都會把上限
+    清掉，而這個 app 的部署頻率不低。
+
+    `input_hash` 是拿來觀察重複率的，**不是拿來還原輸入**（規格 §6：
+    圖片送去辨識完就丟）。
+    """
+
+    __tablename__ = "ai_analyses"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    input_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    succeeded: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+```
+
+**`kind` 要不要加 CheckConstraint 限制成 `'text' | 'image'`** —— 這個
+專案對 enum 有明確的立場（handover §7：`Enum(create_constraint=True)` 會讓
+`alembic check` 永久報漂移，要用 `False` + 手寫 CheckConstraint，
+**而且「只寫 `create_constraint=False` 卻忘了手寫約束」等於完全沒有約束**）。
+去讀 `app/models/food.py` 看 `RevisionStatus` 怎麼處理的，照同一個作法。
+
+> **`CheckConstraint(name=)` 給的是命名慣例的輸入，不是最終名稱**
+> （handover §7 第一條，這個專案踩過）。
+
+- [ ] **Step 2: 加索引**
+
+額度查詢是 `WHERE user_id = ? AND created_at >= ?`。加一個複合索引
+`ix_ai_analyses_user_id_created_at`。
+
+**先想清楚順序**：`(user_id, created_at)` 而不是反過來 —— 篩選力來自
+`user_id`。（P3-B 那次 `ix_meal_items_food_revision_id` 的教訓：規格假設
+某個索引「就是為這個查詢而存在」，實測 `EXPLAIN` 發現它根本沒出現在計畫裡。
+**這次不需要實測 EXPLAIN，因為資料量還太小，但順序的理由要寫進註解。**）
+
+- [ ] **Step 3: 寫 migration**
+
+`migrations/versions/0008_create_ai_analyses.py`，`down_revision = "0007"`。
+照 `0007_create_refresh_sessions.py` 的形狀寫，**包含 `downgrade()`**。
+
+- [ ] **Step 4: 套用並確認沒有漂移**
+
+```bash
+cd F:/wallet && docker compose up -d --build   # migration 要重建映像，見〈開工前必讀〉5
+cd F:/wallet && ./.venv/Scripts/python.exe -m alembic upgrade head
+cd F:/wallet && ./.venv/Scripts/python.exe -m alembic check
+```
+
+Expected: `alembic check` 說沒有漂移。
+
+> **`alembic check` 連續跑兩次都要乾淨。** 這個專案踩過：某些宣告方式會讓
+> 它每次都報 remove_index，永遠收斂不了（handover §7）。
+
+- [ ] **Step 5: 突變驗證**
+
+> **必須成立：** 把 model 裡的索引宣告刪掉（migration 保留），
+> `alembic check` 必須報漂移。
+>
+> **實測填回：** ——
+>
+> 這一條在驗「model 是可信的單一事實來源」這件事本身。
+
+- [ ] **Step 6: Commit**
+
+---
+
+## Task 3: 一致性檢查（純函式）
+
+**這是規格 §2 的核心，而它刻意不是一個 LLM agent。**
+
+**Files:**
+- Create: `app/ai/__init__.py`（空）
+- Create: `app/ai/consistency.py`
+- Test: `tests/test_ai_consistency.py`
+
+- [ ] **Step 1: 寫失敗的測試**
+
+```python
+from decimal import Decimal
+
+from app.ai.consistency import check_consistency
+
+
+def _c(kcal: str, protein: str, fat: str, carb: str):
+    return check_consistency(
+        kcal=Decimal(kcal),
+        protein_g=Decimal(protein),
+        fat_g=Decimal(fat),
+        carb_g=Decimal(carb),
+    )
+
+
+def test_atwater_is_4_4_9():
+    """熱量 = 4×蛋白質 + 4×碳水 + 9×脂肪。"""
+    result = _c("100.00", "10.00", "0.00", "15.00")
+
+    assert result.atwater_kcal == Decimal("100.00")
+    assert result.deviation == Decimal("0.00")
+    assert result.flagged is False
+
+
+def test_fat_is_nine_not_four():
+    """脂肪是 9 不是 4——寫錯的話這一條會紅，而上面那條（脂肪 0）不會。
+
+    這就是為什麼上面那條刻意把脂肪設成 0：它對係數錯誤零鑑別力。
+    """
+    result = _c("90.00", "0.00", "10.00", "0.00")
+
+    assert result.atwater_kcal == Decimal("90.00")
+    assert result.flagged is False
+
+
+def test_flags_a_large_deviation():
+    # atwater = 4×10 + 4×10 + 9×0 = 80；宣稱 500 大卡
+    result = _c("500.00", "10.00", "0.00", "10.00")
+
+    assert result.flagged is True
+
+
+def test_does_not_flag_small_absolute_deviation_on_low_calorie_food():
+    """**規格 §2.1 的絕對下限那一條。**
+
+    青菜：宣稱 8 大卡，atwater 算出來 5 大卡。偏差 3 大卡 = 37.5%，
+    百分比門檻（25%）會標記它——但 3 大卡沒有任何意義。
+
+    只測百分比的話這個雜訊來源完全沒被守到，而它會讓每一樣低熱量食物
+    都被標記——**每一筆都被標記等於沒有標記**。
+    """
+    result = _c("8.00", "0.50", "0.00", "0.75")
+
+    assert result.deviation == Decimal("3.00")
+    assert result.flagged is False
+
+
+def test_flags_when_both_thresholds_are_exceeded():
+    """偏差同時超過 25% 與 20 大卡才標記。
+
+    400 大卡 vs atwater 300：偏差 100，超過 max(100, 20) 嗎？
+    400 × 0.25 = 100，偏差剛好 100 —— 用 `>` 所以**不標記**。
+    邊界值刻意測，因為 `>` 跟 `>=` 的差別在這裡是一個真實的判斷。
+    """
+    boundary = _c("400.00", "25.00", "0.00", "50.00")
+    assert boundary.atwater_kcal == Decimal("300.00")
+    assert boundary.deviation == Decimal("100.00")
+    assert boundary.flagged is False
+
+    over = _c("401.00", "25.00", "0.00", "50.00")
+    assert over.flagged is True
+
+
+def test_zero_kcal_does_not_divide_by_zero():
+    """宣稱 0 大卡（零卡飲料）。百分比門檻是 0，絕對下限 20 接手。"""
+    result = _c("0.00", "0.00", "0.00", "0.00")
+
+    assert result.flagged is False
+```
+
+- [ ] **Step 2: 跑測試確認它失敗**
+
+```bash
+cd F:/wallet && ./.venv/Scripts/python.exe -m pytest tests/test_ai_consistency.py -q 2>&1 | tail -5
+```
+
+Expected: `ModuleNotFoundError: No module named 'app.ai'`
+
+- [ ] **Step 3: 寫實作**
+
+`app/ai/consistency.py`：
+
+```python
+"""營養素一致性檢查 —— 純函式，不碰網路也不碰資料庫。
+
+## 為什麼這不是一個 LLM agent
+
+P1 規格 §11 把驗證設計成 pipeline 第 ④ 步的 LLM agent，並說那是
+「這個作品集最有價值的部分：展示『我知道 LLM 會胡說，所以我設計了驗證層』」。
+
+**但它要檢查的是算術。** 用 LLM 檢查算術，等於用一個會胡說的東西檢查另一個
+會胡說的東西 —— 而且貴、慢、不可重現、測試只能 mock 它。
+
+改成純函式之後：確定性、零成本、測得密、突變得了。**而規格想展示的那句話
+在這個版本反而更成立 —— 因為驗證層本身不會胡說。**
+"""
+
+from dataclasses import dataclass
+from decimal import Decimal
+
+# Atwater 係數。蛋白質與碳水 4 kcal/g、脂肪 9 kcal/g。
+_KCAL_PER_G_PROTEIN = Decimal(4)
+_KCAL_PER_G_CARB = Decimal(4)
+_KCAL_PER_G_FAT = Decimal(9)
+
+# 相對門檻刻意寬鬆：Atwater 是近似值，酒精（7 kcal/g）與膳食纖維都會讓它偏。
+# 太嚴會讓每一筆都被標記，而每一筆都被標記等於沒有標記。
+_RELATIVE_THRESHOLD = Decimal("0.25")
+# 絕對下限：低熱量食物的小小絕對差會變成很大的百分比（5 vs 8 大卡是 60%），
+# 但 3 大卡沒有意義。少了這一條，每一樣青菜都會被標記。
+_ABSOLUTE_FLOOR_KCAL = Decimal(20)
+
+_CENTS = Decimal("0.01")
+
+
+@dataclass(frozen=True)
+class Consistency:
+    atwater_kcal: Decimal
+    deviation: Decimal
+    flagged: bool
+
+
+def check_consistency(
+    *, kcal: Decimal, protein_g: Decimal, fat_g: Decimal, carb_g: Decimal
+) -> Consistency:
+    """宣稱的熱量跟三大營養素算出來的熱量差多少。
+
+    `flagged` 為 True **不代表數字是錯的**，只代表「這組數字值得看一眼」。
+    規格 §2.2：標記不擋人 —— AI 可能是對的而係數是近似的，硬擋會讓使用者
+    記不了東西。
+    """
+    atwater = (
+        protein_g * _KCAL_PER_G_PROTEIN
+        + carb_g * _KCAL_PER_G_CARB
+        + fat_g * _KCAL_PER_G_FAT
+    ).quantize(_CENTS)
+    deviation = abs(kcal - atwater).quantize(_CENTS)
+    threshold = max(kcal * _RELATIVE_THRESHOLD, _ABSOLUTE_FLOOR_KCAL)
+
+    return Consistency(
+        atwater_kcal=atwater, deviation=deviation, flagged=deviation > threshold
+    )
+```
+
+- [ ] **Step 4: 跑測試確認全綠**
+
+- [ ] **Step 5: 突變驗證**
+
+> **必須成立（一）：** 把 `_KCAL_PER_G_FAT` 從 9 改成 4，至少一條測試紅。
+>
+> **實測填回：** ——
+
+> **必須成立（二）：** 把 `threshold` 的 `max(...)` 改成只有相對門檻
+> （拿掉 `_ABSOLUTE_FLOOR_KCAL`），至少一條測試紅，而且紅的是低熱量那條。
+>
+> **實測填回：** ——
+
+> **必須成立（三）：** 把 `deviation > threshold` 改成 `>=`，至少一條測試紅。
+>
+> **實測填回：** ——
+
+- [ ] **Step 6: Commit**
+
+---
+
+## Task 4: Estimator Protocol 與 Anthropic 實作
+
+**這個 task 的設計目標是讓 Task 5 能斷言「LLM 一次都沒被呼叫」。**
+
+**Files:**
+- Create: `app/ai/estimator.py`
+- Test: 這個 task 不獨立測（真實作要打網路）。它由 Task 5 的假實作間接驗證。
+
+- [ ] **Step 1: 定義 Protocol 與資料型別**
+
+```python
+"""LLM 估算的介面與實作。
+
+**Protocol 不是為了「將來換供應商」寫的，是為了測試能斷言它沒被呼叫。**
+
+規格 §8.3：「搜得到就不呼叫 LLM」這條保證，如果測試只斷言「回傳的營養素
+等於食物庫裡那筆」，那麼一個**先呼叫 LLM、再用食物庫的值覆蓋**的實作
+也會全綠 —— 而它每次都在花錢。必須斷言的是「那個方法被呼叫了 0 次」，
+而那需要一個可以注入的假實作。
+"""
+
+from dataclasses import dataclass
+from decimal import Decimal
+from typing import Protocol
+
+
+@dataclass(frozen=True)
+class RawEstimate:
+    """LLM 對「一份」的估算。
+
+    **這是「一份」的值，不是每 100g。** 換算成 `NutritionInput` 要的
+    每 100g 由 `app/api/routes/ai.py` 做一次，前端不重算（規格 §4.1）。
+    """
+
+    name: str
+    brand: str | None
+    serving_grams: Decimal
+    # **欄位名帶 serving_ 前綴是刻意的。**
+    #
+    # `AnalyzedNutrition`（Task 5）有一組叫 `kcal` / `protein_g` / … 的欄位，
+    # 而那組是**每 100g**。如果這裡也叫 `kcal`，兩個意義完全不同的東西
+    # 就會共用同一個名字，而它們會在同一個檔案裡被同時操作（換算那一段）。
+    #
+    # 那正是這個專案反覆踩到的形狀：兩處講「同一個」東西，其實不是同一個。
+    serving_kcal: Decimal
+    serving_protein_g: Decimal
+    serving_fat_g: Decimal
+    serving_carb_g: Decimal
+    confidence: Decimal
+    raw: dict[str, object]
+
+
+class NutritionEstimator(Protocol):
+    async def estimate_text(self, text: str) -> RawEstimate: ...
+    async def estimate_image(self, image: bytes, media_type: str) -> RawEstimate: ...
+```
+
+- [ ] **Step 2: 寫 Anthropic 實作**
+
+用 `anthropic.AsyncAnthropic`，`settings.ai_model`，要求結構化 JSON 輸出。
+
+**回傳的東西必須被驗證過才包成 `RawEstimate`** —— 規格 §8.2 要求
+「LLM 回傳垃圾（缺欄位、負數、超出範圍、不是 JSON）都不能讓畫面炸掉」。
+
+用一個 Pydantic model 解析 LLM 的 JSON，解析失敗就拋
+`UnprocessableEntityError("AI_BAD_RESPONSE", ...)`。
+
+> **`raw` 欄位要存 LLM 原始回覆的 JSON**，不是解析後的物件 ——
+> 規格 §5 的「AI 常常錯很多嗎」要靠它回答。
+
+> **prompt 的文字留給你**（它需要對著真的 API 迭代，寫在計畫裡只會是猜測），
+> 但有四個硬要求：
+>
+> 1. **要求它回 JSON**，欄位名跟 `RawEstimate` 對齊（含 `serving_` 前綴）
+> 2. **要求它估「一份」是幾克** —— 那是 `serving_grams`，沒有它就換算不了
+> 3. **要求它只回一樣食物**（規格 §9：這一版不做多食物辨識）。
+>    照片裡有三樣菜時要它挑最主要的那一樣，而不是回一個陣列
+> 4. **不要在 prompt 裡要求它自己檢查 Atwater** —— 那是 `consistency.py`
+>    的工作，而那一層的價值就在於它不是 LLM 說的
+>
+> 寫完把實際的 prompt 貼進報告，我要看。
+
+- [ ] **Step 3: 依賴注入**
+
+在 `app/api/deps.py` 加：
+
+```python
+async def get_estimator() -> NutritionEstimator:
+    """沒設 API key 就拋 503 —— 規格 §4.1：關閉必須是明講的，
+    不是一個看起來壞掉的樣子。
+    """
+    if settings.anthropic_api_key is None:
+        raise ServiceUnavailableError("AI_NOT_CONFIGURED", "AI 分析未設定")
+    return AnthropicEstimator(...)
+```
+
+**去讀 `app/api/deps.py` 現有的依賴長什麼樣**，照同一個形狀。
+
+- [ ] **Step 4: 驗證與 commit**
+
+```bash
+cd F:/wallet && ./.venv/Scripts/ruff.exe check . && ./.venv/Scripts/mypy.exe app
+```
+
+---
+
+## Task 5: `POST /api/ai/analyze`
+
+**Files:**
+- Create: `app/schemas/ai.py`
+- Create: `app/api/routes/ai.py`
+- Modify: `app/main.py`
+- Test: `tests/test_ai_analyze.py`
+
+### 五條必須成立的行為
+
+1. **食物庫搜得到就不呼叫 LLM** —— 斷言假 estimator 的呼叫次數是 **0**
+2. **第 21 次被擋**（`429 AI_DAILY_LIMIT`），而且訊息含「今天用了 N/20」
+3. **失敗的呼叫也計入額度** —— LLM 拋錯之後，`ai_analyses` 要有那一列
+4. **LLM 回傳垃圾不會 500** —— 回 `502 AI_BAD_RESPONSE`
+5. **沒設 API key 回 `503 AI_NOT_CONFIGURED`**
+6. **`flagged` 為 True 時仍然正常回 200** —— 規格 §2.2：標記不擋人。
+   一致性檢查失敗**不是**錯誤，是一個附註
+7. **圖片不會被寫到磁碟** —— 規格 §6
+
+### 第 6 條容易被實作成「擋下來」
+
+驗證失敗看起來很像應該回 422。**不是。** AI 可能是對的而 Atwater 係數是
+近似值（酒精、纖維都會讓它偏），硬擋會讓使用者記不了東西。
+
+測試要送一組刻意矛盾的數字（例如 500 大卡但三大營養素只算得出 80），
+斷言 **HTTP 200** 且 `consistency.flagged is True`。
+
+### 第 7 條要斷言檔案系統
+
+規格 §6：圖片送去辨識完就丟，不寫進 `photo_dir`、不進資料庫。
+
+**斷言 `settings.photo_dir` 底下的檔案數在呼叫前後沒有變。** 不要只斷言
+「回應裡沒有 photo_path」—— 那證明不了檔案沒被寫出去。
+
+### 第 3 條需要照抄 `_reject()` 的形狀
+
+`app/security/sessions.py` 的 `_reject() -> NoReturn` 在拋出例外之前先
+`commit()`。**去讀它。**
+
+不照做的後果：LLM 回了垃圾（那次一樣花了錢），而 `ai_analyses` 裡沒有紀錄、
+額度也沒扣 —— 於是「LLM 一直失敗」變成一個不花錢的無限迴圈，而它其實
+每次都在計費。
+
+> **這一條的測試要驗的是資料庫裡真的有那一列**，不是驗回應碼。
+> 而且要注意 `db_session` fixture 用 `join_transaction_mode="create_savepoint"`，
+> **`commit()` 在測試裡不會真的提交** —— 這個專案踩過三次
+> （計畫一 Task 7 的「commit 不可觀察」）。要斷言之前先
+> `await db_session.rollback()`，然後**用 select 讀欄位、不要讀 ORM 實體**
+> （rollback 會讓物件過期，之後讀屬性會觸發同步 refresh 而炸 `MissingGreenlet`）。
+
+- [ ] **Step 1: 寫 schema**
+
+`app/schemas/ai.py`。Request 是一個 discriminated union（`kind` 決定形狀），
+Response 照規格 §4.1 的形狀。
+
+**`nutrition` 要同時給每 100g 與一份的值**，而且**兩者都由後端算**：
+
+```python
+class AnalyzedNutrition(BaseModel):
+    base_unit: BaseUnit
+    serving_grams: Decimal
+    # 每 100g/ml —— 直接餵得進 FoodCreateRequest.nutrition
+    kcal: Decimal
+    protein_g: Decimal
+    fat_g: Decimal
+    carb_g: Decimal
+    # 一份的值 —— 給人看的。**前端不重算**（規格 §4.1）
+    serving_kcal: Decimal
+    serving_protein_g: Decimal
+    serving_fat_g: Decimal
+    serving_carb_g: Decimal
+```
+
+> **兩組數字必須一致，而那是一個要測的東西**：
+> `serving_kcal == kcal × serving_grams / 100`（含四捨五入）。
+> 加一條測試釘住它 —— 兩處講同一件事就會漂移，這個專案踩過五次。
+
+- [ ] **Step 2: 寫測試**
+
+用假 estimator 注入（`app.dependency_overrides[get_estimator]`）。
+**假實作要能數呼叫次數。**
+
+去讀 `tests/conftest.py` 看 `client` fixture 怎麼做 override 的。
+
+- [ ] **Step 3–5: 實作、掛 router、跑測試**
+
+- [ ] **Step 6: 突變驗證**
+
+> **必須成立（一）：** 把「先搜食物庫」那段拿掉（一律呼叫 LLM），
+> 第 1 條測試必須紅，**而且紅在呼叫次數那一行**，不是紅在回傳值。
+>
+> **實測填回：** ——
+>
+> 如果它紅在回傳值，那代表測試斷言的是結果而不是「有沒有呼叫」——
+> 那正是規格 §8.3 警告的假綠燈，**停下來報告**。
+
+> **必須成立（二）：** 把「失敗也寫 `ai_analyses`」改成只在成功時寫，
+> 第 3 條測試必須紅。
+>
+> **實測填回：** ——
+
+> **必須成立（三）：** 把額度比較從 `>=` 改成 `>`（差一錯誤），
+> 第 2 條測試必須紅。
+>
+> **實測填回：** ——
+
+- [ ] **Step 7: Commit**
+
+---
+
+## Task 6: `create_food` 接受來源標記
+
+**Files:**
+- Modify: `app/schemas/food.py`
+- Modify: `app/api/routes/foods.py`
+- Test: `tests/test_foods_ai_source.py`
+
+### 規格 §5：「有沒有改」是資料
+
+| 路徑 | `source` | `ai_confidence` | `ai_raw_response` |
+|---|---|---|---|
+| 直接按「確認」 | `'ai'` | AI 給的 | LLM 原始回覆 |
+| 「需要修改」後確認 | `'user'` | AI 給的 | **仍然存** |
+
+**這件事不會因為功能正常運作而自動被驗到** —— 兩條路徑都會成功存出一個
+食物，回應看起來一模一樣。只有專門斷言 `source` 的測試守得住。
+
+- [ ] **Step 1: 寫失敗的測試**
+
+三條：
+
+1. 不帶那三個欄位時，`source` 是預設的 `'user'`、另外兩個是 `NULL`
+   （**既有行為不能壞**）
+2. 帶 `source='ai'` 時真的寫進 `food_revisions`
+3. 帶 `source='user'` 但**同時帶 `ai_raw_response`** 時，兩者都寫進去
+   （那就是「改過才確認」那條路徑）
+
+**斷言要讀資料庫，不是讀回應** —— `FoodResponse` 沒有這三個欄位，
+讀回應什麼都驗不到。
+
+- [ ] **Step 2–5: 實作、驗證、突變**
+
+`FoodCreateRequest` 加：
+
+```python
+    # P1 就預留好的三個欄位（`food_revisions`），P2 是第一個使用者。
+    # 規格 §5：「直接確認」與「改過才確認」要分得出來。
+    source: str = "user"
+    ai_confidence: Decimal | None = Field(default=None, ge=0, le=1, decimal_places=2)
+    ai_raw_response: dict[str, Any] | None = None
+```
+
+> **`source` 要不要限制成 `'user' | 'ai' | 'official'`？** 資料庫那一欄
+> 目前**沒有** CheckConstraint（去確認）。前端能送任意字串進去就是一個洞。
+> **自己判斷要加 Pydantic 驗證、資料庫約束、還是兩個都加**，並在報告裡
+> 說明理由。
+
+> **必須成立：** 把 `create_food` 寫入 `source` 那一行改成寫死 `"user"`，
+> 至少一條測試紅。
+>
+> **實測填回：** ——
+
+- [ ] **Step 6: Commit**
+
+---
+
+## 收尾
+
+- [ ] 把每一處「實測填回」都填上
+- [ ] 跟預期不同的都寫進計畫
+- [ ] **貼出 Task 4 實際用的 prompt**
+- [ ] 全套驗證：`pytest -q`、`ruff check .`、`mypy app`、`alembic check`
+- [ ] 開 PR
+
+**前端是計畫二**，等這份合併之後再寫 —— 那時會有一個真的能打的端點。
