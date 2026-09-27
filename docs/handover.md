@@ -221,7 +221,7 @@ userland proxy 對發佈的埠做 SNAT）。按 IP 限速會把 tailnet 上所�
 
 ---
 
-## 6. 這個專案最有價值的產出：二十七種「綠燈說謊」
+## 6. 這個專案最有價值的產出：二十九種「綠燈說謊」
 
 **每一種的機制都不同，而且都是實測踩到的，不是理論。**
 新加的任何測試都應該對照這份清單檢查一次。
@@ -477,6 +477,45 @@ Playwright 測試，在這裡**永遠是綠的** —— 它測的那個維度在
 弄壞的，它一直都缺同步點 —— 只是環境剛好替它補上了。
 跟 §25（`trend.spec.ts` 送出後沒等存檔就點走）同一類：**巧合地綠很久，
 紅的時候指錯地方。**
+
+### 第 28、29 種是 P2（AI 分析）長出來的
+
+**第 28 種：測試在正確的程式碼下通過，卻在突變下以錯誤的方式失敗 ——
+突變驗證本身被廢掉了。** P2 有一條測試要驗「LLM 失敗時 `ai_analyses`
+仍然留下紀錄」。第一版在 `rollback()` **之後**才用 `user.id`（一個 ORM
+屬性）當查詢條件。
+
+- **正確的程式碼下它通過** —— helper 內部的 `commit()` 讓 session 回到
+  乾淨狀態，讀 `user.id` 不需要 refresh。
+- **套用突變（拿掉那個 commit）之後**，同一行觸發同步 refresh，
+  直接炸 `MissingGreenlet` —— **而不是乾淨地 assert 失敗**。
+
+也就是說：那個突變產生的是一個看不懂的例外，而不是一個指向問題的紅燈。
+一個不夠小心的人會以為「測試環境壞了」，去修 fixture。
+
+修法是這個 codebase 自己在 `tests/test_sessions.py` 早就寫下的教訓
+（先把 id 取出來），只是第一版沒照做。
+
+**這一類特別難察覺，因為問題只在突變時才顯現** —— 而突變正是你用來
+檢查測試有沒有用的工具。**工具本身壞了。**
+
+**第 29 種：`op.drop_constraint` 也會套用命名慣例樣板。**
+handover §7 第一條記著「`CheckConstraint(name=)` 給的是樣板輸入，
+不是最終名稱」。P2 Task 6 發現 **`op.drop_constraint` 也是**：
+
+```python
+op.drop_constraint("ck_food_revisions_source_valid", ...)   # ❌
+# UndefinedObjectError: constraint
+#   "ck_food_revisions_ck_food_revisions_source_valid" does not exist
+op.drop_constraint("source_valid", ...)                      # ✅
+```
+
+**而它只在 `downgrade()` 被執行時才炸。** 只跑 `alembic upgrade head`
+（CI 與部署都只跑這個）永遠不會發現 —— 那個 migration 會以「看起來
+完全正常」的狀態進到 repo 裡，直到某天真的需要回滾。
+
+抓到它的方法是 `alembic downgrade -1` → `upgrade head` 的來回測試。
+**寫了 `downgrade()` 就要真的跑一次，不然那段程式碼從來沒有被執行過。**
 
 ### 由此長出的幾條規矩
 
