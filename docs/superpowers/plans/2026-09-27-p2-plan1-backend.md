@@ -465,6 +465,25 @@ Expected: `alembic check` 說沒有漂移。
 
 ## Task 3: 一致性檢查（純函式）
 
+> ## 實測記錄（已執行完畢）
+>
+> 完全照計畫的測試與實作程式碼做，沒有跟計畫不一致的地方需要回報。
+>
+> 唯一一件計畫沒講、需要自己確認的事：測試檔案的 import 風格。計畫本身
+> 這個 task 的測試不需要 `pytest`（沒有 `pytest.raises`），但為了跟既有
+> 慣例一致還是檢查了 `tests/test_cli.py`、`tests/test_config.py`——兩者都
+> 把 `import pytest` 放在檔案最上面，不是函式內部。這個 task 沒有機會
+> 踩到那個坑，但確認了風格。
+>
+> 邊界案例的算術自己算過一遍：`400 × 0.25 = 100`，`atwater = 4×25 + 4×50 +
+> 9×0 = 300`，`deviation = |400 − 300| = 100`，`threshold = max(100, 20) =
+> 100`，`100 > 100` 為 False → 不標記。`401` 的話 `deviation = 101`，
+> `threshold = max(401×0.25, 20) = 100.25`，`101 > 100.25` 為 True → 標記。
+> 計畫寫的是對的。
+>
+> `Decimal.quantize` 沒有拋 `InvalidOperation`——這個 task 用到的數值都很小，
+> 沒有觸及預設 context 的 28 位有效數字上限。
+
 **這是規格 §2 的核心，而它刻意不是一個 LLM agent。**
 
 **Files:**
@@ -472,7 +491,7 @@ Expected: `alembic check` 說沒有漂移。
 - Create: `app/ai/consistency.py`
 - Test: `tests/test_ai_consistency.py`
 
-- [ ] **Step 1: 寫失敗的測試**
+- [x] **Step 1: 寫失敗的測試**
 
 ```python
 from decimal import Decimal
@@ -554,7 +573,7 @@ def test_zero_kcal_does_not_divide_by_zero():
     assert result.flagged is False
 ```
 
-- [ ] **Step 2: 跑測試確認它失敗**
+- [x] **Step 2: 跑測試確認它失敗**
 
 ```bash
 cd F:/wallet && ./.venv/Scripts/python.exe -m pytest tests/test_ai_consistency.py -q 2>&1 | tail -5
@@ -562,7 +581,9 @@ cd F:/wallet && ./.venv/Scripts/python.exe -m pytest tests/test_ai_consistency.p
 
 Expected: `ModuleNotFoundError: No module named 'app.ai'`
 
-- [ ] **Step 3: 寫實作**
+**實測：** 確認如預期，`ModuleNotFoundError: No module named 'app.ai'`。
+
+- [x] **Step 3: 寫實作**
 
 `app/ai/consistency.py`：
 
@@ -628,24 +649,38 @@ def check_consistency(
     )
 ```
 
-- [ ] **Step 4: 跑測試確認全綠**
+- [x] **Step 4: 跑測試確認全綠**
 
-- [ ] **Step 5: 突變驗證**
+**實測：** `pytest tests/test_ai_consistency.py -q` → `6 passed`。
+
+- [x] **Step 5: 突變驗證**
 
 > **必須成立（一）：** 把 `_KCAL_PER_G_FAT` 從 9 改成 4，至少一條測試紅。
 >
-> **實測填回：** ——
+> **實測填回：** 紅了，且只紅一條——`test_fat_is_nine_not_four`：
+> `assert Decimal('40.00') == Decimal('90.00')`（`atwater_kcal` 從 90 掉成
+> 40，因為 `9×10` 變成 `4×10`）。其餘 5 條仍綠，包含刻意把脂肪設成 0
+> 的 `test_atwater_is_4_4_9`——證實那條測試對這個係數確實零鑑別力，正是
+> 測試註解裡講的原因。
 
 > **必須成立（二）：** 把 `threshold` 的 `max(...)` 改成只有相對門檻
 > （拿掉 `_ABSOLUTE_FLOOR_KCAL`），至少一條測試紅，而且紅的是低熱量那條。
 >
-> **實測填回：** ——
+> **實測填回：** 紅了，且正是低熱量那條——
+> `test_does_not_flag_small_absolute_deviation_on_low_calorie_food`：
+> `assert True is False`（`flagged` 從 False 變 True，因為門檻從
+> `max(2.00, 20) = 20` 掉成 `2.00`，而偏差 3.00 > 2.00）。其餘 5 條仍綠。
 
 > **必須成立（三）：** 把 `deviation > threshold` 改成 `>=`，至少一條測試紅。
 >
-> **實測填回：** ——
+> **實測填回：** 紅了，且正是邊界案例那條——
+> `test_flags_when_both_thresholds_are_exceeded`：
+> `assert True is False`（`boundary.flagged` 從 False 變 True，因為
+> `deviation == threshold == 100.00` 時 `>=` 成立而 `>` 不成立）。其餘 5
+> 條仍綠。三個突變測完都已改回原樣，`diff` 確認實作檔案跟突變前逐位元組
+> 相同。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ---
 
