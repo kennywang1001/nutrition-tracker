@@ -855,6 +855,97 @@ cd F:/wallet && ./.venv/Scripts/ruff.exe check . && ./.venv/Scripts/mypy.exe app
 
 ## Task 5: `POST /api/ai/analyze`
 
+> ## 實測記錄（已執行完畢）
+>
+> ### 標題寫「五條」，內文列了七條——沿用內文，不是漏算
+>
+> 這個小節的標題是「五條必須成立的行為」，但底下的編號清單其實列了 1–7
+> 七項。執行時以內文的七項為準（跟第 6、7 條各自獨立成一小節的事實一致），
+> 標題文字本身沒有改，僅在這裡記錄這個既有的不一致，供之後校對計畫文字時
+> 參考。
+>
+> ### 「食物庫搜得到就不呼叫 LLM」這一條，規格沒講死「搜」是什麼意思——這裡是實作時做的判斷
+>
+> 規格 §3 只說「先搜自己的食物庫（DB 查詢）」，沒有規定比對方式，也沒有
+> 規定命中時的回應要長什麼樣（那個分支甚至不在規格 §4.1 的回應範例裡）。
+> 讀完規格全文（尤其是「找到 → 直接選，結束」這句話）之後做了以下判斷，
+> 都在 `app/api/routes/ai.py` 的 docstring 裡寫了理由：
+>
+> 1. **只有 `kind=text` 會搜**——`kind=image` 沒有文字可以拿來查食物庫，
+>    一律直接進入額度檢查 + 呼叫 LLM。`test_library_search_only_applies_to_text_not_image`
+>    釘住這件事：食物庫裡故意放一筆同名食物，圖片分析仍然呼叫了 LLM。
+> 2. **比對方式是精確比對（不分大小寫，`ILIKE` 無萬用字元），不是子字串**——
+>    這個文字欄位通常是一段描述（規格 §4.1 範例「一碗滷肉飯」），子字串
+>    比對在多義詞情境下會不可預期地誤判「找到」。
+> 3. **可見範圍是使用者看得到的食物（自己的 + 全域），跟 `search_foods`
+>    同一個可見性規則**，不是規格字面「自己的食物庫」那麼窄——全域食物
+>    （例如「白飯」）沒有理由要為它多花一次 LLM 呼叫。
+> 4. **命中時 `analysis_id` 回 `null`**（`AnalyzeResponse.analysis_id` 因此
+>    宣告成 `int | None`）——規格 §3 明講這條路徑「不計入每日上限」，而
+>    額度就是直接數 `ai_analyses` 的列數（§7.2），兩者合起來代表這個分支
+>    **不能**寫入 `ai_analyses`，所以沒有列可以參照。這是規格例文沒有涵蓋
+>    到的分支，回應形狀是這個 task 自己補的決定，不是照抄規格的例子。
+> 5. **命中時 `serving_grams` 固定回 `100.00`**，讓「一份」等於「每 100g」——
+>    食物庫裡的資料本來就沒有「AI 估的一份是幾克」這個概念，用 100 讓
+>    `serving_*` 與每 100g 的值自然相等，不需要另外杜撰一個假的份量。
+> 6. **命中時 `confidence` 固定回 `1.00`**——這不是 AI 自陳值，是查到的、
+>    已經驗證過的資料，用 1.00 表示「這不是估的」。
+>
+> ### `get_estimator()` 用一般的 `Depends()`，不是延後解析——這是刻意的取捨
+>
+> `estimator: NutritionEstimator = Depends(get_estimator)` 這個宣告方式，
+> 代表 FastAPI 會在路由函式本體執行**之前**就解析這個依賴——如果沒設
+> `ANTHROPIC_API_KEY`，`get_estimator()` 會在食物庫搜尋跑之前就先拋
+> `AI_NOT_CONFIGURED`，即使這次呼叫其實靠食物庫短路就能滿足，也不例外。
+>
+> 這不是疏漏，是刻意的取捨，理由有兩個：(a) 七條必須成立的行為沒有一條
+> 要求「沒設 key 但食物庫搜得到時仍要成功」，(b) 拿掉 `Depends()` 改成在
+> 需要時才手動呼叫 `get_estimator()`，會讓 `app.dependency_overrides[get_estimator]`
+> 這個注入機制失效（override 只對 FastAPI 解析的 `Depends()` 生效），而
+> 計畫明講測試就是要用這個機制注入假 estimator。維持 `Depends()` 的形狀，
+> 犧牲的是一個規格沒有要求的邊角案例。
+>
+> ### `MAX_PHOTO_BYTES` 沿用 `app/api/routes/meals.py` 既有的常數，跨路由 import
+>
+> 規格表格寫「沿用照片上傳既有的 `PHOTO_TOO_LARGE` / `INVALID_PHOTO` 慣例」，
+> 但那個常數目前定義在 `app/api/routes/meals.py`（不是 `app/storage/photos.py`
+> 這種共用模組）。這裡直接 `from app.api.routes.meals import MAX_PHOTO_BYTES`
+> 重用同一個數字，而不是複製一份常數——兩份常數之後會漂移，是這個專案
+> 反覆踩過的形狀。跨路由模組 import 一個常數在這個 codebase 沒有先例，
+> 但沒有找到更好的位置：這個常數的本質是「上傳內容大小上限」，兩個端點
+> 剛好都要用，搬到 `app/storage/photos.py` 或 `app/config.py` 都是合理的
+> 後續重構方向，這個 task 沒有動它。
+>
+> ### 一個在突變驗證時抓到的測試自己的 bug——跟這個 task 要驗的東西無關，但值得記下來
+>
+> 第一版的「失敗也計入額度」測試在 `await db_session.rollback()` 之後，
+> 用 `AiAnalysis.user_id == user.id` 查詢——`user.id` 是 rollback 之後才讀的
+> ORM 屬性。**這個測試在正常（未突變）程式碼下可以通過**，因為
+> `_call_estimator_or_record_failure` 的 `await db.commit()` 先跑過一次，
+> 讓 session 進入乾淨的狀態；但套用突變二（拿掉那個 commit）之後，同一行
+> `user.id` 觸發同步 refresh，直接炸 `MissingGreenlet`，而不是乾淨地
+> assert 失敗。照抄 `tests/test_sessions.py` 已經寫下的教訓（「先把 id
+> 取出來」），把 `user_id = user.id` 移到 `rollback()` 之前，問題消失，
+> 突變二之後這條測試改成乾淨地 `assert 0 == 1` 變紅。細節見下面的突變
+> 記錄與 `tests/test_ai_analyze.py` 的 `user_id` 那行註解。
+>
+> ### 三個突變驗證，另外加了兩個「應該仍然綠」的邊界對照組
+>
+> 除了計畫要求的三個突變，測試裡另外加了兩個對照組
+> （`test_the_20th_call_today_is_still_allowed`、
+> `test_library_search_only_applies_to_text_not_image`），在**沒有**套用
+> 任何突變的正常程式碼下確認相鄰的邊界行為沒有被過度收緊。三個計畫要求
+> 的突變全部照計畫的預期紅了：
+>
+> | 突變 | 結果 |
+> |---|---|
+> | 拿掉「先搜食物庫」那段（一律呼叫 LLM） | 只有 `test_library_hit_does_not_call_the_llm` 紅，**紅在 `assert fake.calls == 0`**（`assert 1 == 0`），不是紅在回傳值——不是規格 §8.3 警告的假綠燈 |
+> | 「失敗也寫 `ai_analyses`」改成只在成功時寫 | 只有 `test_a_failed_llm_call_is_still_recorded_in_ai_analyses` 紅，`assert len(rows) == 1` 變成 `assert 0 == 1` |
+> | 額度比較從 `>=` 改成 `>` | 只有 `test_the_21st_call_today_is_blocked` 紅，`assert response.status_code == 429` 變成 `assert 200 == 429` |
+>
+> 三次突變測完都已改回原樣，`git status` / `git diff` 確認 `app/api/routes/ai.py`
+> 跟突變前逐位元組相同，`pytest tests/test_ai_analyze.py -q` 回到 10 passed。
+
 **Files:**
 - Create: `app/schemas/ai.py`
 - Create: `app/api/routes/ai.py`
@@ -903,7 +994,7 @@ cd F:/wallet && ./.venv/Scripts/ruff.exe check . && ./.venv/Scripts/mypy.exe app
 > `await db_session.rollback()`，然後**用 select 讀欄位、不要讀 ORM 實體**
 > （rollback 會讓物件過期，之後讀屬性會觸發同步 refresh 而炸 `MissingGreenlet`）。
 
-- [ ] **Step 1: 寫 schema**
+- [x] **Step 1: 寫 schema**
 
 `app/schemas/ai.py`。Request 是一個 discriminated union（`kind` 決定形狀），
 Response 照規格 §4.1 的形狀。
@@ -930,36 +1021,57 @@ class AnalyzedNutrition(BaseModel):
 > `serving_kcal == kcal × serving_grams / 100`（含四捨五入）。
 > 加一條測試釘住它 —— 兩處講同一件事就會漂移，這個專案踩過五次。
 
-- [ ] **Step 2: 寫測試**
+- [x] **Step 2: 寫測試**
 
 用假 estimator 注入（`app.dependency_overrides[get_estimator]`）。
 **假實作要能數呼叫次數。**
 
 去讀 `tests/conftest.py` 看 `client` fixture 怎麼做 override 的。
 
-- [ ] **Step 3–5: 實作、掛 router、跑測試**
+**實測：** `tests/test_ai_analyze.py` 的 `FakeEstimator` 分別數
+`text_calls` / `image_calls`（`calls` 是兩者的和），注入方式是
+`app.dependency_overrides[get_estimator] = lambda: fake`——`client` fixture
+的 `finally: app.dependency_overrides.clear()` 會在每個測試結束後把它
+一起清掉，不需要額外的清理。
 
-- [ ] **Step 6: 突變驗證**
+- [x] **Step 3–5: 實作、掛 router、跑測試**
+
+**實測：** `tests/test_ai_analyze.py -q` → 10 passed。全套
+`pytest -q` → 551 passed（基準 541 + 這個 task 新增 10 條）。
+`ruff check .` → All checks passed。`mypy app` → no issues in 56 source
+files（基準 54 + `app/schemas/ai.py` + `app/api/routes/ai.py`）。
+
+- [x] **Step 6: 突變驗證**
 
 > **必須成立（一）：** 把「先搜食物庫」那段拿掉（一律呼叫 LLM），
 > 第 1 條測試必須紅，**而且紅在呼叫次數那一行**，不是紅在回傳值。
 >
-> **實測填回：** ——
->
-> 如果它紅在回傳值，那代表測試斷言的是結果而不是「有沒有呼叫」——
-> 那正是規格 §8.3 警告的假綠燈，**停下來報告**。
+> **實測填回：** 紅了，且只紅一條——`test_library_hit_does_not_call_the_llm`：
+> `assert fake.calls == 0` 變成 `assert 1 == 0`（`AssertionError: assert 1 == 0
+> where 1 = <FakeEstimator...>.calls`）。**紅在呼叫次數那一行，不是紅在
+> 回傳值**——`test_library_search_only_applies_to_text_not_image` 等其餘
+> 9 條仍綠。不是規格 §8.3 警告的假綠燈，不需要停下來報告。
 
 > **必須成立（二）：** 把「失敗也寫 `ai_analyses`」改成只在成功時寫，
 > 第 3 條測試必須紅。
 >
-> **實測填回：** ——
+> **實測填回：** 紅了，且只紅一條——`test_a_failed_llm_call_is_still_recorded_in_ai_analyses`：
+> `assert len(rows) == 1` 變成 `assert 0 == 1`（`AssertionError: assert 0 == 1
+> where 0 = len([])`）——`rollback()` 之後那一列真的不見了，證明拿掉的
+> `commit()` 正是「這一列有沒有真的寫進資料庫」的唯一原因。其餘 9 條仍綠。
+> （突變驗證過程中另外抓到一個測試自己的 bug，跟這個突變無關，見上面
+> 「實測記錄」一節的說明；修好之後才有這條乾淨的紅。）
 
 > **必須成立（三）：** 把額度比較從 `>=` 改成 `>`（差一錯誤），
 > 第 2 條測試必須紅。
 >
-> **實測填回：** ——
+> **實測填回：** 紅了，且只紅一條——`test_the_21st_call_today_is_blocked`：
+> `assert response.status_code == 429` 變成 `assert 200 == 429`（第 21 次
+> 呼叫在 `>` 之下被放行，回了 200 而不是 429）。其餘 9 條仍綠，包含對照組
+> `test_the_20th_call_today_is_still_allowed`（第 20 次本來就該放行，不受
+> 這個突變影響）。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ---
 
