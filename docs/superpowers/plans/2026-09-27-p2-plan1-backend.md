@@ -1077,9 +1077,119 @@ files（基準 54 + `app/schemas/ai.py` + `app/api/routes/ai.py`）。
 
 ## Task 6: `create_food` 接受來源標記
 
+> ## 實測記錄（已執行完畢）
+>
+> ### `source` 沒有 CheckConstraint 這件事確認屬實，判斷是兩層都加
+>
+> 實測 `docker exec wallet-db-1 psql -U wallet -d wallet -c "\d food_revisions"`：
+> `source` 欄位從 0002（第一版 migration）就是 `TEXT NOT NULL DEFAULT 'user'`，
+> 七個既有 CheckConstraint 裡確實**沒有一個管到 `source`**——`ai_confidence_in_range`
+> 管的是另一欄。前端目前雖然只有 `create_food` 這一個寫入口，但這個洞是真的：
+> 任何字串都插得進去，靜態檢查與既有測試全綠，因為它們都不會塞一個非法值。
+>
+> **兩層都加，不是二選一：**
+>
+> - **Pydantic（`Literal["user", "ai", "official"]`）**：擋在 API 邊界，壞輸入
+>   直接 422，不用等到打進資料庫才知道錯。
+> - **DB CheckConstraint（`migrations/0009`）**：跟 `app/models/ai_analysis.py`
+>   的 `kind_valid`、`app/models/meal.py` 的 `meal_type_valid` 同一個理由——
+>   `food_revisions` 這張表不該假設「以後只有 `create_food` 這一條路會寫它」。
+>   `propose_revision`（同一個檔案）已經在寫這張表，只是目前沒有傳
+>   `source`（走 model 的 `server_default='user'`），DB 層的約束對它一樣生效。
+>
+> 只加 Pydantic 的話，繞過 API 直接寫 ORM（測試工廠、未來的批次匯入、管理後台）
+> 完全不受保護——這正是這個專案在 Task 2 已經用 `kind_valid` 驗證過的立場，
+> 沒有理由對 `source` 用不同標準。
+>
+> **這個決定讓 Task 6 的檔案清單多出一個原本沒列的 migration**
+> （`migrations/versions/0009_add_food_revisions_source_valid.py`，
+> `down_revision = "0008"`）——照計畫「開工前必讀 1」的規則先在這裡報告。
+> 沿用 Task 2 已經驗證過的作法：**不新增 SQLAlchemy `Enum` 型別**（那會把
+> 欄位從 `TEXT` 換成 `VARCHAR(n)`，需要額外的 `ALTER COLUMN TYPE`，對「只是
+> 想加約束」這個目的沒有必要），單純用 `op.create_check_constraint("source_valid",
+> "food_revisions", "source IN ('user', 'ai', 'official')")`。
+>
+> 實測確認 `op.create_check_constraint` 傳的短名稱一樣會經過 NAMING_CONVENTION
+> 轉換成最終名稱（跟 `op.create_table` 裡宣告的 CheckConstraint 一樣）：
+> `docker exec wallet-db-1 psql -U wallet -d wallet -c "\d food_revisions"` 顯示
+> 最終約束是 `ck_food_revisions_source_valid`。`alembic upgrade head` 之後連續
+> 兩次 `alembic check` 都回報 `No new upgrade operations detected.`。
+>
+> **`downgrade()` 原本寫錯，而且是實測 `alembic downgrade -1` 才抓到的：**
+> 第一版 `downgrade()` 直覺地傳完整名稱 `op.drop_constraint("ck_food_revisions_source_valid",
+> ...)`，以為 drop 這一側是純字面比對（跟 `op.create_table` 裡宣告完整名稱不同，
+> 這裡想著「drop 總該用資料庫裡真正的名字吧」）。**實測直接炸掉**：
+>
+> ```
+> sqlalchemy.exc.ProgrammingError: ... UndefinedObjectError:
+> constraint "ck_food_revisions_ck_food_revisions_source_valid" of relation
+> "food_revisions" does not exist
+> ```
+>
+> `op.drop_constraint` 一樣會把傳進去的名稱當成 NAMING_CONVENTION 的
+> `%(constraint_name)s` 樣板輸入再套一次模板——傳完整名稱等於被雙重套用，
+> `ck_food_revisions_` 前綴疊了兩次。修法：跟 `upgrade()` 一樣傳短名稱
+> `"source_valid"`。這是「`CheckConstraint(name=)` 給的是命名慣例的輸入，
+> 不是最終名稱」（handover §7 第一條）這個已知陷阱的一個新變體——這次踩在
+> `op.drop_constraint`，不是 `CheckConstraint(name=)` 本身，而且踩之前完全
+> 沒有預期到（直覺反而覺得 drop 應該用完整名稱）。改完之後實測
+> `alembic downgrade -1` → 約束消失 → `alembic upgrade head` → 約束用
+> 同一個最終名稱 `ck_food_revisions_source_valid` 重新出現 →
+> 連續兩次 `alembic check` 都乾淨。
+>
+> ### `propose_revision` 判斷：這個 task 不擴充它
+>
+> **沒有讓它也接受這三個欄位。** 理由：
+>
+> 1. 這個 task 的標題本身就界定在 `create_food`，檔案清單也只列
+>    `app/schemas/food.py` 與 `app/api/routes/foods.py`（後者兩個 handler 都在
+>    同一個檔案裡，但只改了 `create_food` 那個函式）。
+> 2. 規格 §3 的流程圖只畫了 `POST /api/foods`——AI 分析目前設計的用途是
+>    「估算出一樣新食物，確認/改過後建立」，不是「重新估算一樣已存在的食物
+>    然後送一筆修訂」。目前沒有任何前端流程（計畫二也還沒寫）會把 AI 估算結果
+>    餵給 `propose_revision`。
+> 3. 沒有驅動這個需求的呼叫端就先開放 API 表面，是在賭一個還沒發生的用法，
+>    而且會讓 `RevisionCreateRequest` 多出目前沒有測試覆蓋、沒有使用者的欄位。
+> 4. 成本不對稱：現在不開放，之後真的需要時再開，只是照這個 task 同樣的形狀
+>    加三行；現在先開放但猜錯欄位語意（例如「編輯食物」的 AI 來源要不要影響
+>    `is_own_private_food` 那條自動生效的邏輯，這個 task 完全沒有分析過），
+>    之後要改就是要處理已經在用的 API 形狀。
+>
+> `propose_revision` 建立的 `FoodRevision` 因此繼續走 model 的
+> `server_default='user'`、`ai_confidence`/`ai_raw_response` 維持 `NULL`——
+> 跟這個 task 之前的既有行為完全一樣。
+>
+> ### 突變驗證
+>
+> **必須成立：** 把 `create_food` 寫入 `source` 那一行改成寫死 `"user"`，
+> 至少一條測試紅。
+>
+> **實測填回：** 紅了，且只紅一條——
+> `test_create_food_with_source_ai_persists_it_in_food_revisions`：
+> `assert revision.source == "ai"` 變成 `AssertionError: assert 'user' == 'ai'`。
+> 其餘 4 條（含「不帶欄位時預設 'user'」那條——它本來就該是 'user'，不受
+> 這個突變影響）仍綠，包含兩條專門測 DB 層 `source_valid` 約束、與 API 層
+> `Literal` 驗證的測試，都跟這一行寫死的邏輯無關，所以維持綠色，證明突變是
+> 精準命中而不是整批連坐。改回 `source=payload.source` 之後 `git diff` 確認
+> `app/api/routes/foods.py` 跟突變前逐位元組相同，
+> `pytest tests/test_foods_ai_source.py -q` 回到 5 passed。
+>
+> ### 驗證前先確認測試真的會紅（TDD 的「先看紅」）
+>
+> 在套用 `app/models/food.py` / `app/schemas/food.py` / `app/api/routes/foods.py`
+> 的實作與 `migrations/0009` 之前，先用 `git stash` 把這三個檔案的改動與
+> migration 檔案暫時移開，單獨跑 `tests/test_foods_ai_source.py`：5 條裡 4 條紅
+> （`source='ai'` 沒被寫入、`source='user'` + `ai_raw_response` 沒被寫入、
+> API 層沒有拒絕非法 `source`、DB 層沒有 CheckConstraint 可以拒絕），只有
+> 「不帶欄位時預設 'user'」那條本來就綠（既有行為）。跟這個 task 一開始
+> 期待的形狀一致，才把改動還原回來。
+
 **Files:**
+- Modify: `app/models/food.py`（計畫原本沒列，補上 `source_valid` CheckConstraint）
 - Modify: `app/schemas/food.py`
 - Modify: `app/api/routes/foods.py`
+- Create: `migrations/versions/0009_add_food_revisions_source_valid.py`（計畫原本
+  沒列，見上面「實測記錄」的判斷）
 - Test: `tests/test_foods_ai_source.py`
 
 ### 規格 §5：「有沒有改」是資料
@@ -1092,9 +1202,10 @@ files（基準 54 + `app/schemas/ai.py` + `app/api/routes/ai.py`）。
 **這件事不會因為功能正常運作而自動被驗到** —— 兩條路徑都會成功存出一個
 食物，回應看起來一模一樣。只有專門斷言 `source` 的測試守得住。
 
-- [ ] **Step 1: 寫失敗的測試**
+- [x] **Step 1: 寫失敗的測試**
 
-三條：
+三條（實作時多加了兩條：API 層拒絕非法 `source`、DB 層 `source_valid`
+CheckConstraint 拒絕非法值——見上面「實測記錄」的兩層防禦判斷）：
 
 1. 不帶那三個欄位時，`source` 是預設的 `'user'`、另外兩個是 `NULL`
    （**既有行為不能壞**）
@@ -1105,15 +1216,18 @@ files（基準 54 + `app/schemas/ai.py` + `app/api/routes/ai.py`）。
 **斷言要讀資料庫，不是讀回應** —— `FoodResponse` 沒有這三個欄位，
 讀回應什麼都驗不到。
 
-- [ ] **Step 2–5: 實作、驗證、突變**
+- [x] **Step 2–5: 實作、驗證、突變**
 
-`FoodCreateRequest` 加：
+`FoodCreateRequest` 實際加的（`source` 比計畫草稿的 `str` 改成
+`Literal["user", "ai", "official"]`，`ai_confidence` 多加了
+`max_digits=3`（跟 `NUMERIC(3,2)` 的欄位對齊，比照 `NutritionInput` 的慣例）
+——理由見上面「實測記錄」）：
 
 ```python
-    # P1 就預留好的三個欄位（`food_revisions`），P2 是第一個使用者。
-    # 規格 §5：「直接確認」與「改過才確認」要分得出來。
-    source: str = "user"
-    ai_confidence: Decimal | None = Field(default=None, ge=0, le=1, decimal_places=2)
+    source: Literal["user", "ai", "official"] = "user"
+    ai_confidence: Decimal | None = Field(
+        default=None, ge=0, le=1, max_digits=3, decimal_places=2
+    )
     ai_raw_response: dict[str, Any] | None = None
 ```
 
@@ -1121,13 +1235,18 @@ files（基準 54 + `app/schemas/ai.py` + `app/api/routes/ai.py`）。
 > 目前**沒有** CheckConstraint（去確認）。前端能送任意字串進去就是一個洞。
 > **自己判斷要加 Pydantic 驗證、資料庫約束、還是兩個都加**，並在報告裡
 > 說明理由。
+>
+> **判斷：兩個都加。** 詳細理由與 migration 0009 的細節見上面「實測記錄」。
 
 > **必須成立：** 把 `create_food` 寫入 `source` 那一行改成寫死 `"user"`，
 > 至少一條測試紅。
 >
-> **實測填回：** ——
+> **實測填回：** 紅了，且只紅一條——
+> `test_create_food_with_source_ai_persists_it_in_food_revisions`：
+> `AssertionError: assert 'user' == 'ai'`。其餘 4 條仍綠。細節見上面
+> 「實測記錄」的「突變驗證」一節。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ---
 
