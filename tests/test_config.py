@@ -70,3 +70,35 @@ def test_ai_daily_limit_must_be_positive():
     """
     with pytest.raises(ValueError):
         Settings(jwt_secret="x" * 32, ai_daily_limit=0)
+
+
+def test_empty_anthropic_key_is_treated_as_no_key(monkeypatch):
+    """空字串等於沒有金鑰 —— 這一條守的是一個部署層的細節。
+
+    `docker-compose.yml` 用 `${ANTHROPIC_API_KEY:-}` 傳這個變數（`:-` 而不是
+    `:?`，因為它是選配的）。實測 `docker compose config` 的輸出確認：沒設值時
+    容器收到的是 `ANTHROPIC_API_KEY: ""`，**不是「沒有這個變數」**。
+
+    少了正規化，`settings.anthropic_api_key is None` 會是 `False`，於是
+    `get_estimator()` 不會拋 `AI_NOT_CONFIGURED`，而是拿一把空字串金鑰去建
+    client —— 使用者看到的是來自 Anthropic 的認證錯誤，而不是「你沒設定 AI」。
+    **看起來是開著的比明確關閉更糟。**
+
+    這個缺陷在單純讀 `.env` 的本機環境下不會出現（那裡沒有這個變數），
+    只有在 compose 起的容器裡才會 —— 是「只有部署環境看得到」的那一類。
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    assert Settings(jwt_secret="x" * 32).anthropic_api_key is None
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "   ")
+    assert Settings(jwt_secret="x" * 32).anthropic_api_key is None
+
+
+def test_a_real_anthropic_key_survives_normalisation(monkeypatch):
+    """跟上一條成對：正規化不能把真的金鑰也吃掉。
+
+    只有上一條的話，一個「永遠回 None」的 validator 也會全綠 ——
+    而那會讓 AI 功能永遠開不了。
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-not-a-real-key")
+    assert Settings(jwt_secret="x" * 32).anthropic_api_key == "sk-ant-not-a-real-key"

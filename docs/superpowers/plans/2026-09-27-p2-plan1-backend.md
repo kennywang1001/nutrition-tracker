@@ -129,6 +129,71 @@ dev 的原始碼掛載只有 `./app`。症狀是 `relation "xxx" does not exist`
 
 ## Task 1: 相依、設定、與「沒有 key 就關閉」
 
+> ## 實測記錄（已執行完畢，commit `cc8d809` + 後續修正）
+>
+> ### ⚠️ 計畫的檔案清單漏了 compose，而那會讓這整個 task 的成果在 production 永遠失效
+>
+> `docker-compose.yml` 與 `docker-compose.prod.yml` **都沒有把
+> `ANTHROPIC_API_KEY` 傳進容器**，而這份計畫的「檔案結構」表格從頭到尾
+> 沒有列它們。
+>
+> compose 的 `--env-file` 只用來做 **YAML 檔案本身的字串代換**，不會自動
+> 把變數注入容器 —— 除非該 service 的 `environment:` 明確列出它。
+> 所以就算使用者照著新寫的部署文件在 `.env.production` 填了金鑰，
+> 容器裡的 `Settings()` 讀到的還是 `None`：**這個「選配功能」在原本的
+> compose 設定下永遠開不了。**
+>
+> ### 補 compose 又引入第二個缺陷，而它比第一個更糟
+>
+> `ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"`（用 `:-` 不是 `:?`，因為它
+> 是選配的）在沒設值時代換成**空字串**，不是「沒有這個變數」。實測
+> `docker compose config` 的輸出確認：`ANTHROPIC_API_KEY: ""`。
+>
+> 而 Pydantic 會把空字串解析成 `""` 不是 `None`：
+>
+> ```
+> ANTHROPIC_API_KEY="" → anthropic_api_key = ''   is None? False
+> ```
+>
+> 於是 `get_estimator()` 不會拋 `AI_NOT_CONFIGURED`，而是拿一把空字串金鑰
+> 去建 client —— 使用者看到的是來自 Anthropic 的認證錯誤，而不是「你沒設定
+> AI」。**看起來是開著的比明確關閉更糟。**
+>
+> 修法：`app/config.py` 加 `_empty_key_is_no_key` validator（`mode="before"`），
+> 空字串與全空白都正規化成 `None`。
+>
+> ### 這個缺陷只有在容器裡才看得到
+>
+> 本機直接跑 pytest 時 `.env` 裡根本沒有 `ANTHROPIC_API_KEY`，所以
+> `anthropic_api_key` 是 `None`，一切正常。**只有 compose 起的容器會收到
+> 空字串。** 是「只有部署環境看得到」的那一類。
+>
+> 補了兩條成對的測試（`monkeypatch.setenv`）：空字串變 `None`、
+> **而真的金鑰不能被吃掉**。第二條是必要的 —— 只有第一條的話，一個
+> 「永遠回 None」的 validator 也會全綠，而那會讓 AI 永遠開不了。
+>
+> 突變驗證：
+>
+> | 突變 | 結果 |
+> |---|---|
+> | 拿掉空字串正規化 | 「空字串等於沒有金鑰」紅 |
+> | 改成永遠回 `None` | 「真的金鑰不能被吃掉」紅 |
+>
+> ### 另外兩件實測
+>
+> **`extra="ignore"` 也作用在建構子的關鍵字參數上。** 在 `ai_daily_limit`
+> 這個欄位還不存在時，`Settings(jwt_secret=…, ai_daily_limit=0)` 不會報
+> 「未知欄位」，而是**整個吞掉那個參數**、安靜地建出物件。所以任何地方把
+> 設定欄位名打錯，Pydantic 都不會提醒 —— 寫測試時要小心。
+>
+> **`pip freeze` 會寫進一行 VCS 需求。** `pip install -e ".[dev]"` 把專案
+> 自己裝成 editable 之後，`pip freeze` 會序列化成
+> `-e git+https://…#egg=wallet`。那一行留在 lock 檔裡**會炸 Docker build**
+> —— `Dockerfile` 用 `pip install -c requirements-lock.txt -e .`，而 pip
+> 不允許 constraints 檔案裡有 editable/VCS 需求（實測
+> `pip install --dry-run -c` 確認：`ERROR: Editable requirements are not
+> allowed as constraints`）。已手動移除。
+
 **Files:**
 - Modify: `pyproject.toml`
 - Modify: `requirements-lock.txt`
