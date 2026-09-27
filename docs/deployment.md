@@ -66,19 +66,29 @@ BIND_ADDR=127.0.0.1
 > 填什麼都不影響，填 `127.0.0.1` 是為了讓它至少不誤導（對外入口是
 > `tailscale serve`，不是任何一個綁在 tailnet 位址上的埠）。
 
-`.env.production.example` 還有一個選配的 `ANTHROPIC_API_KEY`（AI
-營養素估算用的 Anthropic 金鑰）。跟 `JWT_SECRET`、`BIND_ADDR` 不一樣，
-**這個留白也沒關係**：應用程式本身沒設就把 AI 分析功能整個關閉
-（該端點回 `503 AI_NOT_CONFIGURED`），其他既有功能完全不受影響，
-`docker compose config` 也不會因為它沒填就報錯。理由是「沒有 AI key」
-不是安全性問題，只是少一個功能——不該讓整個 app 因為一個選配功能而起不來。
+`.env.production.example` 還有兩個選配的變數：`GEMINI_API_KEY`（AI
+營養素估算用的 Google Gemini 金鑰，P2 計畫一 b 把供應商從 Anthropic 換成
+Gemini，這個名字也跟著換）與 `AI_MODEL`（實際呼叫的 model id）。跟
+`JWT_SECRET`、`BIND_ADDR` 不一樣，**這兩個留白也沒關係**：應用程式本身
+沒設 `GEMINI_API_KEY` 就把 AI 分析功能整個關閉（該端點回
+`503 AI_NOT_CONFIGURED`），其他既有功能完全不受影響，`docker compose config`
+也不會因為它們沒填就報錯。理由是「沒有 AI key」不是安全性問題，只是少一個
+功能——不該讓整個 app 因為一個選配功能而起不來。
 
-> **這個變數目前還沒有被 `docker-compose.yml` / `docker-compose.prod.yml`
-> 傳進容器**（兩個檔案的 `api.environment` 都沒有列出它）——單填
-> `.env.production` 這個值本身不會讓容器裡的 `Settings` 讀到它。
-> 要讓 production 真的能開啟 AI 分析，還需要在 compose 檔補一條
-> `ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"`（可留白，跟 `JWT_SECRET`
-> 的 `:?` 必填語法不同）。這一步目前不在這份 task 的範圍內。
+> `docker-compose.yml` 的 `api.environment` 已經把這兩個變數轉發進容器
+> （`GEMINI_API_KEY: "${GEMINI_API_KEY:-}"`、
+> `AI_MODEL: "${AI_MODEL:-REPLACE_ME_SET_A_REAL_GEMINI_MODEL_ID}"`，可留白，
+> 跟 `JWT_SECRET` 的 `:?` 必填語法不同），單填 `.env.production` 就會生效，
+> 不需要另外改 compose 檔。
+>
+> **`AI_MODEL` 沒有查證過的預設值。** P2 計畫一 b 執行時只 inspect 了
+> `google-genai` 2.25.0 這個 SDK 的 Python 介面，沒有打過真的 API，所以
+> 沒有一份「現在確定合法」的 model id 清單——`app/config.py` 的預設值
+> 因此是一個明顯的佔位符，不是猜的模型名稱。真的要開啟 AI 分析，除了
+> `GEMINI_API_KEY` 之外，**一定要另外到
+> [Gemini 的 model 文件](https://ai.google.dev/gemini-api/docs/models) 查
+> 目前可用的 model id，填進 `AI_MODEL`**，否則第一次呼叫會直接收到
+> Google 的「model not found」錯誤。
 
 > **不要**把這個檔案改名成 `.env` —— 那個名字是本機開發用的，
 > 而且 `docker compose` 只會自動讀 `.env`，兩者混在一起遲早出事。

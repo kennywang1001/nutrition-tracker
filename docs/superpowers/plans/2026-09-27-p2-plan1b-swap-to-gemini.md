@@ -164,7 +164,7 @@ AI」。看起來是開著的比明確關閉更糟。**
 4. **不要在 prompt 裡要求它自己檢查 Atwater** —— 那是 `consistency.py`
    的工作，而那一層的價值就在於它不是 LLM 說的
 
-- [ ] **Step 1: 查證 `response_schema` 吃什麼形狀**
+- [x] **Step 1: 查證 `response_schema` 吃什麼形狀**
 
 ```bash
 cd F:/wallet && ./.venv/Scripts/python.exe -c "
@@ -177,7 +177,35 @@ print('response_schema 型別:', f.annotation)
 它可能吃 pydantic model、可能吃 dict schema，**兩者的行為不同**。
 把結果寫進報告。
 
-- [ ] **Step 2: 改設定與相依**
+> **實測填回：** `response_schema` 的型別註記是
+> `dict[Any, Any] | type | Schema | GenericAlias | UnionType | ... | None`
+> ——確實兩種都吃。**但兩者的行為不只是「不同」，其中一種會直接炸。**
+>
+> 讀 `google.genai._transformers.t_schema()` 原始碼確認：如果傳一個
+> `type` 且是 `pydantic.BaseModel` 子類別，它會呼叫該 model 的
+> `.model_json_schema()` 再塞進 `types.Schema.model_validate()`。**實測
+> 直接把本檔案既有的 `_LLMEstimateSchema`（帶
+> `Field(gt=0, le=10000, max_digits=8, decimal_places=2)` 這類約束）傳進去
+> 會炸：**
+>
+> ```
+> pydantic_core._pydantic_core.ValidationError: 1 validation error for Schema
+> properties.serving_grams.anyOf.0.exclusiveMinimum
+>   Extra inputs are not permitted [type=extra_forbidden, input_value=0.0, ...]
+> ```
+>
+> 原因：pydantic 的 `Field(gt=...)` 產生標準 JSON Schema 的
+> `exclusiveMinimum` 關鍵字，但 Google 的 `types.Schema` 是一個嚴格子集
+> （只認 `type`/`properties`/`required`/`minimum`/`maximum`/`nullable` 等
+> 有限欄位，不認 `exclusiveMinimum`），驗證時直接 `extra_forbidden`。
+> 換成一個**沒有 `Field` 約束**的簡單 pydantic model（純 `str`/`float`）
+> 實測可以過。最後採用的做法是**手刻一份只用 Google `Schema` 認得的關鍵字
+> 的 `dict`**（型別字串大寫：`"OBJECT"`/`"STRING"`/`"NUMBER"`），繞開這個
+> 地雷，跟 `_LLMEstimateSchema` 的實際數值驗證完全脫鉤（後者仍然是
+> `parse_raw_estimate()` 真正把關的地方，沒有變寬鬆）。細節與程式碼見
+> `app/ai/estimator.py` 的 `_RESPONSE_SCHEMA` 定義處的註解。
+
+- [x] **Step 2: 改設定與相依**
 
 `pyproject.toml`：拿掉 `anthropic>=0.40`，加 `google-genai>=2.25`。
 
@@ -194,11 +222,30 @@ cd F:/wallet && ./.venv/Scripts/python.exe -m pip freeze > requirements-lock.txt
 >
 > 跑完用 `git diff requirements-lock.txt` 看清楚增減，寫進報告。
 
-- [ ] **Step 3: 改實作**
+> **實測填回：** 確認踩到了，跟前一份計畫 Task 1 一致：`pip freeze` 寫出
+> `-e git+https://github.com/kennywang1001/nutrition-tracker.git@<sha>#egg=wallet`
+> 這一行，手動刪掉。**額外發現一個計畫沒提到的細節**：`pip uninstall
+> anthropic` 不會連帶移除 anthropic 專屬的轉接依賴（`httpx2`、`jiter`、
+> `docstring_parser`）——`pip show` 確認三者 `Required-by:` 都是空的，
+> `pip freeze` 卻還是會把它們列出來，因為它們仍然*安裝在* venv 裡，只是
+> 沒有東西再宣告依賴它們。一併 `pip uninstall` 掉之後 `pip check` 回報
+> `No broken requirements found`，lock 檔的 diff 因此更乾淨，不會讓下一個
+> 讀 diff 的人納悶「這個沒有 LLM function-calling 功能的專案為什麼會有
+> `docstring_parser`」。
 
-- [ ] **Step 4: 改測試**
+- [x] **Step 3: 改實作**
 
-- [ ] **Step 5: 全套驗證**
+- [x] **Step 4: 改測試**
+
+> **跟計畫不一致：`tests/test_ai_analyze.py` 並非零改動。** 見報告第 8 節
+> ——`test_analyze_without_api_key_returns_503` 直接
+> `monkeypatch.setattr(settings, "anthropic_api_key", None)`，繞過
+> Protocol/`_inject()` 直接戳 config 欄位名稱，重新命名後這一行必須跟著
+> 改，否則對一個 pydantic model 不存在的欄位 `monkeypatch.setattr` 會直接
+> `AttributeError`（實測確認，見下方突變記錄）。這不是 Protocol 邊界劃
+> 錯——其餘 9 條測試经 `_inject()` 走 Protocol，完全沒事。
+
+- [x] **Step 5: 全套驗證**
 
 ```bash
 cd F:/wallet && ./.venv/Scripts/python.exe -m pytest -q
@@ -209,18 +256,39 @@ cd F:/wallet && ./.venv/Scripts/ruff.exe check . && ./.venv/Scripts/mypy.exe app
 6 條必須一條都沒改就全綠。** 那是這次換供應商「只動一個實作」的證據 ——
 **在報告裡明確說出這兩個檔案的 `git diff` 是空的。**
 
-- [ ] **Step 6: 突變驗證**
+> **實測填回：** `test_ai_consistency.py` 的 `git diff` 確實是空的（0 行
+> 改動）。`test_ai_analyze.py` **不是**——改了 1 行程式碼（欄位名稱）加上
+> 說明用的 docstring，理由見上方 Step 4 與報告第 8 節。全套 `pytest -q`
+> 556 passed、`ruff check .` All checks passed、`mypy app` no issues in
+> 56 source files。
+
+- [x] **Step 6: 突變驗證**
 
 > **必須成立：** 把 `_empty_key_is_no_key` 的正規化拿掉，至少一條測試紅。
 >
-> **實測填回：** ——
+> **實測填回：** 成立。拿掉 `if isinstance(value, str) and value.strip()
+> == "": return None` 那兩行之後，`tests/test_config.py::
+> test_empty_gemini_key_is_treated_as_no_key` 紅：
+> `AssertionError: assert '' is None`（`gemini_api_key` 變成空字串
+> `''` 而不是 `None`）。改回來後 556 全綠。
 
 > **必須成立：** 把 `get_estimator()` 的「沒設金鑰就拋 503」拿掉，
 > 至少一條測試紅。
 >
-> **實測填回：** ——
+> **實測填回：** 成立，而且發現一個計畫沒預期的行為。拿掉那個
+> `if settings.gemini_api_key is None: raise ...` 檢查，改成
+> `GeminiEstimator(api_key=settings.gemini_api_key or "", ...)` 之後，
+> `tests/test_ai_analyze.py::test_analyze_without_api_key_returns_503`
+> 紅——但不是「回應碼從 503 變別的」那種紅，是**還沒打到路由就先在
+> `genai.Client(api_key="")` 這一步炸 `ValueError: No API key was
+> provided`**（未被捕捉的例外，pytest 直接顯示整條 traceback）。也就是
+> `google-genai` 的 `Client` 建構子自己也會擋空字串金鑰，但擋法是一個
+> 沒被接住的 `ValueError`（會變成 500），不是規格要的
+> `503 AI_NOT_CONFIGURED`。**這正好證明 `get_estimator()` 那個檢查仍然
+> 必要**——沒有它，使用者看到的不是「Google 的認證錯誤」（原註解的說法），
+> 而是一個更難懂的 500。已把 `get_estimator()` 改回原狀，556 全綠。
 
-- [ ] **Step 7: 確認 API 表面沒被動到**
+- [x] **Step 7: 確認 API 表面沒被動到**
 
 改設定不該動到 `openapi.json`，**但要確認**：
 
@@ -232,7 +300,17 @@ cd F:/wallet && git diff --stat frontend/src/api/schema.d.ts
 
 **預期沒有 diff。** 有 diff 的話代表 API 表面被動到了 —— 停下來報告。
 
-- [ ] **Step 8: Commit**
+> **實測填回：** 本機 Docker Desktop 建置成功（跟計畫提醒的 NAS PyPI
+> 逾時是兩回事，本機網路沒有那個問題）。`docker compose ps` 顯示
+> `wallet-api-1` healthy，啟動 log 乾淨（`Application startup complete`，
+> 沒有 `ValidationError`）。`npm run gen:api` 重新產生
+> `frontend/src/api/schema.d.ts` 之後 `git diff --stat` 沒有輸出——確認
+> API 表面沒被動到。事後 `docker compose down` 把本機容器收掉了（含原本
+> 已經跑了 35 小時的 `wallet-db-1`）；`pgdata` volume 沒被砍，重新
+> `docker compose up -d` 資料還在，但如果有其他工作依賴那組本機容器持續
+> 運行，需要自己重新啟動。
+
+- [x] **Step 8: Commit**
 
 ---
 

@@ -34,27 +34,36 @@ class Settings(BaseSettings):
     # 不是一個看起來壞掉的樣子。
     #
     # **空字串會被正規化成 None，見下面的 validator。** 那不是潔癖：
-    # docker-compose 傳的是 `${ANTHROPIC_API_KEY:-}`，沒設值時容器裡會收到
+    # docker-compose 傳的是 `${GEMINI_API_KEY:-}`，沒設值時容器裡會收到
     # 一個空字串而不是「沒有這個變數」。少了正規化，`is None` 會是 False，
     # 程式就會拿一把空字串金鑰去打 API —— 比「功能關閉」更糟，
     # 因為它看起來是開著的。
-    anthropic_api_key: str | None = None
-    ai_model: str = "claude-sonnet-5"
+    gemini_api_key: str | None = None
+    # **這個值不要用記憶裡的模型名稱猜。** google-genai 2.25.0 的原始碼裡
+    # 沒有任何地方硬編碼一份「目前合法的 model id」清單（inspect 過，
+    # 見計畫「開工前已經查證過的事實」）；套件自己的 README 範例反覆用
+    # `gemini-flash-latest`，但那是文件範例，不是「這是保證存在的 id」的
+    # 權威來源，而且沒有真的打一次 API 驗證過（這份任務不允許打真的 API）。
+    # 所以刻意留一個明顯是佔位符、絕對不是真實 model id 的值——部署時第一次
+    # 真的呼叫會直接看到 Google 那邊「model not found」的錯誤，逼著填一個
+    # 查證過的值，而不是安靜地用一個「看起來合理、其實是猜的」名字失敗在
+    # 更難查的地方（見 .env.production.example 的說明）。
+    ai_model: str = "REPLACE_ME_SET_A_REAL_GEMINI_MODEL_ID"
     # 規格 §7：只算真的呼叫 LLM 的次數，失敗的也算（一樣花了錢）。
     ai_daily_limit: int = Field(20, gt=0)
 
-    @field_validator("anthropic_api_key", mode="before")
+    @field_validator("gemini_api_key", mode="before")
     @classmethod
     def _empty_key_is_no_key(cls, value: object) -> object:
         """空字串等於沒有金鑰。
 
-        `docker-compose` 用 `${ANTHROPIC_API_KEY:-}` 傳這個變數（`:-` 而不是
+        `docker-compose` 用 `${GEMINI_API_KEY:-}` 傳這個變數（`:-` 而不是
         `:?`，因為它是選配的），所以沒設值時容器裡收到的是**空字串**，
         不是「沒有這個變數」。
 
-        少了這一步，`settings.anthropic_api_key is None` 會是 `False`，
+        少了這一步，`settings.gemini_api_key is None` 會是 `False`，
         於是 `get_estimator()` 不會拋 `AI_NOT_CONFIGURED`，而是拿一把空字串
-        金鑰去建 client —— 使用者看到的會是一個來自 Anthropic 的認證錯誤，
+        金鑰去建 client —— 使用者看到的會是一個來自 Google 的認證錯誤，
         而不是「你沒設定 AI」。**看起來是開著的比明確關閉更糟。**
         """
         if isinstance(value, str) and value.strip() == "":
