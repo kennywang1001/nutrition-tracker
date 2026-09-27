@@ -11,7 +11,7 @@ from decimal import Decimal
 import pytest
 
 from app.ai.estimator import RawEstimate, parse_raw_estimate
-from app.errors import UnprocessableEntityError
+from app.errors import BadGatewayError
 
 _VALID_JSON = """
 {
@@ -76,7 +76,7 @@ def test_brand_can_be_a_string():
 
 
 def test_not_json_is_rejected():
-    with pytest.raises(UnprocessableEntityError) as exc_info:
+    with pytest.raises(BadGatewayError) as exc_info:
         parse_raw_estimate("這不是 JSON，只是模型跑題說的一段話。")
 
     assert exc_info.value.code == "AI_BAD_RESPONSE"
@@ -84,7 +84,7 @@ def test_not_json_is_rejected():
 
 def test_json_array_at_top_level_is_rejected():
     """規格 §9：這一版只回一樣食物，不回陣列。模型如果不聽話回了陣列，也要擋下來。"""
-    with pytest.raises(UnprocessableEntityError) as exc_info:
+    with pytest.raises(BadGatewayError) as exc_info:
         parse_raw_estimate("[" + _VALID_JSON + "]")
 
     assert exc_info.value.code == "AI_BAD_RESPONSE"
@@ -93,7 +93,7 @@ def test_json_array_at_top_level_is_rejected():
 def test_missing_field_is_rejected():
     raw_text = _VALID_JSON.replace('"serving_grams": 250,', "")
 
-    with pytest.raises(UnprocessableEntityError) as exc_info:
+    with pytest.raises(BadGatewayError) as exc_info:
         parse_raw_estimate(raw_text)
 
     assert exc_info.value.code == "AI_BAD_RESPONSE"
@@ -118,7 +118,7 @@ def test_negative_values_are_rejected(broken_field: str):
     )
     raw_text = _VALID_JSON.replace(original, broken_field)
 
-    with pytest.raises(UnprocessableEntityError) as exc_info:
+    with pytest.raises(BadGatewayError) as exc_info:
         parse_raw_estimate(raw_text)
 
     assert exc_info.value.code == "AI_BAD_RESPONSE"
@@ -128,7 +128,7 @@ def test_serving_grams_zero_is_rejected():
     """serving_grams 是換算每 100g 的除數，0 會讓後續換算除以零。"""
     raw_text = _VALID_JSON.replace('"serving_grams": 250,', '"serving_grams": 0,')
 
-    with pytest.raises(UnprocessableEntityError) as exc_info:
+    with pytest.raises(BadGatewayError) as exc_info:
         parse_raw_estimate(raw_text)
 
     assert exc_info.value.code == "AI_BAD_RESPONSE"
@@ -137,7 +137,7 @@ def test_serving_grams_zero_is_rejected():
 def test_confidence_above_one_is_rejected():
     raw_text = _VALID_JSON.replace('"confidence": 0.7', '"confidence": 1.5')
 
-    with pytest.raises(UnprocessableEntityError) as exc_info:
+    with pytest.raises(BadGatewayError) as exc_info:
         parse_raw_estimate(raw_text)
 
     assert exc_info.value.code == "AI_BAD_RESPONSE"
@@ -147,7 +147,27 @@ def test_absurdly_large_serving_grams_is_rejected():
     """「生理上不可能的值」防呆，跟 app/schemas/food.py 的 NutritionInput 同一種風格。"""
     raw_text = _VALID_JSON.replace('"serving_grams": 250,', '"serving_grams": 999999,')
 
-    with pytest.raises(UnprocessableEntityError) as exc_info:
+    with pytest.raises(BadGatewayError) as exc_info:
         parse_raw_estimate(raw_text)
 
+    assert exc_info.value.code == "AI_BAD_RESPONSE"
+
+
+def test_bad_response_maps_to_502_not_422():
+    """**AI_BAD_RESPONSE 必須是 502，不是 422。**
+
+    422 的意思是「**你**送的東西有問題」。LLM 回了不能解析的 JSON 時，
+    使用者送的請求完全沒問題 —— 回 422 等於把上游的失敗算在使用者頭上，
+    而使用者會去改一個沒有錯的輸入。
+
+    P2 計畫一 Task 4 的指示原本寫 `UnprocessableEntityError`（422），
+    而規格 §4.1 與 Task 5 的驗收條件都寫 502。計畫自己內部矛盾，規格是對的。
+
+    **只斷言例外類別不夠** —— 那只證明「拋的是我們選的那個類別」，
+    沒有證明那個類別真的對應到 502。這裡直接讀 `status_code`。
+    """
+    with pytest.raises(BadGatewayError) as exc_info:
+        parse_raw_estimate("這不是 JSON")
+
+    assert exc_info.value.status_code == 502
     assert exc_info.value.code == "AI_BAD_RESPONSE"

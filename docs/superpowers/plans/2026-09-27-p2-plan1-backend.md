@@ -686,6 +686,69 @@ def check_consistency(
 
 ## Task 4: Estimator Protocol 與 Anthropic 實作
 
+> ## 實測記錄（已執行完畢，commit `ae78faf` + 後續修正）
+>
+> ### ⚠️ 這份計畫自己內部矛盾，而 Task 4 的指示是錯的那一邊
+>
+> | 出處 | 說什麼 |
+> |---|---|
+> | Task 4 Step 2（原文） | 拋 `UnprocessableEntityError("AI_BAD_RESPONSE")` → **422** |
+> | 規格 §4.1 | `502 AI_BAD_RESPONSE` |
+> | Task 5「五條必須成立的行為」第 4 條 | 回 **502** `AI_BAD_RESPONSE` |
+>
+> 而 `app/errors.py` **沒有任何映射到 502 的類別**，七個 task 也沒有一個把它
+> 列進檔案清單。照 Task 4 字面做完，客戶端收到的是 422。
+>
+> **規格是對的。** 422 的意思是「**你**送的東西有問題」；LLM 回了不能解析的
+> JSON 時，使用者送的請求完全沒問題 —— 回 422 等於把上游的失敗算在使用者
+> 頭上，而使用者會去改一個沒有錯的輸入。
+>
+> 已加 `BadGatewayError`（502）到 `app/errors.py`，並把 `estimator.py` 的
+> 四處 `AI_BAD_RESPONSE` 換過去。**`INVALID_PHOTO` 維持 422** —— 那個真的
+> 是使用者送的東西有問題。
+>
+> 並補一條**直接讀 `status_code`** 的測試：
+>
+> ```python
+> assert exc_info.value.status_code == 502
+> ```
+>
+> **只斷言例外類別不夠** —— 那只證明「拋的是我們選的那個類別」，沒有證明
+> 那個類別真的對應到 502。突變驗證：把 `BadGatewayError` 的狀態碼改成 422，
+> 只有這條紅。
+>
+> ### `anthropic` 1.8.0 的形狀跟一般認知不同（全部讀原始碼確認）
+>
+> - **沒有** OpenAI 風格的 `response_format`，但有 `output_config`，
+>   其中 `format: {"type": "json_schema", "schema": …}` 可要求結構化輸出。
+>   這個版本還內建 `anthropic.transform_schema()` 可以直接從 pydantic model
+>   生成那個 schema。
+> - `.stream()` 有 `output_format=SomeModel` 會自動解析，
+>   **但非串流的 `create()` 沒有** —— 還是要自己 `json.loads` + pydantic 驗證。
+> - 圖片的 `media_type` 是 `Literal["image/jpeg", "image/png", "image/gif",
+>   "image/webp"]`，**只有這四種**，不是任意字串。
+> - 回應的 `Message.content` 是 `list[ContentBlock]`（判別聯集），
+>   要 `isinstance(block, TextBlock)` 才拿得到 `.text`。
+> - 這個版本底層用 `httpx2` 不是 `httpx`。
+>
+> ### 解析那一段拆成純函式並獨立測了
+>
+> `parse_raw_estimate(response_text: str) -> RawEstimate` 只吃字串、不碰網路，
+> 測試在 `tests/test_ai_estimator.py`（計畫的檔案結構表沒列它 —— 執行者判斷
+> 它不屬於 Task 5 的 `test_ai_analyze.py`，那個要留給 HTTP 端點與假 estimator
+> 注入的測試）。15 條，0.07 秒，涵蓋規格 §8.2 要求的四類垃圾輸入。
+>
+> 其中兩條專門釘住 `raw` 的語意：**存的是 `json.loads` 出來的原始字典**
+> （連 LLM 把數字包成字串這種怪癖都原樣保留），不是驗證後轉型過的 Decimal
+> —— 那是最容易被「順手優化」寫錯的地方，而規格 §5 的「AI 常常錯很多嗎」
+> 要靠它回答。
+>
+> ### 一處計畫沒要求的加法
+>
+> 用了 SDK 的 `output_config` structured output。**它不是安全網** ——
+> `parse_raw_estimate()` 的 pydantic 驗證才是真正擋垃圾的那一層，拿掉
+> `output_config` 整段邏輯依然成立。
+
 **這個 task 的設計目標是讓 Task 5 能斷言「LLM 一次都沒被呼叫」。**
 
 **Files:**
@@ -749,7 +812,7 @@ class NutritionEstimator(Protocol):
 「LLM 回傳垃圾（缺欄位、負數、超出範圍、不是 JSON）都不能讓畫面炸掉」。
 
 用一個 Pydantic model 解析 LLM 的 JSON，解析失敗就拋
-`UnprocessableEntityError("AI_BAD_RESPONSE", ...)`。
+`BadGatewayError("AI_BAD_RESPONSE", ...)` —— **502，不是 422**（見下）。
 
 > **`raw` 欄位要存 LLM 原始回覆的 JSON**，不是解析後的物件 ——
 > 規格 §5 的「AI 常常錯很多嗎」要靠它回答。

@@ -73,6 +73,27 @@ class ServiceUnavailableError(AppError):
         super().__init__(code, message, status.HTTP_503_SERVICE_UNAVAILABLE, details)
 
 
+class BadGatewayError(AppError):
+    """用於「上游服務回了我們無法理解的東西」。
+
+    跟 `ServiceUnavailableError`（503）的分界：503 是「依賴的東西**連不上**」，
+    502 是「連上了，但它回的東西有問題」。兩者對呼叫端的意義不同 ——
+    503 值得稍後重試，502 重試同一個輸入很可能拿到同樣的垃圾。
+
+    **而它跟 `UnprocessableEntityError`（422）的分界更重要：** 422 的意思是
+    「**你**送的東西有問題」。LLM 回了不能解析的 JSON 時，使用者送的請求
+    完全沒問題 —— 把那個回成 422 等於把上游的失敗算在使用者頭上，
+    而使用者會去改一個沒有錯的輸入。
+
+    P2 計畫一 Task 4 的指示原本寫「拋 UnprocessableEntityError」，
+    而規格 §4.1 與 Task 5 的驗收條件都寫 502 —— 計畫自己內部矛盾，
+    規格是對的。
+    """
+
+    def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(code, message, status.HTTP_502_BAD_GATEWAY, details)
+
+
 class TooManyRequestsError(AppError):
     """速率限制觸發（P4 Task 3，決定 1／決定 2：登入限速）。
 

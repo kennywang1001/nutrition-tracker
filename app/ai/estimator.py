@@ -36,7 +36,7 @@ from anthropic.types import (
 )
 from pydantic import BaseModel, Field, ValidationError
 
-from app.errors import UnprocessableEntityError
+from app.errors import BadGatewayError, UnprocessableEntityError
 
 logger = logging.getLogger(__name__)
 
@@ -172,17 +172,17 @@ def parse_raw_estimate(response_text: str) -> RawEstimate:
     try:
         parsed_json = json.loads(response_text)
     except json.JSONDecodeError as exc:
-        raise UnprocessableEntityError(
+        raise BadGatewayError(
             "AI_BAD_RESPONSE", "AI 回傳的內容不是有效的 JSON"
         ) from exc
 
     if not isinstance(parsed_json, dict):
-        raise UnprocessableEntityError("AI_BAD_RESPONSE", "AI 回傳的 JSON 不是一個物件")
+        raise BadGatewayError("AI_BAD_RESPONSE", "AI 回傳的 JSON 不是一個物件")
 
     try:
         validated = _LLMEstimateSchema.model_validate(parsed_json)
     except ValidationError as exc:
-        raise UnprocessableEntityError(
+        raise BadGatewayError(
             "AI_BAD_RESPONSE", "AI 回傳的內容缺欄位、型別錯誤，或數值超出範圍"
         ) from exc
 
@@ -209,7 +209,7 @@ def _extract_text(message: Message) -> str:
     for block in message.content:
         if isinstance(block, TextBlock):
             return block.text
-    raise UnprocessableEntityError("AI_BAD_RESPONSE", "AI 回應沒有文字內容")
+    raise BadGatewayError("AI_BAD_RESPONSE", "AI 回應沒有文字內容")
 
 
 class AnthropicEstimator:
