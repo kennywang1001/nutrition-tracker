@@ -1,3 +1,4 @@
+from app.models.ai_analysis import AiAnalysis, AnalysisKind
 from app.models.base import Base
 from app.models.food import BaseUnit, Food, FoodPortion, FoodRevision, RevisionStatus
 from app.models.meal import Meal, MealItem, MealType
@@ -7,6 +8,8 @@ from app.models.target import UserTarget
 from app.models.user import User, UserRole
 
 __all__ = [
+    "AiAnalysis",
+    "AnalysisKind",
     "Base",
     "BaseUnit",
     "Food",

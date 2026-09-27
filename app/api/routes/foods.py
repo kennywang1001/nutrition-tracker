@@ -93,6 +93,12 @@ async def create_food(
         # 私人食物的編輯直接生效
         status=RevisionStatus.APPROVED,
         created_by=user.id,
+        # 規格 §5：「有沒有改」是資料，不是只有操作本身。P1 就預留好這三個
+        # 欄位，這裡是第一個真的寫入它們的呼叫端（Task 6）。不帶的話
+        # payload.source 預設 'user'，另外兩個預設 None ——既有行為不變。
+        source=payload.source,
+        ai_confidence=payload.ai_confidence,
+        ai_raw_response=payload.ai_raw_response,
     )
     db.add(revision)
     await db.flush()

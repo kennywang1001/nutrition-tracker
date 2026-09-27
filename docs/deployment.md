@@ -66,6 +66,20 @@ BIND_ADDR=127.0.0.1
 > 填什麼都不影響，填 `127.0.0.1` 是為了讓它至少不誤導（對外入口是
 > `tailscale serve`，不是任何一個綁在 tailnet 位址上的埠）。
 
+`.env.production.example` 還有一個選配的 `ANTHROPIC_API_KEY`（AI
+營養素估算用的 Anthropic 金鑰）。跟 `JWT_SECRET`、`BIND_ADDR` 不一樣，
+**這個留白也沒關係**：應用程式本身沒設就把 AI 分析功能整個關閉
+（該端點回 `503 AI_NOT_CONFIGURED`），其他既有功能完全不受影響，
+`docker compose config` 也不會因為它沒填就報錯。理由是「沒有 AI key」
+不是安全性問題，只是少一個功能——不該讓整個 app 因為一個選配功能而起不來。
+
+> **這個變數目前還沒有被 `docker-compose.yml` / `docker-compose.prod.yml`
+> 傳進容器**（兩個檔案的 `api.environment` 都沒有列出它）——單填
+> `.env.production` 這個值本身不會讓容器裡的 `Settings` 讀到它。
+> 要讓 production 真的能開啟 AI 分析，還需要在 compose 檔補一條
+> `ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"`（可留白，跟 `JWT_SECRET`
+> 的 `:?` 必填語法不同）。這一步目前不在這份 task 的範圍內。
+
 > **不要**把這個檔案改名成 `.env` —— 那個名字是本機開發用的，
 > 而且 `docker compose` 只會自動讀 `.env`，兩者混在一起遲早出事。
 > 它也已經在 `.gitignore` 裡，不會被提交。

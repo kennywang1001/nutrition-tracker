@@ -797,10 +797,95 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/ai/analyze": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Analyze */
+        post: operations["analyze_api_ai_analyze_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AnalyzeImageRequest */
+        AnalyzeImageRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "image";
+            /** Image Base64 */
+            image_base64: string;
+        };
+        /** AnalyzeResponse */
+        AnalyzeResponse: {
+            /** Analysis Id */
+            analysis_id: number | null;
+            /** Name */
+            name: string;
+            /** Brand */
+            brand: string | null;
+            nutrition: components["schemas"]["AnalyzedNutrition"];
+            /** Confidence */
+            confidence: string;
+            consistency: components["schemas"]["ConsistencyResult"];
+        };
+        /** AnalyzeTextRequest */
+        AnalyzeTextRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "text";
+            /** Text */
+            text: string;
+        };
+        /**
+         * AnalyzedNutrition
+         * @description AI 估算的營養素，**同時**帶每 100g 與一份的值，兩者都由後端算。
+         *
+         *     `kcal` / `protein_g` / `fat_g` / `carb_g` 是每 100g/ml —— 直接餵得進
+         *     `FoodCreateRequest.nutrition`（計畫 Task 6，不在這個 task 的範圍）。
+         *     `serving_*` 是一份的值，給人看的。
+         *
+         *     **兩組數字的一致性由 `app/api/routes/ai.py` 的算法保證，不是巧合**：
+         *     `serving_kcal` 是從已經四捨五入過的 `kcal`（每 100g）反推回去的
+         *     （`kcal × serving_grams / 100`，再四捨五入），不是 LLM 原始說的
+         *     `serving_kcal` 直接填進來——否則兩個各自獨立四捨五入的數字會漂移，
+         *     而使用者會同時看到兩個不一致的「一份熱量」。
+         */
+        AnalyzedNutrition: {
+            base_unit: components["schemas"]["BaseUnit"];
+            /** Serving Grams */
+            serving_grams: string;
+            /** Kcal */
+            kcal: string;
+            /** Protein G */
+            protein_g: string;
+            /** Fat G */
+            fat_g: string;
+            /** Carb G */
+            carb_g: string;
+            /** Serving Kcal */
+            serving_kcal: string;
+            /** Serving Protein G */
+            serving_protein_g: string;
+            /** Serving Fat G */
+            serving_fat_g: string;
+            /** Serving Carb G */
+            serving_carb_g: string;
+        };
         /**
          * BaseUnit
          * @enum {string}
@@ -815,6 +900,21 @@ export interface components {
         BreakdownResponse: {
             food: components["schemas"]["MacrosResponse"];
             supplement: components["schemas"]["MacrosResponse"];
+        };
+        /**
+         * ConsistencyResult
+         * @description `app.ai.consistency.Consistency`（frozen dataclass）的 API 形狀。
+         *
+         *     `from_attributes=True`：直接 `model_validate()` 那個 dataclass 實體，
+         *     不用手動一個個欄位複製。
+         */
+        ConsistencyResult: {
+            /** Atwater Kcal */
+            atwater_kcal: string;
+            /** Deviation */
+            deviation: string;
+            /** Flagged */
+            flagged: boolean;
         };
         /**
          * DailyStatsResponse
@@ -868,6 +968,18 @@ export interface components {
              * @default false
              */
             is_global: boolean;
+            /**
+             * Source
+             * @default user
+             * @enum {string}
+             */
+            source: "user" | "ai" | "official";
+            /** Ai Confidence */
+            ai_confidence?: number | string | null;
+            /** Ai Raw Response */
+            ai_raw_response?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** FoodResponse */
         FoodResponse: {
@@ -2938,6 +3050,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RangeStatsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    analyze_api_ai_analyze_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnalyzeTextRequest"] | components["schemas"]["AnalyzeImageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzeResponse"];
                 };
             };
             /** @description Validation Error */

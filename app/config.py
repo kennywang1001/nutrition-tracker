@@ -22,6 +22,45 @@ class Settings(BaseSettings):
     refresh_token_ttl_days: int = Field(14, gt=0)
     photo_dir: str = "data/photos"
 
+    # **刻意跟 jwt_secret 相反：有預設值。**
+    #
+    # jwt_secret 沒有預設是 fail closed —— 沒設等於任何人都能偽造 token，
+    # 那種情況下安靜地跑起來比崩潰更糟。
+    #
+    # AI 不一樣：沒有 key 不會讓系統變得不安全，只是少一個功能。讓整個 app
+    # 因為少一個選配功能而起不來是錯的取捨（規格 §4.1）。
+    #
+    # 但「關閉」必須是明講的 —— 端點回 503 AI_NOT_CONFIGURED，
+    # 不是一個看起來壞掉的樣子。
+    #
+    # **空字串會被正規化成 None，見下面的 validator。** 那不是潔癖：
+    # docker-compose 傳的是 `${ANTHROPIC_API_KEY:-}`，沒設值時容器裡會收到
+    # 一個空字串而不是「沒有這個變數」。少了正規化，`is None` 會是 False，
+    # 程式就會拿一把空字串金鑰去打 API —— 比「功能關閉」更糟，
+    # 因為它看起來是開著的。
+    anthropic_api_key: str | None = None
+    ai_model: str = "claude-sonnet-5"
+    # 規格 §7：只算真的呼叫 LLM 的次數，失敗的也算（一樣花了錢）。
+    ai_daily_limit: int = Field(20, gt=0)
+
+    @field_validator("anthropic_api_key", mode="before")
+    @classmethod
+    def _empty_key_is_no_key(cls, value: object) -> object:
+        """空字串等於沒有金鑰。
+
+        `docker-compose` 用 `${ANTHROPIC_API_KEY:-}` 傳這個變數（`:-` 而不是
+        `:?`，因為它是選配的），所以沒設值時容器裡收到的是**空字串**，
+        不是「沒有這個變數」。
+
+        少了這一步，`settings.anthropic_api_key is None` 會是 `False`，
+        於是 `get_estimator()` 不會拋 `AI_NOT_CONFIGURED`，而是拿一把空字串
+        金鑰去建 client —— 使用者看到的會是一個來自 Anthropic 的認證錯誤，
+        而不是「你沒設定 AI」。**看起來是開著的比明確關閉更糟。**
+        """
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
+
     @field_validator("jwt_secret")
     @classmethod
     def _reject_known_public_placeholder(cls, value: str) -> str:

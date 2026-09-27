@@ -90,6 +90,15 @@ class FoodRevision(Base):
             "ai_confidence IS NULL OR (ai_confidence >= 0 AND ai_confidence <= 1)",
             name="ai_confidence_in_range",
         ),
+        # P2 Task 6 實測發現：這一欄從 0002（第一版 migration）就存在，
+        # 一直是 TEXT NOT NULL DEFAULT 'user'，但從來沒有 CheckConstraint ——
+        # 前端能送任意字串進去是一個洞。跟 ai_analysis.py 的 kind_valid、
+        # meal.py 的 meal_type_valid 同一個理由補上：DB 層的約束不假設
+        # 「只有 create_food 這一條路會寫這一欄」。migrations/0009 補的。
+        CheckConstraint(
+            "source IN ('user', 'ai', 'official')",
+            name="source_valid",
+        ),
         CheckConstraint(
             "status <> 'rejected' OR reject_reason IS NOT NULL",
             name="rejected_needs_reason",
@@ -142,7 +151,8 @@ class FoodRevision(Base):
     reviewed_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     reject_reason: Mapped[str | None] = mapped_column(Text)
-    # P2 階段（AI 分析）預留，本計畫不使用
+    # P1 預留、P2 Task 6 開始使用：'user' | 'ai' | 'official'（DB 層由
+    # source_valid CheckConstraint 把關，見下面 __table_args__）。
     source: Mapped[str] = mapped_column(Text, nullable=False, server_default="user")
     ai_confidence: Mapped[Decimal | None] = mapped_column(Numeric(3, 2))
     ai_raw_response: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
