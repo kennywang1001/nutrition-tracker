@@ -49,3 +49,24 @@ def test_settings_accept_a_real_looking_secret():
     settings = Settings(jwt_secret="a-secret-that-is-not-the-placeholder")
 
     assert settings.jwt_secret == "a-secret-that-is-not-the-placeholder"
+
+
+def test_anthropic_key_defaults_to_none():
+    """沒設 AI key 不該讓整個 app 起不來——它是選配功能，不是安全性設定。
+
+    跟 jwt_secret 刻意相反：那個沒有預設值（fail closed），因為「沒有密鑰」
+    等於「任何人都能偽造 token」。少一個 AI 功能不會讓系統變得不安全。
+    """
+    settings = Settings(jwt_secret="x" * 32)
+
+    assert settings.anthropic_api_key is None
+    assert settings.ai_daily_limit == 20
+    assert settings.ai_model == "claude-sonnet-5"
+
+
+def test_ai_daily_limit_must_be_positive():
+    """0 或負數會讓每日上限的比較變成一個永遠成立或永遠不成立的條件——
+    兩種都不是「關閉 AI」的正確表達方式（那是不設 key）。
+    """
+    with pytest.raises(ValueError):
+        Settings(jwt_secret="x" * 32, ai_daily_limit=0)

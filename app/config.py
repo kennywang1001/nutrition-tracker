@@ -22,6 +22,21 @@ class Settings(BaseSettings):
     refresh_token_ttl_days: int = Field(14, gt=0)
     photo_dir: str = "data/photos"
 
+    # **刻意跟 jwt_secret 相反：有預設值。**
+    #
+    # jwt_secret 沒有預設是 fail closed —— 沒設等於任何人都能偽造 token，
+    # 那種情況下安靜地跑起來比崩潰更糟。
+    #
+    # AI 不一樣：沒有 key 不會讓系統變得不安全，只是少一個功能。讓整個 app
+    # 因為少一個選配功能而起不來是錯的取捨（規格 §4.1）。
+    #
+    # 但「關閉」必須是明講的 —— 端點回 503 AI_NOT_CONFIGURED，
+    # 不是一個看起來壞掉的樣子。
+    anthropic_api_key: str | None = None
+    ai_model: str = "claude-sonnet-5"
+    # 規格 §7：只算真的呼叫 LLM 的次數，失敗的也算（一樣花了錢）。
+    ai_daily_limit: int = Field(20, gt=0)
+
     @field_validator("jwt_secret")
     @classmethod
     def _reject_known_public_placeholder(cls, value: str) -> str:
