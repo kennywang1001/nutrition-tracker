@@ -318,6 +318,60 @@ cd F:/wallet && ./.venv/Scripts/ruff.exe check . && ./.venv/Scripts/mypy.exe app
 
 ## Task 2: `ai_analyses` 資料表
 
+> ## 實測記錄（已執行完畢，commit `0fe96db`）
+>
+> ### ⚠️ 這份計畫叫人去讀的檔案是錯的
+>
+> Step 1 寫「去讀 `app/models/food.py` 看 `RevisionStatus` 怎麼處理的，
+> 照同一個作法」，並在旁邊引用 handover §7 的「`create_constraint=False`
+> + 手寫 CheckConstraint」。**那兩件事對不上。**
+>
+> 這個 repo 裡**兩種 enum 寫法並存**，而它們解的是同一個問題的兩條路：
+>
+> | 檔案 | 寫法 | 怎麼避開漂移 |
+> |---|---|---|
+> | `food.py`（`RevisionStatus`）、`user.py`（`UserRole`） | `Enum(T, name=…, values_callable=…)` | **原生 PG ENUM**（`CREATE TYPE`）—— 型別本身就是約束，沒有 CHECK 可以漂移 |
+> | `meal.py`（`MealType`）、`supplement.py`（`TimeOfDay`） | `native_enum=False, create_constraint=False` + `__table_args__` 手寫 `CheckConstraint` | 手寫的 CHECK 不是 type-bound，兩側比對得起來 |
+>
+> handover §7 記的那個坑（`create_constraint=True` 產生 **type-bound**
+> CHECK，alembic 的比對器把它排除在 model 那一側，但 reflection 讀回來是
+> 普通 CHECK，於是永久報漂移）是 **`meal.py` 踩的**，不是 `food.py`。
+> `meal.py` 的原始碼註解把整個機制寫下來了。
+>
+> **執行者讀完兩個檔案、發現指示與引用的 handover 內容互相矛盾，選了
+> handover 的實質內容而不是計畫的檔案指標，並回報。** 那是對的處理。
+>
+> ### 採用的是 `meal.py` 那一套，而它對 `kind` 確實比較好
+>
+> 原生 enum 之後要加值得用 `ALTER TYPE`（migration 會變麻煩）；
+> VARCHAR + CHECK 改起來便宜。`kind` 之後很可能會多一個值
+> （例如條碼掃描），所以這個選擇不只是「照著某個檔案抄」。
+>
+> ### `native_enum=False` 讓 Python 那一層完全不驗
+>
+> 實測：對 ORM 直接塞 `kind="video"`，**綁定參數時不會做 enum 成員查找**，
+> 字串原樣送進 VARCHAR。約束完全是資料庫在把關。
+>
+> 所以那條測試斷言的是 `IntegrityError` 且訊息含 `kind_valid` ——
+> 斷言 Python 端拋 `ValueError` 會是一條永遠不會紅的測試。
+>
+> ### 突變驗證
+>
+> 刪掉 model 的索引宣告（migration 保留）→ `alembic check` 報漂移：
+>
+> ```
+> Detected removed index 'ix_ai_analyses_user_id_created_at' on 'ai_analyses'
+> ERROR: New upgrade operations detected: [('remove_index', ...)]
+> ```
+>
+> 改回來之後連續跑兩次 `alembic check` 都乾淨。
+>
+> ### 一個計畫沒寫但必要的步驟
+>
+> **新 model 要 import 進 `app/models/__init__.py`**，否則 alembic 的
+> `target_metadata` 看不到這張表 —— 而失敗訊息會是「資料庫有、模型沒有」，
+> 容易被誤讀成 migration 寫錯。
+
 **Files:**
 - Create: `app/models/ai_analysis.py`
 - Create: `migrations/versions/0008_create_ai_analyses.py`
