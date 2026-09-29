@@ -1,0 +1,136 @@
+from datetime import UTC, datetime
+
+from sqlalchemy import func, select
+
+from app.models.expense import Expense
+from app.security.tokens import create_access_token
+from tests.factories import create_expense, create_user
+
+
+def auth(user):
+    return {"Authorization": f"Bearer {create_access_token(user.id)}"}
+
+
+async def test_create_expense_returns_the_expense(client, db_session):
+    user = await create_user(db_session)
+
+    response = await client.post(
+        "/api/expenses",
+        headers=auth(user),
+        json={
+            "amount": "250.50",
+            "category": "transport",
+            "spent_at": "2026-12-15T12:00:00+08:00",
+            "note": "高鐵",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["amount"] == "250.50"
+    assert body["category"] == "transport"
+    assert body["note"] == "高鐵"
+    assert body["meal_id"] is None
+
+
+async def test_create_expense_requires_authentication(client):
+    response = await client.post(
+        "/api/expenses",
+        json={"amount": "1", "category": "other", "spent_at": "2026-12-15T12:00:00+08:00"},
+    )
+
+    assert response.status_code == 401
+
+
+async def test_create_expense_rejects_zero_amount(client, db_session):
+    """Pydantic 的 gt=0 是第一道防線，資料庫的 CHECK 是第二道
+    （tests/test_expenses_model.py）。兩道都要有。"""
+    user = await create_user(db_session)
+
+    response = await client.post(
+        "/api/expenses",
+        headers=auth(user),
+        json={"amount": "0", "category": "other", "spent_at": "2026-12-15T12:00:00+08:00"},
+    )
+
+    assert response.status_code == 422
+    assert await db_session.scalar(select(func.count()).select_from(Expense)) == 0
+
+
+async def test_create_expense_rejects_unknown_category(client, db_session):
+    user = await create_user(db_session)
+
+    response = await client.post(
+        "/api/expenses",
+        headers=auth(user),
+        json={"amount": "1", "category": "crypto", "spent_at": "2026-12-15T12:00:00+08:00"},
+    )
+
+    assert response.status_code == 422
+
+
+async def test_list_expenses_defaults_to_this_month(client, db_session, monkeypatch):
+    """省略 month 時是「使用者時區的這個月」（規格 §5.3）。
+
+    monkeypatch 的目標是 **routes 模組裡的名字**，不是 app.days 裡的——
+    路由是 `from app.days import this_month_in_timezone` 匯入的，
+    換掉 app.days 那一份不會影響已經綁好的參照。
+    """
+    from app.api.routes import expenses as expenses_route
+
+    monkeypatch.setattr(expenses_route, "this_month_in_timezone", lambda tz_name: (2026, 12))
+
+    user = await create_user(db_session)
+    await create_expense(db_session, user=user, amount=100)  # 預設 2026-12-15
+    await create_expense(
+        db_session, user=user, amount=999, spent_at=datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
+    )
+
+    response = await client.get("/api/expenses", headers=auth(user))
+
+    assert response.status_code == 200
+    amounts = [item["amount"] for item in response.json()]
+    assert amounts == ["100.00"]
+
+
+async def test_list_expenses_accepts_explicit_month(client, db_session):
+    user = await create_user(db_session)
+    await create_expense(db_session, user=user, amount=100)  # 2026-12-15
+
+    response = await client.get("/api/expenses?month=2026-12", headers=auth(user))
+
+    assert response.status_code == 200
+    assert [item["amount"] for item in response.json()] == ["100.00"]
+
+
+async def test_list_expenses_rejects_year_zero(client, db_session):
+    """month=0000-01 必須是 422，不是 500。
+
+    `date(0, 1, 1)` 直接拋 ValueError，那會變成一個已認證使用者就能
+    觸發的 500。年份的 pattern 限定 19xx/20xx 就擋在 FastAPI 層。
+    """
+    user = await create_user(db_session)
+
+    response = await client.get("/api/expenses?month=0000-01", headers=auth(user))
+
+    assert response.status_code == 422
+
+
+async def test_list_expenses_rejects_month_thirteen(client, db_session):
+    user = await create_user(db_session)
+
+    response = await client.get("/api/expenses?month=2026-13", headers=auth(user))
+
+    assert response.status_code == 422
+
+
+async def test_list_expenses_only_returns_my_own(client, db_session):
+    alice = await create_user(db_session)
+    bob = await create_user(db_session)
+    await create_expense(db_session, user=alice, amount=100)
+    await create_expense(db_session, user=bob, amount=200)
+
+    response = await client.get("/api/expenses?month=2026-12", headers=auth(alice))
+
+    assert response.status_code == 200
+    assert [item["amount"] for item in response.json()] == ["100.00"]
