@@ -12,6 +12,21 @@
 
 ---
 
+## 執行環境（Task 1 實測修正）
+
+- **venv 不在 PATH 上。** 所有指令都要用 `./.venv/Scripts/python.exe -m ...`，
+  不是 `python -m ...`。計畫原本寫錯，已全數更正。
+- **不要跑 `ruff format --check`。** CI 只跑 `ruff check .` 與 `mypy app`
+  （`.github/workflows/ci.yml:90,93`）。master 上有 40 個既有檔案不符合
+  `ruff format`，把它當驗收條件會被既有問題擋住。
+- **`ruff check` 與 `mypy` 分開跑**，不要用 `&&` 串——串起來時前面失敗會讓
+  後面根本沒機會跑，而你會以為兩個都壞了。
+- 本機 venv 是 **Python 3.13.14**，不是 3.12（`pyproject.toml` 的
+  `target-version = "py312"` 指的是語法目標，不是直譯器版本）。
+- 開工前的基準線：**556 passed**。Task 1 之後是 **561 passed**。
+
+---
+
 ## 開工前必讀：這份計畫的文字沒有權威性
 
 **這個專案最近兩份計畫，我對「哪條測試會變紅」的預測錯了 9 次。**
@@ -160,7 +175,7 @@ from app.days import month_bounds
 
 - [ ] **Step 2: 跑測試確認它失敗**
 
-Run: `python -m pytest tests/test_days.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_days.py -v`
 
 Expected: **collection error** — `ImportError: cannot import name 'month_bounds' from 'app.days'`
 
@@ -208,7 +223,7 @@ def this_month_in_timezone(tz_name: str) -> tuple[int, int]:
 
 - [ ] **Step 4: 跑測試確認通過**
 
-Run: `python -m pytest tests/test_days.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_days.py -v`
 Expected: PASS（含既有的 `day_bounds` 測試）
 
 - [ ] **Step 5: 突變測試——證明 12 月那條真的守得住**
@@ -219,7 +234,7 @@ Expected: PASS（含既有的 `day_bounds` 測試）
     next_year, next_month = (year, month + 1)
 ```
 
-Run: `python -m pytest tests/test_days.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_days.py -v`
 Expected: `test_month_bounds_december_rolls_over_to_next_year` **FAIL**（`ValueError: month must be in 1..12`），其他月份的測試照樣 PASS。
 
 **看到它失敗之後改回來。** 沒有被觀察到失敗的綠燈不算證據。
@@ -235,7 +250,7 @@ Expected: `test_month_bounds_december_rolls_over_to_next_year` **FAIL**（`Value
     return start, next_start
 ```
 
-Run: `python -m pytest tests/test_days.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_days.py -v`
 Expected: `test_month_bounds_taipei_september` 與 `test_month_bounds_december_rolls_over_to_next_year` **FAIL**；`test_month_bounds_utc_user` 與 `test_month_bounds_is_half_open` 照樣 PASS。
 
 > **`test_month_bounds_is_half_open` 在這個突變下仍然綠，這是預期的、也是重點**：
@@ -245,8 +260,14 @@ Expected: `test_month_bounds_taipei_september` 與 `test_month_bounds_december_r
 
 - [ ] **Step 7: 靜態檢查**
 
-Run: `python -m ruff check app tests && python -m ruff format --check app tests && python -m mypy app`
-Expected: 全部通過
+Run: `./.venv/Scripts/python.exe -m ruff check app tests`
+Run: `./.venv/Scripts/python.exe -m mypy app`
+Expected: 兩者都通過
+
+> **分開跑，而且不要跑 `ruff format --check`。** CI 實際上只跑 `ruff check .` 與
+> `mypy app`（`.github/workflows/ci.yml:90,93`）——`ruff format --check` 從來不是
+> 這個專案的閘門，而且在目前的 master 上有 40 個既有檔案不符合它。
+> 把它寫進驗收條件是計畫的錯（Task 1 的實作者發現並回報）。
 
 - [ ] **Step 8: Commit**
 
@@ -657,7 +678,7 @@ async def test_deleting_a_user_deletes_their_expenses(db_session):
 
 - [ ] **Step 6: 跑測試確認它失敗**
 
-Run: `python -m pytest tests/test_expenses_model.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_expenses_model.py -v`
 
 Expected: **collection error** — `ModuleNotFoundError: No module named 'app.models.expense'`
 
@@ -668,7 +689,7 @@ Expected: **collection error** — `ModuleNotFoundError: No module named 'app.mo
 
 - [ ] **Step 7: 跑完整測試確認 migration 與模型一致**
 
-Run: `python -m pytest tests/test_expenses_model.py tests/test_infra.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_expenses_model.py tests/test_infra.py -v`
 
 Expected: PASS。
 
@@ -688,7 +709,7 @@ Expected: PASS。
             ["meal_id"], ["meals.id"], name="fk_expenses_meal_id_meals", ondelete="CASCADE"
 ```
 
-Run: `python -m pytest tests/test_expenses_model.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_expenses_model.py -v`
 
 Expected: `test_deleting_a_meal_keeps_the_expense_and_nulls_meal_id` **FAIL**
 （`assert remaining is not None` 掛掉）。
@@ -703,8 +724,14 @@ Expected: `test_deleting_a_meal_keeps_the_expense_and_nulls_meal_id` **FAIL**
 
 - [ ] **Step 9: 靜態檢查**
 
-Run: `python -m ruff check app tests && python -m ruff format --check app tests && python -m mypy app`
-Expected: 全部通過
+Run: `./.venv/Scripts/python.exe -m ruff check app tests`
+Run: `./.venv/Scripts/python.exe -m mypy app`
+Expected: 兩者都通過
+
+> **分開跑，而且不要跑 `ruff format --check`。** CI 實際上只跑 `ruff check .` 與
+> `mypy app`（`.github/workflows/ci.yml:90,93`）——`ruff format --check` 從來不是
+> 這個專案的閘門，而且在目前的 master 上有 40 個既有檔案不符合它。
+> 把它寫進驗收條件是計畫的錯（Task 1 的實作者發現並回報）。
 
 - [ ] **Step 10: Commit**
 
@@ -880,7 +907,7 @@ async def test_list_expenses_only_returns_my_own(client, db_session):
 
 - [ ] **Step 2: 跑測試確認它失敗**
 
-Run: `python -m pytest tests/test_expenses_crud.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_expenses_crud.py -v`
 Expected: 全部 FAIL，`404 Not Found`（router 還沒註冊）；
 `test_list_expenses_defaults_to_this_month` 是 `ModuleNotFoundError`。
 
@@ -1094,14 +1121,14 @@ app.include_router(expenses.router, prefix="/api")
 
 - [ ] **Step 6: 跑測試確認通過**
 
-Run: `python -m pytest tests/test_expenses_crud.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_expenses_crud.py -v`
 Expected: 全部 PASS
 
 - [ ] **Step 7: 突變測試——證明「只看得到自己的」那條守得住**
 
 把 `list_expenses` 的 `Expense.user_id == user.id` 暫時刪掉。
 
-Run: `python -m pytest tests/test_expenses_crud.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_expenses_crud.py -v`
 Expected: `test_list_expenses_only_returns_my_own` **FAIL**（會看到兩筆）。
 
 **改回來。**
@@ -1110,7 +1137,7 @@ Expected: `test_list_expenses_only_returns_my_own` **FAIL**（會看到兩筆）
 
 把 `YEAR_MONTH_PATTERN` 暫時改成 `r"^\d{4}-\d{2}$"`。
 
-Run: `python -m pytest tests/test_expenses_crud.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_expenses_crud.py -v`
 Expected: `test_list_expenses_rejects_year_zero` 與 `test_list_expenses_rejects_month_thirteen`
 兩條都 **FAIL**，而且是 **500** 不是 422——這正是那兩條測試存在的理由。
 
@@ -1118,8 +1145,14 @@ Expected: `test_list_expenses_rejects_year_zero` 與 `test_list_expenses_rejects
 
 - [ ] **Step 9: 靜態檢查**
 
-Run: `python -m ruff check app tests && python -m ruff format --check app tests && python -m mypy app`
-Expected: 全部通過
+Run: `./.venv/Scripts/python.exe -m ruff check app tests`
+Run: `./.venv/Scripts/python.exe -m mypy app`
+Expected: 兩者都通過
+
+> **分開跑，而且不要跑 `ruff format --check`。** CI 實際上只跑 `ruff check .` 與
+> `mypy app`（`.github/workflows/ci.yml:90,93`）——`ruff format --check` 從來不是
+> 這個專案的閘門，而且在目前的 master 上有 40 個既有檔案不符合它。
+> 把它寫進驗收條件是計畫的錯（Task 1 的實作者發現並回報）。
 
 - [ ] **Step 10: Commit**
 
@@ -1268,7 +1301,7 @@ async def test_delete_someone_elses_expense_is_404_and_keeps_it(client, db_sessi
 
 - [ ] **Step 2: 跑測試確認它失敗**
 
-Run: `python -m pytest tests/test_expenses_crud.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_expenses_crud.py -v`
 Expected: 上面 9 條 FAIL（`405 Method Not Allowed`），Task 3 的測試照樣 PASS。
 
 - [ ] **Step 3: 實作**
@@ -1355,14 +1388,14 @@ async def delete_expense(
 
 - [ ] **Step 4: 跑測試確認通過**
 
-Run: `python -m pytest tests/test_expenses_crud.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_expenses_crud.py -v`
 Expected: 全部 PASS
 
 - [ ] **Step 5: 突變測試——證明 `exclude_unset` 那條守得住**
 
 把 `payload.model_dump(exclude_unset=True)` 暫時改成 `payload.model_dump()`。
 
-Run: `python -m pytest tests/test_expenses_crud.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_expenses_crud.py -v`
 Expected: `test_patch_expense_leaves_untouched_fields_alone` **FAIL**——
 但**注意它會怎麼失敗**：`_NOT_NULLABLE_FIELDS` 的檢查會先攔下來，
 所以是 **422**，不是「category 被改掉」。
@@ -1378,7 +1411,7 @@ Expected: `test_patch_expense_leaves_untouched_fields_alone` **FAIL**——
 把 `delete_expense` 的 `get_owned_or_404(...)` 暫時換成
 `expense = await db.get(Expense, expense_id)`（並加 `assert expense is not None`）。
 
-Run: `python -m pytest tests/test_expenses_crud.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_expenses_crud.py -v`
 Expected: `test_delete_someone_elses_expense_is_404_and_keeps_it` **FAIL**——
 而且是**兩個斷言都掛**（回 204、資料真的被刪了）。
 
@@ -1386,8 +1419,14 @@ Expected: `test_delete_someone_elses_expense_is_404_and_keeps_it` **FAIL**——
 
 - [ ] **Step 7: 靜態檢查**
 
-Run: `python -m ruff check app tests && python -m ruff format --check app tests && python -m mypy app`
-Expected: 全部通過
+Run: `./.venv/Scripts/python.exe -m ruff check app tests`
+Run: `./.venv/Scripts/python.exe -m mypy app`
+Expected: 兩者都通過
+
+> **分開跑，而且不要跑 `ruff format --check`。** CI 實際上只跑 `ruff check .` 與
+> `mypy app`（`.github/workflows/ci.yml:90,93`）——`ruff format --check` 從來不是
+> 這個專案的閘門，而且在目前的 master 上有 40 個既有檔案不符合它。
+> 把它寫進驗收條件是計畫的錯（Task 1 的實作者發現並回報）。
 
 - [ ] **Step 8: Commit**
 
@@ -1536,7 +1575,7 @@ async def test_summary_defaults_to_this_month(client, db_session, monkeypatch):
 
 - [ ] **Step 2: 跑測試確認它失敗**
 
-Run: `python -m pytest tests/test_expenses_summary.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_expenses_summary.py -v`
 Expected: 全部 FAIL — `422`。
 
 > **這個 422 值得注意，它不是「端點不存在」。**
@@ -1625,7 +1664,7 @@ async def get_summary(
 
 - [ ] **Step 4: 跑測試確認通過**
 
-Run: `python -m pytest tests/test_expenses_summary.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_expenses_summary.py -v`
 Expected: 全部 PASS
 
 > **如果 `test_summary_of_an_empty_month_is_zero_not_an_error` 回的是 `"0"`
@@ -1637,7 +1676,7 @@ Expected: 全部 PASS
 把 `_resolve_month` 裡的 `month_bounds(year, month_number, tz_name)`
 暫時改成 `month_bounds(year, month_number, "UTC")`。
 
-Run: `python -m pytest tests/test_expenses_summary.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_expenses_summary.py -v`
 Expected: `test_summary_respects_user_timezone_at_the_month_boundary` **FAIL**
 （`"0.00" != "777.00"`）。其他測試應該照樣 PASS，因為它們的測資都在月中。
 
@@ -1651,7 +1690,7 @@ Expected: `test_summary_respects_user_timezone_at_the_month_boundary` **FAIL**
 
 把 `get_summary` 的宣告位置暫時搬到 `delete_expense` 之後（檔尾）。
 
-Run: `python -m pytest tests/test_expenses_summary.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_expenses_summary.py -v`
 Expected: 全部 FAIL，`422`——`/summary` 被 `PATCH`/`DELETE` 的
 `{expense_id}` 搶走，而 `ResourceId` 解析 `"summary"` 失敗回 422。
 
@@ -1663,8 +1702,14 @@ Expected: 全部 FAIL，`422`——`/summary` 被 `PATCH`/`DELETE` 的
 
 - [ ] **Step 7: 靜態檢查**
 
-Run: `python -m ruff check app tests && python -m ruff format --check app tests && python -m mypy app`
-Expected: 全部通過
+Run: `./.venv/Scripts/python.exe -m ruff check app tests`
+Run: `./.venv/Scripts/python.exe -m mypy app`
+Expected: 兩者都通過
+
+> **分開跑，而且不要跑 `ruff format --check`。** CI 實際上只跑 `ruff check .` 與
+> `mypy app`（`.github/workflows/ci.yml:90,93`）——`ruff format --check` 從來不是
+> 這個專案的閘門，而且在目前的 master 上有 40 個既有檔案不符合它。
+> 把它寫進驗收條件是計畫的錯（Task 1 的實作者發現並回報）。
 
 - [ ] **Step 8: Commit**
 
@@ -1820,7 +1865,7 @@ async def test_create_meal_commits_exactly_once(client, db_session):
 
 - [ ] **Step 2: 跑測試確認它失敗**
 
-Run: `python -m pytest tests/test_meals_cost.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_meals_cost.py -v`
 
 Expected:
 - `test_creating_a_meal_with_cost_creates_a_linked_expense` **FAIL**
@@ -1898,12 +1943,12 @@ from app.models.expense import Expense, ExpenseCategory
 
 - [ ] **Step 5: 跑測試確認通過**
 
-Run: `python -m pytest tests/test_meals_cost.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_meals_cost.py -v`
 Expected: 全部 PASS
 
 - [ ] **Step 6: 跑既有的餐點測試，確認沒有弄壞任何東西**
 
-Run: `python -m pytest tests/test_meals_create.py tests/test_meals_read.py tests/test_meals_update.py tests/test_meals_items.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_meals_create.py tests/test_meals_read.py tests/test_meals_update.py tests/test_meals_items.py -v`
 Expected: 全部 PASS
 
 > `create_meal` 是這個系統最核心的寫入路徑。**這一步不是形式**——
@@ -1915,7 +1960,7 @@ Expected: 全部 PASS
 在 `create_meal` 的 `db.add(Expense(...))` **之後**暫時多加一行
 `await db.commit()`。
 
-Run: `python -m pytest tests/test_meals_cost.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_meals_cost.py -v`
 Expected: `test_create_meal_commits_exactly_once` **FAIL**
 （`assert 2 == 1`）。
 
@@ -1930,7 +1975,7 @@ Expected: `test_create_meal_commits_exactly_once` **FAIL**
 把 `spent_at=payload.eaten_at` 暫時改成
 `spent_at=datetime.now(UTC)`（需要 import）。
 
-Run: `python -m pytest tests/test_meals_cost.py -v`
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_meals_cost.py -v`
 Expected: `test_creating_a_meal_with_cost_creates_a_linked_expense` **FAIL**
 （最後那條 `isoformat()` 斷言）。
 
@@ -1938,13 +1983,19 @@ Expected: `test_creating_a_meal_with_cost_creates_a_linked_expense` **FAIL**
 
 - [ ] **Step 9: 跑完整測試套件**
 
-Run: `python -m pytest -q`
+Run: `./.venv/Scripts/python.exe -m pytest -q`
 Expected: 全部 PASS
 
 - [ ] **Step 10: 靜態檢查**
 
-Run: `python -m ruff check app tests && python -m ruff format --check app tests && python -m mypy app`
-Expected: 全部通過
+Run: `./.venv/Scripts/python.exe -m ruff check app tests`
+Run: `./.venv/Scripts/python.exe -m mypy app`
+Expected: 兩者都通過
+
+> **分開跑，而且不要跑 `ruff format --check`。** CI 實際上只跑 `ruff check .` 與
+> `mypy app`（`.github/workflows/ci.yml:90,93`）——`ruff format --check` 從來不是
+> 這個專案的閘門，而且在目前的 master 上有 40 個既有檔案不符合它。
+> 把它寫進驗收條件是計畫的錯（Task 1 的實作者發現並回報）。
 
 - [ ] **Step 11: Commit**
 
@@ -1975,7 +2026,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 - [ ] **跑一次完整套件（含平行）**
 
-Run: `python -m pytest -q -n 4`（如果裝了 `pytest-xdist`；沒裝就跳過）
+Run: `./.venv/Scripts/python.exe -m pytest -q -n 4`（如果裝了 `pytest-xdist`；沒裝就跳過）
 Expected: 全部 PASS
 
 > P3-B 有一條 Playwright 測試在單跑時永遠綠、4 worker 平行時約 50% 紅，
