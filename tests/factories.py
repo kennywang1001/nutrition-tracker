@@ -5,6 +5,7 @@ from itertools import count
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.expense import Expense, ExpenseCategory
 from app.models.food import BaseUnit, Food, FoodPortion, FoodRevision, RevisionStatus
 from app.models.meal import Meal, MealItem, MealType
 from app.models.supplement import Supplement, SupplementIntake, SupplementPlan, TimeOfDay
@@ -338,3 +339,38 @@ async def create_target(
     await db_session.commit()
     await db_session.refresh(target)
     return target
+
+
+# 固定時刻，不用 datetime.now()：依賴月界線的測試會因為「現在是幾月」
+# 隨機失敗，跟 _DEFAULT_EATEN_AT 是同一個理由。
+# 刻意挑 12 月：12 月進位是 month_bounds 唯一會寫錯的地方（見 app/days.py）。
+_DEFAULT_SPENT_AT = datetime(2026, 12, 15, 12, 0, tzinfo=UTC)
+
+
+async def create_expense(
+    db_session: AsyncSession,
+    *,
+    user: User,
+    amount: Decimal | int = 100,
+    category: ExpenseCategory = ExpenseCategory.OTHER,
+    spent_at: datetime | None = None,
+    note: str | None = None,
+    meal: Meal | None = None,
+) -> Expense:
+    """建立一筆支出。
+
+    `category` 預設 OTHER 而不是 FOOD：FOOD 是「從記一餐建出來的」那條路徑
+    的專屬分類，工廠預設用它會讓「手動記的花費」與「餐費」在測試裡混在一起。
+    """
+    expense = Expense(
+        user_id=user.id,
+        meal_id=meal.id if meal is not None else None,
+        category=category,
+        amount=Decimal(amount),
+        spent_at=spent_at or _DEFAULT_SPENT_AT,
+        note=note,
+    )
+    db_session.add(expense)
+    await db_session.commit()
+    await db_session.refresh(expense)
+    return expense
