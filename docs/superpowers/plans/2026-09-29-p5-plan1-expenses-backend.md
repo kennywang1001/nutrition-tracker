@@ -2045,6 +2045,17 @@ Expected: 全部 PASS
 3. **`create_constraint=False` 卻忘記手寫 `CheckConstraint`，等於完全沒有約束**，
    而所有靜態檢查與既有測試都是綠的——因為沒有一條會去 INSERT 非法值。
    透過 ORM 測也看不見（SQLAlchemy 的 Enum 型別會先擋），必須用原生 SQL。
+5. **`expire_on_commit=False` 讓 identity map 蓋住資料庫層的變化——而且可以兩個方向都說謊。**
+   測試 session 設了 `expire_on_commit=False`（`tests/conftest.py`），所以
+   `db_session.scalar(select(X).where(...))` 命中 identity map 時，**不會**用資料庫
+   的新值覆蓋已載入的屬性。`ON DELETE SET NULL` 把欄位改成 NULL 之後，
+   Python 物件仍是舊值：
+   - **假紅**：實作完全正確，測試卻失敗（Task 2 實際遇到）
+   - **假綠**（更危險）：斷言「這一列還在」時，如果它被 CASCADE 刪掉了，
+     `select()` 回 None 會正確變紅；但斷言「某欄位沒變」這類就會被舊值騙過
+   斷言資料庫層副作用之前一定要 `await db_session.refresh(obj)`。
+   前例：`tests/test_supplement_plans.py::test_delete_plan_orphans_its_intakes_instead_of_deleting_them`。
+
 4. **交易原子性如果從 API 打不到失敗路徑，行為測試證明不了它。**
    mock 出來的綠燈證明的是 mock。改用原始碼掃描斷言「只有一次 commit」。
 
