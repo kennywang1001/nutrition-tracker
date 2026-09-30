@@ -116,6 +116,21 @@ async def list_expenses(
 _ZERO = Decimal("0.00")
 
 
+# **這條路由必須宣告在任何 `GET /{expense_id}` 之前——但現在沒有任何測試
+# 守得住這件事，因為這個模組目前沒有 `GET /{expense_id}`。**
+#
+# Task 5 實測（把這個函式搬到檔尾，7 條 summary 測試照樣全綠）釐清了
+# Starlette 的實際行為：它掃完所有路由，只要有一條 FULL match（路徑+方法
+# 都對）就用那條，不是「碰到第一個部分匹配就停」。`GET /summary` 對 GET
+# 永遠是 FULL match，而 `PATCH`/`DELETE /{expense_id}` 對 GET 請求只能是
+# PARTIAL match，所以現在的宣告順序完全不影響結果。
+#
+# 但只要有人加上 `GET /api/expenses/{expense_id}`，順序就立刻變成關鍵——
+# 已用最小重現驗證過：有 `GET /{id}` 且 summary 宣告在後面時，
+# `GET /e/summary` 回的是 **422 int_parsing**（"summary" 被當成 id 去解析）。
+#
+# 換句話說：這是一顆現在量不到、將來會安靜引爆的地雷。加 `GET /{expense_id}`
+# 的人請把它加在這條路由**之後**，並補一條會紅的測試。
 @router.get("/summary", response_model=ExpenseSummaryResponse)
 async def get_summary(
     month: str | None = Query(default=None, pattern=YEAR_MONTH_PATTERN),
