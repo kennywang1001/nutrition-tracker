@@ -1,18 +1,21 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, get_owned_or_404
+from app.api.params import ResourceId
 from app.days import month_bounds, this_month_in_timezone
 from app.db import get_db
+from app.errors import UnprocessableEntityError
 from app.models.expense import Expense
 from app.models.user import User
 from app.schemas.expense import (
     YEAR_MONTH_PATTERN,
     ExpenseCreateRequest,
     ExpenseResponse,
+    ExpenseUpdateRequest,
 )
 
 router = APIRouter(prefix="/expenses", tags=["expenses"])
@@ -105,3 +108,59 @@ async def list_expenses(
         )
     ).all()
     return [_to_response(expense) for expense in rows]
+
+
+# `amount` / `category` / `spent_at` 是 NOT NULL；`note` 是 nullable。
+# 只有前三個的顯式 null 要擋。
+_NOT_NULLABLE_FIELDS = ("amount", "category", "spent_at")
+
+
+@router.patch("/{expense_id}", response_model=ExpenseResponse)
+async def update_expense(
+    expense_id: ResourceId,
+    payload: ExpenseUpdateRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ExpenseResponse:
+    """改一筆花費。**`meal_id` 不在可改欄位裡**（規格 §5.1）。
+
+    `exclude_unset=True` 是哨兵寫法的關鍵：沒帶的欄位不會出現在 dict 裡。
+    少了它，`{"amount": "150"}` 這種請求會把 category 與 spent_at 一起
+    設成 None，撞上 NOT NULL。
+
+    但 `exclude_unset` 分不出「沒帶」與「帶了 null」以外的事——
+    `{"amount": null}` 是「有帶」，值是 None。所以三個 NOT NULL 欄位
+    要在這裡明確擋一次，不能只靠 Pydantic（UpdateMeRequest 踩過的坑）。
+    """
+    expense = await get_owned_or_404(
+        db, Expense, expense_id, owner_id=user.id, owner_field="user_id"
+    )
+
+    changes = payload.model_dump(exclude_unset=True)
+    for field in _NOT_NULLABLE_FIELDS:
+        if field in changes and changes[field] is None:
+            raise UnprocessableEntityError(
+                "FIELD_NOT_NULLABLE", f"{field} 不能是 null"
+            )
+
+    for field, value in changes.items():
+        setattr(expense, field, value)
+
+    await db.commit()
+    await db.refresh(expense)
+    return _to_response(expense)
+
+
+@router.delete("/{expense_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_expense(
+    expense_id: ResourceId,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """硬刪。這張表沒有稽核需求，而且錯記一筆要能乾淨刪掉（規格 §5.1）。"""
+    expense = await get_owned_or_404(
+        db, Expense, expense_id, owner_id=user.id, owner_field="user_id"
+    )
+    await db.delete(expense)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

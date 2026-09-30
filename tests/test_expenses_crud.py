@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 
-from app.models.expense import Expense
+from app.models.expense import Expense, ExpenseCategory
 from app.security.tokens import create_access_token
 from tests.factories import create_expense, create_user
 
@@ -134,3 +134,117 @@ async def test_list_expenses_only_returns_my_own(client, db_session):
 
     assert response.status_code == 200
     assert [item["amount"] for item in response.json()] == ["100.00"]
+
+
+async def test_patch_expense_updates_amount(client, db_session):
+    user = await create_user(db_session)
+    expense = await create_expense(db_session, user=user, amount=100)
+
+    response = await client.patch(
+        f"/api/expenses/{expense.id}", headers=auth(user), json={"amount": "150.25"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["amount"] == "150.25"
+
+
+async def test_patch_expense_leaves_untouched_fields_alone(client, db_session):
+    """只帶 amount 時，category 不能被打成預設值。
+
+    這是哨兵寫法真正要守的東西：`model_dump(exclude_unset=True)` 如果
+    寫成 `model_dump()`，沒帶的欄位會以 None 出現在 dict 裡，
+    然後被 setattr 寫進 NOT NULL 欄位。
+    """
+    user = await create_user(db_session)
+    expense = await create_expense(
+        db_session, user=user, amount=100, category=ExpenseCategory.TRANSPORT
+    )
+
+    response = await client.patch(
+        f"/api/expenses/{expense.id}", headers=auth(user), json={"amount": "150"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["category"] == "transport"
+
+
+async def test_patch_expense_can_clear_the_note(client, db_session):
+    """note 是 nullable，`{"note": null}` 是合法輸入、必須放行到底。"""
+    user = await create_user(db_session)
+    expense = await create_expense(db_session, user=user, note="原本的備註")
+
+    response = await client.patch(
+        f"/api/expenses/{expense.id}", headers=auth(user), json={"note": None}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["note"] is None
+
+
+async def test_patch_expense_rejects_explicit_null_on_not_null_field(client, db_session):
+    """`{"amount": null}` 必須是 422，不是 500。
+
+    amount 是 NOT NULL。顯式 null 如果流到 setattr，會撞上
+    asyncpg.NotNullViolationError 變成已認證使用者就能觸發的 500
+    （UpdateMeRequest 踩過的同一個坑）。
+    """
+    user = await create_user(db_session)
+    expense = await create_expense(db_session, user=user)
+
+    response = await client.patch(
+        f"/api/expenses/{expense.id}", headers=auth(user), json={"amount": None}
+    )
+
+    assert response.status_code == 422
+
+
+async def test_patch_someone_elses_expense_is_404(client, db_session):
+    """404 不是 403——403 等於告訴對方「這個 ID 存在，只是你不能看」。"""
+    alice = await create_user(db_session)
+    bob = await create_user(db_session)
+    expense = await create_expense(db_session, user=alice, amount=100)
+
+    response = await client.patch(
+        f"/api/expenses/{expense.id}", headers=auth(bob), json={"amount": "1"}
+    )
+
+    assert response.status_code == 404
+
+
+async def test_patch_nonexistent_expense_is_404_with_identical_body(client, db_session):
+    """「不存在」與「不是你的」必須回一模一樣的東西，否則差異本身就是洩漏。"""
+    alice = await create_user(db_session)
+    bob = await create_user(db_session)
+    alices_expense = await create_expense(db_session, user=alice, amount=100)
+
+    not_mine = await client.patch(
+        f"/api/expenses/{alices_expense.id}", headers=auth(bob), json={"amount": "1"}
+    )
+    missing = await client.patch(
+        "/api/expenses/999999", headers=auth(bob), json={"amount": "1"}
+    )
+
+    assert not_mine.status_code == missing.status_code == 404
+    assert not_mine.json() == missing.json()
+
+
+async def test_delete_expense_removes_it(client, db_session):
+    user = await create_user(db_session)
+    expense = await create_expense(db_session, user=user)
+
+    response = await client.delete(f"/api/expenses/{expense.id}", headers=auth(user))
+
+    assert response.status_code == 204
+    assert await db_session.scalar(select(func.count()).select_from(Expense)) == 0
+
+
+async def test_delete_someone_elses_expense_is_404_and_keeps_it(client, db_session):
+    alice = await create_user(db_session)
+    bob = await create_user(db_session)
+    expense = await create_expense(db_session, user=alice)
+
+    response = await client.delete(f"/api/expenses/{expense.id}", headers=auth(bob))
+
+    assert response.status_code == 404
+    # 關鍵斷言：不只是回 404，那筆資料要真的還在
+    assert await db_session.scalar(select(func.count()).select_from(Expense)) == 1
