@@ -25,6 +25,16 @@ class MealCreateRequest(BaseModel):
     note: str | None = Field(default=None, max_length=500)
     # 允許空清單是刻意的：P2 的流程是先拍照、之後才落項目（見計畫本文）。
     items: list[MealItemCreateRequest] = Field(default_factory=list)
+    # 選填的餐費（P5 規格 §4.1）。有值時，POST /api/meals 會在**同一個交易裡**
+    # 建一筆 category=food、meal_id 指過來的支出。
+    #
+    # **不做成兩次 API 呼叫**：那有一個半成功狀態——餐點記起來了、支出沒有，
+    # 而使用者完全不會知道。在手機上、網路不穩的情況下這不是理論風險。
+    #
+    # gt=0 / max_digits / decimal_places 對齊 expenses.amount 的
+    # numeric(10,2) 與 ck_expenses_amount_positive。不對齊的話，
+    # 超出範圍的值會走到 asyncpg 變成 500 而不是 422。
+    cost: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=2)
 
 
 class MealUpdateRequest(BaseModel):
