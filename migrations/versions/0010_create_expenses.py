@@ -35,6 +35,10 @@ def upgrade() -> None:
                 "other",
                 name="expense_category",
                 native_enum=False,
+                # 明寫 length：不給的話是 VARCHAR(13)（最長值的長度），
+                # 加一個更長的分類就會 StringDataRightTruncation。
+                # 見 app/models/expense.py 的說明。
+                length=32,
             ),
             nullable=False,
         ),

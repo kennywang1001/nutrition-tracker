@@ -94,8 +94,18 @@ async def test_list_expenses_defaults_to_this_month(client, db_session, monkeypa
 
 
 async def test_list_expenses_accepts_explicit_month(client, db_session):
+    """明確指定的 `month` 真的有被用到。
+
+    **另外放一筆 11 月的資料是必要的，不是多餘。** 少了它，這條測試只靠
+    「今天剛好不是 2026-12」才分辨得出 `?month=` 有沒有被忽略——
+    到了 2026 年 12 月它就變成零鑑別力（最終審查指出）。
+    有了 11 月那一筆，不管今天幾號它都守得住。
+    """
     user = await create_user(db_session)
     await create_expense(db_session, user=user, amount=100)  # 2026-12-15
+    await create_expense(
+        db_session, user=user, amount=999, spent_at=datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
+    )
 
     response = await client.get("/api/expenses?month=2026-12", headers=auth(user))
 

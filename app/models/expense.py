@@ -98,6 +98,14 @@ class Expense(Base):
             name="expense_category",
             native_enum=False,
             create_constraint=False,
+            # **length 一定要明寫。** 不給的話 SQLAlchemy 用「目前最長的值」
+            # 當長度——現在是 VARCHAR(13)（"entertainment"）。那會讓這個
+            # model 的「改分類很便宜」變成謊話：加一個 14 字元的分類
+            # （例如 "transportation"）而忘了一起 ALTER COLUMN TYPE，
+            # 症狀是 insert 時 StringDataRightTruncation → 500，
+            # 而且只有那一個新分類會爆（最終審查發現）。
+            # 32 是留給未來分類的餘裕，規格 §3.4 明說這份清單預期會改。
+            length=32,
             values_callable=lambda e: [m.value for m in e],
         ),
         nullable=False,
