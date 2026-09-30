@@ -9,7 +9,6 @@ from app.api.deps import get_current_user, get_owned_or_404
 from app.api.params import ResourceId
 from app.days import month_bounds, this_month_in_timezone
 from app.db import get_db
-from app.errors import UnprocessableEntityError
 from app.models.expense import Expense
 from app.models.user import User
 from app.schemas.expense import (
@@ -162,7 +161,7 @@ async def get_summary(
                 Expense.spent_at < end,
             )
             .group_by(Expense.category)
-            .order_by(func.sum(Expense.amount).desc())
+            .order_by(func.sum(Expense.amount).desc(), Expense.category)
         )
     ).all()
 
@@ -178,11 +177,6 @@ async def get_summary(
     )
 
 
-# `amount` / `category` / `spent_at` 是 NOT NULL；`note` 是 nullable。
-# 只有前三個的顯式 null 要擋。
-_NOT_NULLABLE_FIELDS = ("amount", "category", "spent_at")
-
-
 @router.patch("/{expense_id}", response_model=ExpenseResponse)
 async def update_expense(
     expense_id: ResourceId,
@@ -196,21 +190,16 @@ async def update_expense(
     少了它，`{"amount": "150"}` 這種請求會把 category 與 spent_at 一起
     設成 None，撞上 NOT NULL。
 
-    但 `exclude_unset` 分不出「沒帶」與「帶了 null」以外的事——
-    `{"amount": null}` 是「有帶」，值是 None。所以三個 NOT NULL 欄位
-    要在這裡明確擋一次，不能只靠 Pydantic（UpdateMeRequest 踩過的坑）。
+    「帶了顯式 null」由 `ExpenseUpdateRequest` 的 `model_validator` 擋掉，
+    **不在這裡擋**——跟 `MealUpdateRequest` / `UpdateMeRequest` 同一套。
+    早期版本在這裡丟 `UnprocessableEntityError("FIELD_NOT_NULLABLE")`，
+    那是全專案獨一無二的錯誤形狀，前端得為這一個端點寫第二套處理。
     """
     expense = await get_owned_or_404(
         db, Expense, expense_id, owner_id=user.id, owner_field="user_id"
     )
 
     changes = payload.model_dump(exclude_unset=True)
-    for field in _NOT_NULLABLE_FIELDS:
-        if field in changes and changes[field] is None:
-            raise UnprocessableEntityError(
-                "FIELD_NOT_NULLABLE", f"{field} 不能是 null"
-            )
-
     for field, value in changes.items():
         setattr(expense, field, value)
 

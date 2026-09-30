@@ -4,7 +4,7 @@ from sqlalchemy import func, select
 
 from app.models.expense import Expense, ExpenseCategory
 from app.security.tokens import create_access_token
-from tests.factories import create_expense, create_user
+from tests.factories import create_expense, create_meal, create_user
 
 
 def auth(user):
@@ -267,3 +267,75 @@ async def test_delete_someone_elses_expense_is_404_and_keeps_it(client, db_sessi
     assert response.json()["error"]["code"] == "NOT_FOUND"
     # 關鍵斷言：不只是回 404，那筆資料要真的還在
     assert await db_session.scalar(select(func.count()).select_from(Expense)) == 1
+
+
+async def test_create_expense_rejects_naive_spent_at(client, db_session):
+    """沒有時區偏移的 `spent_at` 必須是 422。
+
+    **這是這個模組唯一一個會算錯錢、而且只在 production 出錯的 bug。**
+    最終審查實測：naive datetime 會被 asyncpg 用執行程序的本機時區解釋
+    （`dt.astimezone()` 對 naive 值假設本機時區）。同一個輸入
+    `"2026-11-30T23:30:00"`：
+
+      開發機（Asia/Taipei）→ 存成 2026-11-30T15:30Z → 月報表算 11 月 ✅
+      容器（沒設 TZ = UTC）→ 存成 2026-11-30T23:30Z → 算 12 月 ❌
+
+    也就是說：台北使用者在每個月最後一天 16:00 之後記的每一筆，
+    在 production 都會跑到下個月，而**開發機上永遠重現不出來**。
+
+    而 `<input type="datetime-local">` 產出的正好就是這個沒有 offset 的
+    格式——P5 計畫二的前端表單會用的就是它。
+    """
+    user = await create_user(db_session)
+
+    response = await client.post(
+        "/api/expenses",
+        headers=auth(user),
+        json={"amount": "1", "category": "other", "spent_at": "2026-11-30T23:30:00"},
+    )
+
+    assert response.status_code == 422
+    assert await db_session.scalar(select(func.count()).select_from(Expense)) == 0
+
+
+async def test_patch_expense_rejects_naive_spent_at(client, db_session):
+    """PATCH 走同一條規則——理由見上面那條。"""
+    user = await create_user(db_session)
+    expense = await create_expense(db_session, user=user)
+
+    response = await client.patch(
+        f"/api/expenses/{expense.id}",
+        headers=auth(user),
+        json={"spent_at": "2026-11-30T23:30:00"},
+    )
+
+    assert response.status_code == 422
+
+
+async def test_patch_cannot_move_an_expense_to_another_meal(client, db_session):
+    """`meal_id` 不可改（規格 §5.1）——把支出搬到別人的餐點是個攻擊面。
+
+    **執行期本來就安全**：`meal_id` 不是 `ExpenseUpdateRequest` 的欄位，
+    Pydantic 預設 `extra="ignore"` 會直接丟掉它。
+
+    但最終審查指出：**沒有任何測試釘住這件事**。只要有人「順手」把
+    `meal_id: int | None = None` 加進那個 model，洞就開了，而 595 條測試
+    沒有一條會紅。這條就是那根釘子。
+    """
+    alice = await create_user(db_session)
+    bob = await create_user(db_session)
+    bobs_meal = await create_meal(db_session, user=bob)
+    expense = await create_expense(db_session, user=alice)
+
+    response = await client.patch(
+        f"/api/expenses/{expense.id}",
+        headers=auth(alice),
+        json={"meal_id": bobs_meal.id, "note": "試著搬過去"},
+    )
+
+    assert response.status_code == 200
+    # 關鍵：不是只看狀態碼——meal_id 必須原封不動
+    assert response.json()["meal_id"] is None
+    # expire_on_commit=False，不 refresh 會被 identity map 的舊值騙過
+    await db_session.refresh(expense)
+    assert expense.meal_id is None
