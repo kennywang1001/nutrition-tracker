@@ -199,7 +199,17 @@ async def test_patch_expense_rejects_explicit_null_on_not_null_field(client, db_
 
 
 async def test_patch_someone_elses_expense_is_404(client, db_session):
-    """404 不是 403——403 等於告訴對方「這個 ID 存在，只是你不能看」。"""
+    """404 不是 403——403 等於告訴對方「這個 ID 存在，只是你不能看」。
+
+    **`code` 也要斷言，不能只看狀態碼。** Task 4 實測發現：這條測試在
+    端點還不存在時就是綠的——路徑不匹配任何路由時 Starlette 也回 404。
+    只斷言 `404` 的話，它分不出「擁有權檢查擋下了你」與「這個路由根本
+    沒被註冊」，於是有人整個刪掉端點它照樣綠。
+
+    兩者的 `code` 不同：我們的 `NotFoundError` 是 `"NOT_FOUND"`，
+    而路由不存在走的是 `handle_http_exception`，`code` 是 `"HTTP_ERROR"`
+    （`app/errors.py`）。斷言前者才真的守得住。
+    """
     alice = await create_user(db_session)
     bob = await create_user(db_session)
     expense = await create_expense(db_session, user=alice, amount=100)
@@ -209,10 +219,15 @@ async def test_patch_someone_elses_expense_is_404(client, db_session):
     )
 
     assert response.status_code == 404
+    assert response.json()["error"]["code"] == "NOT_FOUND"
 
 
 async def test_patch_nonexistent_expense_is_404_with_identical_body(client, db_session):
-    """「不存在」與「不是你的」必須回一模一樣的東西，否則差異本身就是洩漏。"""
+    """「不存在」與「不是你的」必須回一模一樣的東西，否則差異本身就是洩漏。
+
+    `code` 的斷言理由同上：少了它，端點不存在時這條也是綠的
+    （兩邊都會拿到 FastAPI 預設的 404 body，「一模一樣」自動成立）。
+    """
     alice = await create_user(db_session)
     bob = await create_user(db_session)
     alices_expense = await create_expense(db_session, user=alice, amount=100)
@@ -226,6 +241,7 @@ async def test_patch_nonexistent_expense_is_404_with_identical_body(client, db_s
 
     assert not_mine.status_code == missing.status_code == 404
     assert not_mine.json() == missing.json()
+    assert not_mine.json()["error"]["code"] == "NOT_FOUND"
 
 
 async def test_delete_expense_removes_it(client, db_session):
@@ -246,5 +262,8 @@ async def test_delete_someone_elses_expense_is_404_and_keeps_it(client, db_sessi
     response = await client.delete(f"/api/expenses/{expense.id}", headers=auth(bob))
 
     assert response.status_code == 404
+    # `code` 的斷言分辨「擁有權擋下了你」與「路由根本不存在」——後者也是 404
+    # （Task 4 實測：這條測試在端點還沒實作時就是綠的）。
+    assert response.json()["error"]["code"] == "NOT_FOUND"
     # 關鍵斷言：不只是回 404，那筆資料要真的還在
     assert await db_session.scalar(select(func.count()).select_from(Expense)) == 1
