@@ -1,7 +1,8 @@
 from datetime import datetime
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query, Response, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_owned_or_404
@@ -13,8 +14,10 @@ from app.models.expense import Expense
 from app.models.user import User
 from app.schemas.expense import (
     YEAR_MONTH_PATTERN,
+    CategoryTotal,
     ExpenseCreateRequest,
     ExpenseResponse,
+    ExpenseSummaryResponse,
     ExpenseUpdateRequest,
 )
 
@@ -108,6 +111,56 @@ async def list_expenses(
         )
     ).all()
     return [_to_response(expense) for expense in rows]
+
+
+_ZERO = Decimal("0.00")
+
+
+@router.get("/summary", response_model=ExpenseSummaryResponse)
+async def get_summary(
+    month: str | None = Query(default=None, pattern=YEAR_MONTH_PATTERN),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ExpenseSummaryResponse:
+    """這個月花了多少、花在哪——這個模組存在的唯一理由(規格 §1.1)。
+
+    一次 GROUP BY 查詢。`total` 在 Python 端把各分類加起來,不再發第二次
+    查詢——`Decimal` 相加是精確的,不會有浮點誤差。
+
+    **`total` 由後端算,不是前端加總。** 前端加總會在將來加上篩選或分頁時
+    安靜地算錯(規格 §5.2)。
+
+    月界線走 `_resolve_month()`,跟 `list_expenses` 同一份實作。
+    """
+    start, end, normalized_month = _resolve_month(month, user.timezone)
+
+    rows = (
+        await db.execute(
+            select(
+                Expense.category,
+                func.sum(Expense.amount).label("total"),
+                func.count().label("count"),
+            )
+            .where(
+                Expense.user_id == user.id,
+                Expense.spent_at >= start,
+                Expense.spent_at < end,
+            )
+            .group_by(Expense.category)
+            .order_by(func.sum(Expense.amount).desc())
+        )
+    ).all()
+
+    by_category = [
+        CategoryTotal(category=row.category, total=row.total, count=row.count) for row in rows
+    ]
+    # sum() 的 start 是 _ZERO 而不是 0:沒有任何資料時要回 "0.00",
+    # 不是 "0"——回應型別是 Decimal,而 Decimal(0) 序列化成 "0"。
+    total = sum((row.total for row in by_category), _ZERO)
+
+    return ExpenseSummaryResponse(
+        month=normalized_month, total=total, by_category=by_category
+    )
 
 
 # `amount` / `category` / `spent_at` 是 NOT NULL；`note` 是 nullable。
