@@ -2045,6 +2045,16 @@ Expected: 全部 PASS
 3. **`create_constraint=False` 卻忘記手寫 `CheckConstraint`，等於完全沒有約束**，
    而所有靜態檢查與既有測試都是綠的——因為沒有一條會去 INSERT 非法值。
    透過 ORM 測也看不見（SQLAlchemy 的 Enum 型別會先擋），必須用原生 SQL。
+6. **未處理的例外在這個測試套件裡不會變成「500 的 response」，而是直接從
+   `client.get()` 冒出來。** httpx 的 `ASGITransport` 預設
+   `raise_app_exceptions=True`，Starlette 的 `ServerErrorMiddleware` 送出 500 之後
+   **一定會重新 raise** 原始例外（`starlette/middleware/errors.py`）。
+   所以測試看到的是 `ValueError`，不是一個 `status_code == 500` 的 response 物件。
+   **影響**：想斷言「這個輸入不會變成 500」時，不能寫
+   `assert response.status_code != 500`——那行永遠跑不到。要斷言的是
+   `response.status_code == 422`（正常路徑），而它的咬合力要靠突變測試證明
+   （Task 3 實測：放寬 pattern 之後兩條測試確實紅了，只是以例外而非 500 的形式）。
+
 5. **`expire_on_commit=False` 讓 identity map 蓋住資料庫層的變化——而且可以兩個方向都說謊。**
    測試 session 設了 `expire_on_commit=False`（`tests/conftest.py`），所以
    `db_session.scalar(select(X).where(...))` 命中 identity map 時，**不會**用資料庫
