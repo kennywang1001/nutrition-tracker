@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { queryKeys } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { LogMeal } from "../src/screens/LogMeal";
@@ -189,6 +190,60 @@ describe("記一餐", () => {
 		).toBeInTheDocument();
 	});
 
+	it("填了金額就一起送出 cost", async () => {
+		const fetchMock = mockApi({
+			"/api/foods/frequent": () => json(FREQUENT_FOODS),
+			"/api/foods/recent": () => json([]),
+			"/api/foods/1/portions": () => json([]),
+			"/api/meals": () => json({ id: 99 }, 201),
+		});
+
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+
+		await userEvent.type(screen.getByLabelText("金額（選填）"), "180");
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() => {
+			const call = fetchMock.mock.calls.find(
+				([input, init]) =>
+					(init?.method ?? "GET").toUpperCase() === "POST" &&
+					String(input).includes("/api/meals"),
+			);
+			expect(call).toBeDefined();
+			expect(JSON.parse(String(call?.[1]?.body)).cost).toBe("180");
+		});
+	});
+
+	it("沒填金額時不送 cost 欄位", async () => {
+		// **不是送 null、也不是送空字串。** 後端的 cost 是
+		// `Decimal | None = Field(default=None, gt=0, ...)`：
+		// - 送 "" → Pydantic 擋成 422
+		// - 送 null → 合法，但語意上繞了一圈
+		// - 不帶 → 後端的 default=None 生效，最乾淨
+		const fetchMock = mockApi({
+			"/api/foods/frequent": () => json(FREQUENT_FOODS),
+			"/api/foods/recent": () => json([]),
+			"/api/foods/1/portions": () => json([]),
+			"/api/meals": () => json({ id: 99 }, 201),
+		});
+
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() => {
+			const call = fetchMock.mock.calls.find(
+				([input, init]) =>
+					(init?.method ?? "GET").toUpperCase() === "POST" &&
+					String(input).includes("/api/meals"),
+			);
+			expect(call).toBeDefined();
+			expect(JSON.parse(String(call?.[1]?.body))).not.toHaveProperty("cost");
+		});
+	});
+
 	it("409 FOOD_HAS_NO_REVISION 顯示具名訊息，不是通用的「記錄失敗，請再試一次」", async () => {
 		// 搜尋到送出之間，食物有可能剛好失去生效版本——disabled 擋不住
 		// 這種情況（選的當下 nutrition 還不是 null），所以後端這個 409
@@ -218,5 +273,74 @@ describe("記一餐", () => {
 			await screen.findByText("這個食物目前沒有生效的版本"),
 		).toBeInTheDocument();
 		expect(screen.queryByText("記錄失敗，請再試一次")).not.toBeInTheDocument();
+	});
+
+	it("cost 格式錯誤顯示金額專屬訊息，不是通用或誤指份量", async () => {
+		// 真實信封形狀（規格 §5.4）：details.errors 是 loc / msg / type 的陣列。
+		// loc 要含 "cost" 才會顯示這句——同一次 POST 的 quantity 欄位
+		// 也可能觸發 VALIDATION_ERROR，不能一律當成金額錯誤。
+		mockApi({
+			"/api/foods/frequent": () => json(FREQUENT_FOODS),
+			"/api/foods/recent": () => json([]),
+			"/api/foods/1/portions": () => json([]),
+			"/api/meals": () =>
+				json(
+					{
+						error: {
+							code: "VALIDATION_ERROR",
+							message: "輸入資料格式錯誤",
+							details: {
+								errors: [
+									{
+										loc: ["body", "cost"],
+										msg: "Input should be greater than 0",
+										type: "greater_than",
+									},
+								],
+							},
+						},
+					},
+					422,
+				),
+		});
+
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+		await userEvent.type(screen.getByLabelText("金額（選填）"), "0");
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		expect(
+			await screen.findByText("金額格式不對，請輸入大於 0、最多兩位小數的數字"),
+		).toBeInTheDocument();
+		expect(screen.queryByText("記錄失敗，請再試一次")).not.toBeInTheDocument();
+	});
+
+	it("記一餐成功後讓花費（expensesAll）的 query 失效——餐費會建出一筆支出", async () => {
+		mockApi({
+			"/api/foods/frequent": () => json(FREQUENT_FOODS),
+			"/api/foods/recent": () => json([]),
+			"/api/foods/1/portions": () => json([]),
+			"/api/meals": () => json({ id: 99 }, 201),
+		});
+
+		const client = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const invalidateSpy = vi.spyOn(client, "invalidateQueries");
+
+		render(
+			<QueryClientProvider client={client}>
+				<LogMeal onSaved={vi.fn()} />
+			</QueryClientProvider>,
+		);
+		await userEvent.click(await screen.findByText("滷肉飯"));
+		await userEvent.type(screen.getByLabelText("金額（選填）"), "180");
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() => {
+			expect(invalidateSpy).toHaveBeenCalledWith({
+				queryKey: queryKeys.expensesAll,
+			});
+		});
 	});
 });

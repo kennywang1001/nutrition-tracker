@@ -28,6 +28,25 @@ const MEAL_TYPES: Array<{ value: MealType; label: string }> = [
  *  兩處的說法飄走。 */
 const NO_REVISION_MESSAGE = "這個食物還沒有生效的營養素資料";
 
+/** cost 的後端限制（`gt=0, max_digits=10, decimal_places=2`）對齊
+ *  `expenses.amount`——跟 `Expenses.tsx` 的 `AMOUNT_FORMAT_ERROR` 同一句
+ *  文字，同一條規則不該在兩個畫面各寫一份說法。 */
+const COST_FORMAT_ERROR = "金額格式不對，請輸入大於 0、最多兩位小數的數字";
+
+/** `VALIDATION_ERROR` 可能來自 `cost`，也可能來自 `items[0].quantity`——
+ *  兩者是同一次 POST 的不同欄位。看 `details.errors` 的 `loc` 確認錯誤
+ *  真的是 `cost` 才顯示金額專屬訊息，不然份量填錯會被誤報成「金額格式
+ *  不對」。 */
+function isCostValidationError(error: ApiError): boolean {
+	const raw = error.details.errors;
+	if (!Array.isArray(raw)) return false;
+	return raw.some((item) => {
+		if (typeof item !== "object" || item === null) return false;
+		const loc = (item as { loc?: unknown }).loc;
+		return Array.isArray(loc) && loc.includes("cost");
+	});
+}
+
 /** 一個食物項目的營養素預覽，同時決定這個食物能不能被選。
  *
  *  **`nutrition` 可以是 `null`**（`FoodResponse.nutrition` 的註解：「沒有生效
@@ -72,6 +91,9 @@ export function LogMeal({ onSaved }: Props) {
 	const [selectedFood, setSelectedFood] = useState<Food | null>(null);
 	const [portionId, setPortionId] = useState<number | null>(null);
 	const [quantity, setQuantity] = useState("1");
+	// 選填的餐費（P5 規格 §4.1）。有值時 POST /api/meals 會在同一個交易裡
+	// 建一筆 category=food、meal_id 指過來的支出。
+	const [cost, setCost] = useState("");
 	const [mealType, setMealType] = useState<MealType>("snack");
 	const [error, setError] = useState<string | null>(null);
 	const [searchInput, setSearchInput] = useState("");
@@ -128,6 +150,11 @@ export function LogMeal({ onSaved }: Props) {
 							...(portionId !== null ? { portion_id: portionId } : {}),
 						},
 					],
+					// **留空時整個不帶這個欄位**，不是送 "" 也不是送 null。
+					// 後端是 `cost: Decimal | None = Field(default=None, gt=0, ...)`：
+					// 送 "" 會被 Pydantic 擋成 422；送 null 雖然合法但語意繞了
+					// 一圈；不帶讓後端的 default=None 生效，最乾淨。
+					...(cost.trim() === "" ? {} : { cost: cost.trim() }),
 				}),
 			});
 		},
@@ -154,9 +181,12 @@ export function LogMeal({ onSaved }: Props) {
 			// 過：拿掉這一行，本檔案的既有測試依然全線通過）。Task 5 的
 			// E2E 會一起守這一行與 dailyStats 那一行。
 			queryClient.invalidateQueries({ queryKey: queryKeys.meals });
+			// 餐費會建出一筆支出——記帳的清單與報表都要重取。
+			queryClient.invalidateQueries({ queryKey: queryKeys.expensesAll });
 			setSelectedFood(null);
 			setPortionId(null);
 			setQuantity("1");
+			setCost("");
 			setError(null);
 			onSaved();
 		},
@@ -172,6 +202,18 @@ export function LogMeal({ onSaved }: Props) {
 				// REVISION_PENDING 同一個理由：前端重寫一份只會有兩份文字
 				// 互相飄走的風險。
 				setError(caught.message);
+				return;
+			}
+			// cost 對齊 expenses.amount 的同一條後端限制（gt=0、最多兩位
+			// 小數）。VALIDATION_ERROR 也可能來自 quantity，所以要看
+			// details.errors 的 loc 確認是 cost 欄位才顯示這句，不然會
+			// 誤導成「金額填錯」但其實是份量填錯。
+			if (
+				caught instanceof ApiError &&
+				caught.code === "VALIDATION_ERROR" &&
+				isCostValidationError(caught)
+			) {
+				setError(COST_FORMAT_ERROR);
 				return;
 			}
 			setError("記錄失敗，請再試一次");
@@ -292,6 +334,20 @@ export function LogMeal({ onSaved }: Props) {
 							</option>
 						))}
 					</select>
+
+					<div>
+						<label htmlFor="meal-cost">金額（選填）</label>
+						{/* 填了就會在同一個交易裡記一筆餐費（規格 §4.1）。
+						    inputMode="decimal" 讓手機跳數字鍵盤；字級由 index.css
+						    的全域規則保證 ≥16px（iOS Safari 的自動放大，P3-C 踩過）。 */}
+						<input
+							id="meal-cost"
+							type="text"
+							inputMode="decimal"
+							value={cost}
+							onChange={(event) => setCost(event.target.value)}
+						/>
+					</div>
 
 					{error !== null && <p role="alert">{error}</p>}
 					<button type="submit" disabled={saveMeal.isPending}>
