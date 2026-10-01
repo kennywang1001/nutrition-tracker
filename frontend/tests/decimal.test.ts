@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { formatMacro, ratioOf, sumMacros } from "../src/lib/decimal";
+import {
+	formatMacro,
+	formatMoney,
+	ratioOf,
+	sumMacros,
+} from "../src/lib/decimal";
 
 describe("formatMacro", () => {
 	it("保留後端給的小數位", () => {
@@ -40,5 +45,38 @@ describe("ratioOf", () => {
 		// 不是「沒有標準可比」。混為一談的話，今天還沒吃東西的畫面
 		// 會顯示成「沒有設定目標」。
 		expect(ratioOf("0", "100")).toBe(0);
+	});
+});
+
+describe("formatMoney", () => {
+	it("保留兩位小數——錢的 250.50 不能顯示成 250.5", () => {
+		// 這是 formatMacro 不能拿來用的原因：它走 .toString()，
+		// 而 Decimal 會把尾數的 0 正規化掉（已用 node 實測）。
+		// 營養素顯示成 250.5 沒問題，金額顯示成 250.5 是錯的。
+		expect(formatMoney("250.50")).toBe("250.50");
+	});
+
+	it("整數也補到兩位", () => {
+		expect(formatMoney("250")).toBe("250.00");
+	});
+
+	it("零是 0.00，不是 0", () => {
+		// 後端空月份回的就是 "0.00"（app/api/routes/expenses.py 的 _ZERO）。
+		expect(formatMoney("0.00")).toBe("0.00");
+		expect(formatMoney("0")).toBe("0.00");
+	});
+
+	it("不因浮點誤差失真", () => {
+		// 0.1 + 0.2 的經典問題：這個函式只做格式化不做運算，
+		// 但它必須忠實呈現後端送來的字串，不能中途變成 number。
+		expect(formatMoney("0.30")).toBe("0.30");
+		expect(formatMoney("99999999.99")).toBe("99999999.99");
+	});
+});
+
+describe("formatMacro 與 formatMoney 的差別（這就是不能共用的證據）", () => {
+	it("同一個輸入，兩者輸出不同", () => {
+		expect(formatMacro("250.50")).toBe("250.5");
+		expect(formatMoney("250.50")).toBe("250.50");
 	});
 });

@@ -17,6 +17,21 @@ export function formatMacro(value: Numeric): string {
 	return new Decimal(value).toString();
 }
 
+/** 金額的顯示字串，固定兩位小數。
+ *
+ *  **不能用 `formatMacro()`。** 那個函式走 `Decimal.toString()`，而 Decimal
+ *  會把尾數的 0 正規化掉——`"250.50"` 變成 `"250.5"`（已用 node 實測）。
+ *  營養素顯示成 `250.5` 沒問題；金額顯示成 `250.5` 是錯的，而且是那種
+ *  「看起來只是少一個字」、實際上讓人懷疑系統算錯錢的錯。
+ *
+ *  後端的 `amount` 是 `numeric(10,2)`、`summary.total` 是 Decimal 相加的
+ *  結果，兩者都保證最多兩位小數，所以 `toFixed(2)` 不會四捨五入掉任何
+ *  真實的精度——它只是把顯示補齊。
+ */
+export function formatMoney(value: Numeric): string {
+	return new Decimal(value).toFixed(2);
+}
+
 export function sumMacros(values: readonly Numeric[]): Numeric {
 	return values
 		.reduce((total, value) => total.plus(value), new Decimal(0))
