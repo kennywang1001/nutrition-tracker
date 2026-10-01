@@ -12,8 +12,67 @@ import {
 import { queryKeys } from "../api/queries";
 import { formatMoney } from "../lib/decimal";
 
-/** 一筆花費的顯示列。 */
-function ExpenseRow({ expense }: { expense: Expense }) {
+type RowProps = {
+	expense: Expense;
+	onEdited: () => void;
+};
+
+/** 一筆花費：顯示、修改、刪除。
+ *
+ *  **確認步驟用畫面上的一段文字 + 兩個按鈕，不是 `window.confirm()`。**
+ *  `window.confirm` 在 jsdom 裡是未實作的（會需要 stub），而且不能用
+ *  螢幕閱讀器讀到的方式表達「這是一個需要決定的狀態」。這裡用一個
+ *  `useState` 開關 + `role="alertdialog"`，測試與無障礙都直接可用。
+ *
+ *  **不能改日期。** `spent_at` 不在可改欄位裡——改日期需要一個
+ *  `<input type="datetime-local">`，而它產出的是沒有時區 offset 的字串，
+ *  後端的 `AwareDatetime` 會回 422。真的要做時必須先轉成帶 offset 的格式
+ *  （見計畫開頭「刻意避開的地雷」）。
+ */
+function ExpenseRow({ expense, onEdited }: RowProps) {
+	const [editing, setEditing] = useState(false);
+	const [confirmingDelete, setConfirmingDelete] = useState(false);
+	const [draftAmount, setDraftAmount] = useState(expense.amount);
+	const [rowError, setRowError] = useState<string | null>(null);
+
+	const save = useMutation({
+		mutationFn: () =>
+			apiFetch<Expense>(`/api/expenses/${expense.id}`, {
+				method: "PATCH",
+				headers: { "content-type": "application/json" },
+				// **只送 amount。** 後端用 exclude_unset，沒帶的欄位不動。
+				// 刻意不送 spent_at（沒有日期選擇器）也不送 meal_id（不可改）。
+				body: JSON.stringify({ amount: draftAmount }),
+			}),
+		onSuccess: () => {
+			setEditing(false);
+			setRowError(null);
+			onEdited();
+		},
+		onError: () => setRowError("修改失敗，請再試一次"),
+	});
+
+	const remove = useMutation({
+		mutationFn: () =>
+			apiFetch(`/api/expenses/${expense.id}`, { method: "DELETE" }),
+		onSuccess: () => {
+			setConfirmingDelete(false);
+			onEdited();
+		},
+		onError: () => setRowError("刪除失敗，請再試一次"),
+	});
+
+	function handleSave(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		// 跟新增表單同一個理由：空字串擋在前端，不要白打一次請求。
+		if (draftAmount.trim() === "") {
+			setRowError("請輸入金額");
+			return;
+		}
+		setRowError(null);
+		save.mutate();
+	}
+
 	return (
 		<li data-testid={`expense-${expense.id}`}>
 			<span>{CATEGORY_LABELS[expense.category]}</span>
@@ -22,6 +81,65 @@ function ExpenseRow({ expense }: { expense: Expense }) {
 			{/* meal_id 有值代表這筆是記一餐時順手填的餐費（規格 §4.1）。
 			    標示出來，使用者才知道為什麼刪掉那一餐之後這筆錢還在。 */}
 			{expense.meal_id !== null && <span>（餐費）</span>}
+
+			{editing ? (
+				// 用 <form> 不是 onClick：Enter / 手機鍵盤的「前往」都該能儲存，
+				// 跟新增表單同一個作法。**故意不給 amount 加 required**——
+				// 原生驗證會搶在「請輸入金額」這條 JS 擋欄之前擋下送出。
+				<form onSubmit={handleSave}>
+					<label htmlFor={`edit-amount-${expense.id}`}>修改金額</label>
+					<input
+						id={`edit-amount-${expense.id}`}
+						type="text"
+						inputMode="decimal"
+						value={draftAmount}
+						onChange={(event) => setDraftAmount(event.target.value)}
+					/>
+					<button type="submit" disabled={save.isPending}>
+						儲存
+					</button>
+					<button
+						type="button"
+						onClick={() => {
+							setEditing(false);
+							// 放棄要把草稿重設回目前的金額，不然下次打開編輯器
+							// 看到的會是上次放棄時留下的殘值。
+							setDraftAmount(expense.amount);
+							setRowError(null);
+						}}
+					>
+						放棄
+					</button>
+				</form>
+			) : (
+				<button type="button" onClick={() => setEditing(true)}>
+					修改
+				</button>
+			)}
+
+			{confirmingDelete ? (
+				<div role="alertdialog" aria-label="確認刪除">
+					<p>確定要刪掉這筆花費嗎？</p>
+					{/* disabled while pending——刪除兩次第二次會 404，
+					    顯示出一個會誤導使用者的錯誤。 */}
+					<button
+						type="button"
+						disabled={remove.isPending}
+						onClick={() => remove.mutate()}
+					>
+						確定刪除
+					</button>
+					<button type="button" onClick={() => setConfirmingDelete(false)}>
+						取消
+					</button>
+				</div>
+			) : (
+				<button type="button" onClick={() => setConfirmingDelete(true)}>
+					刪除
+				</button>
+			)}
+
+			{rowError !== null && <p role="alert">{rowError}</p>}
 		</li>
 	);
 }
@@ -165,7 +283,15 @@ export function Expenses() {
 			) : (
 				<ul>
 					{expenses.map((expense) => (
-						<ExpenseRow key={expense.id} expense={expense} />
+						<ExpenseRow
+							key={expense.id}
+							expense={expense}
+							onEdited={() =>
+								void queryClient.invalidateQueries({
+									queryKey: queryKeys.expensesAll,
+								})
+							}
+						/>
 					))}
 				</ul>
 			)}

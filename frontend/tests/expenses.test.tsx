@@ -82,6 +82,13 @@ function expenseListGetCount(fetchMock: ReturnType<typeof mockApi>): number {
 	}).length;
 }
 
+/** 這個 spy 收到過的所有 HTTP method。 */
+function methodsOf(fetchMock: ReturnType<typeof mockApi>): string[] {
+	return fetchMock.mock.calls.map(([, init]) =>
+		(init?.method ?? "GET").toUpperCase(),
+	);
+}
+
 beforeEach(() => {
 	localStorage.clear();
 	clearTokens();
@@ -234,5 +241,132 @@ describe("記帳 /expenses", () => {
 		expect(await screen.findByRole("alert")).toHaveTextContent("請輸入金額");
 		// 沒有多打任何請求——驗證擋在前端，不是靠後端回 422
 		expect(fetchMock.mock.calls.length).toBe(before);
+	});
+
+	it("改掉一筆的金額", async () => {
+		const fetchMock = mockApi([
+			{
+				method: "GET",
+				path: "/api/expenses/summary",
+				handler: () => json(EMPTY_SUMMARY),
+			},
+			{ method: "GET", path: "/api/expenses", handler: () => json([TRAIN]) },
+			{
+				method: "PATCH",
+				path: "/api/expenses/2",
+				handler: () => json({ ...TRAIN, amount: "300.00" }),
+			},
+		]);
+
+		render(wrap(<Expenses />));
+		await screen.findByText("250.50");
+
+		await userEvent.click(screen.getByRole("button", { name: "修改" }));
+		const amountInput = screen.getByLabelText("修改金額");
+		await userEvent.clear(amountInput);
+		await userEvent.type(amountInput, "300");
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		await waitFor(() =>
+			expect(sentBody(fetchMock, "PATCH", "/api/expenses/2")).not.toBeNull(),
+		);
+		const sent = sentBody(fetchMock, "PATCH", "/api/expenses/2");
+		expect(sent?.amount).toBe("300");
+		// **關鍵**：不送 spent_at。送了就要帶 offset，而這個畫面沒有
+		// 日期選擇器——不送最安全，而且後端的 exclude_unset 會正確處理。
+		expect(sent).not.toHaveProperty("spent_at");
+		// 也不送 meal_id：後端的 ExpenseUpdateRequest 根本沒有這個欄位
+		// （extra="ignore" 會丟掉它），但前端也不該送。
+		expect(sent).not.toHaveProperty("meal_id");
+	});
+
+	it("修改金額留空時不送請求", async () => {
+		const fetchMock = mockApi([
+			{
+				method: "GET",
+				path: "/api/expenses/summary",
+				handler: () => json(EMPTY_SUMMARY),
+			},
+			{ method: "GET", path: "/api/expenses", handler: () => json([TRAIN]) },
+		]);
+
+		render(wrap(<Expenses />));
+		await screen.findByText("250.50");
+
+		await userEvent.click(screen.getByRole("button", { name: "修改" }));
+		const amountInput = screen.getByLabelText("修改金額");
+		await userEvent.clear(amountInput);
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("請輸入金額");
+		// 沒有送出 PATCH——驗證擋在前端，不是靠後端回 422
+		expect(methodsOf(fetchMock)).not.toContain("PATCH");
+	});
+
+	it("刪除要先確認", async () => {
+		const fetchMock = mockApi([
+			{
+				method: "GET",
+				path: "/api/expenses/summary",
+				handler: () => json(EMPTY_SUMMARY),
+			},
+			{ method: "GET", path: "/api/expenses", handler: () => json([TRAIN]) },
+		]);
+
+		render(wrap(<Expenses />));
+		await screen.findByText("250.50");
+		const before = fetchMock.mock.calls.length;
+
+		await userEvent.click(screen.getByRole("button", { name: "刪除" }));
+
+		// 按了刪除之後**還沒有**打任何請求——先出現確認
+		expect(fetchMock.mock.calls.length).toBe(before);
+		expect(screen.getByText("確定要刪掉這筆花費嗎？")).toBeInTheDocument();
+	});
+
+	it("確認之後才真的刪", async () => {
+		const fetchMock = mockApi([
+			{
+				method: "GET",
+				path: "/api/expenses/summary",
+				handler: () => json(EMPTY_SUMMARY),
+			},
+			{ method: "GET", path: "/api/expenses", handler: () => json([TRAIN]) },
+			{
+				method: "DELETE",
+				path: "/api/expenses/2",
+				handler: () => new Response(null, { status: 204 }),
+			},
+		]);
+
+		render(wrap(<Expenses />));
+		await screen.findByText("250.50");
+
+		await userEvent.click(screen.getByRole("button", { name: "刪除" }));
+		await userEvent.click(screen.getByRole("button", { name: "確定刪除" }));
+
+		await waitFor(() => expect(methodsOf(fetchMock)).toContain("DELETE"));
+	});
+
+	it("取消確認就不刪", async () => {
+		const fetchMock = mockApi([
+			{
+				method: "GET",
+				path: "/api/expenses/summary",
+				handler: () => json(EMPTY_SUMMARY),
+			},
+			{ method: "GET", path: "/api/expenses", handler: () => json([TRAIN]) },
+		]);
+
+		render(wrap(<Expenses />));
+		await screen.findByText("250.50");
+
+		await userEvent.click(screen.getByRole("button", { name: "刪除" }));
+		await userEvent.click(screen.getByRole("button", { name: "取消" }));
+
+		expect(methodsOf(fetchMock)).not.toContain("DELETE");
+		expect(
+			screen.queryByText("確定要刪掉這筆花費嗎？"),
+		).not.toBeInTheDocument();
 	});
 });
