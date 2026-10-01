@@ -179,6 +179,33 @@ function ExpenseRow({ expense, onEdited }: RowProps) {
 	);
 }
 
+type MonthSummaryProps = {
+	query: ReturnType<typeof useExpenseSummary>;
+};
+
+/** 這個月的總額與分類佔比。用 early return 取代巢狀三元——跟 `ExpenseRow`
+ *  同一個理由，分支一多，巢狀三元就比依序判斷難讀。
+ *
+ *  **本地 const 是讓窄化撐過 `.map()` callback 的關鍵**：TS 確實會窄化
+ *  `query.data` 本身，但窄化不會跟著閉包進到 callback 裡——指到同一個
+ *  本地變數就會。 */
+function MonthSummary({ query }: MonthSummaryProps) {
+	if (query.isPending) return <p>載入中…</p>;
+	const summary = query.data;
+	// 失敗不能卡在「載入中…」——那會讓使用者以為還在等，而不是知道要重試。
+	if (query.isError || summary == null) return <p>無法載入本月報表</p>;
+	return (
+		<div>
+			<p>
+				總計 <span>{formatMoney(summary.total)}</span>
+			</p>
+			{summary.by_category.map((row) => (
+				<CategoryBar key={row.category} row={row} monthTotal={summary.total} />
+			))}
+		</div>
+	);
+}
+
 /** 記帳：這個月的花費清單 + 新增。
  *
  *  **入口在 `Today.tsx`，不是第六個 tab**（規格 §6.1、§6.2 方向 1）——
@@ -194,12 +221,6 @@ export function Expenses() {
 	const expensesQuery = useExpenses(null);
 	const expenses = expensesQuery.data ?? [];
 	const summaryQuery = useExpenseSummary(null);
-	// 取成一個本地 const 而不是在 JSX 裡每次重讀 `summaryQuery.data`：
-	// `apiFetch` 的回傳型別是 `T | null`（204 時回 null，見
-	// `api/client.ts`），TS 不會把 `summaryQuery.data === null` 這種檢查
-	// 的窄化套用到物件屬性讀取上（尤其是 `.map()` callback 裡），但對一個
-	// 不會重新賦值的本地變數會。
-	const summary = summaryQuery.data;
 
 	const [amount, setAmount] = useState("");
 	const [category, setCategory] = useState<ExpenseCategory>("food");
@@ -313,31 +334,9 @@ export function Expenses() {
 			</form>
 
 			<h2>這個月花了多少</h2>
-			{summaryQuery.isPending ? (
-				<p>載入中…</p>
-			) : // `summary` 在型別上帶著 `| null | undefined`（見上面宣告處的
-			// 註解；`undefined` 是 pending/error 狀態的型別，`null` 是
-			// `apiFetch` 的回傳型別），即使這個 GET 端點實際上不會回 204。
-			// 跟 isError 併在同一個分支，而不是另外開一個「資料是 null」的
-			// 分支——那種分支在使用者眼裡沒有分別，都是「這次沒拿到報表」。
-			summaryQuery.isError || summary === null || summary === undefined ? (
-				// 跟清單的 isError 分支同一個理由：失敗不能卡在「載入中…」，
-				// 那會讓使用者以為還在等，而不是知道要重試。
-				<p>無法載入本月報表</p>
-			) : (
-				<div>
-					<p>
-						總計 <span>{formatMoney(summary.total)}</span>
-					</p>
-					{summary.by_category.map((row) => (
-						<CategoryBar
-							key={row.category}
-							row={row}
-							monthTotal={summary.total}
-						/>
-					))}
-				</div>
-			)}
+			<div data-testid="expense-summary">
+				<MonthSummary query={summaryQuery} />
+			</div>
 
 			<h2>這個月</h2>
 			{expensesQuery.isPending ? (

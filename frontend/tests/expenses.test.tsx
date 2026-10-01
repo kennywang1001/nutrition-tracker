@@ -500,6 +500,7 @@ describe("記帳 /expenses", () => {
 		const foodRow = screen.getByTestId("category-food");
 		expect(foodRow).toHaveTextContent("飲食");
 		expect(foodRow).toHaveTextContent("350.00");
+		expect(foodRow).toHaveTextContent("2 筆");
 		// 350/400 = 87.5% → 四捨五入到整數是 88%
 		expect(foodRow).toHaveTextContent("88%");
 		expect(screen.getByTestId("category-transport")).toHaveTextContent("13%");
@@ -546,8 +547,16 @@ describe("記帳 /expenses", () => {
 
 		render(wrap(<Expenses />));
 
-		expect(await screen.findByText("無法載入本月報表")).toBeInTheDocument();
-		expect(screen.queryByText("載入中…")).not.toBeInTheDocument();
+		const summarySection = screen.getByTestId("expense-summary");
+		expect(
+			await within(summarySection).findByText("無法載入本月報表"),
+		).toBeInTheDocument();
+		// 限定在報表區塊裡找——不依賴清單那個查詢是什麼狀態，否則這條
+		// 斷言其實測的是「畫面上某處沒有『載入中…』」，跟報表本身有沒有
+		// 卡住是兩件事。
+		expect(
+			within(summarySection).queryByText("載入中…"),
+		).not.toBeInTheDocument();
 	});
 
 	it("總額為 0 時不顯示佔比、也不會出現 NaN", () => {
@@ -562,7 +571,56 @@ describe("記帳 /expenses", () => {
 		);
 
 		expect(screen.getByText("飲食")).toBeInTheDocument();
+		// zh-TW 的 ICU Intl 把 NaN 印成「非數值」，/NaN/ 只有在 en-US（CI 的
+		// locale）才抓得到——真正不依賴 locale 的守門是下面的 /%/ 斷言。
 		expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
 		expect(screen.queryByText(/%/)).not.toBeInTheDocument();
+	});
+
+	it("記一筆之後總額跟著更新", async () => {
+		// 報表 GET 用閉包計數器：第一次回空月份，之後回剛剛那筆交通費——
+		// 這條測試守的是「記了一筆，總額真的變了」，光看清單 GET 被重取
+		// 幾次（expenseListGetCount）看不出總額有沒有跟著動。
+		let summaryCallCount = 0;
+		mockApi([
+			{
+				method: "GET",
+				path: "/api/expenses/summary",
+				handler: () => {
+					summaryCallCount += 1;
+					if (summaryCallCount === 1) {
+						return json({ month: "2026-12", total: "0.00", by_category: [] });
+					}
+					return json({
+						month: "2026-12",
+						total: "250.50",
+						by_category: [{ category: "transport", total: "250.50", count: 1 }],
+					});
+				},
+			},
+			{ method: "GET", path: "/api/expenses", handler: () => json([]) },
+			{
+				method: "POST",
+				path: "/api/expenses",
+				handler: () => json(TRAIN, 201),
+			},
+		]);
+
+		render(wrap(<Expenses />));
+		await screen.findByText("這個月還沒有記錄花費");
+
+		await userEvent.type(screen.getByLabelText("金額"), "250.50");
+		await userEvent.selectOptions(screen.getByLabelText("分類"), "transport");
+		await userEvent.click(screen.getByRole("button", { name: "記一筆" }));
+
+		// **不能直接 `findByText("250.50")`**：這筆交通費是這個月唯一一筆，
+		// 所以分類佔比是 100%，「總計」跟「交通」分類列剛好顯示同一個金額
+		// 字串，會撞成「Found multiple elements」。鎖定「總計」那一段文字，
+		// 才是在斷言總額本身更新了，不是隨便哪裡出現這個數字。
+		await waitFor(() =>
+			expect(
+				within(screen.getByTestId("expense-summary")).getByText(/總計/),
+			).toHaveTextContent("250.50"),
+		);
 	});
 });
