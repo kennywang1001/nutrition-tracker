@@ -16,6 +16,7 @@ import { logout } from "./auth/session";
 import { getRefreshToken } from "./auth/store";
 import { TabBar } from "./components/TabBar";
 import { AdminRevisions } from "./screens/AdminRevisions";
+import { Expenses } from "./screens/Expenses";
 import { FoodDetail } from "./screens/FoodDetail";
 import { FoodLibrary } from "./screens/FoodLibrary";
 import { Login } from "./screens/Login";
@@ -108,6 +109,10 @@ export function App() {
 								「今日補劑」區塊（計畫的說明：320px 寬度下 tab bar 每格
 								只剩 53px，加不下去）。 */}
 							<Route path="/supplements" element={<Supplements />} />
+							{/* 記帳（P5 計畫二）。刻意不加第六個 tab，入口在
+								Today.tsx——320px 寬度下 tab bar 第六格只剩 53.3px，
+								而「今日總覽」四個字約 56px（規格 §6.1、§6.2 方向 1）。 */}
+							<Route path="/expenses" element={<Expenses />} />
 							{/* 不做前端導向：非管理員直接輸入這個網址時，讓它照常渲染、
 								讓 GET /api/admin/food-revisions 打出去、讓後端的
 								require_admin 回 403（見 AdminRevisions.tsx 的說明、

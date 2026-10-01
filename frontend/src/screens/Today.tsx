@@ -159,6 +159,10 @@ export function Today() {
 
 			<MealList />
 
+			{/* 記帳的入口（P5 計畫二）。跟「新增補劑」同一個作法：
+			    不加第六個 tab（規格 §6.2 方向 1）。 */}
+			<Link to="/expenses">記帳</Link>
+
 			<h2>今日補劑</h2>
 			{/* 補劑的新增與「當天吃了就點一份進去」（P3-C Task 2）的入口。
 			    不加第六個 tab（計畫的說明：320px 寬度下 tab bar 每格只剩 53px，
