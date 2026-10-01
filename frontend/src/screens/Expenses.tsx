@@ -17,7 +17,7 @@ import { formatMoney } from "../lib/decimal";
 
 type RowProps = {
 	expense: Expense;
-	onEdited: () => void;
+	onChanged: () => void;
 };
 
 /** 一筆花費：顯示、修改、刪除。
@@ -32,7 +32,7 @@ type RowProps = {
  *  後端的 `AwareDatetime` 會回 422。真的要做時必須先轉成帶 offset 的格式
  *  （見計畫開頭「刻意避開的地雷」）。
  */
-function ExpenseRow({ expense, onEdited }: RowProps) {
+function ExpenseRow({ expense, onChanged }: RowProps) {
 	const [editing, setEditing] = useState(false);
 	const [confirmingDelete, setConfirmingDelete] = useState(false);
 	const [draftAmount, setDraftAmount] = useState(expense.amount);
@@ -50,7 +50,7 @@ function ExpenseRow({ expense, onEdited }: RowProps) {
 		onSuccess: () => {
 			setEditing(false);
 			setRowError(null);
-			onEdited();
+			onChanged();
 		},
 		onError: (caught: unknown) => {
 			if (caught instanceof ApiError && caught.code === "VALIDATION_ERROR") {
@@ -66,7 +66,7 @@ function ExpenseRow({ expense, onEdited }: RowProps) {
 			apiFetch(`/api/expenses/${expense.id}`, { method: "DELETE" }),
 		onSuccess: () => {
 			setConfirmingDelete(false);
-			onEdited();
+			onChanged();
 		},
 		onError: () => setRowError("刪除失敗，請再試一次"),
 	});
@@ -87,8 +87,10 @@ function ExpenseRow({ expense, onEdited }: RowProps) {
 			<span>{CATEGORY_LABELS[expense.category]}</span>
 			<span>{formatMoney(expense.amount)}</span>
 			{expense.note !== null && <span>{expense.note}</span>}
-			{/* meal_id 有值代表這筆是記一餐時順手填的餐費（規格 §4.1）。
-			    標示出來，使用者才知道為什麼刪掉那一餐之後這筆錢還在。 */}
+			{/* meal_id 有值＝這筆是記一餐時順手建立的餐費（規格 §4.1）。
+			    刪掉那一餐時後端是 SET NULL（app/models/expense.py）：標示會
+			    消失，但錢保留。**將來前端加刪除餐點時，要一併失效
+			    queryKeys.expensesAll**，不然快取裡還會顯示（餐費）。 */}
 			{expense.meal_id !== null && <span>（餐費）</span>}
 
 			{editing ? (
@@ -351,7 +353,7 @@ export function Expenses() {
 						<ExpenseRow
 							key={expense.id}
 							expense={expense}
-							onEdited={() =>
+							onChanged={() =>
 								void queryClient.invalidateQueries({
 									queryKey: queryKeys.expensesAll,
 								})

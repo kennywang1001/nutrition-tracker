@@ -159,3 +159,21 @@ test("登入後的 /supplements 畫面，表單控制項字級 ≥16px（P3-C Ta
 	// 碳水化合物，共八個欄位）＋搜尋補劑欄位，一次量完。
 	await expectFormControlsAtLeast16px(page, "補劑畫面");
 });
+
+test("登入後的 /expenses 畫面，表單控制項字級 ≥16px（P5 計畫二之後）", async ({
+	page,
+}) => {
+	// 跟 /supplements 那條同一個理由：記一筆的表單控制項（金額／分類／
+	// 備註）一律吃到 index.css 那條全域的 16px 規則，但只有真的走過畫面
+	// 才驗得到。
+	await login(page);
+
+	// 記帳的入口在 Today.tsx 的「今日總覽」，不是第六個 tab（規格 §6.2
+	// 方向 1，見 Expenses.tsx 開頭註解）。登入後不會直接落在今日總覽，
+	// 要先切過去才看得到「記帳」連結。
+	await page.getByRole("link", { name: "今日總覽" }).click();
+	await page.getByRole("link", { name: "記帳" }).click();
+	await expect(page.getByRole("heading", { name: "記帳" })).toBeVisible();
+	// 金額、分類 select、備註，共三個欄位。
+	await expectFormControlsAtLeast16px(page, "記帳畫面");
+});
