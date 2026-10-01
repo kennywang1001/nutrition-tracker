@@ -84,6 +84,31 @@ export const queryKeys = {
 		["food-search", q, scope] as const,
 	/** 待審提案清單（管理員）。 */
 	pendingRevisions: ["admin", "food-revisions"] as const,
+	/** 某個月的花費清單。`month` 是 `"YYYY-MM"`，或 `null` 代表
+	 *  「讓後端決定這個月」（後端省略 `?month=` 時走
+	 *  `this_month_in_timezone(user.timezone)`）——跟 `dailyStats` 不帶日期
+	 *  是同一條規矩：**前端不該自己算現在是哪個月**。
+	 *
+	 *  `null` 要出現在 key 裡（而不是省略），否則「這個月」與某個明確月份
+	 *  會撞成同一個 key。 */
+	expenses: (month: string | null) => ["expenses", "list", month] as const,
+	/** 某個月的報表。**刻意掛在 `["expenses"]` 底下。**
+	 *
+	 *  這跟 `mealPhoto` 的決定正好相反，而且理由是對稱的：照片不該被
+	 *  「記一餐」連帶失效（照片沒變、而且每張 500KB），但**報表一定要被
+	 *  「記一筆花費」連帶失效**——錢變了，清單跟總額必須一起重取。
+	 *
+	 *  所以新增／修改／刪除之後只要
+	 *  `invalidateQueries({ queryKey: expensesAll })`，前綴比對會同時打到
+	 *  清單與報表，那正是要的行為。 */
+	expenseSummary: (month: string | null) =>
+		["expenses", "summary", month] as const,
+	/** 「所有月份的花費與報表」這個前綴，給 `invalidateQueries` 用。
+	 *
+	 *  寫成具名 key 而不是在呼叫端手打 `["expenses"]`，理由跟這個檔案頂端
+	 *  說的一樣：兩邊各拼一次字串，某天其中一邊改了，失效就靜默失靈——
+	 *  而症狀是「記了一筆花費，總額沒變」。 */
+	expensesAll: ["expenses"] as const,
 	/** 單一餐的照片 blob（`useMealPhoto`，計畫三 Task 2）。跟 `portions` 一樣
 	 *  放這裡是為了「query key 只有一個事實來源」，不是因為現在就需要跨畫面
 	 *  失效——但上傳照片（Task 3）之後會需要讓這個 key 失效，先放在這裡

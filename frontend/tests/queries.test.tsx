@@ -22,3 +22,31 @@ describe("query key", () => {
 		);
 	});
 });
+
+describe("花費的 query key", () => {
+	it("expensesAll 是清單與報表兩者的前綴", () => {
+		// 這條守的是「記一筆花費之後，清單跟總額要一起重取」。
+		// TanStack Query 的 invalidateQueries 是前綴比對，所以兩個 key
+		// 都必須以 expensesAll 開頭——否則失效會靜默漏掉其中一個，
+		// 症狀是「記了一筆，總額沒變」。
+		const prefix = queryKeys.expensesAll;
+		expect(queryKeys.expenses(null).slice(0, prefix.length)).toEqual([
+			...prefix,
+		]);
+		expect(queryKeys.expenseSummary(null).slice(0, prefix.length)).toEqual([
+			...prefix,
+		]);
+	});
+
+	it("清單與報表是不同的 key——不會互相覆蓋", () => {
+		expect(queryKeys.expenses("2026-12")).not.toEqual(
+			queryKeys.expenseSummary("2026-12"),
+		);
+	});
+
+	it("null（這個月）與明確月份是不同的 key", () => {
+		// null 必須出現在 key 裡。省略的話「這個月」跟某個明確月份會撞成
+		// 同一份快取，而使用者會看到錯的月份資料。
+		expect(queryKeys.expenses(null)).not.toEqual(queryKeys.expenses("2026-12"));
+	});
+});
