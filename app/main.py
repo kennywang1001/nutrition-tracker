@@ -4,6 +4,7 @@ from app.api.routes import (
     admin_foods,
     ai,
     auth,
+    expenses,
     foods,
     health,
     me,
@@ -30,3 +31,4 @@ app.include_router(supplement_intakes.router, prefix="/api")
 app.include_router(targets.router, prefix="/api")
 app.include_router(stats.router, prefix="/api")
 app.include_router(ai.router, prefix="/api")
+app.include_router(expenses.router, prefix="/api")

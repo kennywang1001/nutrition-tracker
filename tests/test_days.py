@@ -2,7 +2,8 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
-from app.days import day_bounds
+from app import days
+from app.days import day_bounds, month_bounds
 
 
 def test_taipei_day_starts_at_16_00_utc_the_day_before():
@@ -61,3 +62,59 @@ def test_the_timezone_database_is_actually_available():
     assert importlib.util.find_spec("tzdata") is not None, (
         "缺少 tzdata 套件；Windows 沒有系統時區資料庫，見計畫的「執行前提」"
     )
+
+
+def test_month_bounds_taipei_september():
+    """台北 9 月 1 日 00:00 = UTC 8 月 31 日 16:00（UTC+8）。
+
+    這條測試守的是「月初不是 UTC 月初」。如果 month_bounds 忘了帶時區、
+    直接用 datetime(year, month, 1)，start 會是 2026-09-01T00:00+00:00，
+    這條就會紅。
+    """
+    start, end = month_bounds(2026, 9, "Asia/Taipei")
+
+    assert start == datetime(2026, 8, 31, 16, 0, tzinfo=UTC)
+    assert end == datetime(2026, 9, 30, 16, 0, tzinfo=UTC)
+
+
+def test_month_bounds_december_rolls_over_to_next_year():
+    """12 月的下個月是**隔年**1 月。
+
+    `month + 1` 在 12 月會變成 13，datetime(2026, 13, 1) 直接拋 ValueError。
+    這是這個函式唯一會寫錯的一行，而且**一年只有一個月會錯**——
+    所以這條測試必須寫死 12 月，不能用 today()。
+    """
+    start, end = month_bounds(2026, 12, "Asia/Taipei")
+
+    assert start == datetime(2026, 11, 30, 16, 0, tzinfo=UTC)
+    assert end == datetime(2026, 12, 31, 16, 0, tzinfo=UTC)
+
+
+def test_month_bounds_is_half_open():
+    """[start, end)：end 是下個月的第一刻，不是這個月的最後一刻。
+
+    如果寫成 23:59:59，恰好落在那一秒的支出會從兩個月份都消失。
+    """
+    _, september_end = month_bounds(2026, 9, "Asia/Taipei")
+    october_start, _ = month_bounds(2026, 10, "Asia/Taipei")
+
+    assert september_end == october_start
+
+
+def test_month_bounds_utc_user():
+    start, end = month_bounds(2026, 2, "UTC")
+
+    assert start == datetime(2026, 2, 1, 0, 0, tzinfo=UTC)
+    assert end == datetime(2026, 3, 1, 0, 0, tzinfo=UTC)
+
+
+def test_this_month_in_timezone_matches_today(monkeypatch):
+    """用 today_in_timezone 當接縫替換，不依賴真實時鐘。
+
+    `datetime.datetime` 是不可變的 C 型別，測試沒辦法 monkeypatch 它的 now()
+    ——這正是 today_in_timezone 當初被抽成獨立函式的原因（見它的 docstring）。
+    this_month_in_timezone 必須建立在它之上，才繼承得到這個接縫。
+    """
+    monkeypatch.setattr(days, "today_in_timezone", lambda tz_name: date(2026, 12, 31))
+
+    assert days.this_month_in_timezone("Asia/Taipei") == (2026, 12)

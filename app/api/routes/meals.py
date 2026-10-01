@@ -19,6 +19,7 @@ from app.errors import (
     UnprocessableEntityError,
 )
 from app.food_visibility import load_visible_food, load_visible_portion
+from app.models.expense import Expense, ExpenseCategory
 from app.models.food import Food, FoodRevision
 from app.models.meal import Meal, MealItem
 from app.models.user import User
@@ -159,6 +160,27 @@ async def create_meal(
     )
     db.add(meal)
     await db.flush()
+
+    # 餐費：跟餐點在**同一個交易**裡（P5 規格 §4.1）。
+    #
+    # 這裡不需要 try/except + rollback——下面只有一次 db.commit()，
+    # 兩次 add() 之間沒有任何提交點，所以「餐點成功但支出失敗」在結構上
+    # 不可能發生。這跟上面 _resolve_item 的原子性是同一個道理：
+    # 靠結構，不靠錯誤處理。
+    #
+    # spent_at 用 payload.eaten_at 不是「現在」：跨月補記一餐時，
+    # 那筆錢屬於吃那一餐的月份，不是補記的月份。
+    if payload.cost is not None:
+        db.add(
+            Expense(
+                user_id=user.id,
+                meal_id=meal.id,
+                category=ExpenseCategory.FOOD,
+                amount=payload.cost,
+                spent_at=payload.eaten_at,
+                note=None,
+            )
+        )
 
     item_rows: list[MealItem] = []
     for resolved in resolved_items:

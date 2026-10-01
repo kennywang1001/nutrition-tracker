@@ -221,7 +221,7 @@ userland proxy 對發佈的埠做 SNAT）。按 IP 限速會把 tailnet 上所�
 
 ---
 
-## 6. 這個專案最有價值的產出：二十九種「綠燈說謊」
+## 6. 這個專案最有價值的產出：三十四種「綠燈說謊」
 
 **每一種的機制都不同，而且都是實測踩到的，不是理論。**
 新加的任何測試都應該對照這份清單檢查一次。
@@ -538,6 +538,66 @@ op.drop_constraint("source_valid", ...)                      # ✅
 > **第 7 條是最貴的一課。** 「零鑑別力區間」這條規則是我自己寫下來的，
 > 又在下一個計畫的說明裡重述了一次 —— 然後還是踩了。
 > **知道一條規則，跟在具體情境裡認出它適用，是兩種不同的能力。**
+
+### 第 30～34 種是 P5（記帳模組）長出來的
+
+**第 30 種：`expire_on_commit=False` 讓 identity map 蓋住資料庫層的變化，
+而且兩個方向都會說謊。** 測試 session 設了 `expire_on_commit=False`
+（`tests/conftest.py`），所以 `select()` 命中 identity map 時**不會**用
+資料庫的新值覆蓋已載入的屬性。`ON DELETE SET NULL` 把欄位改成 NULL 之後，
+Python 物件仍是舊值：
+
+- **假紅**：實作完全正確，測試卻失敗（P5 Task 2 實際遇到，浪費一輪除錯）
+- **假綠**：斷言「某欄位沒變」時會被舊值騙過
+
+斷言資料庫層副作用之前一定要 `await db_session.refresh(obj)`。
+這個 codebase 在 `tests/test_supplement_plans.py` 早就寫過同一條教訓。
+
+**第 31 種：未處理的例外不會變成「500 的 response」，所以
+`assert response.status_code != 500` 這種斷言永遠跑不到。** httpx 的
+`ASGITransport` 預設 `raise_app_exceptions=True`，而 Starlette 的
+`ServerErrorMiddleware` 送出 500 之後**一定會重新 raise** 原始例外。
+測試看到的是 `ValueError` 直接從 `client.get()` 冒出來，不是一個
+`status_code == 500` 的物件。要守「這個輸入不會 500」，只能正面斷言
+它回 422，並用突變證明那條斷言有咬合力。
+
+**第 32 種：只斷言 404 的測試，在端點根本不存在時也是綠的。**
+P5 Task 4 實測：計畫預測「8 條測試在實作前都會紅」，實際只紅 5 條——
+另外 3 條斷言跨使用者存取回 404，而**路徑不匹配任何路由時 Starlette
+也回 404**。那 3 條分不出「擁有權檢查擋下了你」與「這個路由沒被註冊」，
+有人整個刪掉端點它們照樣綠。
+
+修法：連 `error.code` 一起斷言。我們的 `NotFoundError` 是 `"NOT_FOUND"`，
+路由不存在走 `handle_http_exception` 是 `"HTTP_ERROR"`。補上之後實測
+突變（把路由路徑改成不匹配），三條全部由綠轉紅。
+
+**第 33 種：`extra="ignore"` 提供的安全，沒有任何測試釘得住。**
+規格說 `PATCH /api/expenses/{id}` 不能改 `meal_id`（搬到別人的餐點是個
+攻擊面）。執行期確實安全——`meal_id` 不是那個 model 的欄位，Pydantic
+預設 `extra="ignore"` 直接丟掉它。
+
+**但那是「碰巧沒開洞」，不是「有東西擋著」。** 只要有人順手把
+`meal_id: int | None = None` 加進去，洞就開了，而 595 條測試沒有一條會紅。
+**結構性的安全一樣需要一根釘子。**
+
+**第 34 種：100% 覆蓋率擋不住「所有測試都送同一種輸入」。**
+P5 的 `spent_at` 宣告成 `datetime`，Pydantic 對沒有 offset 的 ISO 字串
+一律放行成 naive，而 asyncpg 存進 `timestamptz` 時走 `dt.astimezone()`，
+對 naive 值**假設執行程序的本機時區**。同一個輸入
+`"2026-11-30T23:30:00"`：
+
+- 開發機（Asia/Taipei）→ `2026-11-30T15:30Z` → 月報表算 11 月 ✅
+- 容器（compose 與 Dockerfile 都沒設 `TZ`，等於 UTC）→ `23:30Z` → 算 12 月 ❌
+
+`app/api/routes/expenses.py`、`app/days.py`、`app/models/expense.py`
+三個檔案都是 **100% 覆蓋率**，595 條測試全綠——因為**每一條測試都送
+帶 offset 的字串**。覆蓋率量的是「哪幾行被執行過」，不是「哪幾種輸入被試過」。
+
+而 `<input type="datetime-local">` 產出的正好就是沒有 offset 的格式。
+
+**這一種最危險的地方在於它只在 production 錯**：台北使用者在每個月最後
+一天 16:00 之後記的每一筆都會跑到下個月，而開發機上永遠重現不出來。
+修法是 `AwareDatetime`（naive 一律 422），而且那條測試必須自己被突變驗證過。
 
 ---
 

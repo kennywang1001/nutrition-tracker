@@ -814,6 +814,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/expenses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Expenses
+         * @description 這個月的花費，由新到舊。
+         *
+         *     **沒有 offset。** `limit` 是一個上限，不是分頁——跟 `foods.py` 的
+         *     `limit` 是同一種東西。一個月的個人支出撞到 500 筆的機率極低，
+         *     真的撞到了再說（規格 §5.1）。
+         *
+         *     **已知落差（最終審查指出）**：這個端點會截斷，而
+         *     `GET /api/expenses/summary` 算的是整個月，兩者在超過 `limit` 筆的
+         *     月份會對不起來——而且回應裡**沒有任何欄位告訴呼叫端被截斷了**。
+         *     前端畫面會是「清單 N 筆 + 一個對不上的總額」，看起來像後端算錯。
+         *     真的有人撞到 500 筆時，要嘛回應帶一個 count、要嘛才做分頁；
+         *     在那之前這是一個刻意接受、但必須寫下來的落差。
+         */
+        get: operations["list_expenses_api_expenses_get"];
+        put?: never;
+        /**
+         * Create Expense
+         * @description 手動記一筆花費。
+         *
+         *     `user_id` 從 token 取，**不從 body 取**（P1 既有規則）——
+         *     body 裡根本沒有這個欄位，所以「忘記檢查」這件事在結構上不可能發生。
+         *
+         *     `meal_id` 一律是 NULL：從記一餐建出來的支出走 `POST /api/meals`
+         *     的 `cost` 欄位（Task 6），不走這裡。
+         */
+        post: operations["create_expense_api_expenses_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/expenses/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Summary
+         * @description 這個月花了多少、花在哪——這個模組存在的唯一理由(規格 §1.1)。
+         *
+         *     一次 GROUP BY 查詢。`total` 在 Python 端把各分類加起來,不再發第二次
+         *     查詢——`Decimal` 相加是精確的,不會有浮點誤差。
+         *
+         *     **`total` 由後端算,不是前端加總。** 前端加總會在將來加上篩選或分頁時
+         *     安靜地算錯(規格 §5.2)。
+         *
+         *     月界線走 `_resolve_month()`,跟 `list_expenses` 同一份實作。
+         */
+        get: operations["get_summary_api_expenses_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/expenses/{expense_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Expense
+         * @description 硬刪。這張表沒有稽核需求，而且錯記一筆要能乾淨刪掉（規格 §5.1）。
+         */
+        delete: operations["delete_expense_api_expenses__expense_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Expense
+         * @description 改一筆花費。**`meal_id` 不在可改欄位裡**（規格 §5.1）。
+         *
+         *     `exclude_unset=True` 是哨兵寫法的關鍵：沒帶的欄位不會出現在 dict 裡。
+         *     少了它，`{"amount": "150"}` 這種請求會把 category 與 spent_at 一起
+         *     設成 None，撞上 NOT NULL。
+         *
+         *     「帶了顯式 null」由 `ExpenseUpdateRequest` 的 `model_validator` 擋掉，
+         *     **不在這裡擋**——跟 `MealUpdateRequest` / `UpdateMeRequest` 同一套。
+         *     早期版本在這裡丟 `UnprocessableEntityError("FIELD_NOT_NULLABLE")`，
+         *     那是全專案獨一無二的錯誤形狀，前端得為這一個端點寫第二套處理。
+         */
+        patch: operations["update_expense_api_expenses__expense_id__patch"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -901,6 +1003,14 @@ export interface components {
             food: components["schemas"]["MacrosResponse"];
             supplement: components["schemas"]["MacrosResponse"];
         };
+        /** CategoryTotal */
+        CategoryTotal: {
+            category: components["schemas"]["ExpenseCategory"];
+            /** Total */
+            total: string;
+            /** Count */
+            count: number;
+        };
         /**
          * ConsistencyResult
          * @description `app.ai.consistency.Consistency`（frozen dataclass）的 API 形狀。
@@ -955,6 +1065,87 @@ export interface components {
             actual: components["schemas"]["MacrosResponse"];
             target: components["schemas"]["NullableMacrosResponse"] | null;
             ratio: components["schemas"]["NullableMacrosResponse"] | null;
+        };
+        /**
+         * ExpenseCategory
+         * @description 寫死的分類清單（規格 §3.2）。
+         *
+         *     **不做成使用者自訂是刻意的。** 這個專案已經連續兩次踩到同一個坑：
+         *     食物與補劑都是「後端蓋好了，但前端沒有任何地方可以新增」。分類如果
+         *     做成使用者自訂，那會是第三次——而且更糟，因為「沒有分類可選」會讓
+         *     記帳從第一天就不能用。
+         *
+         *     **這份清單是猜的，一定會錯**（規格 §3.4）。改它是一行 enum + 一個
+         *     只改 CheckConstraint 的 migration，既有資料不動。
+         * @enum {string}
+         */
+        ExpenseCategory: "food" | "transport" | "daily" | "entertainment" | "medical" | "housing" | "other";
+        /** ExpenseCreateRequest */
+        ExpenseCreateRequest: {
+            /** Amount */
+            amount: number | string;
+            category: components["schemas"]["ExpenseCategory"];
+            /**
+             * Spent At
+             * Format: date-time
+             */
+            spent_at: string;
+            /** Note */
+            note?: string | null;
+        };
+        /** ExpenseResponse */
+        ExpenseResponse: {
+            /** Id */
+            id: number;
+            /** Amount */
+            amount: string;
+            category: components["schemas"]["ExpenseCategory"];
+            /**
+             * Spent At
+             * Format: date-time
+             */
+            spent_at: string;
+            /** Note */
+            note: string | null;
+            /** Meal Id */
+            meal_id: number | null;
+        };
+        /** ExpenseSummaryResponse */
+        ExpenseSummaryResponse: {
+            /** Month */
+            month: string;
+            /** Total */
+            total: string;
+            /** By Category */
+            by_category: components["schemas"]["CategoryTotal"][];
+        };
+        /**
+         * ExpenseUpdateRequest
+         * @description `PATCH /api/expenses/{id}`。
+         *
+         *     跟 `MealUpdateRequest` 同一種哨兵寫法：每個欄位都是 `X | None = None`，
+         *     `None` 代表「這次請求沒帶這個欄位」，路由用 `model_dump(exclude_unset=True)`
+         *     決定要更新哪些。
+         *
+         *     `amount` / `category` / `spent_at` 是 NOT NULL，顯式 `null` 必須擋在這裡——
+         *     否則會一路流到 `setattr`，撞上 `asyncpg.NotNullViolationError` 變成
+         *     已認證使用者就能觸發的 500（`UpdateMeRequest` 踩過的同一個坑）。
+         *     `note` 是 nullable，`{"note": null}` 是合法輸入、必須放行到底。
+         *
+         *     **`meal_id` 不可改**：把一筆支出從一餐搬到另一餐沒有實際用途，
+         *     而且是個好用的攻擊面（改成別人的 meal_id）——規格 §5.1。
+         *     它不是這個 model 的欄位，Pydantic 預設 `extra="ignore"` 會直接丟掉，
+         *     所以「不可改」是結構性的，不是靠檢查——但那件事需要一條測試釘住
+         *     （`tests/test_expenses_crud.py`），否則有人把它加進來也沒人會發現。
+         */
+        ExpenseUpdateRequest: {
+            /** Amount */
+            amount?: number | string | null;
+            category?: components["schemas"]["ExpenseCategory"] | null;
+            /** Spent At */
+            spent_at?: string | null;
+            /** Note */
+            note?: string | null;
         };
         /** FoodCreateRequest */
         FoodCreateRequest: {
@@ -1052,6 +1243,8 @@ export interface components {
             note?: string | null;
             /** Items */
             items?: components["schemas"]["MealItemCreateRequest"][];
+            /** Cost */
+            cost?: number | string | null;
         };
         /** MealItemCreateRequest */
         MealItemCreateRequest: {
@@ -3083,6 +3276,166 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AnalyzeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_expenses_api_expenses_get: {
+        parameters: {
+            query?: {
+                month?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExpenseResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_expense_api_expenses_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpenseCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExpenseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_summary_api_expenses_summary_get: {
+        parameters: {
+            query?: {
+                month?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExpenseSummaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_expense_api_expenses__expense_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                expense_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_expense_api_expenses__expense_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                expense_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpenseUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExpenseResponse"];
                 };
             };
             /** @description Validation Error */

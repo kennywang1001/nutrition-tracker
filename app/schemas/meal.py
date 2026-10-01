@@ -1,9 +1,20 @@
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from app.models.meal import MealType
+
+# `eaten_at` 一律要帶時區偏移，naive 的一律 422。
+#
+# P5 之前這個欄位只決定「這一餐算哪一天」；加了 `cost` 之後它同時決定
+# **那筆錢算哪個月**，所以它繼承了 `expenses.spent_at` 的同一個風險
+# （見 `app/schemas/expense.py` 檔頭）：naive datetime 會被 asyncpg
+# 用執行程序的本機時區解釋，而開發機是 Asia/Taipei、容器沒設 TZ 等於 UTC。
+#
+# 收緊它不會影響現有前端：`frontend/src/screens/LogMeal.tsx` 送的是
+# `new Date().toISOString()`，永遠帶 `Z`。
+AwareInstant = AwareDatetime
 
 # PostgreSQL 的 BIGINT 上限，同 app/api/params.py 的 ResourceId ——
 # 但這裡是 request body 的欄位，不是路徑參數，ResourceId（Annotated[int, Path(...)]）
@@ -20,11 +31,21 @@ class MealItemCreateRequest(BaseModel):
 
 
 class MealCreateRequest(BaseModel):
-    eaten_at: datetime
+    eaten_at: AwareInstant
     meal_type: MealType
     note: str | None = Field(default=None, max_length=500)
     # 允許空清單是刻意的：P2 的流程是先拍照、之後才落項目（見計畫本文）。
     items: list[MealItemCreateRequest] = Field(default_factory=list)
+    # 選填的餐費（P5 規格 §4.1）。有值時，POST /api/meals 會在**同一個交易裡**
+    # 建一筆 category=food、meal_id 指過來的支出。
+    #
+    # **不做成兩次 API 呼叫**：那有一個半成功狀態——餐點記起來了、支出沒有，
+    # 而使用者完全不會知道。在手機上、網路不穩的情況下這不是理論風險。
+    #
+    # gt=0 / max_digits / decimal_places 對齊 expenses.amount 的
+    # numeric(10,2) 與 ck_expenses_amount_positive。不對齊的話，
+    # 超出範圍的值會走到 asyncpg 變成 500 而不是 422。
+    cost: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=2)
 
 
 class MealUpdateRequest(BaseModel):
@@ -42,7 +63,7 @@ class MealUpdateRequest(BaseModel):
     `note` 是 nullable，`{"note": null}` 是合法輸入、必須放行到底。
     """
 
-    eaten_at: datetime | None = None
+    eaten_at: AwareInstant | None = None
     meal_type: MealType | None = None
     note: str | None = Field(default=None, max_length=500)
 
@@ -80,6 +101,8 @@ class MealItemResponse(BaseModel):
 
 class MealResponse(BaseModel):
     id: int
+    # 回應刻意維持 `datetime`：這個 bug 是**輸入**的問題，而回應的值來自
+    # timestamptz 欄位，本來就一定帶時區。收緊它只會擴大這次改動的範圍。
     eaten_at: datetime
     meal_type: MealType
     note: str | None
