@@ -278,6 +278,12 @@ describe("記帳 /expenses", () => {
 		// 也不送 meal_id：後端的 ExpenseUpdateRequest 根本沒有這個欄位
 		// （extra="ignore" 會丟掉它），但前端也不該送。
 		expect(sent).not.toHaveProperty("meal_id");
+
+		// 修改成功要讓清單重取，不然畫面上還是改之前的金額——掛載時打過
+		// 一次 GET /api/expenses，成功後 invalidateQueries 應該再觸發至少一次。
+		await waitFor(() =>
+			expect(expenseListGetCount(fetchMock)).toBeGreaterThanOrEqual(2),
+		);
 	});
 
 	it("修改金額留空時不送請求", async () => {
@@ -301,6 +307,50 @@ describe("記帳 /expenses", () => {
 		expect(await screen.findByRole("alert")).toHaveTextContent("請輸入金額");
 		// 沒有送出 PATCH——驗證擋在前端，不是靠後端回 422
 		expect(methodsOf(fetchMock)).not.toContain("PATCH");
+	});
+
+	it("修改金額格式被後端拒絕時顯示具體訊息", async () => {
+		// 錯誤信封形狀跟「清單讀取失敗」那條測試一樣：
+		// { error: { code, message, details } }。
+		const fetchMock = mockApi([
+			{
+				method: "GET",
+				path: "/api/expenses/summary",
+				handler: () => json(EMPTY_SUMMARY),
+			},
+			{ method: "GET", path: "/api/expenses", handler: () => json([TRAIN]) },
+			{
+				method: "PATCH",
+				path: "/api/expenses/2",
+				handler: () =>
+					json(
+						{
+							error: {
+								code: "VALIDATION_ERROR",
+								message: "amount must be greater than 0",
+								details: {},
+							},
+						},
+						422,
+					),
+			},
+		]);
+
+		render(wrap(<Expenses />));
+		await screen.findByText("250.50");
+
+		await userEvent.click(screen.getByRole("button", { name: "修改" }));
+		const amountInput = screen.getByLabelText("修改金額");
+		await userEvent.clear(amountInput);
+		await userEvent.type(amountInput, "0");
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		// 跟新增表單用同一句——都是同一個後端驗證規則，使用者不該在
+		// 兩個表單看到兩種說法。
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"金額格式不對，請輸入大於 0、最多兩位小數的數字",
+		);
+		expect(methodsOf(fetchMock)).toContain("PATCH");
 	});
 
 	it("刪除要先確認", async () => {
@@ -345,7 +395,62 @@ describe("記帳 /expenses", () => {
 		await userEvent.click(screen.getByRole("button", { name: "刪除" }));
 		await userEvent.click(screen.getByRole("button", { name: "確定刪除" }));
 
-		await waitFor(() => expect(methodsOf(fetchMock)).toContain("DELETE"));
+		// 不只「送過某個 DELETE」，要送到**這一筆**的 URL——否則刪錯列
+		// 也會讓這條測試變綠。
+		await waitFor(() => {
+			const deletedUrls = fetchMock.mock.calls
+				.filter(
+					([, init]) => (init?.method ?? "GET").toUpperCase() === "DELETE",
+				)
+				.map(([input]) => String(input));
+			expect(deletedUrls.some((url) => url.includes("/api/expenses/2"))).toBe(
+				true,
+			);
+		});
+
+		// 刪除成功要讓清單重取，不然畫面上還留著已經刪掉的那一筆——掛載時
+		// 打過一次 GET /api/expenses，成功後 invalidateQueries 應該再觸發
+		// 至少一次。
+		await waitFor(() =>
+			expect(expenseListGetCount(fetchMock)).toBeGreaterThanOrEqual(2),
+		);
+	});
+
+	it("刪除失敗時講清楚", async () => {
+		const fetchMock = mockApi([
+			{
+				method: "GET",
+				path: "/api/expenses/summary",
+				handler: () => json(EMPTY_SUMMARY),
+			},
+			{ method: "GET", path: "/api/expenses", handler: () => json([TRAIN]) },
+			{
+				method: "DELETE",
+				path: "/api/expenses/2",
+				handler: () =>
+					json(
+						{
+							error: {
+								code: "INTERNAL_ERROR",
+								message: "伺服器錯誤",
+								details: {},
+							},
+						},
+						500,
+					),
+			},
+		]);
+
+		render(wrap(<Expenses />));
+		await screen.findByText("250.50");
+
+		await userEvent.click(screen.getByRole("button", { name: "刪除" }));
+		await userEvent.click(screen.getByRole("button", { name: "確定刪除" }));
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"刪除失敗，請再試一次",
+		);
+		expect(methodsOf(fetchMock)).toContain("DELETE");
 	});
 
 	it("取消確認就不刪", async () => {

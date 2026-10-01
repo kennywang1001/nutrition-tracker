@@ -12,6 +12,10 @@ import {
 import { queryKeys } from "../api/queries";
 import { formatMoney } from "../lib/decimal";
 
+/** 金額格式錯誤的訊息。新增與修改共用同一句——都是同一個後端驗證規則
+ *  （amount 必須大於 0、最多兩位小數），使用者不該在兩個表單看到兩種說法。 */
+const AMOUNT_FORMAT_ERROR = "金額格式不對，請輸入大於 0、最多兩位小數的數字";
+
 type RowProps = {
 	expense: Expense;
 	onEdited: () => void;
@@ -49,7 +53,13 @@ function ExpenseRow({ expense, onEdited }: RowProps) {
 			setRowError(null);
 			onEdited();
 		},
-		onError: () => setRowError("修改失敗，請再試一次"),
+		onError: (caught: unknown) => {
+			if (caught instanceof ApiError && caught.code === "VALIDATION_ERROR") {
+				setRowError(AMOUNT_FORMAT_ERROR);
+				return;
+			}
+			setRowError("修改失敗，請再試一次");
+		},
 	});
 
 	const remove = useMutation({
@@ -102,9 +112,6 @@ function ExpenseRow({ expense, onEdited }: RowProps) {
 						type="button"
 						onClick={() => {
 							setEditing(false);
-							// 放棄要把草稿重設回目前的金額，不然下次打開編輯器
-							// 看到的會是上次放棄時留下的殘值。
-							setDraftAmount(expense.amount);
 							setRowError(null);
 						}}
 					>
@@ -112,7 +119,18 @@ function ExpenseRow({ expense, onEdited }: RowProps) {
 					</button>
 				</form>
 			) : (
-				<button type="button" onClick={() => setEditing(true)}>
+				<button
+					type="button"
+					onClick={() => {
+						// 草稿在**打開編輯器的當下**重新載入，不是只在放棄時重設：
+						// 如果清單在背景重取過（例如另一個分頁改了這筆），上次
+						// 打開編輯器時讀到的 expense.amount 可能已經過期，這裡
+						// 保證每次打開看到的都是目前畫面上顯示的金額。
+						setDraftAmount(expense.amount);
+						setRowError(null);
+						setEditing(true);
+					}}
+				>
 					修改
 				</button>
 			)}
@@ -125,16 +143,31 @@ function ExpenseRow({ expense, onEdited }: RowProps) {
 					<button
 						type="button"
 						disabled={remove.isPending}
-						onClick={() => remove.mutate()}
+						onClick={() => {
+							setRowError(null);
+							remove.mutate();
+						}}
 					>
 						確定刪除
 					</button>
-					<button type="button" onClick={() => setConfirmingDelete(false)}>
+					<button
+						type="button"
+						onClick={() => {
+							setConfirmingDelete(false);
+							setRowError(null);
+						}}
+					>
 						取消
 					</button>
 				</div>
 			) : (
-				<button type="button" onClick={() => setConfirmingDelete(true)}>
+				<button
+					type="button"
+					onClick={() => {
+						setConfirmingDelete(true);
+						setRowError(null);
+					}}
+				>
 					刪除
 				</button>
 			)}
@@ -191,7 +224,7 @@ export function Expenses() {
 		},
 		onError: (caught: unknown) => {
 			if (caught instanceof ApiError && caught.code === "VALIDATION_ERROR") {
-				setError("金額格式不對，請輸入大於 0、最多兩位小數的數字");
+				setError(AMOUNT_FORMAT_ERROR);
 				return;
 			}
 			setError("記帳失敗，請再試一次");
