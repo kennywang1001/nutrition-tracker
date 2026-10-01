@@ -221,7 +221,7 @@ userland proxy 對發佈的埠做 SNAT）。按 IP 限速會把 tailnet 上所�
 
 ---
 
-## 6. 這個專案最有價值的產出：三十四種「綠燈說謊」
+## 6. 這個專案最有價值的產出：三十九種「綠燈說謊」
 
 **每一種的機制都不同，而且都是實測踩到的，不是理論。**
 新加的任何測試都應該對照這份清單檢查一次。
@@ -598,6 +598,62 @@ P5 的 `spent_at` 宣告成 `datetime`，Pydantic 對沒有 offset 的 ISO 字�
 **這一種最危險的地方在於它只在 production 錯**：台北使用者在每個月最後
 一天 16:00 之後記的每一筆都會跑到下個月，而開發機上永遠重現不出來。
 修法是 `AwareDatetime`（naive 一律 422），而且那條測試必須自己被突變驗證過。
+
+### 第 35～39 種是 P5 計畫二（記帳前端）長出來的
+
+**第 35 種：測 `NaN` 的正規表示式在 zh-TW 環境永遠不會紅。** Intl 在
+zh-TW 的 ICU 下把 `NaN` 格式化成「非數值」，`screen.queryByText(/NaN/)`
+在本機（zh-TW）根本找不到東西，斷言「找不到」永遠成立——不是因為
+程式沒印出 `NaN`，而是因為這個 locale 不會印出英文的 "NaN" 四個字母。
+CI 跑在 en-US，/NaN/ 在那裡抓得到，本機抓不到：**同一條斷言在兩個
+環境的鑑別力不一樣**，本機綠燈不代表這條守門真的在守。真正不依賴
+locale 的是旁邊那條 `queryByText(/%/)`——總額為 0 時佔比不顯示，連
+百分比符號都不該出現，這個斷言在任何 locale 下都抓得到同一件事
+（`frontend/tests/expenses.test.tsx`，commit 9e4396b 寫下、4b7cbdc
+補上這條說明的註解）。
+
+**第 36 種：計畫寫的「除以零」測試根本沒有走到除法。** 計畫原本的版本
+是餵一個總額 0 的月份（`by_category: []`）進 `MonthSummary`，但月總額
+0 時 `by_category` 本來就是空陣列——`CategoryBar` 一列都不會渲染，
+`ratioOf()` 根本沒被呼叫，不管除法怎麼算（哪怕直接 `Number(a) / Number(b)`
+不做零檢查）測試都是綠的。改成不經畫面、不經 `QueryClient`，直接渲染
+`<CategoryBar row={{ total: "0.00", ... }} monthTotal="0.00" />`，
+才真的讓除法跑到。而且後端 `amount` 有 `CheckConstraint("amount > 0")`
+（`app/models/expense.py`），真實資料不可能出現總額 0 的分類列——這個
+防線守的是元件自己的契約（傳進一個理論上不會發生的輸入時不能炸），
+不是在守現有資料會不會踩到它。
+
+**第 37 種：拿掉 `isError` 分支，錯誤狀態的測試照樣綠。**
+`MonthSummary` 的判斷式是 `query.isError || summary == null`
+（`frontend/src/screens/Expenses.tsx`）。TanStack Query 在查詢失敗時
+`data` 是 `undefined`，所以單靠 `summary == null` 就已經接住了錯誤
+狀態——把 `query.isError ||` 整段拿掉，「報表讀取失敗時顯示『無法載入
+本月報表』」那條測試不會變紅。**這不代表那條測試沒用**：它守的是
+使用者看得到的行為（失敗時不能卡在「載入中…」），不是 `isError` 這個
+子句本身。突變測試綠燈時要先分清楚它在守哪一層，再判斷是「測試沒用」
+還是「這段程式碼本來就有安全冗餘」。
+
+**第 38 種：裸的 `getByText` 在「有表單又有清單」的畫面上預設就該懷疑。**
+計畫寫的測試 `screen.getByText("飲食")` 在 `/expenses` 畫面會撞到同一
+畫面上新增表單的 `<option>飲食</option>`，兩個都符合，Testing Library
+丟 `Found multiple elements`——要改成 `within(screen.getByTestId(...))`
+限定範圍才能過。同一類錯誤後來又在執行者自己補的「記一筆之後總額跟著
+更新」測試裡重演一次：月份裡只有一筆交通費時，分類佔比是 100%，
+「總計」那一段跟「交通」分類列剛好顯示同一個金額字串 `"250.50"`，
+裸的 `findByText("250.50")` 一樣會撞成找到兩個元素
+（`frontend/tests/expenses.test.tsx`，commit 4b7cbdc）。同一個坑在
+同一份計畫裡連中兩次：有表單又有清單的畫面上，看到裸的 `getByText` /
+`findByText` 就該先問「畫面上還有沒有別的地方會出現一樣的文字」。
+
+**第 39 種：「金額留空不送 cost」在實作前就是綠的，這是預期的，但計畫
+沒有明寫。** `LogMeal.tsx` 加「金額（選填）」欄位之前，`POST /api/meals`
+的 request body 本來就不帶 `cost` 這個鍵——`expect(body).not.toHaveProperty
+("cost")`（`frontend/tests/log-meal.test.tsx`，commit dd15d12）在那個
+狀態下必然成立，不是因為行為被測到，純粹是因為那個欄位還不存在。這是
+一條**迴歸防護**：它要守住的是「以後有人手滑把 `cost: undefined` 之類
+的東西塞進去」，不是「這個功能現在是對的」。計畫如果沒寫清楚「這條在
+動工前就是綠的，而且應該是綠的」，執行者在 TDD 的紅燈階段看到它沒紅，
+容易誤以為測試本身壞了而去改測試，而不是繼續往下做。
 
 ---
 
