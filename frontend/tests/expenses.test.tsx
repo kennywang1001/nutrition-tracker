@@ -66,15 +66,21 @@ function sentBody(
 	return JSON.parse(String(call[1]?.body));
 }
 
-/** 這個 spy 收到過的所有 HTTP method。 */
-function methodsOf(fetchMock: ReturnType<typeof mockApi>): string[] {
-	return fetchMock.mock.calls.map(([, init]) =>
-		(init?.method ?? "GET").toUpperCase(),
-	);
+/** 這個 spy 收到過幾次「GET /api/expenses」（清單，不含 `/summary`）。
+ *
+ *  給「新增成功後清單會重取」那條測試用：用 `>= 2` 而不是算出確切次數，
+ *  是因為掛載時已經打過一次，新增成功後 `invalidateQueries` 再觸發一次——
+ *  在意的是「至少重取了一次」，不是 TanStack Query 內部確切打幾次請求。 */
+function expenseListGetCount(fetchMock: ReturnType<typeof mockApi>): number {
+	return fetchMock.mock.calls.filter(([input, init]) => {
+		const url = String(input);
+		return (
+			(init?.method ?? "GET").toUpperCase() === "GET" &&
+			url.includes("/api/expenses") &&
+			!url.includes("/summary")
+		);
+	}).length;
 }
-// Task 4 會用到（編輯／刪除）；Task 3 先留著會被 biome 的
-// noUnusedVariables 擋下來，所以暫時標成已使用的佔位呼叫。
-void methodsOf;
 
 beforeEach(() => {
 	localStorage.clear();
@@ -133,6 +139,40 @@ describe("記帳 /expenses", () => {
 		expect(await screen.findByText("這個月還沒有記錄花費")).toBeInTheDocument();
 	});
 
+	it("清單讀取失敗時講清楚，不是顯示成沒有花費", async () => {
+		// 錯誤信封形狀跟 admin-revisions.test.tsx 的 errorEnvelope() 一樣：
+		// { error: { code, message, details } }。
+		mockApi([
+			{
+				method: "GET",
+				path: "/api/expenses/summary",
+				handler: () => json(EMPTY_SUMMARY),
+			},
+			{
+				method: "GET",
+				path: "/api/expenses",
+				handler: () =>
+					json(
+						{
+							error: {
+								code: "INTERNAL_ERROR",
+								message: "伺服器錯誤",
+								details: {},
+							},
+						},
+						500,
+					),
+			},
+		]);
+
+		render(wrap(<Expenses />));
+
+		expect(await screen.findByText("無法載入花費清單")).toBeInTheDocument();
+		// 失敗不能被誤讀成「這個月沒有花費」——那個措辭在金錢畫面上會
+		// 引誘使用者以為真的沒記錄過，重打一筆造成重複記帳。
+		expect(screen.queryByText("這個月還沒有記錄花費")).not.toBeInTheDocument();
+	});
+
 	it("新增一筆花費，送出的 spent_at 帶時區偏移", async () => {
 		const fetchMock = mockApi([
 			{
@@ -161,9 +201,18 @@ describe("記帳 /expenses", () => {
 		const sent = sentBody(fetchMock, "POST", "/api/expenses");
 		expect(sent?.amount).toBe("250.50");
 		expect(sent?.category).toBe("transport");
+		// 備註留空——後端 note 是「留空轉 null」，不是空字串。
+		expect(sent?.note).toBeNull();
 		// **關鍵斷言**：後端用 AwareDatetime，沒有 offset 的 datetime 會 422。
 		// toISOString() 永遠以 Z 結尾。
 		expect(sent?.spent_at).toMatch(/(Z|[+-]\d{2}:\d{2})$/);
+
+		// 新增成功要讓清單重取，不然記完一筆之後畫面上還是舊資料——
+		// 掛載時打過一次 GET /api/expenses，成功後 invalidateQueries
+		// 應該再觸發至少一次。
+		await waitFor(() =>
+			expect(expenseListGetCount(fetchMock)).toBeGreaterThanOrEqual(2),
+		);
 	});
 
 	it("金額留空時不送請求", async () => {

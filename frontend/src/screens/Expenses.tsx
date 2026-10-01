@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { type FormEvent, useState } from "react";
 import { apiFetch } from "../api/client";
 import { ApiError } from "../api/errors";
 import {
@@ -69,18 +69,19 @@ export function Expenses() {
 			setNote("");
 			setError(null);
 			// 一次失效打到清單與報表兩者（queryKeys.expensesAll 是兩者的前綴）。
-			queryClient.invalidateQueries({ queryKey: queryKeys.expensesAll });
+			void queryClient.invalidateQueries({ queryKey: queryKeys.expensesAll });
 		},
 		onError: (caught: unknown) => {
 			if (caught instanceof ApiError && caught.code === "VALIDATION_ERROR") {
-				setError("金額格式不對，請輸入大於 0 的數字");
+				setError("金額格式不對，請輸入大於 0、最多兩位小數的數字");
 				return;
 			}
 			setError("記帳失敗，請再試一次");
 		},
 	});
 
-	function handleSubmit() {
+	function handleSubmit(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault();
 		// 擋在前端，不是靠後端回 422——空字串送出去只會換來一個
 		// 使用者看不懂的驗證錯誤，而且白打一次請求。
 		if (amount.trim() === "") {
@@ -96,53 +97,69 @@ export function Expenses() {
 			<h1>記帳</h1>
 
 			<h2>記一筆</h2>
-			<div>
-				<label htmlFor="expense-amount">金額</label>
-				{/* inputMode="decimal" 讓手機跳數字鍵盤。
-				    font-size 由 index.css 的全域規則保證 ≥16px（iOS Safari
-				    在 <16px 時會自動放大整個頁面，P3-C 踩過）——
-				    **不要在這裡覆寫成更小的字**。 */}
-				<input
-					id="expense-amount"
-					type="text"
-					inputMode="decimal"
-					value={amount}
-					onChange={(event) => setAmount(event.target.value)}
-				/>
-			</div>
-			<div>
-				<label htmlFor="expense-category">分類</label>
-				<select
-					id="expense-category"
-					value={category}
-					onChange={(event) =>
-						setCategory(event.target.value as ExpenseCategory)
-					}
-				>
-					{CATEGORY_ORDER.map((value) => (
-						<option key={value} value={value}>
-							{CATEGORY_LABELS[value]}
-						</option>
-					))}
-				</select>
-			</div>
-			<div>
-				<label htmlFor="expense-note">備註</label>
-				<input
-					id="expense-note"
-					type="text"
-					value={note}
-					onChange={(event) => setNote(event.target.value)}
-				/>
-			</div>
-			<button type="button" onClick={handleSubmit}>
-				記一筆
-			</button>
-			{error !== null && <p role="alert">{error}</p>}
+			{/* 用 <form> 不是 onClick：手機鍵盤的「前往」/ Enter 都該能送出，
+			    跟其他每一個新增表單（Supplements.tsx 等）同一個作法。
+			    **故意不給 amount 加 required**——原生驗證會搶在「請輸入金額」
+			    這條 JS 擋欄之前擋下送出，讓那條測試失去鑑別力。 */}
+			<form onSubmit={handleSubmit}>
+				<div>
+					<label htmlFor="expense-amount">金額</label>
+					{/* inputMode="decimal" 讓手機跳數字鍵盤。
+					    font-size 由 index.css 的全域規則保證 ≥16px（iOS Safari
+					    在 <16px 時會自動放大整個頁面，P3-C 踩過）——
+					    **不要在這裡覆寫成更小的字**。 */}
+					<input
+						id="expense-amount"
+						type="text"
+						inputMode="decimal"
+						value={amount}
+						onChange={(event) => setAmount(event.target.value)}
+					/>
+				</div>
+				<div>
+					<label htmlFor="expense-category">分類</label>
+					<select
+						id="expense-category"
+						value={category}
+						onChange={(event) =>
+							setCategory(event.target.value as ExpenseCategory)
+						}
+					>
+						{CATEGORY_ORDER.map((value) => (
+							<option key={value} value={value}>
+								{CATEGORY_LABELS[value]}
+							</option>
+						))}
+					</select>
+				</div>
+				<div>
+					<label htmlFor="expense-note">備註</label>
+					{/* maxLength 對齊後端 ExpenseCreateRequest.note 的
+					    Field(max_length=500)（app/schemas/expense.py）。 */}
+					<input
+						id="expense-note"
+						type="text"
+						maxLength={500}
+						value={note}
+						onChange={(event) => setNote(event.target.value)}
+					/>
+				</div>
+				{/* disabled while pending——跟每一個手足畫面一樣（Supplements.tsx
+				    的「新增補劑」按鈕）：連點兩下不該把同一筆錢記兩次。 */}
+				<button type="submit" disabled={createExpense.isPending}>
+					記一筆
+				</button>
+				{error !== null && <p role="alert">{error}</p>}
+			</form>
 
 			<h2>這個月</h2>
 			{expensesQuery.isPending ? (
 				<p>載入中…</p>
+			) : expensesQuery.isError ? (
+				// 失敗不能落到「這個月還沒有記錄花費」——這是記帳畫面，
+				// 空清單的措辭會引誘使用者重打一筆，造成重複記帳
+				// （跟 MealList.tsx 的 isError 分支同一個理由）。
+				<p>無法載入花費清單</p>
 			) : expenses.length === 0 ? (
 				<p>這個月還沒有記錄花費</p>
 			) : (
