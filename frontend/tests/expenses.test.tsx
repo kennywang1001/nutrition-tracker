@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
+import { CategoryBar } from "../src/components/CategoryBar";
 import { Expenses } from "../src/screens/Expenses";
 import { json, mockApi } from "./helpers/mock-api";
 
@@ -473,5 +474,95 @@ describe("記帳 /expenses", () => {
 		expect(
 			screen.queryByText("確定要刪掉這筆花費嗎？"),
 		).not.toBeInTheDocument();
+	});
+
+	it("月報表顯示總額與各分類佔比", async () => {
+		mockApi([
+			{
+				method: "GET",
+				path: "/api/expenses/summary",
+				handler: () =>
+					json({
+						month: "2026-12",
+						total: "400.00",
+						by_category: [
+							{ category: "food", total: "350.00", count: 2 },
+							{ category: "transport", total: "50.00", count: 1 },
+						],
+					}),
+			},
+			{ method: "GET", path: "/api/expenses", handler: () => json([]) },
+		]);
+
+		render(wrap(<Expenses />));
+
+		expect(await screen.findByText("400.00")).toBeInTheDocument();
+		const foodRow = screen.getByTestId("category-food");
+		expect(foodRow).toHaveTextContent("飲食");
+		expect(foodRow).toHaveTextContent("350.00");
+		// 350/400 = 87.5% → 四捨五入到整數是 88%
+		expect(foodRow).toHaveTextContent("88%");
+		expect(screen.getByTestId("category-transport")).toHaveTextContent("13%");
+	});
+
+	it("空月份的總額是 0.00，不是空白也不是錯誤", async () => {
+		mockApi([
+			{
+				method: "GET",
+				path: "/api/expenses/summary",
+				handler: () =>
+					json({ month: "2026-12", total: "0.00", by_category: [] }),
+			},
+			{ method: "GET", path: "/api/expenses", handler: () => json([]) },
+		]);
+
+		render(wrap(<Expenses />));
+
+		expect(await screen.findByText("0.00")).toBeInTheDocument();
+	});
+
+	it("本月報表讀取失敗時講清楚，不是卡在載入中", async () => {
+		// 錯誤信封形狀跟「清單讀取失敗」那條測試一樣：
+		// { error: { code, message, details } }。清單本身成功（回傳 []），
+		// 只有報表失敗——要確認兩個查詢的錯誤分支互不影響。
+		mockApi([
+			{
+				method: "GET",
+				path: "/api/expenses/summary",
+				handler: () =>
+					json(
+						{
+							error: {
+								code: "INTERNAL_ERROR",
+								message: "伺服器錯誤",
+								details: {},
+							},
+						},
+						500,
+					),
+			},
+			{ method: "GET", path: "/api/expenses", handler: () => json([]) },
+		]);
+
+		render(wrap(<Expenses />));
+
+		expect(await screen.findByText("無法載入本月報表")).toBeInTheDocument();
+		expect(screen.queryByText("載入中…")).not.toBeInTheDocument();
+	});
+
+	it("總額為 0 時不顯示佔比、也不會出現 NaN", () => {
+		// 直接渲染 CategoryBar，不經過畫面與 QueryClient——
+		// 計畫原本的版本用空的 by_category 測，那樣永遠不會有 CategoryBar
+		// 被渲染、也就永遠不會做除法，測試沒有鑑別力，換成這樣。
+		render(
+			<CategoryBar
+				row={{ category: "food", total: "0.00", count: 0 }}
+				monthTotal="0.00"
+			/>,
+		);
+
+		expect(screen.getByText("飲食")).toBeInTheDocument();
+		expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/%/)).not.toBeInTheDocument();
 	});
 });
