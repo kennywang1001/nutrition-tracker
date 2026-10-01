@@ -72,7 +72,7 @@ P5 計畫一的最終審查發現並修掉了一個只在 production 會錯的 b
 所以這份計畫：
 
 - **新增花費時 `spent_at` 一律是 `new Date().toISOString()`**（永遠帶 `Z`），沒有日期選擇器
-- **編輯時只能改 `amount` / `category` / `note`，不能改日期**
+- **編輯時只能改 `amount`，不能改日期**
 
 「改日期」刻意不做（YAGNI：花費是當下記的）。將來真的要做時，**必須把
 `datetime-local` 的值轉成帶 offset 的字串再送**，否則會拿到 422，而那個 422
