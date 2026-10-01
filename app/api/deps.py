@@ -3,7 +3,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 
-from app.ai.estimator import AnthropicEstimator, NutritionEstimator
+from app.ai.estimator import GeminiEstimator, NutritionEstimator
 from app.config import settings
 from app.db import get_db
 from app.errors import ForbiddenError, NotFoundError, ServiceUnavailableError, UnauthorizedError
@@ -42,13 +42,13 @@ async def get_estimator() -> NutritionEstimator:
     """沒設 API key 就拋 503 —— 規格 §4.1：關閉必須是明講的，
     不是一個看起來壞掉的樣子（跟 `jwt_secret` 刻意相反：見 app/config.py）。
 
-    每次請求都建一個新的 `AnthropicEstimator`（等同新的 `AsyncAnthropic`
-    client）——這個依賴本身沒有需要跨請求共用的狀態，跟 `get_current_user`
+    每次請求都建一個新的 `GeminiEstimator`（等同新的 `genai.Client`）——
+    這個依賴本身沒有需要跨請求共用的狀態，跟 `get_current_user`
     每次重查一次使用者是同一種簡單優先的取捨。
     """
-    if settings.anthropic_api_key is None:
+    if settings.gemini_api_key is None:
         raise ServiceUnavailableError("AI_NOT_CONFIGURED", "AI 分析未設定")
-    return AnthropicEstimator(api_key=settings.anthropic_api_key, model=settings.ai_model)
+    return GeminiEstimator(api_key=settings.gemini_api_key, model=settings.ai_model)
 
 
 async def get_owned_or_404[Model: DeclarativeBase](

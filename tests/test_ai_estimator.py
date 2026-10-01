@@ -1,7 +1,9 @@
 """`parse_raw_estimate()` 是 app/ai/estimator.py 裡唯一不需要打網路就能測的部分。
 
 Task 4 計畫寫「這個 task 不獨立測（真實作要打網路），由 Task 5 的假實作間接
-驗證」——那句話說的是 AnthropicEstimator 本身（打真的 Anthropic API）。
+驗證」——那句話說的是實際打 API 的那個 estimator 類別本身（現在是
+GeminiEstimator，打真的 Gemini API；P2 計畫一 b 把它從 Anthropic 換過來，
+這個檔案完全沒受影響，因為它從來就只測 parse_raw_estimate()）。
 但 LLM 回傳的 JSON 怎麼被驗證、缺欄位/負數/超出範圍/不是 JSON 怎麼被擋下來，
 是一個純函式，不需要網路就測得到，而且正是規格 §8.2 那條保證真正落地的地方。
 """

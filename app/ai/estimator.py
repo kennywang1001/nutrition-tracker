@@ -7,7 +7,13 @@
 也會全綠 —— 而它每次都在花錢。必須斷言的是「那個方法被呼叫了 0 次」，
 而那需要一個可以注入的假實作（Task 5：`app.dependency_overrides[get_estimator]`）。
 
-## 這個模組不獨立測試 Anthropic 實作本身
+**P2 計畫一 b（2026-09-27）把這裡的實作從 Anthropic 換成 Gemini。** 556 則
+測試裡只有這個模組自己的測試受影響——`app/api/routes/ai.py`、
+`tests/test_ai_analyze.py`、`tests/test_ai_consistency.py` 都注入假實作或
+只碰純函式，一行都沒改，證明了上面那句話：Protocol 是為了測試斷言存在的，
+「將來換供應商」只是它的副作用。
+
+## 這個模組不獨立測試 Gemini 實作本身
 
 打真的網路：慢、花錢、不可重現（規格 §8.1）。Task 5 用一個假的
 `NutritionEstimator` 注入到 FastAPI 依賴裡，間接驗證整條路徑接得起來。
@@ -17,23 +23,14 @@
 炸掉」那條保證實際落地的地方。
 """
 
-import base64
 import json
 import logging
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Literal, Protocol, cast
+from typing import Protocol
 
-from anthropic import AsyncAnthropic, transform_schema
-from anthropic.types import (
-    Base64ImageSourceParam,
-    ImageBlockParam,
-    Message,
-    MessageParam,
-    OutputConfigParam,
-    TextBlock,
-    TextBlockParam,
-)
+from google import genai
+from google.genai import types
 from pydantic import BaseModel, Field, ValidationError
 
 from app.errors import BadGatewayError, UnprocessableEntityError
@@ -72,12 +69,13 @@ class NutritionEstimator(Protocol):
     async def estimate_image(self, image: bytes, media_type: str) -> RawEstimate: ...
 
 
-# Anthropic 的 Base64ImageSourceParam.media_type 是一個 Literal，只接受這四種。
-# Protocol 的 estimate_image() 刻意收 `str`（呼叫端——Task 5 的路由——用既有的
-# 照片驗證慣例，也就是 Pillow 實際解碼後判斷格式，不是信任 client 宣告的
-# Content-Type），所以這裡要在打 API 之前重新驗證一次、縮成 Literal 給
-# mypy，也是防禦性的第二道關卡。
-_ImageMediaType = Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
+# `types.Part.from_bytes(data=..., mime_type=...)` 的 mime_type 只是 `str`，
+# 不像 Anthropic 的 Base64ImageSourceParam.media_type 是一個四選一的
+# Literal——但驗證仍然要做：Protocol 的 estimate_image() 刻意收 `str`
+# （呼叫端——app/api/routes/ai.py——用既有的照片驗證慣例，也就是 Pillow
+# 實際解碼後判斷格式，不是信任 client 宣告的 Content-Type），這裡是打 API
+# 之前的第二道防禦性關卡，擋掉理論上不該出現、但也沒有理由假設不會出現的
+# 格式。
 _ALLOWED_IMAGE_MEDIA_TYPES: frozenset[str] = frozenset(
     {"image/jpeg", "image/png", "image/gif", "image/webp"}
 )
@@ -148,14 +146,47 @@ class _LLMEstimateSchema(BaseModel):
     confidence: Decimal = Field(ge=0, le=1, decimal_places=2)
 
 
-# 用 anthropic 官方提供的 transform_schema() 從上面的 pydantic model 產生
-# structured output 要的 JSON schema，請模型直接照這個形狀輸出（`anthropic`
-# 套件的實際 API 形狀是讀 .venv 裡的原始碼確認的，見開工前必讀）。
-# **這不是唯一的防線** —— 就算 API 忽略這個提示，parse_raw_estimate() 的
+# **不能直接把 `_LLMEstimateSchema` 這個 pydantic model 傳給
+# `response_schema`。** 計畫要求查證 `response_schema` 實際吃什麼形狀
+# （見開工前必讀），實測結果是：`google-genai` 2.25.0 確實接受直接傳一個
+# pydantic `BaseModel` 子類別（`google.genai._transformers.t_schema()` 會
+# 呼叫它的 `model_json_schema()`），**但 `_LLMEstimateSchema` 的
+# `Field(gt=..., decimal_places=..., max_digits=...)` 這些約束會讓
+# pydantic 產生 `exclusiveMinimum` 這種 JSON Schema 關鍵字，而 Google 自己
+# 的 `types.Schema`（是一個嚴格子集，不是完整 JSON Schema）不接受它**——
+# 實測直接把 `_LLMEstimateSchema` 傳進去，會在還沒打 API 之前就在 SDK 內部
+# 因為 `types.Schema.model_validate()` 而炸 `pydantic_core.ValidationError:
+# ...exclusiveMinimum ... Extra inputs are not permitted`。
+#
+# 所以這裡手刻一份只用 Google `Schema` 認得的關鍵字（`type` /
+# `properties` / `required` / `nullable`，型別字串是大寫）的字典，
+# 純粹是「提示模型輸出的形狀」，跟 `_LLMEstimateSchema` 是兩件事——
+# **真正的數值範圍驗證（`gt=0`、`le=10000` 那些）仍然只由
+# `parse_raw_estimate()` 事後做一次**，不會因為這裡少了約束就變寬鬆。
+# 這不是唯一的防線 —— 就算 API 忽略這個提示，`parse_raw_estimate()` 的
 # pydantic 驗證仍然會擋下任何不合規的回應。
-_RESPONSE_SCHEMA: dict[str, object] = transform_schema(_LLMEstimateSchema)
-_OUTPUT_CONFIG: OutputConfigParam = {
-    "format": {"type": "json_schema", "schema": _RESPONSE_SCHEMA}
+_RESPONSE_SCHEMA: dict[str, object] = {
+    "type": "OBJECT",
+    "properties": {
+        "name": {"type": "STRING"},
+        "brand": {"type": "STRING", "nullable": True},
+        "serving_grams": {"type": "NUMBER"},
+        "serving_kcal": {"type": "NUMBER"},
+        "serving_protein_g": {"type": "NUMBER"},
+        "serving_fat_g": {"type": "NUMBER"},
+        "serving_carb_g": {"type": "NUMBER"},
+        "confidence": {"type": "NUMBER"},
+    },
+    "required": [
+        "name",
+        "brand",
+        "serving_grams",
+        "serving_kcal",
+        "serving_protein_g",
+        "serving_fat_g",
+        "serving_carb_g",
+        "confidence",
+    ],
 }
 
 
@@ -199,62 +230,67 @@ def parse_raw_estimate(response_text: str) -> RawEstimate:
     )
 
 
-def _extract_text(message: Message) -> str:
-    """從回應裡取出第一個文字內容區塊。
+def _extract_text(response: types.GenerateContentResponse) -> str:
+    """從回應裡取出文字內容。
 
-    正常情況下（沒有開 extended thinking、沒有用 tool）content 就是一個
-    TextBlock。找不到文字區塊本身就是一種「垃圾回應」，跟 JSON 解析失敗
-    走同一條錯誤路徑。
+    `GenerateContentResponse.text` 是 `str | None`（inspect 過，見開工前
+    必讀）——`None` 或空字串本身就是一種「垃圾回應」，跟 JSON 解析失敗
+    走同一條錯誤路徑（`response.text` 不像 Anthropic 的 `message.content`
+    是一串要自己找 TextBlock 的區塊，SDK 已經幫忙串好了）。
     """
-    for block in message.content:
-        if isinstance(block, TextBlock):
-            return block.text
-    raise BadGatewayError("AI_BAD_RESPONSE", "AI 回應沒有文字內容")
+    text = response.text
+    if not text:
+        raise BadGatewayError("AI_BAD_RESPONSE", "AI 回應沒有文字內容")
+    return text
 
 
-class AnthropicEstimator:
-    """用 Anthropic Claude 估算「一份」的營養素。
+class GeminiEstimator:
+    """用 Google Gemini 估算「一份」的營養素。
 
     這個類別本身沒有獨立測試 —— 打真的 API 會花錢、不可重現（規格 §8.1）。
-    `NutritionEstimator` Protocol 的存在就是為了讓 Task 5 能用假實作取代它，
+    `NutritionEstimator` Protocol 的存在就是為了讓測試能用假實作取代它，
     然後斷言「這個類別的方法被呼叫了幾次」。
     """
 
     def __init__(self, *, api_key: str, model: str) -> None:
-        self._client = AsyncAnthropic(api_key=api_key)
+        # 非同步走 `client.aio`（inspect 過，見開工前必讀）——`AsyncAnthropic`
+        # 是一個獨立的類別，`genai.Client` 是同一個物件底下切出同步／非同步
+        # 兩組介面，不需要另外 import 一個 Async 版本。
+        self._client = genai.Client(api_key=api_key)
         self._model = model
 
     async def estimate_text(self, text: str) -> RawEstimate:
-        message: MessageParam = {
-            "role": "user",
-            "content": _TEXT_ESTIMATE_INSTRUCTION.format(text=text),
-        }
-        return await self._estimate(message)
+        return await self._estimate(_TEXT_ESTIMATE_INSTRUCTION.format(text=text))
 
     async def estimate_image(self, image: bytes, media_type: str) -> RawEstimate:
         if media_type not in _ALLOWED_IMAGE_MEDIA_TYPES:
-            # Task 5 的路由在呼叫這裡之前應該已經用 Pillow 實際解碼過圖片、
-            # 確認過格式（跟 app/storage/photos.py 同一個「不信任宣告」的
-            # 原則）。這裡是第二道關卡，理論上不會踩到。
+            # app/api/routes/ai.py 在呼叫這裡之前應該已經用 Pillow 實際解碼過
+            # 圖片、確認過格式（跟 app/storage/photos.py 同一個「不信任宣告」
+            # 的原則）。這裡是第二道關卡，理論上不會踩到。
             raise UnprocessableEntityError("INVALID_PHOTO", "無法識別的圖片格式")
 
-        source: Base64ImageSourceParam = {
-            "type": "base64",
-            "media_type": cast(_ImageMediaType, media_type),
-            "data": base64.standard_b64encode(image).decode("ascii"),
-        }
-        image_block: ImageBlockParam = {"type": "image", "source": source}
-        text_block: TextBlockParam = {"type": "text", "text": _IMAGE_ESTIMATE_INSTRUCTION}
-        message: MessageParam = {"role": "user", "content": [image_block, text_block]}
-        return await self._estimate(message)
+        # `types.Part.from_bytes()` 直接吃原始 bytes，SDK 自己處理編碼——
+        # 比 Anthropic 版本少一步手動 base64 編碼（開工前必讀「比 Anthropic
+        # 那版簡單的三處」）。
+        image_part = types.Part.from_bytes(data=image, mime_type=media_type)
+        # 明確標註型別：不然 mypy 會把 [Part, str] 這個字面 list 推成
+        # list[object]，跟 generate_content() 期待的聯集型別對不上。
+        # `PartUnionDict` 是 SDK 自己匯出的別名，跟 `contents` 參數型別裡
+        # 那個 list 分支的元素型別一模一樣（list 是不變的，型別要精準對齊，
+        # 不能只是「相容」）。
+        contents: list[types.PartUnionDict] = [image_part, _IMAGE_ESTIMATE_INSTRUCTION]
+        return await self._estimate(contents)
 
-    async def _estimate(self, message: MessageParam) -> RawEstimate:
-        response = await self._client.messages.create(
-            model=self._model,
-            max_tokens=_MAX_OUTPUT_TOKENS,
-            system=_SYSTEM_PROMPT,
-            messages=[message],
-            output_config=_OUTPUT_CONFIG,
+    async def _estimate(self, contents: types.ContentListUnionDict) -> RawEstimate:
+        config = types.GenerateContentConfig(
+            system_instruction=_SYSTEM_PROMPT,
+            max_output_tokens=_MAX_OUTPUT_TOKENS,
+            response_mime_type="application/json",
+            response_schema=_RESPONSE_SCHEMA,
         )
-        response_text = _extract_text(response)
-        return parse_raw_estimate(response_text)
+        response = await self._client.aio.models.generate_content(
+            model=self._model,
+            contents=contents,
+            config=config,
+        )
+        return parse_raw_estimate(_extract_text(response))

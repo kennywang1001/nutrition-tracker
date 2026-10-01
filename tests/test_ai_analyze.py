@@ -280,12 +280,23 @@ async def test_llm_garbage_response_is_502_not_500(client, db_session):
 
 async def test_analyze_without_api_key_returns_503(client, db_session, monkeypatch):
     """刻意不 override `get_estimator`——直接用 `app/api/deps.py` 真正的
-    `get_estimator()`，它在 `settings.anthropic_api_key is None` 時就會拋
-    503（Task 4 已經做好）。測試環境預設沒有 `ANTHROPIC_API_KEY`
+    `get_estimator()`，它在 `settings.gemini_api_key is None` 時就會拋
+    503（Task 4 已經做好）。測試環境預設沒有 `GEMINI_API_KEY`
     （見根目錄 conftest.py），這裡明確 monkeypatch 一次，不依賴那個環境
     細節、也不受其他測試汙染設定影響。
+
+    **P2 計畫一 b 這裡改了一行**（`anthropic_api_key` → `gemini_api_key`）
+    ——計畫原文要求這個檔案一行都不要動，因為它注入假 estimator、不碰供應商
+    細節。但這條測試是例外：它刻意不注入假 estimator，直接戳全域
+    `settings` 物件上的欄位名稱，而那個欄位名稱正是 Task 1 要重新命名的
+    對象。`Settings` 是 pydantic model，對不存在的欄位 `monkeypatch.setattr`
+    會直接拋 `AttributeError`，不是安靜地變成別的行為——所以這一行不改，
+    整個檔案就不是「零改動也全綠」，是「零改動就先在 monkeypatch 那一行
+    炸掉」。這不是 Protocol 邊界劃錯（其他 9 條測試都靠 `_inject()` 走
+    Protocol，完全沒事），只是這一條測試本身的設計就是繞過 Protocol、
+    直接測 config 佈線，所以供應商换名會直接影響到它。
     """
-    monkeypatch.setattr(settings, "anthropic_api_key", None)
+    monkeypatch.setattr(settings, "gemini_api_key", None)
     user = await create_user(db_session)
 
     response = await client.post(

@@ -39,9 +39,14 @@ services:
       # ⚠️ 沒設時容器收到的是**空字串**，不是「沒有這個變數」。
       # `app/config.py` 的 `_empty_key_is_no_key` validator 把它正規化回
       # `None` —— 少了那一步，`is None` 會是 False，程式會拿一把空字串
-      # 金鑰去打 API，而使用者看到的是來自 Anthropic 的認證錯誤，
+      # 金鑰去打 API，而使用者看到的是來自 Google 的認證錯誤，
       # 不是「你沒設定 AI」。
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      # 同樣選配。沒設值時代換成 app/config.py 裡那個刻意留的佔位符
+      # （不是猜的 model id，見該檔案註解）——打真的 API 會直接收到
+      # Google「model not found」的錯誤，逼著部署的人去查目前合法的
+      # model id，而不是猜一個看起來合理、實際上不存在的名字。
+      AI_MODEL: "${AI_MODEL:-REPLACE_ME_SET_A_REAL_GEMINI_MODEL_ID}"
 
       # JWT_SECRET 故意不寫在這裡：它在開發與 production 是完全不同的值
       # （開發是寫死的明顯字串，production 是 ${JWT_SECRET:?...} 必填），
