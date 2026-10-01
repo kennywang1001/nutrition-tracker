@@ -24,6 +24,13 @@ export const CATEGORY_LABELS: Record<ExpenseCategory, string> = {
 	other: "其他",
 };
 
+/** 金額格式錯誤的訊息。**`Expenses.tsx` 的 amount 與 `LogMeal.tsx` 的
+ *  cost 共用同一條後端規則**（`gt=0`、最多兩位小數——後者的
+ *  `max_digits=10, decimal_places=2` 就是對齊 `expenses.amount` 訂的），
+ *  所以兩個畫面共用同一句訊息，不要各寫一份、任由兩邊的說法飄走。 */
+export const AMOUNT_FORMAT_ERROR =
+	"金額格式不對，請輸入大於 0、最多兩位小數的數字";
+
 /** 顯示用的分類順序。跟 `CATEGORY_LABELS` 一樣是七個全列。
  *
  *  新增表單的下拉選單用這個順序，**不是 `Object.keys()`** ——

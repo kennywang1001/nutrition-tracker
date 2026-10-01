@@ -3,6 +3,7 @@ import { type FormEvent, useState } from "react";
 import { apiFetch } from "../api/client";
 import { ApiError } from "../api/errors";
 import {
+	AMOUNT_FORMAT_ERROR,
 	CATEGORY_LABELS,
 	CATEGORY_ORDER,
 	type Expense,
@@ -13,10 +14,6 @@ import {
 import { queryKeys } from "../api/queries";
 import { CategoryBar } from "../components/CategoryBar";
 import { formatMoney } from "../lib/decimal";
-
-/** 金額格式錯誤的訊息。新增與修改共用同一句——都是同一個後端驗證規則
- *  （amount 必須大於 0、最多兩位小數），使用者不該在兩個表單看到兩種說法。 */
-const AMOUNT_FORMAT_ERROR = "金額格式不對，請輸入大於 0、最多兩位小數的數字";
 
 type RowProps = {
 	expense: Expense;

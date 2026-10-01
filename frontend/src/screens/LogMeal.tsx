@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { apiFetch } from "../api/client";
 import { ApiError } from "../api/errors";
+import { AMOUNT_FORMAT_ERROR } from "../api/expenses";
 import { useFoodSearch } from "../api/foods";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
@@ -27,11 +28,6 @@ const MEAL_TYPES: Array<{ value: MealType; label: string }> = [
  *  「目前生效的營養素」區塊的空狀態用同一句文字——不重寫一份是為了不讓
  *  兩處的說法飄走。 */
 const NO_REVISION_MESSAGE = "這個食物還沒有生效的營養素資料";
-
-/** cost 的後端限制（`gt=0, max_digits=10, decimal_places=2`）對齊
- *  `expenses.amount`——跟 `Expenses.tsx` 的 `AMOUNT_FORMAT_ERROR` 同一句
- *  文字，同一條規則不該在兩個畫面各寫一份說法。 */
-const COST_FORMAT_ERROR = "金額格式不對，請輸入大於 0、最多兩位小數的數字";
 
 /** `VALIDATION_ERROR` 可能來自 `cost`，也可能來自 `items[0].quantity`——
  *  兩者是同一次 POST 的不同欄位。看 `details.errors` 的 `loc` 確認錯誤
@@ -213,7 +209,7 @@ export function LogMeal({ onSaved }: Props) {
 				caught.code === "VALIDATION_ERROR" &&
 				isCostValidationError(caught)
 			) {
-				setError(COST_FORMAT_ERROR);
+				setError(AMOUNT_FORMAT_ERROR);
 				return;
 			}
 			setError("記錄失敗，請再試一次");
@@ -335,19 +331,17 @@ export function LogMeal({ onSaved }: Props) {
 						))}
 					</select>
 
-					<div>
-						<label htmlFor="meal-cost">金額（選填）</label>
-						{/* 填了就會在同一個交易裡記一筆餐費（規格 §4.1）。
-						    inputMode="decimal" 讓手機跳數字鍵盤；字級由 index.css
-						    的全域規則保證 ≥16px（iOS Safari 的自動放大，P3-C 踩過）。 */}
-						<input
-							id="meal-cost"
-							type="text"
-							inputMode="decimal"
-							value={cost}
-							onChange={(event) => setCost(event.target.value)}
-						/>
-					</div>
+					<label htmlFor="meal-cost">金額（選填）</label>
+					{/* 填了就會在同一個交易裡記一筆餐費（規格 §4.1）。
+					    inputMode="decimal" 讓手機跳數字鍵盤；字級由 index.css
+					    的全域規則保證 ≥16px（iOS Safari 的自動放大，P3-C 踩過）。 */}
+					<input
+						id="meal-cost"
+						type="text"
+						inputMode="decimal"
+						value={cost}
+						onChange={(event) => setCost(event.target.value)}
+					/>
 
 					{error !== null && <p role="alert">{error}</p>}
 					<button type="submit" disabled={saveMeal.isPending}>

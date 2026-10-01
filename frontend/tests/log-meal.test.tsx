@@ -315,6 +315,44 @@ describe("記一餐", () => {
 		expect(screen.queryByText("記錄失敗，請再試一次")).not.toBeInTheDocument();
 	});
 
+	it("quantity 格式錯誤不會被誤報成金額格式不對", async () => {
+		// 跟上一條測試對稱：loc 指到 items[0].quantity，不是 cost——
+		// 這種 422 該落回通用訊息，不能被誤判成金額錯誤。
+		mockApi({
+			"/api/foods/frequent": () => json(FREQUENT_FOODS),
+			"/api/foods/recent": () => json([]),
+			"/api/foods/1/portions": () => json([]),
+			"/api/meals": () =>
+				json(
+					{
+						error: {
+							code: "VALIDATION_ERROR",
+							message: "輸入資料格式錯誤",
+							details: {
+								errors: [
+									{
+										loc: ["body", "items", 0, "quantity"],
+										msg: "Input should be greater than 0",
+										type: "greater_than",
+									},
+								],
+							},
+						},
+					},
+					422,
+				),
+		});
+
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		expect(await screen.findByText("記錄失敗，請再試一次")).toBeInTheDocument();
+		expect(
+			screen.queryByText("金額格式不對，請輸入大於 0、最多兩位小數的數字"),
+		).not.toBeInTheDocument();
+	});
+
 	it("記一餐成功後讓花費（expensesAll）的 query 失效——餐費會建出一筆支出", async () => {
 		mockApi({
 			"/api/foods/frequent": () => json(FREQUENT_FOODS),
