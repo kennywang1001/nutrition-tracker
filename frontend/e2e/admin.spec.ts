@@ -105,6 +105,7 @@ test("送審編輯 → 管理員登入 → 佇列看到新舊並排 → 通過 �
 	const memberContext = await browser.newContext();
 	const memberPage = await memberContext.newPage();
 	await login(memberPage, MEMBER);
+	await memberPage.getByRole("link", { name: "飲食" }).click();
 	await memberPage.getByRole("link", { name: "食物庫" }).click();
 	// **等食物庫真的掛載完成再填搜尋框。** P3-C Task 3 之後首頁是記一餐，
 	// 它跟食物庫剛好用同一個可存取名稱「搜尋食物」（各自的 <label>）。
@@ -138,6 +139,7 @@ test("送審編輯 → 管理員登入 → 佇列看到新舊並排 → 通過 �
 	const adminContext = await browser.newContext();
 	const adminPage = await adminContext.newPage();
 	await login(adminPage, ADMIN);
+	await adminPage.getByRole("link", { name: "我的" }).click();
 	await adminPage.getByRole("link", { name: "審核" }).click();
 
 	const row = adminPage.getByRole("listitem").filter({ hasText: foodName });
@@ -150,6 +152,7 @@ test("送審編輯 → 管理員登入 → 佇列看到新舊並排 → 通過 �
 	// 通過成功後 pendingRevisions 失效重取，這一筆從佇列消失。
 	await expect(row).not.toBeVisible();
 
+	await adminPage.getByRole("link", { name: "飲食" }).click();
 	await adminPage.getByRole("link", { name: "食物庫" }).click();
 	// 這裡的前一頁是「審核」（AdminRevisions），沒有同名的「搜尋食物」
 	// 欄位可以搶——理論上不會撞到上面那個坑，但既然要等，就跟上面用
@@ -177,6 +180,7 @@ test("駁回 → 提案者在食物庫的編輯歷史看得到駁回理由", asy
 	const memberContext = await browser.newContext();
 	const memberPage = await memberContext.newPage();
 	await login(memberPage, MEMBER);
+	await memberPage.getByRole("link", { name: "飲食" }).click();
 	await memberPage.getByRole("link", { name: "食物庫" }).click();
 	// 同一個坑，見上面「送審編輯」測試裡第一次點「食物庫」之後的說明：
 	// 首頁（記一餐）跟食物庫共用「搜尋食物」這個可存取名稱，不等食物庫的
@@ -199,6 +203,7 @@ test("駁回 → 提案者在食物庫的編輯歷史看得到駁回理由", asy
 	const adminContext = await browser.newContext();
 	const adminPage = await adminContext.newPage();
 	await login(adminPage, ADMIN);
+	await adminPage.getByRole("link", { name: "我的" }).click();
 	await adminPage.getByRole("link", { name: "審核" }).click();
 
 	const row = adminPage.getByRole("listitem").filter({ hasText: foodName });
@@ -265,7 +270,7 @@ test("非管理員打 admin 端點 → 403 且沒有多打一次 /api/auth/refre
 	await login(page, MEMBER);
 	// P3-C Task 3：首頁從今日總覽換成記一餐，登入後的落地頁跟著換——這裡
 	// 只是要確認登入成功，不特別在乎落在哪一頁，斷言跟著換掉。
-	await expect(page.getByRole("heading", { name: "記一餐" })).toBeVisible();
+	await expect(page.getByRole("heading", { name: "總覽" })).toBeVisible();
 
 	// MEMBER 看不到「審核」那個 tab（TabBar 的第五格是管理員限定），
 	// 所以沒有連結可以點——這裡模擬的是「直接輸入網址」，但刻意不用

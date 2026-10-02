@@ -8,16 +8,16 @@ async function login(page: import("@playwright/test").Page) {
 	await page.getByRole("button", { name: "登入" }).click();
 }
 
-test("新增補劑 → 今天吃了 → 今日總覽看得到它", async ({ page }) => {
+test("新增補劑 → 今天吃了 → 飲食頁看得到它", async ({ page }) => {
 	// 規格來源：使用者原話（2026-09-26）「補劑類 我想要能新增我有在使用的
 	// 當天有吃就點一份進去就好」。這條契約 E2E 走完整條路徑：
 	// POST /api/supplements（新增）→ POST /api/supplement-intakes
 	// （plan_id: null 的臨時記錄）→ 今日總覽讀得到。
 	await login(page);
-	// P3-C Task 3：首頁從今日總覽換成記一餐，要先切過去才看得到
-	// 「今日補劑」區塊與「新增補劑」的入口。
-	await page.getByRole("link", { name: "今日總覽" }).click();
-	await expect(page.getByRole("heading", { name: "今日總覽" })).toBeVisible();
+	// 登入後落在總覽，要先切到飲食才看得到「今日補劑」區塊與
+	// 「新增補劑」的入口。
+	await page.getByRole("link", { name: "飲食" }).click();
+	await expect(page.getByRole("heading", { name: "飲食" })).toBeVisible();
 
 	// 入口是「今日補劑」區塊的連結，不是第六個 tab（計畫 Task 2 的說明）。
 	await page.getByRole("link", { name: "新增補劑" }).click();
@@ -70,8 +70,8 @@ test("新增補劑 → 今天吃了 → 今日總覽看得到它", async ({ page
 		.filter({ hasText: "已記錄" });
 	await expect(statusRow).toBeVisible();
 
-	// 回今日總覽，同一筆補劑要看得到。
-	await page.getByRole("link", { name: "今日總覽" }).click();
-	await expect(page.getByRole("heading", { name: "今日總覽" })).toBeVisible();
+	// 回飲食頁，同一筆補劑要看得到。
+	await page.getByRole("link", { name: "飲食" }).click();
+	await expect(page.getByRole("heading", { name: "飲食" })).toBeVisible();
 	await expect(page.getByText(supplementName)).toBeVisible();
 });

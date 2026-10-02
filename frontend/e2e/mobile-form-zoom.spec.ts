@@ -24,8 +24,8 @@ async function login(page: Page) {
 	await page.getByLabel("Email").fill(ADMIN.email);
 	await page.getByLabel("密碼").fill(ADMIN.password);
 	await page.getByRole("button", { name: "登入" }).click();
-	// P3-C Task 3：首頁從今日總覽換成記一餐，登入後的落地頁跟著換。
-	await expect(page.getByRole("heading", { name: "記一餐" })).toBeVisible();
+	// 登入後落在總覽。
+	await expect(page.getByRole("heading", { name: "總覽" })).toBeVisible();
 }
 
 /** 走過目前畫面上「這一刻」存在的每一個 input / select / textarea，斷言
@@ -74,6 +74,7 @@ test("登入後的食物庫／新增食物／記一餐畫面，表單控制項�
 }) => {
 	await login(page);
 
+	await page.getByRole("link", { name: "飲食" }).click();
 	await page.getByRole("link", { name: "食物庫" }).click();
 	// react-router 是 client-side 換頁，`click()` resolve 不代表換頁完成。
 	// 先等這個畫面獨有的 heading 出現，確保接下來數的是「換頁後」的
@@ -101,6 +102,7 @@ test("登入後的食物庫／新增食物／記一餐畫面，表單控制項�
 	await page.getByRole("button", { name: "建立食物" }).click();
 	await expect(page.getByRole("heading", { name: foodName })).toBeVisible();
 
+	await page.getByRole("button", { name: "新增紀錄" }).click();
 	await page.getByRole("link", { name: "記一餐" }).click();
 	await expect(page.getByRole("heading", { name: "記一餐" })).toBeVisible();
 	// 尚未選擇食物：畫面上只有搜尋框。
@@ -133,7 +135,7 @@ test("登入後的 /supplements 畫面，表單控制項字級 ≥16px（P3-C Ta
 	// 「新增補劑」的入口在 Today.tsx 的「今日補劑」區塊（Task 2）。首頁換成
 	// 記一餐之後（Task 3），登入後不再直接落在今日總覽，要先切過去才看得到
 	// 那個連結。
-	await page.getByRole("link", { name: "今日總覽" }).click();
+	await page.getByRole("link", { name: "飲食" }).click();
 	await page.getByRole("link", { name: "新增補劑" }).click();
 	await expect(page.getByRole("heading", { name: "補劑" })).toBeVisible();
 	// **只等「補劑」這個 h1 出現還不夠。** 實測踩到的坑：`Today.tsx` 的
@@ -168,12 +170,10 @@ test("登入後的 /expenses 畫面，表單控制項字級 ≥16px（P5 計畫�
 	// 才驗得到。
 	await login(page);
 
-	// 記帳的入口在 Today.tsx 的「今日總覽」，不是第六個 tab（規格 §6.2
-	// 方向 1，見 Expenses.tsx 開頭註解）。登入後不會直接落在今日總覽，
-	// 要先切過去才看得到「記帳」連結。
-	await page.getByRole("link", { name: "今日總覽" }).click();
+	// 記帳的入口是 tab bar 的「＋」（新增紀錄）。
+	await page.getByRole("button", { name: "新增紀錄" }).click();
 	await page.getByRole("link", { name: "記帳" }).click();
 	await expect(page.getByRole("heading", { name: "記帳" })).toBeVisible();
-	// 金額、分類 select、備註，共三個欄位。
+	// 只有備註一個 input；金額用畫面上的鍵盤（按鈕）輸入。
 	await expectFormControlsAtLeast16px(page, "記帳畫面");
 });

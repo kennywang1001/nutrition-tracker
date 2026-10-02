@@ -71,7 +71,8 @@ test("記一餐之後，趨勢圖上今天那根柱子跟著變", async ({ page,
 
 	// 趨勢畫面：讀「今天」那根柱子的 aria-label。期間的最後一天就是今天，
 	// 所以是最後一根。
-	await page.getByRole("link", { name: "趨勢" }).click();
+	await page.getByRole("link", { name: "報表" }).click();
+	await page.getByRole("link", { name: "營養趨勢" }).click();
 	await page.getByTestId("trend-chart").waitFor();
 	const todayBar = page.getByTestId("trend-chart").locator("rect").last();
 	const before = await todayBar.getAttribute("aria-label");
@@ -87,14 +88,14 @@ test("記一餐之後，趨勢圖上今天那根柱子跟著變", async ({ page,
 	//   不是「送出」。
 	// 食物清單是 `<li><button>{food.name}</button>…</li>`，`getByText`
 	// 找得到按鈕裡的文字節點並點擊——跟 daily-loop.spec.ts 同一招。
+	await page.getByRole("button", { name: "新增紀錄" }).click();
 	await page.getByRole("link", { name: "記一餐" }).click();
 	await page.getByText(foodName).first().click();
 	await page.getByLabel("份量").fill("250");
 	await page.getByRole("button", { name: "記錄" }).click();
 
 	// **等記錄真的完成再走。** `LogMeal` 的 mutation `onSuccess` 會呼叫
-	// `onSaved()`，由 `LogMealRoute` 導去 `/today`（P3-C Task 3：首頁換成
-	// 記一餐之後，記完一餐要導去今日總覽，不是導回自己）——「今日總覽」
+	// `onSaved()`，由 `LogMealRoute` 導去 `/`（總覽）——「總覽」
 	// 那個標題出現就是「POST /api/meals 成功、而且失效已經發出」的同步點，
 	// 跟這條測試被寫下來時（Task 3 之前 onSaved 導回 `/`）用的是同一個
 	// 訊號，只是目的地換了。
@@ -112,10 +113,11 @@ test("記一餐之後，趨勢圖上今天那根柱子跟著變", async ({ page,
 	//
 	// `daily-loop.spec.ts` 沒有這個問題，因為它送出後直接斷言
 	// `macro-kcal`，Playwright 的自動重試隱含地等到了導頁完成。
-	await expect(page.getByRole("heading", { name: "今日總覽" })).toBeVisible();
+	await expect(page.getByRole("heading", { name: "總覽" })).toBeVisible();
 
 	// 回到趨勢，同一根柱子的數字必須變了。
-	await page.getByRole("link", { name: "趨勢" }).click();
+	await page.getByRole("link", { name: "報表" }).click();
+	await page.getByRole("link", { name: "營養趨勢" }).click();
 	await page.getByTestId("trend-chart").waitFor();
 	await expect(
 		page.getByTestId("trend-chart").locator("rect").last(),

@@ -14,7 +14,7 @@ test("登入之後看得到記一餐", async ({ page }) => {
 	await page.getByLabel("密碼").fill(ADMIN.password);
 	await page.getByRole("button", { name: "登入" }).click();
 
-	await expect(page.getByRole("heading", { name: "記一餐" })).toBeVisible();
+	await expect(page.getByRole("heading", { name: "總覽" })).toBeVisible();
 });
 
 test("access token 過期時會自動換票並重送，使用者不會被踢出去", async ({
@@ -28,7 +28,12 @@ test("access token 過期時會自動換票並重送，使用者不會被踢出�
 	await page.getByRole("button", { name: "登入" }).click();
 	// P3-C Task 3：首頁換成記一餐之後，這裡斷言的落地頁跟著換（見上面
 	// 那條測試的說明）。這條測試全程停在首頁，不涉及導頁，只是換個標題。
-	await expect(page.getByRole("heading", { name: "記一餐" })).toBeVisible();
+	await expect(page.getByRole("heading", { name: "總覽" })).toBeVisible();
+	await page.getByRole("link", { name: "我的" }).click();
+	await expect(page.getByRole("heading", { name: "我的" })).toBeVisible();
+	// 「我的」掛載時 useMe() 自己會打一次 /api/me；等 email 出現代表那個
+	// 請求已經結束，再讓 token 失效，換票才只會由「重新整理」觸發。
+	await expect(page.getByText(ADMIN.email)).toBeVisible();
 
 	// 把記憶體裡的 access token 換成一張無效的，模擬它過期。
 	// refresh token 留著——這正是「票過期但 session 還活著」的狀態。
@@ -43,10 +48,11 @@ test("access token 過期時會自動換票並重送，使用者不會被踢出�
 	// 但行為沒變。
 	const meResponse = page.waitForResponse(
 		(response) =>
-			response.url().includes("/api/me") && response.status() === 200,
+			new URL(response.url()).pathname === "/api/me" &&
+			response.status() === 200,
 	);
 	await page.getByRole("button", { name: "重新整理" }).click();
 	await meResponse;
 
-	await expect(page.getByRole("heading", { name: "記一餐" })).toBeVisible();
+	await expect(page.getByRole("heading", { name: "我的" })).toBeVisible();
 });

@@ -20,9 +20,9 @@ test("建立食物 → 在記一餐搜尋得到 → 記一筆 → 今日總覽�
 	// 沒有任何一支既有的單元測試或 E2E 覆蓋過「建立」到「搜尋得到」這一段。
 	await login(page);
 
-	// P3-C Task 3：首頁從今日總覽換成記一餐，要先切過去才讀得到基準值。
-	await page.getByRole("link", { name: "今日總覽" }).click();
-	await expect(page.getByRole("heading", { name: "今日總覽" })).toBeVisible();
+	// 登入後落在總覽，要先切到飲食才讀得到基準值。
+	await page.getByRole("link", { name: "飲食" }).click();
+	await expect(page.getByRole("heading", { name: "飲食" })).toBeVisible();
 	const before = await page.getByTestId("macro-kcal").textContent();
 
 	const foodName = `E2E 契約食物 ${Date.now()}`;
@@ -40,6 +40,7 @@ test("建立食物 → 在記一餐搜尋得到 → 記一筆 → 今日總覽�
 	// 不斷言網址字串本身（跟 tests/new-food.test.tsx 的作法一致）。
 	await expect(page.getByRole("heading", { name: foodName })).toBeVisible();
 
+	await page.getByRole("button", { name: "新增紀錄" }).click();
 	await page.getByRole("link", { name: "記一餐" }).click();
 	await page.getByLabel("搜尋食物").fill(foodName);
 	// 不填「份量」——LogMeal 的 quantity 預設就是 "1"，跟
@@ -48,8 +49,9 @@ test("建立食物 → 在記一餐搜尋得到 → 記一筆 → 今日總覽�
 	await page.getByRole("button", { name: foodName }).click();
 	await page.getByRole("button", { name: "記錄" }).click();
 
-	// 記錄成功後 LogMealRoute 的 onSaved 導去「/today」（P3-C Task 3：首頁
-	// 換成記一餐之後，記完一餐要導去今日總覽，不是導回自己）。
-	await expect(page.getByRole("heading", { name: "今日總覽" })).toBeVisible();
+	// 記錄成功後 LogMealRoute 的 onSaved 導去 `/`（總覽）；macro-kcal 在
+	// 飲食頁，所以再點過去。
+	await expect(page.getByRole("heading", { name: "總覽" })).toBeVisible();
+	await page.getByRole("link", { name: "飲食" }).click();
 	await expect(page.getByTestId("macro-kcal")).not.toHaveText(before ?? "");
 });
