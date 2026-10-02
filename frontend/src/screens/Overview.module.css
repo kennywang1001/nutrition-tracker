@@ -1,0 +1,92 @@
+.cards {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: var(--space-3);
+}
+
+/* 卡片之間的間距由 grid 管，Card 自己的上下 margin 在這裡不需要。 */
+.cards > * {
+	margin: 0;
+}
+
+.label {
+	margin: 0 0 var(--space-1);
+	font-size: 12px;
+	color: var(--color-text-muted);
+}
+
+.total {
+	margin: 0;
+	font-size: var(--font-size-total);
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+}
+
+.unit {
+	font-size: 12px;
+	font-weight: 400;
+	color: var(--color-text-muted);
+}
+
+.progress {
+	width: 100%;
+	height: 6px;
+	margin-top: var(--space-2);
+	accent-color: var(--color-accent);
+}
+
+.sectionTitle {
+	margin: var(--space-4) 0 0;
+	font-size: 14px;
+	color: var(--color-text-muted);
+}
+
+.timeline {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.row {
+	display: grid;
+	grid-template-columns: auto 1fr auto;
+	grid-template-areas:
+		"icon title value"
+		"icon time value";
+	column-gap: var(--space-3);
+	align-items: center;
+	padding: var(--space-2) 0;
+	border-bottom: 1px solid var(--color-border);
+}
+
+.row:last-child {
+	border-bottom: none;
+}
+
+.row > :first-child {
+	grid-area: icon;
+}
+
+.title {
+	grid-area: title;
+}
+
+.time {
+	grid-area: time;
+	font-size: 12px;
+	color: var(--color-text-muted);
+}
+
+.value {
+	grid-area: value;
+	font-variant-numeric: tabular-nums;
+	font-weight: 600;
+}
+
+.notice {
+	margin: 0 0 var(--space-3);
+	padding: var(--space-3);
+	border-radius: var(--radius-card);
+	background: var(--color-accent-soft);
+	color: var(--color-text);
+}
