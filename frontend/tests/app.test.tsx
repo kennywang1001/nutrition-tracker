@@ -6,19 +6,67 @@ import { queryClient } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 
+const ME = {
+	id: 1,
+	email: "kenny@example.com",
+	display_name: "Kenny",
+	role: "user",
+	timezone: "Asia/Taipei",
+};
+const STATS = {
+	date: "2026-10-02",
+	actual: { kcal: "0.00", protein_g: "0.00", fat_g: "0.00", carb_g: "0.00" },
+	target: null,
+	ratio: null,
+};
+const EMPTY_SUMMARY = { month: "2026-10", total: "0.00", by_category: [] };
+
+function jsonResponse(body: unknown) {
+	return new Response(JSON.stringify(body), {
+		status: 200,
+		headers: { "content-type": "application/json" },
+	});
+}
+
+/** App 一掛上去會打好幾個端點（總覽、tab bar 切過去的畫面、我的）。
+ *
+ *  用子字串依序比對，**更具體的路徑排前面**（`/api/expenses/summary`
+ *  在 `/api/expenses` 之前、`/api/meals` 在 `/api/me` 之前）。
+ *
+ *  **每個端點都回正確的形狀**：舊版「所有請求都回 `[]`」會讓總覽拿到
+ *  `[]` 當月報表，`formatMoney(undefined)` 直接把 render 炸掉。 */
+function mockBackend() {
+	return vi
+		.spyOn(globalThis, "fetch")
+		.mockImplementation(async (input, init) => {
+			const url = String(input);
+			const method = (init?.method ?? "GET").toUpperCase();
+			if (method === "POST" && url.includes("/api/auth/logout")) {
+				return new Response(null, { status: 204 });
+			}
+			// **`/api/meals` 必須在 `/api/me` 之前**："/api/meals".includes("/api/me")
+			// 為真——順序反過來，總覽的餐點清單會拿到使用者物件然後當掉。
+			if (url.includes("/api/meals")) return jsonResponse([]);
+			if (url.includes("/api/me")) return jsonResponse(ME);
+			if (url.includes("/api/stats/daily")) return jsonResponse(STATS);
+			if (url.includes("/api/expenses/summary"))
+				return jsonResponse(EMPTY_SUMMARY);
+			if (url.includes("/api/expenses")) return jsonResponse([]);
+			if (url.includes("/api/supplements/today")) return jsonResponse([]);
+			throw new Error(`app.test 沒有為這個請求準備回應：${method} ${url}`);
+		});
+}
+
 beforeEach(() => {
 	localStorage.clear();
 	clearTokens();
 	resetRefreshStateForTests();
 	vi.restoreAllMocks();
-	// `queryClient` 是模組層的單例（Task 4：`clearQueryCacheOnForcedLogout`
-	// 要在 logout()／refresh 失敗時清的就是這一個 instance），在同一個測試
-	// 檔案裡的多個 it() 之間會留存。不清的話，這裡任一則測試對 /api/stats/daily
-	// 的 mock 回應（形狀常常只是隨手塞的 `[]`）會被 <Today /> 快取住，
-	// 下一則測試一 mount 就讀到上一則的舊快取，值的形狀對不上會直接把
-	// render 炸掉——這正是 §6.5 要清快取的同一個道理，只是這裡的「下一個
-	// 使用者」換成了「下一個測試」。
+	// queryClient 是模組層單例，同一個檔案的多個 it() 之間會留存。
 	queryClient.clear();
+	// App 用 BrowserRouter，路徑來自 jsdom 的 window.location——每一條
+	// 測試都從根路徑開始，轉址測試再自己換。
+	window.history.replaceState(null, "", "/");
 });
 
 describe("App", () => {
@@ -27,40 +75,56 @@ describe("App", () => {
 		expect(screen.getByRole("heading", { name: "登入" })).toBeInTheDocument();
 	});
 
-	it("有 token 時顯示記一餐（首頁），而不是登入畫面", () => {
-		// P3-C Task 3：首頁從今日總覽換成記一餐（使用者原話「記一餐應該
-		// 放在首頁」）。重新整理之後不該被踢回登入頁——refresh token 還在
-		// localStorage 裡。
-		//
-		// 這條原本只斷言「沒看到登入畫面」，那個斷言在首頁換成記一餐之後
-		// 依然會綠（不管首頁是今日總覽還是記一餐，登入畫面都不在），但
-		// 那不是這個 task 改動的行為要被守住的方式——加一行明確斷言看到
-		// 的是「記一餐」，這樣如果哪天首頁被誰不小心導回今日總覽，這裡
-		// 才會紅。
+	it("有 token 時首頁是總覽", async () => {
+		// 介面改版：`/` 從「記一餐」換成「總覽」，記一餐要從「＋」進去
+		// （規格 §3.3：這是使用者選了「＋ 先選」的直接代價，不是迴歸）。
 		setTokens({ access_token: "a", refresh_token: "r" });
-		vi.spyOn(globalThis, "fetch").mockResolvedValue(
-			new Response(JSON.stringify([]), {
-				status: 200,
-				headers: { "content-type": "application/json" },
-			}),
-		);
+		mockBackend();
 
 		render(<App />);
 
 		expect(
+			await screen.findByRole("heading", { name: "總覽" }),
+		).toBeInTheDocument();
+		expect(
 			screen.queryByRole("heading", { name: "登入" }),
 		).not.toBeInTheDocument();
-		expect(screen.getByRole("heading", { name: "記一餐" })).toBeInTheDocument();
 	});
 
-	it("登出之後回到登入畫面", async () => {
+	it("舊網址 /today 轉到飲食", async () => {
+		// 手機上可能有書籤或 PWA 的舊狀態（規格 §3.3）。
 		setTokens({ access_token: "a", refresh_token: "r" });
-		vi.spyOn(globalThis, "fetch").mockResolvedValue(
-			new Response(null, { status: 204 }),
-		);
+		mockBackend();
+		window.history.replaceState(null, "", "/today");
 
 		render(<App />);
-		await userEvent.click(screen.getByRole("button", { name: "登出" }));
+
+		expect(
+			await screen.findByRole("heading", { name: "飲食" }),
+		).toBeInTheDocument();
+		expect(window.location.pathname).toBe("/diet");
+	});
+
+	it("舊網址 /expenses 轉到報表", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockBackend();
+		window.history.replaceState(null, "", "/expenses");
+
+		render(<App />);
+
+		expect(
+			await screen.findByRole("heading", { name: "報表" }),
+		).toBeInTheDocument();
+		expect(window.location.pathname).toBe("/reports");
+	});
+
+	it("從「我的」登出之後回到登入畫面", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockBackend();
+		render(<App />);
+
+		await userEvent.click(await screen.findByRole("link", { name: "我的" }));
+		await userEvent.click(await screen.findByRole("button", { name: "登出" }));
 
 		expect(
 			await screen.findByRole("heading", { name: "登入" }),

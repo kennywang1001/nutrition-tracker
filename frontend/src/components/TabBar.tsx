@@ -1,65 +1,83 @@
+import {
+	ChartPie,
+	CircleUser,
+	LayoutDashboard,
+	type LucideIcon,
+	Plus,
+	Salad,
+} from "lucide-react";
+import { useState } from "react";
 import { NavLink } from "react-router";
-import { useMe } from "../api/me";
+import { AddSheet } from "./AddSheet";
+import styles from "./TabBar.module.css";
 
-type Tab = { to: string; label: string; end?: boolean };
+type Tab = { to: string; label: string; icon: LucideIcon; end?: boolean };
 
-/** 底部導覽（規格 §3.1）。
+/** 底部導覽：總覽｜報表｜＋｜飲食｜我的（介面改版規格 §3.1）。
  *
  *  **用 `NavLink` 而不是 `Link`**：NavLink 自己依目前路由加上
  *  `aria-current="page"`。自己拿 `useLocation()` 比字串的話，「哪一格是
- *  亮的」會退化成一個只有 class 名稱看得出來的狀態 —— 而 class 名稱
- *  螢幕閱讀器讀不到，測試驗它也只是在驗我們自己寫的字串。
+ *  亮的」會退化成只有 class 名稱看得出來的狀態，而 `"/diet".startsWith("/")`
+ *  為真——總覽會跟著亮（`tests/tab-bar.test.tsx` 守這件事）。
  *
- *  **`/` 那一格的 `end` 在 react-router 8.3.1 其實是無作用的保險。**
- *  原本的理由是「根路由是每一個路徑的前綴，沒有 `end` 的話這一格在
- *  每一頁都會亮」—— 那個理由在這個版本不成立：NavLink 對 `to="/"` 有內建
- *  特例（非精確分支要求 `locationPathname.charAt(1) === "/"`，對 `/today`
- *  是 `"t"`，恆為 false）。實測過：拿掉 `end: true`，
- *  `tests/tab-bar.test.tsx` 照樣全綠。
+ *  **`/` 那一格的 `end` 在 react-router 8.3.1 是無作用的保險**：NavLink 對
+ *  `to="/"` 有內建特例。留著是因為它精確表達意圖。
  *
- *  留著它是因為它精確表達意圖，而且不排除將來 react-router 改掉那個
- *  內建行為。**但不要以為它是那條測試在守的東西** ——
- *  那條測試真正守的是上面「用 NavLink 而不是 Link」這個選擇，
- *  詳見 `tests/tab-bar.test.tsx` 裡的說明。
- *
- *  **P3-C Task 3：`/` 從今日總覽換成記一餐**（使用者原話「記一餐應該放在
- *  首頁」），今日總覽搬到 `/today`。**`end: true` 跟著 `to: "/"` 走，不是
- *  跟著「今日總覽」這個標籤走**——它標記的是「哪個路徑是根路徑」，跟哪個
- *  畫面掛在根路徑上是兩件事。
- */
-const TABS: readonly Tab[] = [
-	{ to: "/", label: "記一餐", end: true },
-	{ to: "/today", label: "今日總覽" },
-	{ to: "/trend", label: "趨勢" },
-	{ to: "/foods", label: "食物庫" },
+ *  **「＋」不是一個路由**，是一顆打開 `AddSheet` 的按鈕。管理員的「審核」
+ *  搬到「我的」——tab bar 因此對所有人都是固定的 4＋1 格，320px 寬時每格
+ *  64px，圖示加兩個字的標籤放得下。 */
+const LEFT_TABS: readonly Tab[] = [
+	{ to: "/", label: "總覽", icon: LayoutDashboard, end: true },
+	{ to: "/reports", label: "報表", icon: ChartPie },
 ];
 
-/** 管理員限定的第五格（規格 §3.1、Task 7）。
- *
- *  **`TabBar` 自己呼叫 `useMe()`，不是從 `App` 往下傳 `role`。** 從 `App`
- *  傳的話只是把同一個資料依賴往上推一層，還會讓 `App`（現在完全不需要
- *  知道使用者角色）多一個它用不到的 query（Task 7 計畫的決定）。
- *
- *  `role === "admin"` 用 `meQuery.data?.role`，不是 `meQuery.data!.role`
- *  或另外判斷 `isLoading`：`useMe()` 還在載入或失敗時 `data` 是
- *  `undefined`，`undefined?.role === "admin"` 自然是 `false`——第五格
- *  一開始就不畫，不是畫出來再拿掉，不會有「先閃一下再消失」這件事。 */
+const RIGHT_TABS: readonly Tab[] = [
+	{ to: "/diet", label: "飲食", icon: Salad },
+	{ to: "/me", label: "我的", icon: CircleUser },
+];
+
+function TabLink({ tab }: { tab: Tab }) {
+	const Icon = tab.icon;
+	return (
+		<NavLink
+			to={tab.to}
+			end={tab.end}
+			className={({ isActive }) =>
+				isActive ? `${styles.tab} ${styles.active}` : styles.tab
+			}
+		>
+			<Icon aria-hidden="true" size={22} />
+			<span>{tab.label}</span>
+		</NavLink>
+	);
+}
+
 export function TabBar() {
-	const meQuery = useMe();
-	const isAdmin = meQuery.data?.role === "admin";
+	const [sheetOpen, setSheetOpen] = useState(false);
 
 	return (
-		<nav className="tab-bar" aria-label="主要導覽">
-			{TABS.map((tab) => (
-				<NavLink key={tab.to} to={tab.to} end={tab.end} className="tab">
-					{tab.label}
-				</NavLink>
-			))}
-			{isAdmin && (
-				<NavLink to="/admin/revisions" className="tab">
-					審核
-				</NavLink>
-			)}
-		</nav>
+		<>
+			<nav className={styles.bar} aria-label="主要導覽">
+				{LEFT_TABS.map((tab) => (
+					<TabLink key={tab.to} tab={tab} />
+				))}
+				<div className={styles.addSlot}>
+					<button
+						type="button"
+						className={styles.add}
+						aria-label="新增紀錄"
+						aria-haspopup="dialog"
+						aria-expanded={sheetOpen}
+						onClick={() => setSheetOpen(true)}
+					>
+						<Plus aria-hidden="true" size={28} />
+					</button>
+				</div>
+				{RIGHT_TABS.map((tab) => (
+					<TabLink key={tab.to} tab={tab} />
+				))}
+			</nav>
+			{sheetOpen && <AddSheet onClose={() => setSheetOpen(false)} />}
+		</>
 	);
 }

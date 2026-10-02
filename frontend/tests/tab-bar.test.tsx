@@ -1,156 +1,117 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetRefreshStateForTests } from "../src/auth/refresh";
-import { clearTokens, setTokens } from "../src/auth/store";
+import { describe, expect, it } from "vitest";
 import { TabBar } from "../src/components/TabBar";
-import { json, mockApi } from "./helpers/mock-api";
 
-// TabBar 從 Task 7 開始自己呼叫 useMe()（決定第五格出不出現），所以這裡
-// 一定要包 QueryClientProvider，不然 useQuery 會直接炸掉——這是計畫原文
-// 講的「這裡的 3 則會壞，是預期的」。
+// 介面改版：TabBar 不再呼叫 useMe()（管理員的「審核」搬到「我的」，
+// 見 tests/me.test.tsx），所以不需要 QueryClientProvider 也不需要 mock API。
 
-function me(role: "user" | "admin") {
-	return {
-		id: 1,
-		email: "kenny@example.com",
-		display_name: "Kenny",
-		role,
-		timezone: "Asia/Taipei",
-	};
-}
-
-function wrap(children: ReactNode, path: string) {
-	const client = new QueryClient({
-		defaultOptions: { queries: { retry: false } },
-	});
-	return (
-		<QueryClientProvider client={client}>
-			<MemoryRouter initialEntries={[path]}>{children}</MemoryRouter>
-		</QueryClientProvider>
+function renderAt(path: string) {
+	return render(
+		<MemoryRouter initialEntries={[path]}>
+			<TabBar />
+		</MemoryRouter>,
 	);
 }
 
-function renderAt(path: string, role: "user" | "admin" = "user") {
-	mockApi([{ method: "GET", path: "/api/me", handler: () => json(me(role)) }]);
-	return render(wrap(<TabBar />, path));
-}
-
-beforeEach(() => {
-	localStorage.clear();
-	clearTokens();
-	resetRefreshStateForTests();
-	vi.restoreAllMocks();
-	setTokens({ access_token: "a", refresh_token: "r" });
-});
-
 describe("TabBar", () => {
-	it("四個目的地都在", async () => {
+	it("四個目的地都在，連到對的路由", () => {
 		renderAt("/");
-		for (const name of ["記一餐", "今日總覽", "趨勢", "食物庫"]) {
-			expect(await screen.findByRole("link", { name })).toBeInTheDocument();
+
+		for (const [name, href] of [
+			["總覽", "/"],
+			["報表", "/reports"],
+			["飲食", "/diet"],
+			["我的", "/me"],
+		] as const) {
+			expect(screen.getByRole("link", { name })).toHaveAttribute("href", href);
 		}
 	});
 
-	it("目前所在的那一格標成 aria-current", async () => {
-		// 用 NavLink 而不是 Link：NavLink 自己會依路由比對加上
-		// aria-current="page"。自己用 useLocation 比對字串的話，
-		// 「哪一格是亮的」就變成一個要自己維護、而且測試只驗 class
-		// 名稱的東西——而 class 名稱跟螢幕閱讀器讀到的東西無關。
-		renderAt("/trend");
+	it("目前所在的那一格標成 aria-current，別格沒有", () => {
+		renderAt("/reports");
 
-		expect(await screen.findByRole("link", { name: "趨勢" })).toHaveAttribute(
+		expect(screen.getByRole("link", { name: "報表" })).toHaveAttribute(
 			"aria-current",
 			"page",
 		);
-		expect(screen.getByRole("link", { name: "今日總覽" })).not.toHaveAttribute(
+		expect(screen.getByRole("link", { name: "飲食" })).not.toHaveAttribute(
 			"aria-current",
 		);
 	});
 
-	it("在 /today 時亮的是今日總覽，不是記一餐", async () => {
-		// 上面那條測試（停在 /trend）只檢查趨勢那一格亮著，**沒檢查別格暗著**
-		// ——把每一格都標成 aria-current 的實作照樣會綠。這條補那個洞，而且
-		// 挑的是最容易踩雷的那一格：`/` 現在是記一餐（P3-C Task 3：記一餐
-		// 變成首頁），如果哪天有人把 NavLink 換成 `<Link>` +
-		// `useLocation()` + `startsWith`，`"/today".startsWith("/")` 為真，
-		// 記一餐會被誤判成也在啟用中。
-		//
-		// （這條測試原本停在 `/log`，守的是「今日總覽 vs 記一餐」；P3-C
-		// Task 3 把路由換成 `/` = 記一餐、`/today` = 今日總覽之後，`/log`
-		// 不再是任何一格的目的地，改守 `/today`，角色互換但驗的道理不變。）
-		//
-		// ## 它守的不是 `end`（實測過，計畫一原本寫錯了，這裡沿用同一個結論）
-		//
-		// react-router 8.3.1 的 NavLink 對 `to="/"` 有內建特例，跟 `end` 無關
-		// ——`node_modules/react-router/dist/development/lib/dom/lib.js`：
-		//
-		//   const endSlashPosition = toPathname !== "/" && toPathname.endsWith("/")
-		//     ? toPathname.length - 1 : toPathname.length;
-		//   isActive = locationPathname === toPathname
-		//     || (!end && locationPathname.startsWith(toPathname)
-		//         && locationPathname.charAt(endSlashPosition) === "/");
-		//
-		// `toPathname === "/"` 時 endSlashPosition 是 1，於是非精確分支要求
-		// `locationPathname.charAt(1) === "/"` —— 對 `/today` 那是 "t"，恆為
-		// false。**所以 `end` 對根路由那一格是無作用的保險**（留著是因為它
-		// 精確表達意圖，而且不排除將來 react-router 改掉這個內建行為）。
-		//
-		// ## 它真正守的是「不要自己拿 useLocation() 比字串」
-		//
-		// 那正是 TabBar 的 docstring 主張的架構選擇。實測過的突變：
-		// 把 NavLink 換成 `<Link>` 加 `useLocation()` 加
-		// `location.pathname.startsWith(tab.to)`，**這條與上面那條都紅**
-		// （`/today`.startsWith("/") 為真，記一餐也亮了）。
-		//
-		// 也就是說：這條測試有鑑別力，只是標的跟計畫寫的不是同一個。
-		renderAt("/today");
+	it("在 /diet 時亮的是飲食，不是總覽", () => {
+		// 守的是「用 NavLink，不要自己拿 useLocation() 比字串」：
+		// "/diet".startsWith("/") 為真，自己比字串的實作會讓總覽也亮起來。
+		// （`end` 對根路由那一格在 react-router 8.3.1 是無作用的保險——
+		// NavLink 對 to="/" 有內建特例，詳見舊版這個檔案的說明與 TabBar.tsx。）
+		renderAt("/diet");
 
-		expect(
-			await screen.findByRole("link", { name: "今日總覽" }),
-		).toHaveAttribute("aria-current", "page");
-		expect(screen.getByRole("link", { name: "記一餐" })).not.toHaveAttribute(
+		expect(screen.getByRole("link", { name: "飲食" })).toHaveAttribute(
+			"aria-current",
+			"page",
+		);
+		expect(screen.getByRole("link", { name: "總覽" })).not.toHaveAttribute(
 			"aria-current",
 		);
 	});
 
-	it("管理員看得到第五格「審核」", async () => {
-		renderAt("/", "admin");
+	it("「新增紀錄」打開面板，裡面有記帳與記一餐兩個入口", async () => {
+		// **入口測試。** 這個專案三次蓋好後端卻沒有前端入口（食物、補劑、
+		// 記帳——handover §6）。拿掉面板裡任何一個連結，這條會紅。
+		renderAt("/");
 
-		expect(
-			await screen.findByRole("link", { name: "審核" }),
-		).toBeInTheDocument();
-	});
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
-	it("一般使用者看不到「審核」", async () => {
-		renderAt("/", "user");
+		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
 
-		// 先等一個一定會出現的目的地，確保 useMe() 已經解析完——否則下面
-		// 的 queryByRole 只是在證明「還沒 fetch 完」，不是在證明「查完之後
-		// 仍然沒有」。
-		await screen.findByRole("link", { name: "今日總覽" });
-
-		expect(
-			screen.queryByRole("link", { name: "審核" }),
-		).not.toBeInTheDocument();
-	});
-
-	it("useMe 還在載入時看不到「審核」——不要先閃一下再消失", () => {
-		// 不用 mockApi：故意讓 fetch 停在 pending，模擬 useMe() 還沒回來的
-		// 那個瞬間。斷言的是「一開始就沒有」，不是「等一下才消失」——
-		// isAdmin 用 meQuery.data?.role（TabBar.tsx）在 data 是 undefined
-		// 時自然是 false，不需要另外判斷 isLoading 才擋得住。
-		vi.spyOn(globalThis, "fetch").mockImplementation(
-			() => new Promise(() => {}),
+		const sheet = screen.getByRole("dialog", { name: "新增紀錄" });
+		expect(sheet).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "記帳" })).toHaveAttribute(
+			"href",
+			"/expenses/new",
 		);
+		expect(screen.getByRole("link", { name: "記一餐" })).toHaveAttribute(
+			"href",
+			"/meals/new",
+		);
+	});
 
-		render(wrap(<TabBar />, "/"));
+	it("按 Esc 關掉面板", async () => {
+		renderAt("/");
+		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
 
-		expect(screen.getByRole("link", { name: "今日總覽" })).toBeInTheDocument();
-		expect(
-			screen.queryByRole("link", { name: "審核" }),
-		).not.toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+
+	it("按「取消」關掉面板", async () => {
+		renderAt("/");
+		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
+
+		await userEvent.click(screen.getByRole("button", { name: "取消" }));
+
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+
+	it("點了入口之後面板關掉", async () => {
+		// 不關的話，使用者到了記帳畫面，面板還蓋在上面。
+		renderAt("/");
+		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
+
+		await userEvent.click(screen.getByRole("link", { name: "記帳" }));
+
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+
+	it("面板打開時焦點移到第一個入口", async () => {
+		// 鍵盤與螢幕閱讀器的使用者按下「＋」之後，焦點不能留在背後被遮住的按鈕上。
+		renderAt("/");
+
+		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
+
+		expect(screen.getByRole("link", { name: "記帳" })).toHaveFocus();
 	});
 });

@@ -1,7 +1,12 @@
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { useState } from "react";
-import { BrowserRouter, Route, Routes, useNavigate } from "react-router";
-import { apiFetch } from "./api/client";
+import {
+	BrowserRouter,
+	Navigate,
+	Route,
+	Routes,
+	useNavigate,
+} from "react-router";
 // 離線 L2（計畫三 Task 4）：跟下面的 queryClient 一樣是模組層單例，不是
 // 這裡的元件 render 裡——建在 render 裡每次重繪都會建一個新的 persister，
 // 節流狀態跟著重置。
@@ -12,7 +17,6 @@ import { offlinePersistOptions } from "./api/persist";
 // 的 refresh 失敗路徑也能拿到同一個 instance 去清快取（規格 §6.5），
 // 又不必回頭 import 這個檔案（那會兜出循環依賴）。
 import { queryClient } from "./api/queries";
-import { logout } from "./auth/session";
 import { getRefreshToken } from "./auth/store";
 import { TabBar } from "./components/TabBar";
 import { AdminRevisions } from "./screens/AdminRevisions";
@@ -21,58 +25,21 @@ import { FoodDetail } from "./screens/FoodDetail";
 import { FoodLibrary } from "./screens/FoodLibrary";
 import { Login } from "./screens/Login";
 import { LogMeal } from "./screens/LogMeal";
+import { Me } from "./screens/Me";
 import { NewFood } from "./screens/NewFood";
+import { Overview } from "./screens/Overview";
 import { Supplements } from "./screens/Supplements";
 import { Today } from "./screens/Today";
 import { Trend } from "./screens/Trend";
 
-/** `/` 路由（P3-C Task 3：記一餐變成首頁，使用者原話「記一餐應該放在
- *  首頁」）：記完一餐之後導去 `/today`，不是導回自己。
+/** `/meals/new`（介面改版）：記完一餐之後導回總覽。
  *
- *  **故意不導回 `/`。** 使用者記完一餐要的是立刻看到「數字變了」（今日
- *  總覽），導回記一餐本身等於畫面上什麼都沒發生——使用者會以為沒記進去。
- *
- *  `onSaved` 不直接放「導向哪裡」以外的邏輯——快取的失效已經在
- *  `LogMeal` 內部的 mutation `onSuccess` 做掉了，這裡只管畫面切換。 */
+ *  **導回 `/`，不是留在記一餐**：使用者記完要的是立刻看到「數字變了」——
+ *  總覽的今天熱量與時間線。留在原地等於畫面上什麼都沒發生，使用者會以為
+ *  沒記進去、再記一次。 */
 function LogMealRoute() {
 	const navigate = useNavigate();
-	return <LogMeal onSaved={() => navigate("/today")} />;
-}
-
-function Nav({ onLoggedOut }: { onLoggedOut: () => void }) {
-	// 「重新整理」按鈕從 main.tsx 搬過來，不是刪掉——計畫一的
-	// 「access token 過期時會自動換票並重送」E2E 依賴它打 /api/me。
-	//
-	// **不要改成 useMe() 的 refetch。** staleTime 是 60 秒，改了之後按下去
-	// 什麼都不會發生，而 e2e/auth.spec.ts 那條測試不會紅——它只是不再
-	// 測到任何東西（規格 §8.1）。
-	//
-	// 導覽連結搬到 <TabBar>（P3-B 計畫一 Task 3），這裡只剩下兩個動作。
-	const [displayName, setDisplayName] = useState<string | null>(null);
-
-	return (
-		<nav>
-			<button
-				type="button"
-				onClick={async () => {
-					const me = await apiFetch<{ display_name: string }>("/api/me");
-					setDisplayName(me?.display_name ?? null);
-				}}
-			>
-				重新整理
-			</button>
-			<button
-				type="button"
-				onClick={async () => {
-					await logout();
-					onLoggedOut();
-				}}
-			>
-				登出
-			</button>
-			{displayName !== null && <p>{displayName}</p>}
-		</nav>
-	);
+	return <LogMeal onSaved={() => navigate("/")} />;
 }
 
 export function App() {
@@ -87,13 +54,25 @@ export function App() {
 		>
 			{loggedIn ? (
 				<BrowserRouter>
-					<Nav onLoggedOut={() => setLoggedIn(false)} />
 					<main className="app-main">
 						<Routes>
-							{/* P3-C Task 3：首頁從今日總覽換成記一餐，今日總覽搬到
-								/today（使用者原話「記一餐應該放在首頁」）。 */}
-							<Route path="/" element={<LogMealRoute />} />
-							<Route path="/today" element={<Today />} />
+							{/* 介面改版（規格 §3.2）：總覽｜報表｜＋｜飲食｜我的。
+									「＋」不是路由，是 TabBar 裡打開 AddSheet 的按鈕。 */}
+							<Route path="/" element={<Overview />} />
+							<Route path="/reports" element={<Expenses />} />
+							<Route path="/diet" element={<Today />} />
+							<Route
+								path="/me"
+								element={<Me onLoggedOut={() => setLoggedIn(false)} />}
+							/>
+							<Route path="/meals/new" element={<LogMealRoute />} />
+							{/* 舊網址轉址（規格 §3.3）：手機上可能有書籤或 PWA 的舊
+									狀態。`replace`：上一頁不會回到一個只會再轉走的網址。 */}
+							<Route path="/today" element={<Navigate to="/diet" replace />} />
+							<Route
+								path="/expenses"
+								element={<Navigate to="/reports" replace />}
+							/>
 							<Route path="/trend" element={<Trend />} />
 							<Route path="/foods" element={<FoodLibrary />} />
 							{/* 順序在這裡不像後端 foods.py 的 /frequent /recent 那樣要緊
@@ -109,10 +88,6 @@ export function App() {
 								「今日補劑」區塊（計畫的說明：320px 寬度下 tab bar 每格
 								只剩 53px，加不下去）。 */}
 							<Route path="/supplements" element={<Supplements />} />
-							{/* 記帳（P5 計畫二）。刻意不加第六個 tab，入口在
-								Today.tsx——320px 寬度下 tab bar 第六格只剩 53.3px，
-								而「今日總覽」四個字約 56px（規格 §6.1、§6.2 方向 1）。 */}
-							<Route path="/expenses" element={<Expenses />} />
 							{/* 不做前端導向：非管理員直接輸入這個網址時，讓它照常渲染、
 								讓 GET /api/admin/food-revisions 打出去、讓後端的
 								require_admin 回 403（見 AdminRevisions.tsx 的說明、

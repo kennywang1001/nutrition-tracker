@@ -274,7 +274,7 @@ export function Expenses() {
 
 	return (
 		<section>
-			<h1>記帳</h1>
+			<h1>報表</h1>
 
 			<h2>記一筆</h2>
 			{/* 用 <form> 不是 onClick：手機鍵盤的「前往」/ Enter 都該能送出，

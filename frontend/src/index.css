@@ -92,36 +92,6 @@ a {
 		);
 }
 
-.tab-bar {
-	position: fixed;
-	bottom: 0;
-	left: 0;
-	right: 0;
-	display: flex;
-	/* 有 home indicator 的機子（iPhone X 之後），最底下一排會被系統的
-	   手勢區遮掉一截。墊高這個量之後才看得完整（規格 §3.1）。 */
-	padding-bottom: var(--safe-bottom);
-	border-top: 1px solid #ddd;
-	background: #fff;
-}
-
-.tab {
-	flex: 1;
-	/* 44px 是可點選區的下限；這裡給 56 是為了讓中文標籤不會貼邊。 */
-	min-height: var(--tab-bar-height);
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	text-decoration: none;
-	color: #555;
-	font-size: 14px;
-}
-
-.tab[aria-current="page"] {
-	color: #111;
-	font-weight: 600;
-}
-
 /* 圖的「大小」由 CSS 決定，但每一根柱子的「高度」不是——那是在
    TrendChart.tsx 裡算成 SVG 屬性的。理由見那個檔案的 docstring：
    jsdom 不做版面計算，交給 CSS 的話幾何就測不到。 */

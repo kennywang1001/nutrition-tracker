@@ -85,7 +85,7 @@ export function Today() {
 
 	return (
 		<section>
-			<h1>今日總覽</h1>
+			<h1>飲食</h1>
 
 			{statsQuery.isLoading && <p>載入中…</p>}
 			{statsQuery.isError && stats === undefined && <p>無法載入今日總覽</p>}

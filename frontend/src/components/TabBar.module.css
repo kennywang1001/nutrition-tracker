@@ -1,0 +1,52 @@
+.bar {
+	position: fixed;
+	bottom: 0;
+	left: 0;
+	right: 0;
+	z-index: 10;
+	display: flex;
+	/* 有 home indicator 的機子，最底下一排會被系統的手勢區遮掉一截。 */
+	padding-bottom: var(--safe-bottom);
+	background: var(--color-surface);
+	border-top: 1px solid var(--color-border);
+}
+
+.tab {
+	flex: 1;
+	/* 44px 是可點選區的下限；56 讓圖示加兩個字的標籤不會貼邊。 */
+	min-height: var(--tab-bar-height);
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 2px;
+	text-decoration: none;
+	color: var(--color-text-muted);
+	font-size: 12px;
+}
+
+.active {
+	color: var(--color-action);
+	font-weight: 600;
+}
+
+.addSlot {
+	flex: 1;
+	display: flex;
+	justify-content: center;
+}
+
+.add {
+	width: 52px;
+	height: 52px;
+	/* 凸出 tab bar 上緣（規格 §4.4）。.app-main 的底部留白有把這一截算進去。 */
+	margin-top: calc(-1 * var(--add-button-overhang));
+	border: none;
+	border-radius: 50%;
+	background: var(--color-action);
+	color: var(--color-on-action);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	box-shadow: var(--shadow-raised);
+}
