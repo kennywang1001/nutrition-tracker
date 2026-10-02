@@ -94,8 +94,12 @@ export class PhotoTooLargeError extends Error {
  *     用 `vi.mock` 把它換成直接回傳原檔。
  *  3. `FormData` 的欄位名必須是 `"file"` ——後端的簽章是
  *     `file: UploadFile = File(...)`，欄位名寫錯的話 FastAPI 回
- *     422 VALIDATION_ERROR，訊息不會直接說「你的欄位名叫錯了」。 */
-async function uploadMealPhoto(
+ *     422 VALIDATION_ERROR，訊息不會直接說「你的欄位名叫錯了」。
+ *
+ *  **匯出給記一餐用**（介面改版 Task 8）：記一餐要等 `POST /api/meals`
+ *  回來才知道 mealId，`useUploadMealPhoto(mealId)` 綁死一個 mealId 用不了。
+ *  記一餐成功後自己失效 `queryKeys.meals`（前綴會一起打到這一餐的照片 key）。 */
+export async function uploadMealPhoto(
 	mealId: number,
 	file: File,
 ): Promise<MealResponse> {

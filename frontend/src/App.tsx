@@ -25,7 +25,7 @@ import { Expenses } from "./screens/Expenses";
 import { FoodDetail } from "./screens/FoodDetail";
 import { FoodLibrary } from "./screens/FoodLibrary";
 import { Login } from "./screens/Login";
-import { LogMeal } from "./screens/LogMeal";
+import { LogMeal, PHOTO_UPLOAD_FAILED_NOTICE } from "./screens/LogMeal";
 import { Me } from "./screens/Me";
 import { NewFood } from "./screens/NewFood";
 import { Overview } from "./screens/Overview";
@@ -33,14 +33,25 @@ import { Supplements } from "./screens/Supplements";
 import { Today } from "./screens/Today";
 import { Trend } from "./screens/Trend";
 
-/** `/meals/new`（介面改版）：記完一餐之後導回總覽。
+/** `/meals/new`（介面改版）：記完一餐之後導回總覽；照片沒傳上去時帶著通知回總覽。
  *
  *  **導回 `/`，不是留在記一餐**：使用者記完要的是立刻看到「數字變了」——
  *  總覽的今天熱量與時間線。留在原地等於畫面上什麼都沒發生，使用者會以為
  *  沒記進去、再記一次。 */
 function LogMealRoute() {
 	const navigate = useNavigate();
-	return <LogMeal onSaved={() => navigate("/")} />;
+	return (
+		<LogMeal
+			onSaved={({ photoFailed }) =>
+				navigate(
+					"/",
+					photoFailed
+						? { state: { notice: PHOTO_UPLOAD_FAILED_NOTICE } }
+						: undefined,
+				)
+			}
+		/>
+	);
 }
 
 /** `/expenses/new`：記完或關閉都回總覽。 */

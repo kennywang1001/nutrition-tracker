@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useLocation } from "react-router";
 import {
 	CATEGORY_LABELS,
 	useExpenseSummary,
@@ -12,6 +13,20 @@ import { formatTime } from "../lib/dates";
 import { formatMacro, formatMoney, ratioOf } from "../lib/decimal";
 import { buildTimeline, type TimelineRow } from "../lib/timeline";
 import styles from "./Overview.module.css";
+
+/** 從路由 state 拿通知（例如記一餐「照片沒傳上去」）。state 是 unknown——
+ *  任何頁面都可能 navigate 過來，形狀不對就當作沒有。 */
+function noticeFrom(state: unknown): string | null {
+	if (
+		typeof state === "object" &&
+		state !== null &&
+		"notice" in state &&
+		typeof state.notice === "string"
+	) {
+		return state.notice;
+	}
+	return null;
+}
 
 function MonthSpendCard() {
 	const summaryQuery = useExpenseSummary(null);
@@ -189,9 +204,15 @@ function OfflineBanner() {
  *  三塊**各自**處理載入與錯誤——一塊失敗不拖垮整頁。
  *  時間線的列只能看、不能點（規格 §1.3）。 */
 export function Overview() {
+	const notice = noticeFrom(useLocation().state);
 	return (
 		<section>
 			<h1>總覽</h1>
+			{notice !== null && (
+				<p role="status" className={styles.notice}>
+					{notice}
+				</p>
+			)}
 			<OfflineBanner />
 			<div className={styles.cards}>
 				<MonthSpendCard />

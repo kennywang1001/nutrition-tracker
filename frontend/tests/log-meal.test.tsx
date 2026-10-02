@@ -3,11 +3,18 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_PHOTO_BYTES } from "../src/api/photos";
 import { queryKeys } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { LogMeal } from "../src/screens/LogMeal";
 import { json, mockApiByPath as mockApi } from "./helpers/mock-api";
+
+// 上傳會先呼叫 shrinkToLongestEdge 降尺寸，它用 canvas，jsdom 沒有。
+// 這裡驗的是「兩步驟的順序與失敗處理」，不是降尺寸本身。
+vi.mock("../src/lib/resize-image", () => ({
+	shrinkToLongestEdge: vi.fn((file: File) => Promise.resolve(file)),
+}));
 
 function wrap(children: ReactNode) {
 	const client = new QueryClient({
@@ -41,6 +48,21 @@ const FREQUENT_FOODS = [
 	},
 ];
 
+function photoFile(size?: number): File {
+	const file = new File(["fake-jpeg"], "lunch.jpg", { type: "image/jpeg" });
+	if (size !== undefined) {
+		// 不真的配置 10MB——只改 size 屬性，前端的大小檢查只看這個。
+		Object.defineProperty(file, "size", { value: size });
+	}
+	return file;
+}
+
+function postedUrls(fetchMock: ReturnType<typeof mockApi>): string[] {
+	return fetchMock.mock.calls
+		.filter(([, init]) => (init?.method ?? "GET").toUpperCase() === "POST")
+		.map(([input]) => String(input));
+}
+
 const SEARCH_RESULT = {
 	id: 3,
 	name: "白飯",
@@ -64,6 +86,125 @@ beforeEach(() => {
 });
 
 describe("記一餐", () => {
+	it("選了照片：先建立這一餐，再把照片傳到那一餐", async () => {
+		// **路徑順序**：mockApiByPath 依物件的鍵順序用 url.includes 比對，
+		// "/api/meals/99/photo" 也「包含」"/api/meals"——照片的路徑要排前面。
+		const fetchMock = mockApi({
+			"/api/foods/frequent": () => json(FREQUENT_FOODS),
+			"/api/foods/recent": () => json([]),
+			"/api/foods/1/portions": () => json([]),
+			"/api/meals/99/photo": () => json({ id: 99 }),
+			"/api/meals": () => json({ id: 99 }, 201),
+		});
+		const onSaved = vi.fn();
+		render(wrap(<LogMeal onSaved={onSaved} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+
+		await userEvent.upload(screen.getByLabelText("照片（選填）"), photoFile());
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() =>
+			expect(onSaved).toHaveBeenCalledWith({ photoFailed: false }),
+		);
+		expect(postedUrls(fetchMock)).toEqual([
+			"/api/meals",
+			"/api/meals/99/photo",
+		]);
+		const photoCall = fetchMock.mock.calls.find(([input]) =>
+			String(input).includes("/photo"),
+		);
+		const body = photoCall?.[1]?.body;
+		expect(body).toBeInstanceOf(FormData);
+		// 欄位名必須是 "file"——後端是 `file: UploadFile = File(...)`。
+		expect((body as FormData).get("file")).toBeInstanceOf(File);
+	});
+
+	it("沒選照片就只建立這一餐", async () => {
+		const fetchMock = mockApi({
+			"/api/foods/frequent": () => json(FREQUENT_FOODS),
+			"/api/foods/recent": () => json([]),
+			"/api/foods/1/portions": () => json([]),
+			"/api/meals": () => json({ id: 99 }, 201),
+		});
+		const onSaved = vi.fn();
+		render(wrap(<LogMeal onSaved={onSaved} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() =>
+			expect(onSaved).toHaveBeenCalledWith({ photoFailed: false }),
+		);
+		expect(postedUrls(fetchMock)).toEqual(["/api/meals"]);
+	});
+
+	it("照片太大：選的當下就擋，不會傳出去", async () => {
+		const fetchMock = mockApi({
+			"/api/foods/frequent": () => json(FREQUENT_FOODS),
+			"/api/foods/recent": () => json([]),
+			"/api/foods/1/portions": () => json([]),
+			"/api/meals": () => json({ id: 99 }, 201),
+		});
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+
+		await userEvent.upload(
+			screen.getByLabelText("照片（選填）"),
+			photoFile(MAX_PHOTO_BYTES + 1),
+		);
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("MB 上限");
+		expect(screen.queryByAltText("選好的照片")).not.toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+		await waitFor(() => expect(postedUrls(fetchMock)).toEqual(["/api/meals"]));
+	});
+
+	it("餐存好了、照片傳失敗：不算整筆失敗，告訴外層照片沒傳上去", async () => {
+		// 讓 mutation 失敗的話，使用者會以為沒記到、再記一次——
+		// 那一餐（含餐費）已經在後端了，那就是重複記錢。
+		mockApi({
+			"/api/foods/frequent": () => json(FREQUENT_FOODS),
+			"/api/foods/recent": () => json([]),
+			"/api/foods/1/portions": () => json([]),
+			"/api/meals/99/photo": () =>
+				json(
+					{ error: { code: "INTERNAL_ERROR", message: "壞了", details: {} } },
+					500,
+				),
+			"/api/meals": () => json({ id: 99 }, 201),
+		});
+		const onSaved = vi.fn();
+		render(wrap(<LogMeal onSaved={onSaved} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+
+		await userEvent.upload(screen.getByLabelText("照片（選填）"), photoFile());
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() =>
+			expect(onSaved).toHaveBeenCalledWith({ photoFailed: true }),
+		);
+		expect(screen.queryByText("記錄失敗，請再試一次")).not.toBeInTheDocument();
+	});
+
+	it("移除照片之後就不會上傳", async () => {
+		const fetchMock = mockApi({
+			"/api/foods/frequent": () => json(FREQUENT_FOODS),
+			"/api/foods/recent": () => json([]),
+			"/api/foods/1/portions": () => json([]),
+			"/api/meals": () => json({ id: 99 }, 201),
+		});
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+		await userEvent.upload(screen.getByLabelText("照片（選填）"), photoFile());
+		expect(await screen.findByAltText("選好的照片")).toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "移除照片" }));
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() => expect(postedUrls(fetchMock)).toEqual(["/api/meals"]));
+	});
+
 	it("列出常吃的食物", async () => {
 		mockApi({
 			"/api/foods/frequent": () => json(FREQUENT_FOODS),

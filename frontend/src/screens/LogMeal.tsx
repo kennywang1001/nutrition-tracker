@@ -1,21 +1,35 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { Camera } from "lucide-react";
+import { type ChangeEvent, useEffect, useState } from "react";
 import { apiFetch } from "../api/client";
 import { ApiError } from "../api/errors";
 import { AMOUNT_FORMAT_ERROR } from "../api/expenses";
 import { useFoodSearch } from "../api/foods";
+import {
+	MAX_PHOTO_BYTES,
+	PhotoTooLargeError,
+	uploadMealPhoto,
+} from "../api/photos";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
 import { FoodResultList } from "../components/FoodResultList";
 import { formatMacro } from "../lib/decimal";
 import { useDebounced } from "../lib/use-debounced";
+import styles from "./LogMeal.module.css";
 
 type Food = components["schemas"]["FoodResponse"];
 type Portion = components["schemas"]["PortionResponse"];
 type MealResponse = components["schemas"]["MealResponse"];
 type MealType = components["schemas"]["MealType"];
 
-type Props = { onSaved: () => void };
+type Props = {
+	/** `photoFailed`：這一餐存好了，但選的照片沒傳上去（規格 §5.4）。 */
+	onSaved: (result: { photoFailed: boolean }) => void;
+};
+
+/** 餐存好、照片沒傳上去時給總覽顯示的話。補傳走飲食頁 `MealList` 既有的上傳。 */
+export const PHOTO_UPLOAD_FAILED_NOTICE =
+	"這一餐已記錄，照片沒有傳上去，可以到飲食頁的那一餐補傳";
 
 const MEAL_TYPES: Array<{ value: MealType; label: string }> = [
 	{ value: "breakfast", label: "早餐" },
@@ -90,6 +104,34 @@ export function LogMeal({ onSaved }: Props) {
 	// 選填的餐費（P5 規格 §4.1）。有值時 POST /api/meals 會在同一個交易裡
 	// 建一筆 category=food、meal_id 指過來的支出。
 	const [cost, setCost] = useState("");
+	// 選填的照片（介面改版 §5.4）。選的當下就檢查大小，不要等到存檔才發現。
+	const [photo, setPhoto] = useState<File | null>(null);
+	const [photoError, setPhotoError] = useState<string | null>(null);
+	const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+
+	useEffect(() => {
+		if (photo === null) {
+			setPhotoPreview(null);
+			return;
+		}
+		const url = URL.createObjectURL(photo);
+		setPhotoPreview(url);
+		// 換照片或離開畫面時釋放，不然每選一次就漏一份 blob。
+		return () => URL.revokeObjectURL(url);
+	}, [photo]);
+
+	function handlePhotoChange(event: ChangeEvent<HTMLInputElement>) {
+		const file = event.target.files?.[0] ?? null;
+		// 清掉 input 自己的值：「移除」之後再選同一張，change 才會再觸發。
+		event.target.value = "";
+		if (file !== null && file.size > MAX_PHOTO_BYTES) {
+			setPhoto(null);
+			setPhotoError(new PhotoTooLargeError().message);
+			return;
+		}
+		setPhotoError(null);
+		setPhoto(file);
+	}
 	const [mealType, setMealType] = useState<MealType>("snack");
 	const [error, setError] = useState<string | null>(null);
 	const [searchInput, setSearchInput] = useState("");
@@ -125,7 +167,7 @@ export function LogMeal({ onSaved }: Props) {
 			if (selectedFood === null) {
 				throw new Error("尚未選擇食物");
 			}
-			return apiFetch<MealResponse>("/api/meals", {
+			const meal = await apiFetch<MealResponse>("/api/meals", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
@@ -153,8 +195,21 @@ export function LogMeal({ onSaved }: Props) {
 					...(cost.trim() === "" ? {} : { cost: cost.trim() }),
 				}),
 			});
+			if (photo === null) return { photoFailed: false };
+			// 後端成功時一定回 MealResponse；null 代表 apiFetch 的假設被破壞了，
+			// 照片沒地方傳——當成照片失敗，不是整筆失敗。
+			if (meal === null) return { photoFailed: true };
+			// **第二步失敗不算整筆失敗**（規格 §5.4）：這一餐（含餐費）已經在
+			// 後端了。讓 mutation 失敗，使用者會以為沒記到、再記一次——那就是
+			// 重複記錢。
+			try {
+				await uploadMealPhoto(meal.id, photo);
+				return { photoFailed: false };
+			} catch {
+				return { photoFailed: true };
+			}
 		},
-		onSuccess: () => {
+		onSuccess: (result) => {
 			// 這一行是這份計畫的核心。少了它，記完一餐回到總覽會看到舊數字，
 			// 使用者會以為沒記進去——然後再記一次。
 			queryClient.invalidateQueries({ queryKey: queryKeys.dailyStats });
@@ -183,8 +238,10 @@ export function LogMeal({ onSaved }: Props) {
 			setPortionId(null);
 			setQuantity("1");
 			setCost("");
+			setPhoto(null);
+			setPhotoError(null);
 			setError(null);
-			onSaved();
+			onSaved(result);
 		},
 		onError: (caught: unknown) => {
 			// disabled 按鈕擋的是送出當下已知的狀態；搜尋到送出之間，
@@ -224,10 +281,10 @@ export function LogMeal({ onSaved }: Props) {
 	const foods = dedupeById([frequentQuery.data ?? [], recentQuery.data ?? []]);
 
 	return (
-		<section>
+		<section className={styles.screen}>
 			<h1>記一餐</h1>
 
-			<div>
+			<div className={styles.search}>
 				<label htmlFor="food-search-input">搜尋食物</label>
 				<input
 					id="food-search-input"
@@ -258,7 +315,7 @@ export function LogMeal({ onSaved }: Props) {
 
 			{frequentQuery.isLoading && <p>載入中…</p>}
 
-			<ul>
+			<ul className={styles.foods}>
 				{foods.map((food) => (
 					<li key={food.id}>
 						<button
@@ -275,12 +332,13 @@ export function LogMeal({ onSaved }: Props) {
 
 			{selectedFood !== null && (
 				<form
+					className={styles.form}
 					onSubmit={(event) => {
 						event.preventDefault();
 						saveMeal.mutate();
 					}}
 				>
-					<p>已選擇：{selectedFood.name}</p>
+					<p className={styles.selected}>已選擇：{selectedFood.name}</p>
 
 					{portionsQuery.data !== undefined &&
 						portionsQuery.data !== null &&
@@ -343,8 +401,36 @@ export function LogMeal({ onSaved }: Props) {
 						onChange={(event) => setCost(event.target.value)}
 					/>
 
+					<label htmlFor="meal-photo" className={styles.photoButton}>
+						<Camera aria-hidden="true" size={18} />
+						照片（選填）
+					</label>
+					{/* 不加 capture：iPhone 會同時給「拍照」與「從相簿選」
+					    （MealList 的補傳有 capture="environment"，那裡的情境是
+					    「現在正在吃」，直接開相機比較快）。 */}
+					<input
+						id="meal-photo"
+						type="file"
+						accept="image/*"
+						className={styles.fileInput}
+						onChange={handlePhotoChange}
+					/>
+					{photoPreview !== null && (
+						<div className={styles.preview}>
+							<img src={photoPreview} alt="選好的照片" />
+							<button type="button" onClick={() => setPhoto(null)}>
+								移除照片
+							</button>
+						</div>
+					)}
+					{photoError !== null && <p role="alert">{photoError}</p>}
+
 					{error !== null && <p role="alert">{error}</p>}
-					<button type="submit" disabled={saveMeal.isPending}>
+					<button
+						type="submit"
+						className={styles.save}
+						disabled={saveMeal.isPending}
+					>
 						記錄
 					</button>
 				</form>

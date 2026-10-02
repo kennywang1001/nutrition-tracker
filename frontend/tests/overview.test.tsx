@@ -289,7 +289,7 @@ describe("總覽", () => {
 
 	it("連得到網路但到不了後端：保留快取資料並顯示離線提示", async () => {
 		const client = newClient();
-		const seeded = Date.now() - 60 * 60 * 1000; // 一小時前——要比 staleTime 舊才會重抓
+		const seeded = Date.now() - 60 * 60 * 1000; // 一小時前——只是讓「最後更新於」的時間貼近真實（測試用的 client 的 staleTime 是 0，不倒推也會重抓）
 		const seed = (key: readonly unknown[], data: unknown) =>
 			client.setQueryData(key, data, { updatedAt: seeded });
 		seed(queryKeys.dailyStats, STATS);
@@ -311,5 +311,26 @@ describe("總覽", () => {
 		).toBeInTheDocument();
 		expect(screen.getAllByTestId("timeline-row")).toHaveLength(2);
 		expect(screen.queryByText(/無法載入/)).not.toBeInTheDocument();
+	});
+
+	it("帶著通知進來時顯示通知（例如照片沒傳上去）", async () => {
+		mockOverview();
+		const client = newClient();
+
+		render(
+			<QueryClientProvider client={client}>
+				<MemoryRouter
+					initialEntries={[
+						{ pathname: "/", state: { notice: "照片沒有傳上去" } },
+					]}
+				>
+					<Overview />
+				</MemoryRouter>
+			</QueryClientProvider>,
+		);
+
+		expect(await screen.findByRole("status")).toHaveTextContent(
+			"照片沒有傳上去",
+		);
 	});
 });
