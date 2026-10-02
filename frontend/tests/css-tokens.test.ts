@@ -58,6 +58,11 @@ const PAIRS: ReadonlyArray<readonly [string, string]> = [
 	["--color-on-action", "--color-action"],
 	["--color-danger", "--color-bg"],
 	["--color-danger", "--color-surface"],
+	// accent-soft 是「選取中」晶片的底色（記帳的分類、鍵盤退格鍵）；淺色的
+	// muted / action 壓在上面只有約 4.57 / 4.65，餘裕很薄，值得守。
+	["--color-text", "--color-accent-soft"],
+	["--color-text-muted", "--color-accent-soft"],
+	["--color-action", "--color-accent-soft"],
 ];
 
 function collectModuleCss(dir: string): string[] {
@@ -73,6 +78,17 @@ describe("設計變數", () => {
 		// 少了這條，正規表示式寫錯時 light 是空的，「深色覆寫了每一個」會
 		// 因為兩邊都空而通過——handover §6 一再出現的那種綠燈說謊。
 		expect(light.size).toBeGreaterThanOrEqual(9);
+	});
+
+	it("每個顏色變數都是 6 位十六進位（解析器沒有漏掉任何一個）", () => {
+		// 寫成 #fff、#rrggbbaa 或 rgb() 的變數會被 colorTokens 默默略過，
+		// 對比度測試就永遠看不到它。這裡數「宣告」的個數，跟解析結果比。
+		const declared = (block: RegExp) =>
+			(css.match(block)?.[1] ?? "").match(/--color-[\w-]+\s*:/g)?.length ?? 0;
+		expect(declared(/:root\s*\{([^}]*)\}/)).toBe(light.size);
+		expect(
+			declared(/prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{([^}]*)\}/),
+		).toBe(dark.size);
 	});
 
 	it("深色模式覆寫了每一個顏色變數", () => {
