@@ -9,11 +9,11 @@ export type Me = components["schemas"]["UserResponse"];
  *  前端藏起連結只是可用性，真正的授權在後端 `require_admin`（規格 §11.2、
  *  `app/api/deps.py`）。
  *
- *  **不要跟 `App.tsx` 裡「重新整理」按鈕的 `apiFetch("/api/me")` 搞混。**
- *  那個按鈕是 `e2e/auth.spec.ts` 用來驗證「access token 過期時會自動換票
- *  並重送」的路徑，兩者刻意不合併——這支 `useMe` 帶 `staleTime: 60_000`
- *  的快取，換成它會讓那條 E2E 的按鈕按下去什麼都不會發生（見
- *  `api/queries.ts` 的 `queryClient` 註解）。 */
+ *  **跟 `Me.tsx` 裡「重新整理」按鈕的 `apiFetch("/api/me")` 是兩條獨立的
+ *  路。** 那個按鈕是 `e2e/auth.spec.ts` 在強制 access token 過期後，用來觸發
+ *  一次需要認證的請求的路徑，它直接呼叫 `apiFetch`、不碰這支 `useMe` 的快取，
+ *  兩者刻意不合併。（`useMe().refetch()` 其實也會發請求——refetch 不看
+ *  `staleTime`——所以不是「做不到」，只是 E2E 是照直接呼叫寫的。） */
 export function useMe() {
 	return useQuery({
 		queryKey: queryKeys.me,

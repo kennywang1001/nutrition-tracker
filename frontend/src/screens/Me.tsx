@@ -19,9 +19,11 @@ export function Me({ onLoggedOut }: Props) {
 
 	// 從原本 App.tsx 的 <Nav> 搬過來，行為一個字都沒改（介面改版 Task 5）。
 	//
-	// **不要改成 useMe() 的 refetch。** staleTime 是 60 秒，改了之後按下去
-	// 什麼都不會發生，而 e2e/auth.spec.ts 那條「access token 過期時會自動
-	// 換票並重送」不會紅——它只是不再測到任何東西（P3-A 規格 §8.1）。
+	// 這顆按鈕是 e2e/auth.spec.ts 在強制 access token 過期後，用來觸發一次
+	// 需要認證的請求的路徑（驗證「自動換票並重送」，P3-A 規格 §8.1）。它直接
+	// 呼叫 apiFetch("/api/me") 並顯示 display_name，不碰 useMe() 的快取。
+	// （useMe().refetch() 也會發請求——refetch 不看 staleTime——所以保留直接
+	// 呼叫只是因為 E2E 是照它寫的，不是因為 refetch 不行。）
 	const [displayName, setDisplayName] = useState<string | null>(null);
 
 	return (

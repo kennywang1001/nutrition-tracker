@@ -93,8 +93,8 @@ describe("我的", () => {
 
 	it("「重新整理」直接打 /api/me 並顯示名稱", async () => {
 		// 這顆按鈕是 e2e/auth.spec.ts 測「token 過期自動換票」的唯一路徑。
-		// 這條測試守的是「它真的會發出一個新的請求」——改成 useMe().refetch()
-		// 的話，staleTime 內按下去不會打 API。
+		// 這條測試守的是「點一下會多發一個 /api/me 請求，並把回應的
+		// display_name 顯示出來」。
 		const fetchMock = mockApi([
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
 		]);
