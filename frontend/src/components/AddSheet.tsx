@@ -5,7 +5,12 @@ import { CATEGORY_COLORS } from "../api/expenses";
 import styles from "./AddSheet.module.css";
 import { IconBadge } from "./IconBadge";
 
-type Props = { onClose: () => void };
+type Props = {
+	/** Esc、取消、點背景：留在原頁，呼叫端負責把焦點還給「＋」。 */
+	onDismiss: () => void;
+	/** 點了入口連結：換頁，不需要還焦點。 */
+	onNavigate: () => void;
+};
 
 /** 「＋」滑出的面板：記帳或記一餐（規格 §3.1、§5.1）。
  *
@@ -15,7 +20,7 @@ type Props = { onClose: () => void };
  *
  *  背景是一顆 `tabIndex={-1}` 的按鈕而不是 `<div onClick>`：Biome 的
  *  a11y 規則不接受沒有鍵盤對應的可點擊 div；鍵盤使用者用 Esc 或「取消」。 */
-export function AddSheet({ onClose }: Props) {
+export function AddSheet({ onDismiss, onNavigate }: Props) {
 	const firstChoice = useRef<HTMLAnchorElement>(null);
 
 	useEffect(() => {
@@ -24,11 +29,11 @@ export function AddSheet({ onClose }: Props) {
 
 	useEffect(() => {
 		function closeOnEscape(event: KeyboardEvent) {
-			if (event.key === "Escape") onClose();
+			if (event.key === "Escape") onDismiss();
 		}
 		window.addEventListener("keydown", closeOnEscape);
 		return () => window.removeEventListener("keydown", closeOnEscape);
-	}, [onClose]);
+	}, [onDismiss]);
 
 	return (
 		<div className={styles.layer}>
@@ -37,7 +42,7 @@ export function AddSheet({ onClose }: Props) {
 				className={styles.backdrop}
 				aria-label="關閉"
 				tabIndex={-1}
-				onClick={onClose}
+				onClick={onDismiss}
 			/>
 			<div
 				role="dialog"
@@ -50,12 +55,12 @@ export function AddSheet({ onClose }: Props) {
 						ref={firstChoice}
 						to="/expenses/new"
 						className={styles.choice}
-						onClick={onClose}
+						onClick={onNavigate}
 					>
 						<IconBadge icon={Wallet} color="var(--color-action)" size="large" />
 						記帳
 					</Link>
-					<Link to="/meals/new" className={styles.choice} onClick={onClose}>
+					<Link to="/meals/new" className={styles.choice} onClick={onNavigate}>
 						<IconBadge
 							icon={Utensils}
 							color={CATEGORY_COLORS.food}
@@ -64,7 +69,7 @@ export function AddSheet({ onClose }: Props) {
 						記一餐
 					</Link>
 				</div>
-				<button type="button" className={styles.cancel} onClick={onClose}>
+				<button type="button" className={styles.cancel} onClick={onDismiss}>
 					取消
 				</button>
 			</div>

@@ -6,8 +6,8 @@ import {
 	Plus,
 	Salad,
 } from "lucide-react";
-import { useState } from "react";
-import { NavLink } from "react-router";
+import { useCallback, useRef, useState } from "react";
+import { NavLink, useLocation } from "react-router";
 import { AddSheet } from "./AddSheet";
 import styles from "./TabBar.module.css";
 
@@ -53,7 +53,22 @@ function TabLink({ tab }: { tab: Tab }) {
 }
 
 export function TabBar() {
-	const [sheetOpen, setSheetOpen] = useState(false);
+	const location = useLocation();
+	// 開關狀態由「在哪個 location 打開的」推導，不是單純的 boolean：TabBar 在
+	// <Routes> 外面，換頁不會 remount。用 boolean 的話，面板開著時按返回手勢
+	// （Android 返回鍵、瀏覽器上一頁）或用 Tab 鍵走到背後的 NavLink，頁面換了
+	// 面板卻還蓋在上面。location.key 一變，openedAt 就不等於它，面板自然關上，
+	// 不需要 effect。
+	const [openedAt, setOpenedAt] = useState<string | null>(null);
+	const sheetOpen = openedAt === location.key;
+	const addRef = useRef<HTMLButtonElement>(null);
+
+	// Esc／取消／點背景：留在原頁，焦點回到「＋」。點入口連結是換頁，不走這條。
+	const dismiss = useCallback(() => {
+		setOpenedAt(null);
+		addRef.current?.focus();
+	}, []);
+	const closeForNavigation = useCallback(() => setOpenedAt(null), []);
 
 	return (
 		<>
@@ -63,12 +78,13 @@ export function TabBar() {
 				))}
 				<div className={styles.addSlot}>
 					<button
+						ref={addRef}
 						type="button"
 						className={styles.add}
 						aria-label="新增紀錄"
 						aria-haspopup="dialog"
 						aria-expanded={sheetOpen}
-						onClick={() => setSheetOpen(true)}
+						onClick={() => setOpenedAt(location.key)}
 					>
 						<Plus aria-hidden="true" size={28} />
 					</button>
@@ -77,7 +93,9 @@ export function TabBar() {
 					<TabLink key={tab.to} tab={tab} />
 				))}
 			</nav>
-			{sheetOpen && <AddSheet onClose={() => setSheetOpen(false)} />}
+			{sheetOpen && (
+				<AddSheet onDismiss={dismiss} onNavigate={closeForNavigation} />
+			)}
 		</>
 	);
 }

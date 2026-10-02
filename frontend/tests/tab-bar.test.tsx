@@ -68,6 +68,7 @@ describe("TabBar", () => {
 
 		const sheet = screen.getByRole("dialog", { name: "新增紀錄" });
 		expect(sheet).toBeInTheDocument();
+		expect(sheet).toHaveAttribute("aria-modal", "true");
 		expect(screen.getByRole("link", { name: "記帳" })).toHaveAttribute(
 			"href",
 			"/expenses/new",
@@ -113,5 +114,34 @@ describe("TabBar", () => {
 		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
 
 		expect(screen.getByRole("link", { name: "記帳" })).toHaveFocus();
+	});
+
+	it("按 Esc 關掉之後焦點回到「新增紀錄」", async () => {
+		renderAt("/");
+		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
+
+		await userEvent.keyboard("{Escape}");
+
+		expect(screen.getByRole("button", { name: "新增紀錄" })).toHaveFocus();
+	});
+
+	it("點背景關掉面板", async () => {
+		renderAt("/");
+		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
+
+		await userEvent.click(screen.getByRole("button", { name: "關閉" }));
+
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+
+	it("面板開著時換頁（例如返回手勢、Tab 到背後的連結）面板一定關掉", async () => {
+		// TabBar 在 <Routes> 外面不會 remount，單純的 boolean 狀態在換頁後
+		// 面板還會蓋在新頁面上。
+		renderAt("/");
+		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
+
+		await userEvent.click(screen.getByRole("link", { name: "飲食" }));
+
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 	});
 });

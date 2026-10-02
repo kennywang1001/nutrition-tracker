@@ -25,6 +25,7 @@ export function Me({ onLoggedOut }: Props) {
 	// （useMe().refetch() 也會發請求——refetch 不看 staleTime——所以保留直接
 	// 呼叫只是因為 E2E 是照它寫的，不是因為 refetch 不行。）
 	const [displayName, setDisplayName] = useState<string | null>(null);
+	const [refreshFailed, setRefreshFailed] = useState(false);
 
 	return (
 		<section>
@@ -42,7 +43,9 @@ export function Me({ onLoggedOut }: Props) {
 
 			{isAdmin && (
 				<Card>
-					<Link to="/admin/revisions">審核</Link>
+					<Link to="/admin/revisions" className={styles.adminLink}>
+						審核
+					</Link>
 				</Card>
 			)}
 
@@ -51,13 +54,19 @@ export function Me({ onLoggedOut }: Props) {
 					type="button"
 					className={styles.secondary}
 					onClick={async () => {
-						const fresh = await apiFetch<{ display_name: string }>("/api/me");
-						setDisplayName(fresh?.display_name ?? null);
+						try {
+							const fresh = await apiFetch<{ display_name: string }>("/api/me");
+							setRefreshFailed(false);
+							setDisplayName(fresh?.display_name ?? null);
+						} catch {
+							setRefreshFailed(true);
+						}
 					}}
 				>
 					重新整理
 				</button>
 				{displayName !== null && <p>{displayName}</p>}
+				{refreshFailed && <p role="alert">無法重新整理</p>}
 			</Card>
 
 			<button

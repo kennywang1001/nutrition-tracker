@@ -124,4 +124,26 @@ describe("我的", () => {
 
 		await waitFor(() => expect(onLoggedOut).toHaveBeenCalled());
 	});
+
+	it("「重新整理」失敗時顯示提示，不丟出未處理的 rejection", async () => {
+		let calls = 0;
+		mockApi([
+			{
+				method: "GET",
+				path: "/api/me",
+				handler: () => {
+					calls += 1;
+					return calls === 1
+						? json(me("user"))
+						: new Response("boom", { status: 500 });
+				},
+			},
+		]);
+		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		await screen.findByText("kenny@example.com");
+
+		await userEvent.click(screen.getByRole("button", { name: "重新整理" }));
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("無法重新整理");
+	});
 });

@@ -13,6 +13,8 @@
 	border: none;
 	padding: 0;
 	background: var(--scrim);
+	/* iOS：不然在遮罩上滑會捲動背後的頁面。 */
+	touch-action: none;
 }
 
 .sheet {
