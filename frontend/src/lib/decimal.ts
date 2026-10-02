@@ -32,6 +32,21 @@ export function formatMoney(value: Numeric): string {
 	return new Decimal(value).toFixed(2);
 }
 
+/** 金額字串是否大於 0。空字串、`"0."`、`"abc"` 都回 `false`，**不丟例外**——
+ *  記帳鍵盤打到一半的字串是常態，✓ 按鈕每次重繪都會問一次。
+ *
+ *  放在這裡而不是 `lib/keypad.ts`：判斷「是不是 0」要經過 `Decimal`
+ *  （`"0.00"`、`"0."` 用字串比對很容易漏），而只有這個檔案可以 import
+ *  decimal.js（`tests/decimal-containment.test.ts`）。 */
+export function isPositiveAmount(value: string): boolean {
+	if (value.trim() === "") return false;
+	try {
+		return new Decimal(value).greaterThan(0);
+	} catch {
+		return false;
+	}
+}
+
 export function sumMacros(values: readonly Numeric[]): Numeric {
 	return values
 		.reduce((total, value) => total.plus(value), new Decimal(0))

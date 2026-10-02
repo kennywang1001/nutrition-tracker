@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	formatMacro,
 	formatMoney,
+	isPositiveAmount,
 	ratioOf,
 	sumMacros,
 } from "../src/lib/decimal";
@@ -78,5 +79,19 @@ describe("formatMacro 與 formatMoney 的差別（這就是不能共用的證據
 	it("同一個輸入，兩者輸出不同", () => {
 		expect(formatMacro("250.50")).toBe("250.5");
 		expect(formatMoney("250.50")).toBe("250.50");
+	});
+});
+
+describe("isPositiveAmount", () => {
+	it.each(["", "0", "0.", "0.00", "abc", "-1"])(
+		"%s 不是正數（也不丟例外）",
+		(value) => {
+			// 鍵盤打到一半的字串是常態，不是錯誤——✓ 按鈕每次重繪都會問一次。
+			expect(isPositiveAmount(value)).toBe(false);
+		},
+	);
+
+	it.each(["0.01", "5.", "12345678.99"])("%s 是正數", (value) => {
+		expect(isPositiveAmount(value)).toBe(true);
 	});
 });

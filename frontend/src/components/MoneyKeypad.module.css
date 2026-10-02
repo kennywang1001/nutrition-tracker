@@ -1,0 +1,41 @@
+/* 4 欄：數字 3 欄＋右邊一欄放刪除（第 1 列）與記一筆（第 2～4 列）。
+   刪除與記一筆是明確擺放的，其他按鍵依 DOM 順序自動填空格。 */
+.keypad {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+	gap: var(--space-2);
+}
+
+.key {
+	min-height: 52px;
+	border: none;
+	border-radius: var(--radius-button);
+	background: var(--color-surface);
+	color: var(--color-text);
+	font-size: 22px;
+	font-variant-numeric: tabular-nums;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.backspace {
+	grid-column: 4;
+	grid-row: 1;
+	background: var(--color-accent-soft);
+}
+
+.submit {
+	grid-column: 4;
+	grid-row: 2 / span 3;
+	background: var(--color-action);
+	color: var(--color-on-action);
+}
+
+.submit:disabled {
+	opacity: 0.4;
+}
+
+.zero {
+	grid-column: span 2;
+}
