@@ -118,3 +118,8 @@
 .save:disabled {
 	opacity: 0.4;
 }
+
+/* 儲存中檔案輸入框是 disabled，但 label 看起來還能按——跟著淡掉。 */
+.photoButton:has(+ .fileInput:disabled) {
+	opacity: 0.4;
+}
