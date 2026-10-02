@@ -19,7 +19,7 @@ test("新增補劑 → 今天吃了 → 飲食頁看得到它", async ({ page })
 	await page.getByRole("link", { name: "飲食" }).click();
 	await expect(page.getByRole("heading", { name: "飲食" })).toBeVisible();
 
-	// 入口是「今日補劑」區塊的連結，不是第六個 tab（計畫 Task 2 的說明）。
+	// 入口是「今日補劑」區塊的連結，不是 tab（tab bar 固定是 總覽／報表／＋／飲食／我的）。
 	await page.getByRole("link", { name: "新增補劑" }).click();
 	await expect(page.getByRole("heading", { name: "補劑" })).toBeVisible();
 

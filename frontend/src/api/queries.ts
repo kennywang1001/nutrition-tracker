@@ -5,7 +5,7 @@ type FoodScope = components["schemas"]["FoodScope"];
 
 /** 所有 query key 的唯一事實來源。
  *
- *  **為什麼集中放：** 記一餐要讓今日總覽失效，那代表兩個畫面共用同一個 key。
+ *  **為什麼集中放：** 記一餐要讓今日營養素失效，那代表兩個畫面共用同一個 key。
  *  分散寫的話兩邊各拼一次字串，某天其中一邊改了，失效就**靜默失靈** ——
  *  而症狀是「記完一餐，總覽的數字沒變」，使用者會以為沒記進去。
  *
@@ -63,7 +63,7 @@ export const queryKeys = {
 	 *  放進這個檔案不是因為要共用失效，而是延續「query key 只有一個
 	 *  事實來源」這條規矩，不要有些 key 在這裡、有些散在各畫面裡。 */
 	portions: (foodId: number) => ["foods", foodId, "portions"] as const,
-	/** 目前登入者。Task 7 的 tab bar 要用它的 `role` 決定第五格出不出現。 */
+	/** 目前登入者。我的（Me.tsx）用它的 `role` 決定要不要顯示「審核」。 */
 	me: ["me"] as const,
 	/** 單一食物。**刻意是 `portions` 與 `foodRevisions` 的前綴。**
 	 *
@@ -143,12 +143,12 @@ export const queryKeys = {
  *
  *  **`staleTime: 60_000`（Task 6 的突變驗證發現、實測補上）：** 沒有這一行時
  *  `staleTime` 預設是 0，代表任何 query 一 fetch 完就立刻「過期」。React
- *  Router 把「今日總覽」與「記一餐」放在不同路由，切換路由時前者會整個
+ *  Router 把「今日營養素」與「記一餐」放在不同路由，切換路由時前者會整個
  *  unmount／remount —— 而 remount 時只要資料是「過期」的，TanStack Query
  *  就會自動重新 fetch，跟有沒有呼叫 `invalidateQueries` 無關。結果是：
  *  `LogMeal.tsx` 那個 `invalidateQueries({ queryKey: queryKeys.dailyStats })`
- *  （記完一餐讓今日總覽重取的那一行，程式碼注解說它是「這份計畫的核心」）
- *  即使被整行刪掉，「記一餐 → 導回今日總覽 → 數字變了」這個 E2E 斷言依然會
+ *  （記完一餐讓今日營養素重取的那一行，程式碼注解說它是「這份計畫的核心」）
+ *  即使被整行刪掉，「記一餐 → 導回總覽 → 數字變了」這個 E2E 斷言依然會
  *  綠燈——remount 觸發的自動重取蓋掉了它。拿掉這一行的當下用突變驗證親自
  *  確認過（見 `e2e/daily-loop.spec.ts` 附近的說明與 Task 6 的完成報告）。
  *
@@ -164,7 +164,7 @@ export const queryClient = new QueryClient({
 
 /** 強制登出（或使用者主動登出）時清空 query 快取（規格 §6.5）。
  *
- *  **必須清。** 不清的話下一個登入的人會先看到上一個人的今日總覽，
+ *  **必須清。** 不清的話下一個登入的人會先看到上一個人的今日營養素，
  *  然後才被重新 fetch 覆蓋掉 —— 那是使用者會親眼看到的跨使用者資料外洩，
  *  不是理論上的風險。
  *

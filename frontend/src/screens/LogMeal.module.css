@@ -44,7 +44,7 @@
 }
 
 .foods button {
-	min-height: 36px;
+	min-height: 44px;
 	border: none;
 	background: transparent;
 	color: var(--color-text);
@@ -95,6 +95,10 @@
 	display: flex;
 	align-items: center;
 	gap: var(--space-3);
+}
+
+.preview button {
+	min-height: 44px;
 }
 
 .preview img {

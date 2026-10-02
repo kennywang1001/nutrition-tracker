@@ -46,8 +46,8 @@ import type { PersistQueryClientProviderProps } from "@tanstack/react-query-pers
  *  ——重抄就是又一個「兩處講同一件事」的漂移點。 */
 export const OFFLINE_CACHE_STORAGE_KEY = "nutrition-tracker-offline-cache";
 
-/** 一天前的「今日總覽」已經不是今日了。與其顯示一個標著「最後更新於
- *  昨天」的今日總覽，不如顯示空的——超過這個時間的持久化快取直接不
+/** 一天前的「今日營養素」已經不是今日了。與其顯示一個標著「最後更新於
+ *  昨天」的今日營養素，不如顯示空的——超過這個時間的持久化快取直接不
  *  hydrate（`persistQueryClientRestore` 會呼叫 `persister.removeClient()`
  *  丟棄它）。 */
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -69,7 +69,7 @@ type OfflinePersistOptions = PersistQueryClientProviderProps["persistOptions"];
  *  失敗模式，所以比照辦理排除。
  *
  *  三者塞爆的症狀一樣惡劣：`setItem` 丟 `QuotaExceededError`，於是**整份
- *  離線快取都寫不進去** —— 不是「搜尋結果存不了」，是連今日總覽也一起沒了。
+ *  離線快取都寫不進去** —— 不是「搜尋結果存不了」，是連今日營養素也一起沒了。
  *  而那個失敗發生在背景的節流寫入裡，畫面上完全看不出來。
  *
  *  三個 key 都刻意用獨立的第一段命名空間（不掛在 `"meals"` / `"foods"` /

@@ -74,9 +74,8 @@ function statusLabel(item: { plan_id: number | null; done: boolean }): string {
  *  只有兩件事：`POST /api/supplements` 建一筆補劑、`POST
  *  /api/supplement-intakes`（`plan_id: null`）記一筆臨時攝取。
  *
- *  **入口在 `Today.tsx` 的「今日補劑」區塊，不是第六個 tab**——tab bar
- *  現在 4 格，320px 寬度下每格只剩 53px，中文標籤會擠爆（計畫 Task 2
- *  的說明）。 */
+ *  **入口在 `Today.tsx` 的「今日補劑」區塊（飲食畫面），不是 tab**——
+ *  tab bar 固定是 總覽／報表／＋／飲食／我的，沒有補劑的位置。 */
 export function Supplements() {
 	const queryClient = useQueryClient();
 

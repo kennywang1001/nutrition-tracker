@@ -162,11 +162,11 @@ test("登入後的 /supplements 畫面，表單控制項字級 ≥16px（P3-C Ta
 	await expectFormControlsAtLeast16px(page, "補劑畫面");
 });
 
-test("登入後的 /expenses 畫面，表單控制項字級 ≥16px（P5 計畫二之後）", async ({
+test("登入後的 /expenses/new 畫面，表單控制項字級 ≥16px（P5 計畫二之後）", async ({
 	page,
 }) => {
-	// 跟 /supplements 那條同一個理由：記一筆的表單控制項（金額／分類／
-	// 備註）一律吃到 index.css 那條全域的 16px 規則，但只有真的走過畫面
+	// 跟 /supplements 那條同一個理由：記一筆畫面的表單控制項（現在只剩備註
+	// 一個 input，金額與分類是按鈕）一律吃到 index.css 那條全域的 16px 規則，但只有真的走過畫面
 	// 才驗得到。
 	await login(page);
 

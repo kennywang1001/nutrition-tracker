@@ -242,7 +242,7 @@ export function Expenses() {
 				{expensesQuery.isPending ? (
 					<p>載入中…</p>
 				) : expensesQuery.isError ? (
-					// 失敗不能落到「這個月還沒有記錄花費」——這是記帳畫面，
+					// 失敗不能落到「這個月還沒有記錄花費」——這是報表畫面，
 					// 空清單的措辭會引誘使用者重打一筆，造成重複記帳
 					// （跟 MealList.tsx 的 isError 分支同一個理由）。
 					<p>無法載入花費清單</p>

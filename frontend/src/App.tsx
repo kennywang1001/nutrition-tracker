@@ -103,9 +103,9 @@ export function App() {
 							<Route path="/foods/new" element={<NewFood />} />
 							<Route path="/foods/:id" element={<FoodDetail />} />
 							{/* 補劑（P3-C Task 2）：新增「我有在使用的」＋「當天有吃就點
-								一份進去」。刻意不加第六個 tab，入口在 Today.tsx 的
-								「今日補劑」區塊（計畫的說明：320px 寬度下 tab bar 每格
-								只剩 53px，加不下去）。 */}
+								一份進去」。tab bar 固定是 總覽／報表／＋／飲食／我的，
+								沒有補劑的位置，入口放在飲食畫面（Today.tsx 的
+								「今日補劑」區塊）。 */}
 							<Route path="/supplements" element={<Supplements />} />
 							{/* 不做前端導向：非管理員直接輸入這個網址時，讓它照常渲染、
 								讓 GET /api/admin/food-revisions 打出去、讓後端的

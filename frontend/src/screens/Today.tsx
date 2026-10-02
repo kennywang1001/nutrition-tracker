@@ -97,7 +97,7 @@ export function Today() {
 			</nav>
 
 			{statsQuery.isLoading && <p>載入中…</p>}
-			{statsQuery.isError && stats === undefined && <p>無法載入今日總覽</p>}
+			{statsQuery.isError && stats === undefined && <p>無法載入今天的營養素</p>}
 			{isOfflineStats && (
 				<p data-testid="offline-banner">
 					離線資料，最後更新於 {formatTime(statsQuery.dataUpdatedAt)}
@@ -168,8 +168,8 @@ export function Today() {
 			<Card>
 				<h2>今日補劑</h2>
 				{/* 補劑的新增與「當天吃了就點一份進去」（P3-C Task 2）的入口。
-			    不加第六個 tab（計畫的說明：320px 寬度下 tab bar 每格只剩 53px，
-			    中文標籤會擠爆）——這裡是使用者會看到補劑的地方，也是他們
+			    補劑不是 tab（tab bar 固定是 總覽／報表／＋／飲食／我的），
+			    入口放在飲食畫面——這裡是使用者會看到補劑的地方，也是他們
 			    想「加一個」的當下。 */}
 				<Link to="/supplements">新增補劑</Link>
 				<ul>

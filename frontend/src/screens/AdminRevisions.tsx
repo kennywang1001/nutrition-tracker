@@ -211,7 +211,7 @@ function RevisionRow({ revision }: RevisionRowProps) {
  *  一條「非管理員看不到審核佇列」的測試會綠，但它只證明 redirect 有效，
  *  完全沒有碰到後端授權——把 `require_admin` 整個拿掉，那條測試依然綠，
  *  而且 redirect 之後 403 那條路徑再也走不到、也就測不到。前端藏起連結
- *  （`TabBar` 的第五格）是可用性，這裡的 403 才是授權。
+ *  （「我的」裡的「審核」連結）是可用性，這裡的 403 才是授權。
  *
  *  **403 不觸發登出。** `client.ts` 的 `fetchWithAuthRetry` 只在
  *  `status === 401` 才換票，403 直接落到 `!response.ok` 拋 `ApiError`——

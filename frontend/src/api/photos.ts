@@ -98,7 +98,8 @@ export class PhotoTooLargeError extends Error {
  *
  *  **匯出給記一餐用**（介面改版 Task 8）：記一餐要等 `POST /api/meals`
  *  回來才知道 mealId，`useUploadMealPhoto(mealId)` 綁死一個 mealId 用不了。
- *  記一餐成功後自己失效 `queryKeys.meals`（前綴會一起打到這一餐的照片 key）。 */
+ *  記一餐成功後自己失效 `queryKeys.meals`：全新的 mealId 不會有任何快取
+ *  的照片，所以只要讓清單重取（`photo_path` 變了）就夠。 */
 export async function uploadMealPhoto(
 	mealId: number,
 	file: File,
@@ -133,17 +134,11 @@ export async function uploadMealPhoto(
  *  情況都要重取）。**不 invalidate `queryKeys.dailyStats`**：照片不影響
  *  營養素，`MealResponse` 的巨集不會因為換照片而改變。
  *
- *  **`queryKeys.meals` 那一行一定要帶 `exact: true`。** `queryKeys.meals`
- *  是 `["meals"]`，而 `queryKeys.mealPhoto` 是 `["meals", mealId, "photo"]`
- *  ——TanStack Query 預設的 `invalidateQueries` 是前綴比對，不是精確比對，
- *  `["meals"]` 本身就是 `["meals", mealId, "photo"]` 的前綴。少了
- *  `exact: true` 的話，這一行會連帶把**畫面上目前掛載的每一餐**的照片
- *  快取都標成失效並重取——不只是剛上傳的這一餐，而是清單上所有正在顯示
- *  照片的其他餐點也會跟著多打一次沒必要的 GET。實測抓到的：拿掉
- *  `exact: true` 之後，`tests/meal-photo-upload.test.tsx`「讓餐點清單與
- *  該餐的照片 key 失效」那條測試裡，`GET /api/meals/11/photo` 從預期的
- *  2 次（掛載時 1 次、上傳成功後重取 1 次）變成 3 次——多出來的那一次
- *  正是被這條前綴比對重複觸發的。 */
+ *  **`queryKeys.meals` 與 `queryKeys.mealPhoto` 互不為前綴。**
+ *  `queryKeys.meals` 是 `["meals"]`，`queryKeys.mealPhoto` 是
+ *  `["meal-photo", mealId]`（獨立的命名空間，見 queries.ts 的說明），
+ *  所以失效 `meals` 不會連帶重取任何照片，這裡不需要 `exact: true`；
+ *  照片的 key 要另外失效。 */
 export function useUploadMealPhoto(mealId: number) {
 	const queryClient = useQueryClient();
 	return useMutation({
