@@ -36,3 +36,6 @@ frontend/coverage/
 frontend/.vite/
 frontend/test-results/
 frontend/playwright-report/
+
+# brainstorming 的視覺輔助頁面（mockup 暫存，不進版控）
+.superpowers/
