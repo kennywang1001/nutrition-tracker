@@ -73,7 +73,7 @@ export const CATEGORY_COLORS: Record<ExpenseCategory, string> = {
 	other: "#8395a7",
 };
 
-/** 分類的圖示。名稱以 lucide-react 1.49 實際匯出的為準（`PieChart` 這種
+/** 分類的圖示。名稱以 lucide-react 實際匯出的為準（`PieChart` 這種
  *  舊名已經不存在了——寫計畫時解開套件確認過）。 */
 export const CATEGORY_ICONS: Record<ExpenseCategory, LucideIcon> = {
 	food: Utensils,
