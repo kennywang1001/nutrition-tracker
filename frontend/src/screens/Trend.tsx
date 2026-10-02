@@ -2,10 +2,10 @@ import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
+import { useDailyStats } from "../api/stats";
 import { TrendChart } from "../components/TrendChart";
 import { shiftDays } from "../lib/civil-date";
 
-type DailyStats = components["schemas"]["DailyStatsResponse"];
 type RangeStats = components["schemas"]["RangeStatsResponse"];
 
 /** 最近七天。兩端都含，所以起點是終點往回推 6 天（不是 7）——
@@ -30,10 +30,7 @@ const SPAN_DAYS = 7;
  *  往返；離線時它在持久化快取裡，錨點一樣拿得到。
  */
 export function Trend() {
-	const anchorQuery = useQuery({
-		queryKey: queryKeys.dailyStats,
-		queryFn: () => apiFetch<DailyStats>("/api/stats/daily"),
-	});
+	const anchorQuery = useDailyStats();
 
 	const today = anchorQuery.data?.date ?? null;
 	const from = today === null ? null : shiftDays(today, -(SPAN_DAYS - 1));

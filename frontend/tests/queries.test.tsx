@@ -38,6 +38,15 @@ describe("花費的 query key", () => {
 		]);
 	});
 
+	it("expensesByDate 也掛在 expensesAll 底下", () => {
+		// 總覽的「今天的支出」要在記帳、記一餐、改刪之後一起重取。
+		// 那些地方都只失效 expensesAll——前綴不對的話，總覽會停在舊資料。
+		const prefix = queryKeys.expensesAll;
+		expect(
+			queryKeys.expensesByDate("2026-12-15").slice(0, prefix.length),
+		).toEqual([...prefix]);
+	});
+
 	it("清單與報表是不同的 key——不會互相覆蓋", () => {
 		expect(queryKeys.expenses("2026-12")).not.toEqual(
 			queryKeys.expenseSummary("2026-12"),

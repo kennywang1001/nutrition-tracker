@@ -1,0 +1,19 @@
+.small,
+.large {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 50%;
+	color: var(--color-on-badge);
+	flex-shrink: 0;
+}
+
+.small {
+	width: 28px;
+	height: 28px;
+}
+
+.large {
+	width: 44px;
+	height: 44px;
+}

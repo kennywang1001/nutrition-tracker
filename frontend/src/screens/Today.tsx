@@ -3,12 +3,12 @@ import { Link } from "react-router";
 import { apiFetch } from "../api/client";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
+import { useDailyStats } from "../api/stats";
 import { MacroBar } from "../components/MacroBar";
 import { formatTime } from "../lib/dates";
 import { formatMacro } from "../lib/decimal";
 import { MealList } from "./MealList";
 
-type DailyStats = components["schemas"]["DailyStatsResponse"];
 type TodaySupplementItem = components["schemas"]["TodaySupplementItem"];
 
 /** 打卡：`POST /api/supplement-intakes`。`taken_at` 是「現在這一刻」，不是
@@ -42,10 +42,7 @@ export function Today() {
 	// 規格 §5.3：不傳 date，讓後端用 today_in_timezone(user.timezone) 決定
 	// 今天是哪一天——跟 /api/supplements/today 用同一個函式（app/days.py）。
 	// 前端自己算的話，使用者時區跟瀏覽器時區不同時會在午夜前後靜默算錯。
-	const statsQuery = useQuery({
-		queryKey: queryKeys.dailyStats,
-		queryFn: () => apiFetch<DailyStats>("/api/stats/daily"),
-	});
+	const statsQuery = useDailyStats();
 
 	const supplementsQuery = useQuery({
 		queryKey: queryKeys.supplementsToday,

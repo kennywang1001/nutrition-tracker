@@ -109,6 +109,13 @@ export const queryKeys = {
 	 *  說的一樣：兩邊各拼一次字串，某天其中一邊改了，失效就靜默失靈——
 	 *  而症狀是「記了一筆花費，總額沒變」。 */
 	expensesAll: ["expenses"] as const,
+	/** 某一天的支出（總覽的時間線）。`date` 是後端 `GET /api/stats/daily`
+	 *  回的 `"YYYY-MM-DD"`——前端不自己算今天是哪天；`null` 代表還不知道
+	 *  （query 不會發出，見 `useExpensesByDate`）。
+	 *
+	 *  **掛在 `["expenses"]` 底下**：記帳、記一餐、報表改刪之後都只失效
+	 *  `expensesAll`，前綴比對會一起打到它。 */
+	expensesByDate: (date: string | null) => ["expenses", "day", date] as const,
 	/** 單一餐的照片 blob（`useMealPhoto`，計畫三 Task 2）。跟 `portions` 一樣
 	 *  放這裡是為了「query key 只有一個事實來源」，不是因為現在就需要跨畫面
 	 *  失效——但上傳照片（Task 3）之後會需要讓這個 key 失效，先放在這裡

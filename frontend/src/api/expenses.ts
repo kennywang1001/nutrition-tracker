@@ -1,4 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
+import {
+	Bus,
+	Ellipsis,
+	Gamepad2,
+	House,
+	type LucideIcon,
+	Pill,
+	ShoppingBag,
+	Utensils,
+} from "lucide-react";
 import { apiFetch } from "./client";
 import { queryKeys } from "./queries";
 import type { components } from "./schema";
@@ -46,6 +56,35 @@ export const CATEGORY_ORDER: readonly ExpenseCategory[] = [
 	"other",
 ];
 
+/** 分類的顏色（規格 §4.2）。`Record` 不是 `Partial`，理由同 `CATEGORY_LABELS`。
+ *
+ *  **色碼寫在這裡、不寫在 CSS 變數**：這是「資料」（每個分類一個固定的
+ *  識別色），不是主題——深淺色模式都一樣。`IconBadge` 用 inline style 套上。
+ *
+ *  白色圖示壓在這些顏色上的對比度大多不到 3:1，**這是刻意接受的**：
+ *  徽章旁邊一定有文字標籤，圖示是裝飾（`aria-hidden`），不是唯一的資訊來源。 */
+export const CATEGORY_COLORS: Record<ExpenseCategory, string> = {
+	food: "#ff9f43",
+	transport: "#54a0ff",
+	daily: "#1dd1a1",
+	entertainment: "#a29bfe",
+	medical: "#ff6b6b",
+	housing: "#feca57",
+	other: "#8395a7",
+};
+
+/** 分類的圖示。名稱以 lucide-react 1.49 實際匯出的為準（`PieChart` 這種
+ *  舊名已經不存在了——寫計畫時解開套件確認過）。 */
+export const CATEGORY_ICONS: Record<ExpenseCategory, LucideIcon> = {
+	food: Utensils,
+	transport: Bus,
+	daily: ShoppingBag,
+	entertainment: Gamepad2,
+	medical: Pill,
+	housing: House,
+	other: Ellipsis,
+};
+
 /** 這個月（或指定月份）的花費清單。
  *
  *  `month` 為 `null` 時**不帶 `?month=`**，讓後端用使用者時區決定這個月
@@ -72,5 +111,19 @@ export function useExpenseSummary(month: string | null) {
 					? "/api/expenses/summary"
 					: `/api/expenses/summary?month=${month}`,
 			),
+	});
+}
+
+/** 某一天的支出。`date` 由呼叫端從 `useDailyStats()` 的回應拿——
+ *  **前端不自己算今天**。`null` 時不發請求（`enabled: false`）。
+ *
+ *  注意：`enabled: false` 的 query 在 TanStack Query v5 是
+ *  `isPending: true`。呼叫端要自己處理「拿不到 date」的情況（例如
+ *  `stats/daily` 失敗），不然畫面會永遠停在「載入中」。 */
+export function useExpensesByDate(date: string | null) {
+	return useQuery({
+		queryKey: queryKeys.expensesByDate(date),
+		queryFn: () => apiFetch<Expense[]>(`/api/expenses?date=${date}`),
+		enabled: date !== null,
 	});
 }

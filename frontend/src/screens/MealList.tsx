@@ -1,26 +1,13 @@
-import { useQuery } from "@tanstack/react-query";
 import type { ChangeEvent } from "react";
-import { apiFetch } from "../api/client";
 import { ApiError } from "../api/errors";
+import { MEAL_TYPE_LABELS, type Meal, useTodayMeals } from "../api/meals";
 import {
 	PhotoTooLargeError,
 	useMealPhoto,
 	useUploadMealPhoto,
 } from "../api/photos";
-import { queryKeys } from "../api/queries";
-import type { components } from "../api/schema";
 import { formatTime } from "../lib/dates";
 import { formatMacro } from "../lib/decimal";
-
-type Meal = components["schemas"]["MealResponse"];
-type MealType = components["schemas"]["MealType"];
-
-const MEAL_TYPE_LABELS: Record<MealType, string> = {
-	breakfast: "早餐",
-	lunch: "午餐",
-	dinner: "晚餐",
-	snack: "點心",
-};
 
 /** 這一餐的照片。**`photo_path` 本身從不出現在這個元件裡** ——
  *  它是伺服器端的相對路徑，不是 URL（規格 §5.2），唯一的用途是讓呼叫端
@@ -132,10 +119,7 @@ function MealCard({ meal }: { meal: Meal }) {
  *  `/api/supplements/today` 是同一個函式。前端自己算「今天」就是建立
  *  第二個事實來源，在使用者時區跟瀏覽器時區不同時會在午夜前後靜默算錯。 */
 export function MealList() {
-	const mealsQuery = useQuery({
-		queryKey: queryKeys.meals,
-		queryFn: () => apiFetch<Meal[]>("/api/meals"),
-	});
+	const mealsQuery = useTodayMeals();
 
 	const meals = mealsQuery.data ?? [];
 
