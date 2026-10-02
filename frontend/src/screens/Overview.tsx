@@ -22,10 +22,10 @@ function MonthSpendCard() {
 			<p className={styles.label}>本月支出</p>
 			{summaryQuery.isPending ? (
 				<p>載入中…</p>
-			) : summaryQuery.isError || summary == null ? (
-				<p>無法載入本月支出</p>
-			) : (
+			) : summary != null ? (
 				<p className={styles.total}>${formatMoney(summary.total)}</p>
+			) : (
+				<p>無法載入本月支出</p>
 			)}
 		</Card>
 	);
@@ -43,7 +43,9 @@ function TodayKcalCard() {
 			</Card>
 		);
 	}
-	if (statsQuery.isError || stats == null) {
+	// 資料優先於錯誤：重抓失敗時（連得到網路、到不了後端）照樣顯示快取，
+	// 離線提示由 Overview 頂端那一條負責。
+	if (stats == null) {
 		return (
 			<Card testId="today-kcal">
 				<p className={styles.label}>今天熱量</p>
@@ -103,7 +105,7 @@ function TimelineItem({ row }: { row: TimelineRow }) {
 		<li className={styles.row} data-testid="timeline-row">
 			<CategoryIcon category={expense.category} />
 			<span className={styles.title}>
-				{expense.note ?? CATEGORY_LABELS[expense.category]}
+				{expense.note?.trim() || CATEGORY_LABELS[expense.category]}
 			</span>
 			<span className={styles.time}>{formatTime(row.time)}</span>
 			<span className={styles.value}>${formatMoney(expense.amount)}</span>
@@ -123,11 +125,16 @@ function TodayTimeline() {
 	const today = statsQuery.data?.date ?? null;
 	const expensesQuery = useExpensesByDate(today);
 
+	// 資料優先於錯誤：只有「失敗而且沒有任何資料」才算壞掉。
+	const stats = statsQuery.data;
 	const statsUnusable =
-		statsQuery.isError || (statsQuery.isSuccess && statsQuery.data === null);
+		stats === null || (statsQuery.isError && stats === undefined);
+	const mealsFailed = mealsQuery.isError && mealsQuery.data === undefined;
+	const expensesFailed =
+		expensesQuery.isError && expensesQuery.data === undefined;
 
 	let body: ReactNode;
-	if (statsUnusable || mealsQuery.isError || expensesQuery.isError) {
+	if (statsUnusable || mealsFailed || expensesFailed) {
 		body = <p>無法載入今天的紀錄</p>;
 	} else if (mealsQuery.isPending || expensesQuery.isPending) {
 		body = <p>載入中…</p>;
@@ -155,6 +162,29 @@ function TodayTimeline() {
 	);
 }
 
+/** 任何一個 query「重抓失敗但手上還有資料」就顯示一條離線提示（跟今日
+ *  總覽同字樣、同 testid）。時間取最舊的那個——它代表畫面上最不新鮮的資料。
+ *  TanStack 會把相同 key 的 query 去重，這裡重複呼叫 hook 不會多發請求。 */
+function OfflineBanner() {
+	const statsQuery = useDailyStats();
+	const summaryQuery = useExpenseSummary(null);
+	const mealsQuery = useTodayMeals();
+	const expensesQuery = useExpensesByDate(statsQuery.data?.date ?? null);
+
+	const stale = [statsQuery, summaryQuery, mealsQuery, expensesQuery].filter(
+		(query) => query.isError && query.data !== undefined,
+	);
+	if (stale.length === 0) {
+		return null;
+	}
+	const oldest = Math.min(...stale.map((query) => query.dataUpdatedAt));
+	return (
+		<p data-testid="offline-banner" className={styles.offline}>
+			離線資料，最後更新於 {formatTime(oldest)}
+		</p>
+	);
+}
+
 /** 總覽（介面改版規格 §5.2）：本月支出、今天熱量、今天的時間線。
  *  三塊**各自**處理載入與錯誤——一塊失敗不拖垮整頁。
  *  時間線的列只能看、不能點（規格 §1.3）。 */
@@ -162,6 +192,7 @@ export function Overview() {
 	return (
 		<section>
 			<h1>總覽</h1>
+			<OfflineBanner />
 			<div className={styles.cards}>
 				<MonthSpendCard />
 				<TodayKcalCard />

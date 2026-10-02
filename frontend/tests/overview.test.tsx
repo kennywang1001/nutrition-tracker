@@ -3,15 +3,17 @@ import { render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { queryKeys } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { Overview } from "../src/screens/Overview";
 import { json, mockApi, type Route } from "./helpers/mock-api";
 
-function wrap(children: ReactNode) {
-	const client = new QueryClient({
-		defaultOptions: { queries: { retry: false } },
-	});
+function newClient() {
+	return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+}
+
+function wrap(children: ReactNode, client = newClient()) {
 	return (
 		<QueryClientProvider client={client}>
 			<MemoryRouter>{children}</MemoryRouter>
@@ -70,6 +72,24 @@ const LUNCH_COST = {
 	spent_at: "2026-12-15T04:30:00+00:00",
 	note: null,
 	meal_id: 11,
+};
+
+const BLANK_NOTE_TAXI = {
+	id: 3,
+	amount: "90.00",
+	category: "transport",
+	spent_at: "2026-12-15T00:30:00+00:00",
+	note: null,
+	meal_id: null,
+};
+
+const EMPTY_NOTE_SNACK = {
+	id: 4,
+	amount: "30.00",
+	category: "food",
+	spent_at: "2026-12-15T00:10:00+00:00",
+	note: "  ",
+	meal_id: null,
 };
 
 const METRO = {
@@ -186,5 +206,110 @@ describe("總覽", () => {
 		render(wrap(<Overview />));
 
 		expect(await screen.findByText("今天還沒有紀錄")).toBeInTheDocument();
+	});
+
+	it("沒有金額對應的餐顯示熱量；備註空白的支出顯示分類名稱", async () => {
+		mockOverview({
+			"/api/expenses": () => json([BLANK_NOTE_TAXI, EMPTY_NOTE_SNACK]),
+		});
+
+		render(wrap(<Overview />));
+
+		const rows = await screen.findAllByTestId("timeline-row");
+		expect(rows).toHaveLength(3);
+		expect(rows[0]).toHaveTextContent("午餐・滷肉飯");
+		expect(rows[0]).toHaveTextContent("620 kcal");
+		expect(rows[1]).toHaveTextContent("交通");
+		expect(rows[1]).toHaveTextContent("$90.00");
+		expect(rows[2]).toHaveTextContent("飲食");
+		expect(rows[2]).toHaveTextContent("$30.00");
+	});
+
+	it("meals 失敗時時間線說失敗，不會說今天沒有紀錄", async () => {
+		mockOverview({ "/api/meals": serverError });
+
+		render(wrap(<Overview />));
+
+		const timeline = screen.getByRole("region", { name: "今天" });
+		expect(
+			await within(timeline).findByText("無法載入今天的紀錄"),
+		).toBeInTheDocument();
+		expect(
+			within(timeline).queryByText("今天還沒有紀錄"),
+		).not.toBeInTheDocument();
+	});
+
+	it("今天的支出失敗時時間線說失敗，不會說今天沒有紀錄", async () => {
+		mockOverview({ "/api/expenses": serverError });
+
+		render(wrap(<Overview />));
+
+		const timeline = screen.getByRole("region", { name: "今天" });
+		expect(
+			await within(timeline).findByText("無法載入今天的紀錄"),
+		).toBeInTheDocument();
+		expect(
+			within(timeline).queryByText("今天還沒有紀錄"),
+		).not.toBeInTheDocument();
+	});
+
+	it("有目標時畫熱量進度條", async () => {
+		mockOverview();
+
+		render(wrap(<Overview />));
+
+		expect(
+			await screen.findByRole("progressbar", { name: "熱量進度" }),
+		).toBeInTheDocument();
+	});
+
+	it.each([
+		["今天沒有目標（target 是 null）", null],
+		[
+			"有目標但熱量沒設（target.kcal 是 null）",
+			{ kcal: null, protein_g: null, fat_g: null, carb_g: null },
+		],
+	])("%s：只顯示數字，沒有「/」也沒有進度條", async (_name, target) => {
+		mockOverview({
+			"/api/stats/daily": () =>
+				json({
+					...STATS,
+					target,
+					ratio: { kcal: null, protein_g: null, fat_g: null, carb_g: null },
+				}),
+		});
+
+		render(wrap(<Overview />));
+
+		const kcal = screen.getByTestId("today-kcal");
+		expect(await within(kcal).findByText(/1240/)).toBeInTheDocument();
+		expect(kcal).not.toHaveTextContent("/");
+		expect(within(kcal).queryByRole("progressbar")).not.toBeInTheDocument();
+	});
+
+	it("連得到網路但到不了後端：保留快取資料並顯示離線提示", async () => {
+		const client = newClient();
+		const seeded = Date.now() - 60 * 60 * 1000; // 一小時前——要比 staleTime 舊才會重抓
+		const seed = (key: readonly unknown[], data: unknown) =>
+			client.setQueryData(key, data, { updatedAt: seeded });
+		seed(queryKeys.dailyStats, STATS);
+		seed(queryKeys.expenseSummary(null), SUMMARY);
+		seed(queryKeys.meals, [LUNCH]);
+		seed(queryKeys.expensesByDate("2026-12-15"), [LUNCH_COST, METRO]);
+		vi.spyOn(globalThis, "fetch").mockRejectedValue(
+			new TypeError("network request failed"),
+		);
+
+		render(wrap(<Overview />, client));
+
+		expect(await screen.findByTestId("offline-banner")).toHaveTextContent(
+			"離線資料，最後更新於",
+		);
+		expect(screen.getByText("$12480.00")).toBeInTheDocument();
+		expect(
+			within(screen.getByTestId("today-kcal")).getByText(/1240/),
+		).toBeInTheDocument();
+		expect(screen.getAllByTestId("timeline-row")).toHaveLength(2);
+		expect(screen.queryByText(/無法載入/)).not.toBeInTheDocument();
 	});
 });
