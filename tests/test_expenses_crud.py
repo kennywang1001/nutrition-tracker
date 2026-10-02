@@ -146,6 +146,66 @@ async def test_list_expenses_only_returns_my_own(client, db_session):
     assert [item["amount"] for item in response.json()] == ["100.00"]
 
 
+async def test_list_expenses_by_date_uses_the_users_local_day(client, db_session):
+    """`?date=` 是使用者時區（Asia/Taipei）的一天，不是 UTC 的一天。
+
+    台北 12/15 00:00 = UTC 12/14 16:00。三筆分別落在台北的 12/14 23:59、
+    12/15 00:01、12/16 00:00——只有中間那筆屬於台北的 12/15。
+
+    **第三筆是必要的**：它落在 UTC 的 12/15 裡。如果實作誤用 UTC 的一天，
+    回的會是第三筆而不是第二筆，測試才分辨得出兩種實作。
+    """
+    user = await create_user(db_session)
+    await create_expense(
+        db_session, user=user, amount=1, spent_at=datetime(2026, 12, 14, 15, 59, tzinfo=UTC)
+    )
+    await create_expense(
+        db_session, user=user, amount=2, spent_at=datetime(2026, 12, 14, 16, 1, tzinfo=UTC)
+    )
+    await create_expense(
+        db_session, user=user, amount=3, spent_at=datetime(2026, 12, 15, 16, 0, tzinfo=UTC)
+    )
+
+    response = await client.get("/api/expenses?date=2026-12-15", headers=auth(user))
+
+    assert response.status_code == 200
+    assert [item["amount"] for item in response.json()] == ["2.00"]
+
+
+async def test_list_expenses_by_date_only_returns_my_own(client, db_session):
+    alice = await create_user(db_session)
+    bob = await create_user(db_session)
+    noon_in_taipei = datetime(2026, 12, 15, 4, 0, tzinfo=UTC)
+    await create_expense(db_session, user=alice, amount=100, spent_at=noon_in_taipei)
+    await create_expense(db_session, user=bob, amount=200, spent_at=noon_in_taipei)
+
+    response = await client.get("/api/expenses?date=2026-12-15", headers=auth(alice))
+
+    assert response.status_code == 200
+    assert [item["amount"] for item in response.json()] == ["100.00"]
+
+
+async def test_list_expenses_rejects_date_and_month_together(client, db_session):
+    """兩個都帶時沒有一個「對」的解讀——擇一靜默忽略另一個，呼叫端會拿到
+    跟它以為的不一樣的資料，而且沒有任何訊號。"""
+    user = await create_user(db_session)
+
+    response = await client.get(
+        "/api/expenses?date=2026-12-15&month=2026-12", headers=auth(user)
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "DATE_AND_MONTH_EXCLUSIVE"
+
+
+async def test_list_expenses_rejects_malformed_date(client, db_session):
+    user = await create_user(db_session)
+
+    response = await client.get("/api/expenses?date=2026-13-01", headers=auth(user))
+
+    assert response.status_code == 422
+
+
 async def test_patch_expense_updates_amount(client, db_session):
     user = await create_user(db_session)
     expense = await create_expense(db_session, user=user, amount=100)

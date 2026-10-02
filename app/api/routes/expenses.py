@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query, Response, status
@@ -7,8 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_owned_or_404
 from app.api.params import ResourceId
-from app.days import month_bounds, this_month_in_timezone
+from app.days import day_bounds, month_bounds, this_month_in_timezone
 from app.db import get_db
+from app.errors import UnprocessableEntityError
 from app.models.expense import Expense
 from app.models.user import User
 from app.schemas.expense import (
@@ -85,11 +86,24 @@ async def create_expense(
 @router.get("", response_model=list[ExpenseResponse])
 async def list_expenses(
     month: str | None = Query(default=None, pattern=YEAR_MONTH_PATTERN),
+    date: date | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[ExpenseResponse]:
-    """這個月的花費，由新到舊。
+    """這個月（或某一天）的花費，由新到舊。
+
+    **`?date=` 是使用者時區的一天**，跟 `GET /api/meals?date=` 同一個
+    `day_bounds()`——總覽的時間線把兩者放在同一條線上，兩邊對「今天」
+    的看法不同的話，午夜前後的支出會跟餐點分到不同天。
+
+    **不帶任何參數時仍然是「這個月」**，不是「今天」：報表的
+    `useExpenses(null)` 依賴這個行為。前端要今天的支出時，先從
+    `GET /api/stats/daily` 拿後端算好的 `date` 再明確帶進來——前端不自己
+    算日界線。
+
+    `date` 與 `month` 同時帶 → 422。擇一靜默忽略另一個的話，呼叫端拿到
+    的資料跟它以為的不一樣，而且沒有任何訊號。
 
     **沒有 offset。** `limit` 是一個上限，不是分頁——跟 `foods.py` 的
     `limit` 是同一種東西。一個月的個人支出撞到 500 筆的機率極低，
@@ -102,7 +116,15 @@ async def list_expenses(
     真的有人撞到 500 筆時，要嘛回應帶一個 count、要嘛才做分頁；
     在那之前這是一個刻意接受、但必須寫下來的落差。
     """
-    start, end, _ = _resolve_month(month, user.timezone)
+    if month is not None and date is not None:
+        raise UnprocessableEntityError(
+            "DATE_AND_MONTH_EXCLUSIVE", "date 與 month 只能擇一"
+        )
+
+    if date is not None:
+        start, end = day_bounds(date, user.timezone)
+    else:
+        start, end, _ = _resolve_month(month, user.timezone)
 
     rows = (
         await db.scalars(

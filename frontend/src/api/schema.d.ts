@@ -823,7 +823,19 @@ export interface paths {
         };
         /**
          * List Expenses
-         * @description 這個月的花費，由新到舊。
+         * @description 這個月（或某一天）的花費，由新到舊。
+         *
+         *     **`?date=` 是使用者時區的一天**，跟 `GET /api/meals?date=` 同一個
+         *     `day_bounds()`——總覽的時間線把兩者放在同一條線上，兩邊對「今天」
+         *     的看法不同的話，午夜前後的支出會跟餐點分到不同天。
+         *
+         *     **不帶任何參數時仍然是「這個月」**，不是「今天」：報表的
+         *     `useExpenses(null)` 依賴這個行為。前端要今天的支出時，先從
+         *     `GET /api/stats/daily` 拿後端算好的 `date` 再明確帶進來——前端不自己
+         *     算日界線。
+         *
+         *     `date` 與 `month` 同時帶 → 422。擇一靜默忽略另一個的話，呼叫端拿到
+         *     的資料跟它以為的不一樣，而且沒有任何訊號。
          *
          *     **沒有 offset。** `limit` 是一個上限，不是分頁——跟 `foods.py` 的
          *     `limit` 是同一種東西。一個月的個人支出撞到 500 筆的機率極低，
@@ -3293,6 +3305,7 @@ export interface operations {
         parameters: {
             query?: {
                 month?: string | null;
+                date?: string | null;
                 limit?: number;
             };
             header?: never;
