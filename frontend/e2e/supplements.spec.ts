@@ -12,7 +12,7 @@ test("新增補劑 → 今天吃了 → 飲食頁看得到它", async ({ page })
 	// 規格來源：使用者原話（2026-09-26）「補劑類 我想要能新增我有在使用的
 	// 當天有吃就點一份進去就好」。這條契約 E2E 走完整條路徑：
 	// POST /api/supplements（新增）→ POST /api/supplement-intakes
-	// （plan_id: null 的臨時記錄）→ 今日總覽讀得到。
+	// （plan_id: null 的臨時記錄）→ 飲食頁讀得到。
 	await login(page);
 	// 登入後落在總覽，要先切到飲食才看得到「今日補劑」區塊與
 	// 「新增補劑」的入口。

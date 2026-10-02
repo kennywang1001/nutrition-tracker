@@ -69,7 +69,7 @@ test("記一餐之後，趨勢圖上今天那根柱子跟著變", async ({ page,
 	await page.getByLabel("密碼").fill(ADMIN.password);
 	await page.getByRole("button", { name: "登入" }).click();
 
-	// 趨勢畫面：讀「今天」那根柱子的 aria-label。期間的最後一天就是今天，
+	// 營養趨勢畫面（報表 → 營養趨勢）：讀「今天」那根柱子的 aria-label。期間的最後一天就是今天，
 	// 所以是最後一根。
 	await page.getByRole("link", { name: "報表" }).click();
 	await page.getByRole("link", { name: "營養趨勢" }).click();
@@ -96,14 +96,12 @@ test("記一餐之後，趨勢圖上今天那根柱子跟著變", async ({ page,
 
 	// **等記錄真的完成再走。** `LogMeal` 的 mutation `onSuccess` 會呼叫
 	// `onSaved()`，由 `LogMealRoute` 導去 `/`（總覽）——「總覽」
-	// 那個標題出現就是「POST /api/meals 成功、而且失效已經發出」的同步點，
-	// 跟這條測試被寫下來時（Task 3 之前 onSaved 導回 `/`）用的是同一個
-	// 訊號，只是目的地換了。
+	// 那個標題出現就是「POST /api/meals 成功、而且失效已經發出」的同步點。
 	//
-	// ⚠️ **不可以省略這一步直接點「趨勢」。** 那樣沒有任何東西等存檔，
+	// ⚠️ **不可以省略這一步直接點「報表」。** 那樣沒有任何東西等存檔，
 	// 點走會在請求還在飛的時候把 `LogMeal` 卸載掉。
 	//
-	// 實測過（P3-B 計畫二 Task 8 之後）：原本就是直接點「趨勢」，單獨跑
+	// 實測過（P3-B 計畫二 Task 8 之後）：原本就是直接點「報表」→「營養趨勢」，單獨跑
 	// 永遠綠，但整套 11 條用 4 個 worker 平行跑時約一半的機率紅——API
 	// 變慢就輸掉那個 race。
 	//
@@ -115,7 +113,7 @@ test("記一餐之後，趨勢圖上今天那根柱子跟著變", async ({ page,
 	// `macro-kcal`，Playwright 的自動重試隱含地等到了導頁完成。
 	await expect(page.getByRole("heading", { name: "總覽" })).toBeVisible();
 
-	// 回到趨勢，同一根柱子的數字必須變了。
+	// 回到營養趨勢（報表 → 營養趨勢），同一根柱子的數字必須變了。
 	await page.getByRole("link", { name: "報表" }).click();
 	await page.getByRole("link", { name: "營養趨勢" }).click();
 	await page.getByTestId("trend-chart").waitFor();

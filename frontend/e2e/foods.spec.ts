@@ -8,7 +8,7 @@ async function login(page: import("@playwright/test").Page) {
 	await page.getByRole("button", { name: "登入" }).click();
 }
 
-test("建立食物 → 在記一餐搜尋得到 → 記一筆 → 今日總覽數字變", async ({
+test("建立食物 → 在記一餐搜尋得到 → 記一筆 → 飲食頁數字變", async ({
 	page,
 }) => {
 	// 規格 §10.2 第 1 條。跟 daily-loop.spec.ts 的「記一餐」測試不一樣的地方：

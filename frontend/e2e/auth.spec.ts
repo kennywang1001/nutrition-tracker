@@ -1,14 +1,12 @@
 import { expect, test } from "@playwright/test";
 import { ADMIN } from "./accounts.ts";
 
-test("登入之後看得到記一餐", async ({ page }) => {
+test("登入之後看得到總覽", async ({ page }) => {
 	// 計畫二（Task 1）把登入後的畫面從一個扁平的「已登入」佔位頁換成
 	// React Router 的路由——這裡的斷言跟著換，斷言的意圖不變：登入成功後
 	// 不再停在登入畫面。
 	//
-	// P3-C Task 3：首頁從今日總覽換成記一餐（使用者原話「記一餐應該放在
-	// 首頁」）——這條測試原本斷言「今日總覽」，那不再是登入後的落地頁，
-	// 改斷言「記一餐」正是這個 task 要驗的行為，不是遷就實作。
+	// 登入後的落地頁是總覽（`/`）。
 	await page.goto("/");
 	await page.getByLabel("Email").fill(ADMIN.email);
 	await page.getByLabel("密碼").fill(ADMIN.password);
@@ -26,8 +24,7 @@ test("access token 過期時會自動換票並重送，使用者不會被踢出�
 	await page.getByLabel("Email").fill(ADMIN.email);
 	await page.getByLabel("密碼").fill(ADMIN.password);
 	await page.getByRole("button", { name: "登入" }).click();
-	// P3-C Task 3：首頁換成記一餐之後，這裡斷言的落地頁跟著換（見上面
-	// 那條測試的說明）。這條測試全程停在首頁，不涉及導頁，只是換個標題。
+	// 登入後落在總覽；接著點到「我的」（那裡有「重新整理」按鈕）。
 	await expect(page.getByRole("heading", { name: "總覽" })).toBeVisible();
 	await page.getByRole("link", { name: "我的" }).click();
 	await expect(page.getByRole("heading", { name: "我的" })).toBeVisible();

@@ -107,8 +107,8 @@ test("送審編輯 → 管理員登入 → 佇列看到新舊並排 → 通過 �
 	await login(memberPage, MEMBER);
 	await memberPage.getByRole("link", { name: "飲食" }).click();
 	await memberPage.getByRole("link", { name: "食物庫" }).click();
-	// **等食物庫真的掛載完成再填搜尋框。** P3-C Task 3 之後首頁是記一餐，
-	// 它跟食物庫剛好用同一個可存取名稱「搜尋食物」（各自的 <label>）。
+	// **等食物庫真的掛載完成再填搜尋框。** 記一餐畫面
+	// 跟食物庫用同一個可存取名稱「搜尋食物」（各自的 <label>）。
 	// 如果不等，`getByLabel("搜尋食物")` 在路由真正切換完成之前會抓到
 	// 記一餐畫面上還沒卸載的那個輸入框、把字填在那裡，接著記一餐卸載、
 	// 食物庫掛載出一個全新的空白搜尋框，這裡的 fill 就白填了——後面
@@ -183,7 +183,7 @@ test("駁回 → 提案者在食物庫的編輯歷史看得到駁回理由", asy
 	await memberPage.getByRole("link", { name: "飲食" }).click();
 	await memberPage.getByRole("link", { name: "食物庫" }).click();
 	// 同一個坑，見上面「送審編輯」測試裡第一次點「食物庫」之後的說明：
-	// 首頁（記一餐）跟食物庫共用「搜尋食物」這個可存取名稱，不等食物庫的
+	// 記一餐跟食物庫共用「搜尋食物」這個可存取名稱，不等食物庫的
 	// heading 出現就填搜尋框，會把字填進記一餐畫面正要被卸載的那個輸入框。
 	await expect(
 		memberPage.getByRole("heading", { name: "食物庫" }),
@@ -268,11 +268,10 @@ test("非管理員打 admin 端點 → 403 且沒有多打一次 /api/auth/refre
 	});
 
 	await login(page, MEMBER);
-	// P3-C Task 3：首頁從今日總覽換成記一餐，登入後的落地頁跟著換——這裡
-	// 只是要確認登入成功，不特別在乎落在哪一頁，斷言跟著換掉。
+	// 登入後落在總覽——這裡只是要確認登入成功。
 	await expect(page.getByRole("heading", { name: "總覽" })).toBeVisible();
 
-	// MEMBER 看不到「審核」那個 tab（TabBar 的第五格是管理員限定），
+	// MEMBER 看不到「審核」連結（它在「我的」畫面裡，管理員限定），
 	// 所以沒有連結可以點——這裡模擬的是「直接輸入網址」，但刻意不用
 	// `page.goto()`（見 `navigateWithoutReload` 的註解：那會製造一次
 	// 跟這條測試無關的 bootstrap 換票，污染這裡要驗的計數）。

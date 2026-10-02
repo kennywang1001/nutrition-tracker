@@ -8,7 +8,7 @@ async function login(page: import("@playwright/test").Page) {
 	await page.getByRole("button", { name: "登入" }).click();
 }
 
-test("記一餐之後，今日總覽的數字真的變了", async ({ page, request }) => {
+test("記一餐之後，飲食頁的數字真的變了", async ({ page, request }) => {
 	// **這條守的是兩件單元測試看不到的事：**
 	//   1. invalidateQueries 那條失效路徑（需要兩個畫面同時存在）
 	//   2. 數值是字串（規格 §5.1）——後端回 "180.50"，前端的 decimal 處理
@@ -96,7 +96,7 @@ test("記一餐之後，今日總覽的數字真的變了", async ({ page, reque
 	await expect(page.getByTestId("macro-kcal")).not.toHaveText(before ?? "");
 });
 
-test("今日總覽不帶 date 參數——日界線由伺服器決定", async ({ page }) => {
+test("飲食頁不帶 date 參數——日界線由伺服器決定", async ({ page }) => {
 	// 規格 §5.3。Playwright 的 timezoneId 設成 Asia/Taipei（見
 	// playwright.config.ts），跟 CI runner 的 UTC 不同——所以
 	// 「前端自己用瀏覽器時區算日期」在這裡會算出跟後端不同的答案。

@@ -78,7 +78,7 @@ test("登入後的食物庫／新增食物／記一餐畫面，表單控制項�
 	await page.getByRole("link", { name: "食物庫" }).click();
 	// react-router 是 client-side 換頁，`click()` resolve 不代表換頁完成。
 	// 先等這個畫面獨有的 heading 出現，確保接下來數的是「換頁後」的
-	// DOM——「今日總覽」的餐點清單裡有一個一直可見的照片上傳
+	// DOM——飲食頁的餐點清單裡有一個一直可見的照片上傳
 	// `<input type="file">`（MealList.tsx 的 MealPhotoUpload），如果在
 	// 換頁完成前就去數控制項，會數到舊畫面那個 input，跟這個畫面
 	// 要驗的東西無關。
@@ -132,8 +132,8 @@ test("登入後的 /supplements 畫面，表單控制項字級 ≥16px（P3-C Ta
 	// 完全沒設過字級，實測比推論可靠）。
 	await login(page);
 
-	// 「新增補劑」的入口在 Today.tsx 的「今日補劑」區塊（Task 2）。首頁換成
-	// 記一餐之後（Task 3），登入後不再直接落在今日總覽，要先切過去才看得到
+	// 「新增補劑」的入口在 Today.tsx 的「今日補劑」區塊（Task 2）。登入後
+	// 落在總覽，要先切到飲食頁才看得到
 	// 那個連結。
 	await page.getByRole("link", { name: "飲食" }).click();
 	await page.getByRole("link", { name: "新增補劑" }).click();
