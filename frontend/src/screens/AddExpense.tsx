@@ -68,7 +68,8 @@ export function AddExpense({ onDone }: Props) {
 
 	function handleSubmit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		// ✓ 停用時按 Enter 仍然會觸發 submit——這裡是第二道防線。
+		// ✓ 停用時瀏覽器本來就不會隱式送出；這裡是保險——萬一之後多了別的
+		// submit 按鈕，或有程式呼叫 requestSubmit。
 		if (!isPositiveAmount(amount) || save.isPending) return;
 		setError(null);
 		save.mutate();

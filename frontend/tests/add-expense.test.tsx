@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { queryKeys } from "../src/api/queries";
@@ -107,6 +107,16 @@ describe("記帳 /expenses/new", () => {
 		await pressKeys("0");
 
 		expect(screen.getByRole("button", { name: "記一筆" })).toBeDisabled();
+		// 按鈕停用時瀏覽器本來就不會送出，所以直接觸發 submit 事件，
+		// 才測得到 handleSubmit 的守門。
+		fireEvent.submit(
+			screen
+				.getByRole("button", { name: "記一筆" })
+				.closest("form") as HTMLFormElement,
+		);
+		// mutate 是非同步送出的：讓出一輪再斷言，守門被拿掉時請求才來得及出現。
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(postBody(fetchMock)).toBeNull();
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
@@ -163,13 +173,53 @@ describe("記帳 /expenses/new", () => {
 		const { onDone } = renderScreen();
 
 		await pressKeys("2", "5", "0");
+		await userEvent.click(screen.getByRole("button", { name: "交通" }));
 		await userEvent.click(screen.getByRole("button", { name: "記一筆" }));
 
 		expect(await screen.findByRole("alert")).toHaveTextContent(
 			"金額格式不對，請輸入大於 0、最多兩位小數的數字",
 		);
 		expect(screen.getByLabelText("金額")).toHaveTextContent("250");
+		// 分類也不清掉（規格 §5.3）。
+		expect(screen.getByRole("button", { name: "交通" })).toHaveAttribute(
+			"aria-pressed",
+			"true",
+		);
 		expect(onDone).not.toHaveBeenCalled();
+	});
+
+	it("送出中 ✓ 停用，只送一次", async () => {
+		// mockApi 的 handler 必須同步回 Response，做不出「還沒回來」，
+		// 所以這條直接 spy fetch，回一個永遠不 resolve 的 promise。
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockImplementation(() => new Promise(() => {}));
+		renderScreen();
+
+		await pressKeys("1");
+		await userEvent.click(screen.getByRole("button", { name: "記一筆" }));
+
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: "記一筆" })).toBeDisabled(),
+		);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("備註去掉頭尾空白後送出", async () => {
+		const fetchMock = mockApi([
+			{
+				method: "POST",
+				path: "/api/expenses",
+				handler: () => json(SAVED, 201),
+			},
+		]);
+		renderScreen();
+
+		await pressKeys("1");
+		await userEvent.type(screen.getByLabelText("備註"), "  高鐵  ");
+		await userEvent.click(screen.getByRole("button", { name: "記一筆" }));
+
+		await waitFor(() => expect(postBody(fetchMock)?.note).toBe("高鐵"));
 	});
 
 	it("其他失敗顯示通用訊息", async () => {
