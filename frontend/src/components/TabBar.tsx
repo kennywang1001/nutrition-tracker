@@ -60,6 +60,10 @@ export function TabBar() {
 	// 面板卻還蓋在上面。location.key 一變，openedAt 就不等於它，面板自然關上，
 	// 不需要 effect。
 	const [openedAt, setOpenedAt] = useState<string | null>(null);
+	// 換頁後把舊的 key 清掉（React 文件的「render 時調整 state」寫法，不用 effect）：
+	// location.key 是每個歷史紀錄各一個，不清的話回到面板當初開著的那一頁，
+	// key 又對上了，面板會自己跳回來。
+	if (openedAt !== null && openedAt !== location.key) setOpenedAt(null);
 	const sheetOpen = openedAt === location.key;
 	const addRef = useRef<HTMLButtonElement>(null);
 

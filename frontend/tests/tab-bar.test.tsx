@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useNavigate } from "react-router";
 import { describe, expect, it } from "vitest";
 import { TabBar } from "../src/components/TabBar";
 
@@ -141,6 +141,32 @@ describe("TabBar", () => {
 		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
 
 		await userEvent.click(screen.getByRole("link", { name: "飲食" }));
+
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+
+	it("換頁再回到上一頁，面板不會自己跳回來", async () => {
+		// location.key 每個歷史紀錄各一個；舊的 key 沒清掉的話，回到當初
+		// 開著面板的那一頁，key 又對上了。
+		function Back() {
+			const navigate = useNavigate();
+			return (
+				<button type="button" onClick={() => navigate(-1)}>
+					上一頁
+				</button>
+			);
+		}
+		render(
+			<MemoryRouter initialEntries={["/"]}>
+				<TabBar />
+				<Back />
+			</MemoryRouter>,
+		);
+		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
+		await userEvent.click(screen.getByRole("link", { name: "飲食" }));
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "上一頁" }));
 
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 	});
