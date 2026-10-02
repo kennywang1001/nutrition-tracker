@@ -16,7 +16,8 @@ const DIGIT_ROWS: ReadonlyArray<ReadonlyArray<KeypadKey>> = [
 ];
 
 /** 記帳的數字鍵盤（規格 §5.1）。**規則全在 `lib/keypad.ts` 的 `applyKey`**，
- *  這裡只畫按鈕。
+ *  這裡只畫按鈕。DOM 順序（也就是 Tab 順序）是 7 8 9 4 5 6 1 2 3 . 0 ⌫ ✓，
+ *  跟畫面由上到下、由左到右一致；⌫ 與 ✓ 用 grid-column／grid-row 明確擺在第 4 欄。
  *
  *  「記一筆」是 `type="submit"`：鍵盤要放在呼叫端的 `<form>` 裡，送出由
  *  那個表單的 `onSubmit` 處理（備註欄按 Enter 也會走同一條路）。其他按鍵
@@ -25,7 +26,7 @@ export function MoneyKeypad({ value, onChange, submitDisabled }: Props) {
 	const press = (key: KeypadKey) => onChange(applyKey(value, key));
 
 	return (
-		// biome-ignore lint/a11y/useSemanticElements: 它建議的 <fieldset> 會帶來邊框與 legend 的預設樣式，一組按鍵用 role="group" 就夠了
+		// biome-ignore lint/a11y/useSemanticElements: role=group 與 fieldset 語意相同；fieldset 要另外重設 border、padding、min-inline-size，換過去沒有無障礙上的好處
 		<div className={styles.keypad} role="group" aria-label="數字鍵盤">
 			{DIGIT_ROWS.flat().map((digit) => (
 				<button
@@ -37,6 +38,21 @@ export function MoneyKeypad({ value, onChange, submitDisabled }: Props) {
 					{digit}
 				</button>
 			))}
+			<button
+				type="button"
+				aria-label="小數點"
+				className={styles.key}
+				onClick={() => press(".")}
+			>
+				.
+			</button>
+			<button
+				type="button"
+				className={`${styles.key} ${styles.zero}`}
+				onClick={() => press("0")}
+			>
+				0
+			</button>
 			<button
 				type="button"
 				aria-label="刪除"
@@ -52,21 +68,6 @@ export function MoneyKeypad({ value, onChange, submitDisabled }: Props) {
 				disabled={submitDisabled}
 			>
 				<Check aria-hidden="true" />
-			</button>
-			<button
-				type="button"
-				aria-label="小數點"
-				className={styles.key}
-				onClick={() => press(".")}
-			>
-				.
-			</button>
-			<button
-				type="button"
-				className={`${styles.key} ${styles.zero}`}
-				onClick={() => press("0")}
-			>
-				0
 			</button>
 		</div>
 	);

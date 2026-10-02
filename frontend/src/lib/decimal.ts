@@ -35,6 +35,9 @@ export function formatMoney(value: Numeric): string {
 /** 金額字串是否大於 0。空字串、`"0."`、`"abc"` 都回 `false`，**不丟例外**——
  *  記帳鍵盤打到一半的字串是常態，✓ 按鈕每次重繪都會問一次。
  *
+ *  它驗的是鍵盤組出來的字串；decimal.js 也接受 "1e5"、"0x10"、"Infinity"
+ *  這類寫法，鍵盤不可能產生它們，所以這個函式不特別拒絕。
+ *
  *  放在這裡而不是 `lib/keypad.ts`：判斷「是不是 0」要經過 `Decimal`
  *  （`"0.00"`、`"0."` 用字串比對很容易漏），而只有這個檔案可以 import
  *  decimal.js（`tests/decimal-containment.test.ts`）。 */
