@@ -8,6 +8,7 @@ import {
 } from "../api/photos";
 import { formatTime } from "../lib/dates";
 import { formatMacro } from "../lib/decimal";
+import styles from "./MealList.module.css";
 
 /** 這一餐的照片。**`photo_path` 本身從不出現在這個元件裡** ——
  *  它是伺服器端的相對路徑，不是 URL（規格 §5.2），唯一的用途是讓呼叫端
@@ -89,7 +90,7 @@ function MealPhotoUpload({ mealId }: { mealId: number }) {
 
 function MealCard({ meal }: { meal: Meal }) {
 	return (
-		<li>
+		<li className={styles.meal}>
 			<h3>
 				{formatTime(meal.eaten_at)} · {MEAL_TYPE_LABELS[meal.meal_type]}
 			</h3>
@@ -128,7 +129,7 @@ export function MealList() {
 			<h2>今日餐點</h2>
 			{mealsQuery.isLoading && <p>載入中…</p>}
 			{mealsQuery.isError && <p>無法載入餐點清單</p>}
-			<ul>
+			<ul className={styles.meals}>
 				{meals.map((meal) => (
 					<MealCard key={meal.id} meal={meal} />
 				))}

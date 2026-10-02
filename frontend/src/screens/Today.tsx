@@ -4,10 +4,12 @@ import { apiFetch } from "../api/client";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
 import { useDailyStats } from "../api/stats";
+import { Card } from "../components/Card";
 import { MacroBar } from "../components/MacroBar";
 import { formatTime } from "../lib/dates";
 import { formatMacro } from "../lib/decimal";
 import { MealList } from "./MealList";
+import styles from "./Today.module.css";
 
 type TodaySupplementItem = components["schemas"]["TodaySupplementItem"];
 
@@ -87,6 +89,13 @@ export function Today() {
 		<section>
 			<h1>飲食</h1>
 
+			{/* 介面改版：「食物庫」不再是 tab，入口在這裡（今天吃了什麼的
+			    旁邊，就是會想查、想加食物的地方）。補劑管理的入口原本就在下面
+			    「今日補劑」區塊，維持不動。 */}
+			<nav className={styles.links} aria-label="飲食相關">
+				<Link to="/foods">食物庫</Link>
+			</nav>
+
 			{statsQuery.isLoading && <p>載入中…</p>}
 			{statsQuery.isError && stats === undefined && <p>無法載入今日總覽</p>}
 			{isOfflineStats && (
@@ -101,7 +110,7 @@ export function Today() {
 					// 逐項顯示「未設定」（那是第二層 null 的畫面，見 else 分支的
 					// MacroBar）——兩者混為一談會讓使用者以為自己是「設了目標但
 					// 剛好每一項都沒填」，而不是「根本沒設目標」。
-					<div>
+					<Card>
 						<p>尚未設定目標</p>
 						<dl>
 							<div data-testid="macro-kcal">
@@ -121,12 +130,12 @@ export function Today() {
 								<dd>{formatMacro(stats.actual.carb_g)}</dd>
 							</div>
 						</dl>
-					</div>
+					</Card>
 				) : (
 					// 規格 §5.7 第二層 null：目標存在，但個別欄位可能是 null
 					// （「有目標，但這一項沒設」）。MacroBar 自己處理那一列的
 					// 「未設定」，其他列照常顯示比例——不在這裡把兩層混在一起判斷。
-					<div>
+					<Card>
 						<MacroBar
 							field="kcal"
 							label="熱量"
@@ -151,50 +160,48 @@ export function Today() {
 							actual={stats.actual.carb_g}
 							target={stats.target.carb_g}
 						/>
-					</div>
+					</Card>
 				))}
 
 			<MealList />
 
-			{/* 記帳的入口（P5 計畫二）。跟「新增補劑」同一個作法：
-			    不加第六個 tab（規格 §6.2 方向 1）。 */}
-			<Link to="/expenses">記帳</Link>
-
-			<h2>今日補劑</h2>
-			{/* 補劑的新增與「當天吃了就點一份進去」（P3-C Task 2）的入口。
+			<Card>
+				<h2>今日補劑</h2>
+				{/* 補劑的新增與「當天吃了就點一份進去」（P3-C Task 2）的入口。
 			    不加第六個 tab（計畫的說明：320px 寬度下 tab bar 每格只剩 53px，
 			    中文標籤會擠爆）——這裡是使用者會看到補劑的地方，也是他們
 			    想「加一個」的當下。 */}
-			<Link to="/supplements">新增補劑</Link>
-			<ul>
-				{supplements.map((item) => (
-					<li key={supplementKey(item)}>
-						<span>{item.supplement_name}</span>
-						{/* 規格 §5.8：plan_id 為 null 是臨時記錄，一定 done=true，
+				<Link to="/supplements">新增補劑</Link>
+				<ul>
+					{supplements.map((item) => (
+						<li key={supplementKey(item)}>
+							<span>{item.supplement_name}</span>
+							{/* 規格 §5.8：plan_id 為 null 是臨時記錄，一定 done=true，
 						    不該有打卡按鈕——只有「計畫存在但今天還沒打卡」才給打卡。 */}
-						{item.plan_id !== null && !item.done && (
-							<button
-								type="button"
-								disabled={checkIn.isPending}
-								onClick={() => checkIn.mutate(item)}
-							>
-								打卡
-							</button>
-						)}
-						{item.done && (
-							<button
-								type="button"
-								disabled={cancel.isPending}
-								onClick={() => {
-									if (item.intake_id !== null) cancel.mutate(item.intake_id);
-								}}
-							>
-								取消
-							</button>
-						)}
-					</li>
-				))}
-			</ul>
+							{item.plan_id !== null && !item.done && (
+								<button
+									type="button"
+									disabled={checkIn.isPending}
+									onClick={() => checkIn.mutate(item)}
+								>
+									打卡
+								</button>
+							)}
+							{item.done && (
+								<button
+									type="button"
+									disabled={cancel.isPending}
+									onClick={() => {
+										if (item.intake_id !== null) cancel.mutate(item.intake_id);
+									}}
+								>
+									取消
+								</button>
+							)}
+						</li>
+					))}
+				</ul>
+			</Card>
 		</section>
 	);
 }

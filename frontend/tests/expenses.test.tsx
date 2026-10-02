@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
+import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
@@ -9,13 +10,16 @@ import { CategoryBar } from "../src/components/CategoryBar";
 import { Expenses } from "../src/screens/Expenses";
 import { json, mockApi } from "./helpers/mock-api";
 
-// 不需要 MemoryRouter：這個畫面沒有 <Link> 也沒有 useNavigate
-// （清單、改刪、報表全在同一個畫面裡，跟 Supplements.tsx 同一個作法）。
+// 需要 MemoryRouter：營養趨勢的入口是 <Link>。
 function wrap(children: ReactNode) {
 	const client = new QueryClient({
 		defaultOptions: { queries: { retry: false } },
 	});
-	return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+	return (
+		<QueryClientProvider client={client}>
+			<MemoryRouter>{children}</MemoryRouter>
+		</QueryClientProvider>
+	);
 }
 
 const LUNCH = {
@@ -511,5 +515,23 @@ describe("記帳 /expenses", () => {
 		// locale）才抓得到——真正不依賴 locale 的守門是下面的 /%/ 斷言。
 		expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
 		expect(screen.queryByText(/%/)).not.toBeInTheDocument();
+	});
+
+	it("有營養趨勢的入口連結", async () => {
+		// 「趨勢」不再是 tab（介面改版），入口搬到報表頁。
+		mockApi([
+			{
+				method: "GET",
+				path: "/api/expenses/summary",
+				handler: () => json(EMPTY_SUMMARY),
+			},
+			{ method: "GET", path: "/api/expenses", handler: () => json([]) },
+		]);
+
+		render(wrap(<Expenses />));
+
+		expect(
+			await screen.findByRole("link", { name: "營養趨勢" }),
+		).toHaveAttribute("href", "/trend");
 	});
 });

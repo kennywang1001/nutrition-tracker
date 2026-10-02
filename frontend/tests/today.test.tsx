@@ -200,10 +200,9 @@ describe("今日總覽", () => {
 		expect(client.getQueryData(queryKeys.dailyStats)).toBeUndefined();
 	});
 
-	it("有記帳的入口連結", async () => {
-		// 這條守的是「記帳有一條進得去的路」。這個專案已經**三次**蓋好後端
-		// 卻沒有任何前端入口（食物、補劑、記帳），沒有這條測試，拿掉那個
-		// <Link> 不會有任何東西變紅。
+	it("有食物庫的入口連結", async () => {
+		// 「食物庫」不再是 tab（介面改版）。沒有這條測試，拿掉這個連結不會
+		// 有任何東西變紅——這個專案已經三次蓋好功能卻沒有入口。
 		mockApi({
 			"/api/stats/daily": () => json(STATS_WITH_TARGET),
 			"/api/supplements/today": () => json([]),
@@ -211,7 +210,9 @@ describe("今日總覽", () => {
 
 		render(wrap(<Today />));
 
-		const link = await screen.findByRole("link", { name: "記帳" });
-		expect(link).toHaveAttribute("href", "/expenses");
+		expect(await screen.findByRole("link", { name: "食物庫" })).toHaveAttribute(
+			"href",
+			"/foods",
+		);
 	});
 });

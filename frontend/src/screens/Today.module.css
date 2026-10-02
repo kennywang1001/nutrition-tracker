@@ -1,0 +1,12 @@
+.links {
+	display: flex;
+	gap: var(--space-4);
+	margin-bottom: var(--space-2);
+}
+
+.links a {
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+	font-weight: 600;
+}

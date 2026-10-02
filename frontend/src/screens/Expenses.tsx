@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
+import { Link } from "react-router";
 import { apiFetch } from "../api/client";
 import { ApiError } from "../api/errors";
 import {
@@ -10,8 +11,11 @@ import {
 	useExpenses,
 } from "../api/expenses";
 import { queryKeys } from "../api/queries";
+import { Card } from "../components/Card";
 import { CategoryBar } from "../components/CategoryBar";
+import { CategoryIcon } from "../components/IconBadge";
 import { formatMoney } from "../lib/decimal";
+import styles from "./Expenses.module.css";
 
 type RowProps = {
 	expense: Expense;
@@ -81,9 +85,10 @@ function ExpenseRow({ expense, onChanged }: RowProps) {
 	}
 
 	return (
-		<li data-testid={`expense-${expense.id}`}>
+		<li className={styles.row} data-testid={`expense-${expense.id}`}>
+			<CategoryIcon category={expense.category} />
 			<span>{CATEGORY_LABELS[expense.category]}</span>
-			<span>{formatMoney(expense.amount)}</span>
+			<span className={styles.amount}>{formatMoney(expense.amount)}</span>
 			{expense.note !== null && <span>{expense.note}</span>}
 			{/* meal_id 有值＝這筆是記一餐時順手建立的餐費（規格 §4.1）。
 			    刪掉那一餐時後端是 SET NULL（app/models/expense.py）：標示會
@@ -222,36 +227,43 @@ export function Expenses() {
 		<section>
 			<h1>報表</h1>
 
+			{/* 介面改版：「趨勢」不再是 tab，入口在報表——兩者都是「回頭看」。 */}
+			<nav className={styles.links} aria-label="報表相關">
+				<Link to="/trend">營養趨勢</Link>
+			</nav>
+
 			<h2>這個月花了多少</h2>
-			<div data-testid="expense-summary">
+			<Card testId="expense-summary">
 				<MonthSummary query={summaryQuery} />
-			</div>
+			</Card>
 
 			<h2>這個月</h2>
-			{expensesQuery.isPending ? (
-				<p>載入中…</p>
-			) : expensesQuery.isError ? (
-				// 失敗不能落到「這個月還沒有記錄花費」——這是記帳畫面，
-				// 空清單的措辭會引誘使用者重打一筆，造成重複記帳
-				// （跟 MealList.tsx 的 isError 分支同一個理由）。
-				<p>無法載入花費清單</p>
-			) : expenses.length === 0 ? (
-				<p>這個月還沒有記錄花費</p>
-			) : (
-				<ul>
-					{expenses.map((expense) => (
-						<ExpenseRow
-							key={expense.id}
-							expense={expense}
-							onChanged={() =>
-								void queryClient.invalidateQueries({
-									queryKey: queryKeys.expensesAll,
-								})
-							}
-						/>
-					))}
-				</ul>
-			)}
+			<Card>
+				{expensesQuery.isPending ? (
+					<p>載入中…</p>
+				) : expensesQuery.isError ? (
+					// 失敗不能落到「這個月還沒有記錄花費」——這是記帳畫面，
+					// 空清單的措辭會引誘使用者重打一筆，造成重複記帳
+					// （跟 MealList.tsx 的 isError 分支同一個理由）。
+					<p>無法載入花費清單</p>
+				) : expenses.length === 0 ? (
+					<p>這個月還沒有記錄花費</p>
+				) : (
+					<ul className={styles.list}>
+						{expenses.map((expense) => (
+							<ExpenseRow
+								key={expense.id}
+								expense={expense}
+								onChanged={() =>
+									void queryClient.invalidateQueries({
+										queryKey: queryKeys.expensesAll,
+									})
+								}
+							/>
+						))}
+					</ul>
+				)}
+			</Card>
 		</section>
 	);
 }
