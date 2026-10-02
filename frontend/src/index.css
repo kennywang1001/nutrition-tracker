@@ -1,22 +1,95 @@
-/* 這個專案的第一份樣式表（P3-B 計畫一 Task 3）。
-   純 class 選擇器，沒有 CSS modules、沒有 Tailwind——P3-B 不需要那些設定。 */
+/* 樣式表的兩層（介面改版第一階段，規格 §4）：
+   1. 這個檔案：設計變數、深色模式、全域基底樣式。
+   2. 每個元件自己的 *.module.css：只能引用這裡的變數，不能寫色碼——
+      tests/css-tokens.test.ts 會掃，也會驗每一組文字/底色的對比度。
+
+   **深色模式只在這裡覆寫同一組變數名稱**，元件裡不寫任何
+   prefers-color-scheme。這樣「加一個新顏色卻忘了深色版本」會被
+   css-tokens.test.ts 的「深色模式覆寫了每一個顏色變數」抓到。 */
 
 :root {
+	/* 讓瀏覽器原生的控制項（捲軸、還沒改樣式的 input/select）也跟著深淺色。 */
+	color-scheme: light dark;
+
 	/* 底部 tab bar 的高度，加上 iPhone home indicator 的安全區。
 	   下面的 main 用同一個變數補 padding，兩個數字因此不可能漂移。 */
 	--tab-bar-height: 56px;
 	--safe-bottom: env(safe-area-inset-bottom, 0px);
+	/* 中間「＋」凸出 tab bar 上緣的高度（規格 §4.4）。 */
+	--add-button-overhang: 20px;
+
+	/* 珊瑚橘拆成兩個（計畫「與規格的差異」第 1 點）：
+	   accent 只給沒有文字壓在上面的裝飾；action 給按鈕底色與連結文字。
+	   白字在 #ff7a59 上只有約 2.6:1。 */
+	--color-accent: #ff7a59;
+	--color-accent-soft: #ffe9e2;
+	--color-action: #b8432a;
+	--color-on-action: #ffffff;
+	--color-bg: #f6f6f8;
+	--color-surface: #ffffff;
+	--color-text: #222222;
+	--color-text-muted: #6b6b6b;
+	--color-border: #e5e5e5;
+	--color-danger: #c0392b;
+	/* 彩色圓形徽章上的白色圖示（IconBadge）。兩種模式都是白色，但深色
+	   區塊仍然要寫一次——「深色覆寫了每一個顏色變數」那條測試要求的。
+	   徽章旁邊一定有文字標籤，圖示是裝飾，不列入對比度的組合。 */
+	--color-on-badge: #ffffff;
+
+	--shadow-raised: 0 2px 6px rgb(0 0 0 / 25%);
+	/* 「＋」面板背後的半透明遮罩。 */
+	--scrim: rgb(0 0 0 / 40%);
+
+	--radius-card: 12px;
+	--radius-button: 10px;
+	--space-1: 4px;
+	--space-2: 8px;
+	--space-3: 12px;
+	--space-4: 16px;
+	--space-6: 24px;
+	--font-size-amount: 34px;
+	--font-size-total: 20px;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--color-accent: #ff8a6b;
+		--color-accent-soft: #3a2620;
+		--color-action: #ff8a6b;
+		/* 深色模式的按鈕是亮的珊瑚橘，上面的字要用深色才讀得到。 */
+		--color-on-action: #1f1f1f;
+		--color-bg: #16161a;
+		--color-surface: #24242a;
+		--color-text: #eeeeee;
+		--color-text-muted: #a0a0a0;
+		--color-border: #333333;
+		--color-danger: #ff7675;
+		--color-on-badge: #ffffff;
+	}
 }
 
 body {
 	margin: 0;
 	font-family: system-ui, -apple-system, "Noto Sans TC", sans-serif;
+	background: var(--color-bg);
+	color: var(--color-text);
 }
 
-/* tab bar 是 position: fixed，會蓋住內容的最後一行——而「今天最後吃的
-   那一餐」正好就在那個位置（規格 §3.1）。這裡補回等高的空間。 */
+a {
+	color: var(--color-action);
+}
+
+/* tab bar 是 position: fixed，會蓋住內容的最後一行。這裡補回等高的空間，
+   加上「＋」凸出 tab bar 上緣的那一截（規格 §4.4）——少算那一截，
+   最後一列內容的中間會被「＋」的圓蓋住。 */
 .app-main {
-	padding: 0 12px calc(var(--tab-bar-height) + var(--safe-bottom) + 12px);
+	padding: 0 var(--space-3)
+		calc(
+			var(--tab-bar-height) +
+			var(--safe-bottom) +
+			var(--add-button-overhang) +
+			var(--space-3)
+		);
 }
 
 .tab-bar {
