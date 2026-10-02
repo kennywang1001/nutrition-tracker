@@ -1,10 +1,16 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { queryClient } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
+import { PHOTO_UPLOAD_FAILED_NOTICE } from "../src/screens/LogMeal";
+
+// 上傳會呼叫 shrinkToLongestEdge（用 canvas，jsdom 沒有）。
+vi.mock("../src/lib/resize-image", () => ({
+	shrinkToLongestEdge: vi.fn((file: File) => Promise.resolve(file)),
+}));
 
 const ME = {
 	id: 1,
@@ -35,7 +41,10 @@ function jsonResponse(body: unknown) {
  *
  *  **每個端點都回正確的形狀**：舊版「所有請求都回 `[]`」會讓總覽拿到
  *  `[]` 當月報表，`formatMoney(undefined)` 直接把 render 炸掉。 */
-function mockBackend() {
+function mockBackend(
+	extra: (url: string, method: string) => Response | undefined = () =>
+		undefined,
+) {
 	return vi
 		.spyOn(globalThis, "fetch")
 		.mockImplementation(async (input, init) => {
@@ -44,6 +53,10 @@ function mockBackend() {
 			if (method === "POST" && url.includes("/api/auth/logout")) {
 				return new Response(null, { status: 204 });
 			}
+			// 個別測試的客製回應排在最前面（例如 `/api/meals/99/photo` 必須在
+			// `/api/meals` 之前）。
+			const custom = extra(url, method);
+			if (custom !== undefined) return custom;
 			// **`/api/meals` 必須在 `/api/me` 之前**："/api/meals".includes("/api/me")
 			// 為真——順序反過來，總覽的餐點清單會拿到使用者物件然後當掉。
 			if (url.includes("/api/meals")) return jsonResponse([]);
@@ -129,5 +142,61 @@ describe("App", () => {
 		expect(
 			await screen.findByRole("heading", { name: "登入" }),
 		).toBeInTheDocument();
+	});
+
+	it("記一餐存好、照片沒傳上去：回到總覽並顯示通知", async () => {
+		// LogMealRoute 的接線只有 App 層看得到：onSaved 的結果 → navigate 的 state
+		// → 總覽的 role="status"。
+		setTokens({ access_token: "a", refresh_token: "r" });
+		const food = {
+			id: 1,
+			name: "滷肉飯",
+			brand: null,
+			is_global: true,
+			nutrition: {
+				base_unit: "g",
+				kcal: "180.00",
+				protein_g: "6.50",
+				fat_g: "7.00",
+				carb_g: "22.00",
+			},
+		};
+		mockBackend((url, method) => {
+			if (url.includes("/api/foods/frequent")) return jsonResponse([food]);
+			if (url.includes("/api/foods/recent")) return jsonResponse([]);
+			if (url.includes("/api/foods/1/portions")) return jsonResponse([]);
+			if (method === "POST" && url.includes("/api/meals/99/photo")) {
+				return new Response(
+					JSON.stringify({
+						error: { code: "INTERNAL_ERROR", message: "壞了", details: {} },
+					}),
+					{ status: 500, headers: { "content-type": "application/json" } },
+				);
+			}
+			if (method === "POST" && url.includes("/api/meals")) {
+				return new Response(JSON.stringify({ id: 99 }), {
+					status: 201,
+					headers: { "content-type": "application/json" },
+				});
+			}
+			return undefined;
+		});
+		window.history.replaceState(null, "", "/meals/new");
+
+		render(<App />);
+		await userEvent.click(await screen.findByText("滷肉飯"));
+		await userEvent.upload(
+			screen.getByLabelText("照片（選填）"),
+			new File(["fake-jpeg"], "lunch.jpg", { type: "image/jpeg" }),
+		);
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		expect(await screen.findByRole("heading", { name: "總覽" })).toBeVisible();
+		await waitFor(() =>
+			expect(screen.getByRole("status")).toHaveTextContent(
+				PHOTO_UPLOAD_FAILED_NOTICE,
+			),
+		);
+		expect(window.location.pathname).toBe("/");
 	});
 });

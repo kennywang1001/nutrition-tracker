@@ -163,7 +163,7 @@ describe("記一餐", () => {
 	it("餐存好了、照片傳失敗：不算整筆失敗，告訴外層照片沒傳上去", async () => {
 		// 讓 mutation 失敗的話，使用者會以為沒記到、再記一次——
 		// 那一餐（含餐費）已經在後端了，那就是重複記錢。
-		mockApi({
+		const fetchMock = mockApi({
 			"/api/foods/frequent": () => json(FREQUENT_FOODS),
 			"/api/foods/recent": () => json([]),
 			"/api/foods/1/portions": () => json([]),
@@ -185,6 +185,10 @@ describe("記一餐", () => {
 			expect(onSaved).toHaveBeenCalledWith({ photoFailed: true }),
 		);
 		expect(screen.queryByText("記錄失敗，請再試一次")).not.toBeInTheDocument();
+		// 沒有重複記錄：POST /api/meals 剛好一次，照片失敗不會讓整筆重送。
+		expect(
+			postedUrls(fetchMock).filter((url) => url === "/api/meals"),
+		).toHaveLength(1);
 	});
 
 	it("移除照片之後就不會上傳", async () => {

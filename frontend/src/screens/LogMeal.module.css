@@ -77,13 +77,18 @@
 	color: var(--color-text-muted);
 }
 
-/* 視覺上藏起來，但仍然可以被 label 觸發、被測試與 Playwright 找到。
-   不用 display:none——那會讓某些瀏覽器忽略 label 的點擊。 */
+/* 視覺上藏起來，但不用 display:none：opacity:0 的 input 仍然可以用鍵盤
+   對焦，測試與 Playwright 也還找得到它。對焦時的外框畫在前一個兄弟 label 上。 */
 .fileInput {
 	position: absolute;
 	width: 1px;
 	height: 1px;
 	opacity: 0;
+}
+
+.photoButton:has(+ .fileInput:focus-visible) {
+	outline: 2px solid var(--color-action);
+	outline-offset: 2px;
 }
 
 .preview {

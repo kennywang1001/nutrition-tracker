@@ -413,12 +413,17 @@ export function LogMeal({ onSaved }: Props) {
 						type="file"
 						accept="image/*"
 						className={styles.fileInput}
+						disabled={saveMeal.isPending}
 						onChange={handlePhotoChange}
 					/>
 					{photoPreview !== null && (
 						<div className={styles.preview}>
 							<img src={photoPreview} alt="選好的照片" />
-							<button type="button" onClick={() => setPhoto(null)}>
+							<button
+								type="button"
+								disabled={saveMeal.isPending}
+								onClick={() => setPhoto(null)}
+							>
 								移除照片
 							</button>
 						</div>
@@ -431,7 +436,7 @@ export function LogMeal({ onSaved }: Props) {
 						className={styles.save}
 						disabled={saveMeal.isPending}
 					>
-						記錄
+						{saveMeal.isPending ? "儲存中…" : "記錄"}
 					</button>
 				</form>
 			)}

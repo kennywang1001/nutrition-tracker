@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { useLocation } from "react-router";
+import { useEffect, useState } from "react";
+import { useLocation, useNavigate } from "react-router";
 import {
 	CATEGORY_LABELS,
 	useExpenseSummary,
@@ -204,15 +205,31 @@ function OfflineBanner() {
  *  三塊**各自**處理載入與錯誤——一塊失敗不拖垮整頁。
  *  時間線的列只能看、不能點（規格 §1.3）。 */
 export function Overview() {
-	const notice = noticeFrom(useLocation().state);
+	const location = useLocation();
+	const navigate = useNavigate();
+	const [notice, setNotice] = useState<string | null>(null);
+	const incoming = noticeFrom(location.state);
+
+	// 通知讀過就從 history 清掉：BrowserRouter 把 state 存在 history 裡，不清的話
+	// 重新整理或返回會再跳出來（照片可能已經補傳了）。通知先放進元件自己的
+	// state，所以清掉 history 之後畫面上仍然看得到。
+	// 刻意在掛載之後才設定：role="status" 的區塊要先存在、再填字，
+	// 螢幕閱讀器才會唸（一開始就有字的 live region 常常不唸）。
+	useEffect(() => {
+		if (incoming === null) return;
+		setNotice(incoming);
+		navigate(`${location.pathname}${location.search}`, {
+			replace: true,
+			state: null,
+		});
+	}, [incoming, location.pathname, location.search, navigate]);
+
 	return (
 		<section>
 			<h1>總覽</h1>
-			{notice !== null && (
-				<p role="status" className={styles.notice}>
-					{notice}
-				</p>
-			)}
+			<div role="status">
+				{notice !== null && <p className={styles.notice}>{notice}</p>}
+			</div>
 			<OfflineBanner />
 			<div className={styles.cards}>
 				<MonthSpendCard />

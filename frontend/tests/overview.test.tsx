@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { queryKeys } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
@@ -11,6 +11,25 @@ import { json, mockApi, type Route } from "./helpers/mock-api";
 
 function newClient() {
 	return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+}
+
+function LocationState() {
+	return (
+		<pre data-testid="location-state">
+			{JSON.stringify(useLocation().state)}
+		</pre>
+	);
+}
+
+function wrapAt(state: unknown) {
+	return (
+		<QueryClientProvider client={newClient()}>
+			<MemoryRouter initialEntries={[{ pathname: "/", state }]}>
+				<Overview />
+				<LocationState />
+			</MemoryRouter>
+		</QueryClientProvider>
+	);
 }
 
 function wrap(children: ReactNode, client = newClient()) {
@@ -315,22 +334,23 @@ describe("總覽", () => {
 
 	it("帶著通知進來時顯示通知（例如照片沒傳上去）", async () => {
 		mockOverview();
-		const client = newClient();
 
-		render(
-			<QueryClientProvider client={client}>
-				<MemoryRouter
-					initialEntries={[
-						{ pathname: "/", state: { notice: "照片沒有傳上去" } },
-					]}
-				>
-					<Overview />
-				</MemoryRouter>
-			</QueryClientProvider>,
-		);
+		render(wrapAt({ notice: "照片沒有傳上去" }));
 
 		expect(await screen.findByRole("status")).toHaveTextContent(
 			"照片沒有傳上去",
 		);
+	});
+
+	it("通知讀過就從 history 清掉：state 變成 null，畫面上的通知還在", async () => {
+		mockOverview();
+
+		render(wrapAt({ notice: "照片沒有傳上去" }));
+
+		await screen.findByText("照片沒有傳上去");
+		await waitFor(() =>
+			expect(screen.getByTestId("location-state")).toHaveTextContent("null"),
+		);
+		expect(screen.getByText("照片沒有傳上去")).toBeInTheDocument();
 	});
 });
