@@ -10,7 +10,7 @@ import { Expenses } from "../src/screens/Expenses";
 import { json, mockApi } from "./helpers/mock-api";
 
 // 不需要 MemoryRouter：這個畫面沒有 <Link> 也沒有 useNavigate
-// （清單、新增、改刪、報表全在同一個畫面裡，跟 Supplements.tsx 同一個作法）。
+// （清單、改刪、報表全在同一個畫面裡，跟 Supplements.tsx 同一個作法）。
 function wrap(children: ReactNode) {
 	const client = new QueryClient({
 		defaultOptions: { queries: { retry: false } },
@@ -121,9 +121,8 @@ describe("記帳 /expenses", () => {
 		// 250.50 不能顯示成 250.5——這是 formatMoney 存在的理由
 		expect(screen.getByText("250.50")).toBeInTheDocument();
 		expect(screen.getByText("180.00")).toBeInTheDocument();
-		// 分類顯示中文，不是 "food"——新增表單的 <select> 也有同樣文字的
-		// <option>，所以要限定在該筆花費的列裡找，否則會撞到
-		// "Found multiple elements"。
+		// 分類顯示中文，不是 "food"——限定在該筆花費的列裡找，不要用裸的
+		// getByText（分類名稱可能同時出現在別處）。
 		expect(
 			within(screen.getByTestId("expense-1")).getByText("飲食"),
 		).toBeInTheDocument();
@@ -179,69 +178,6 @@ describe("記帳 /expenses", () => {
 		// 失敗不能被誤讀成「這個月沒有花費」——那個措辭在金錢畫面上會
 		// 引誘使用者以為真的沒記錄過，重打一筆造成重複記帳。
 		expect(screen.queryByText("這個月還沒有記錄花費")).not.toBeInTheDocument();
-	});
-
-	it("新增一筆花費，送出的 spent_at 帶時區偏移", async () => {
-		const fetchMock = mockApi([
-			{
-				method: "GET",
-				path: "/api/expenses/summary",
-				handler: () => json(EMPTY_SUMMARY),
-			},
-			{ method: "GET", path: "/api/expenses", handler: () => json([]) },
-			{
-				method: "POST",
-				path: "/api/expenses",
-				handler: () => json(TRAIN, 201),
-			},
-		]);
-
-		render(wrap(<Expenses />));
-		await screen.findByText("這個月還沒有記錄花費");
-
-		await userEvent.type(screen.getByLabelText("金額"), "250.50");
-		await userEvent.selectOptions(screen.getByLabelText("分類"), "transport");
-		await userEvent.click(screen.getByRole("button", { name: "記一筆" }));
-
-		await waitFor(() =>
-			expect(sentBody(fetchMock, "POST", "/api/expenses")).not.toBeNull(),
-		);
-		const sent = sentBody(fetchMock, "POST", "/api/expenses");
-		expect(sent?.amount).toBe("250.50");
-		expect(sent?.category).toBe("transport");
-		// 備註留空——後端 note 是「留空轉 null」，不是空字串。
-		expect(sent?.note).toBeNull();
-		// **關鍵斷言**：後端用 AwareDatetime，沒有 offset 的 datetime 會 422。
-		// toISOString() 永遠以 Z 結尾。
-		expect(sent?.spent_at).toMatch(/(Z|[+-]\d{2}:\d{2})$/);
-
-		// 新增成功要讓清單重取，不然記完一筆之後畫面上還是舊資料——
-		// 掛載時打過一次 GET /api/expenses，成功後 invalidateQueries
-		// 應該再觸發至少一次。
-		await waitFor(() =>
-			expect(expenseListGetCount(fetchMock)).toBeGreaterThanOrEqual(2),
-		);
-	});
-
-	it("金額留空時不送請求", async () => {
-		const fetchMock = mockApi([
-			{
-				method: "GET",
-				path: "/api/expenses/summary",
-				handler: () => json(EMPTY_SUMMARY),
-			},
-			{ method: "GET", path: "/api/expenses", handler: () => json([]) },
-		]);
-
-		render(wrap(<Expenses />));
-		await screen.findByText("這個月還沒有記錄花費");
-		const before = fetchMock.mock.calls.length;
-
-		await userEvent.click(screen.getByRole("button", { name: "記一筆" }));
-
-		expect(await screen.findByRole("alert")).toHaveTextContent("請輸入金額");
-		// 沒有多打任何請求——驗證擋在前端，不是靠後端回 422
-		expect(fetchMock.mock.calls.length).toBe(before);
 	});
 
 	it("改掉一筆的金額", async () => {
@@ -575,52 +511,5 @@ describe("記帳 /expenses", () => {
 		// locale）才抓得到——真正不依賴 locale 的守門是下面的 /%/ 斷言。
 		expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
 		expect(screen.queryByText(/%/)).not.toBeInTheDocument();
-	});
-
-	it("記一筆之後總額跟著更新", async () => {
-		// 報表 GET 用閉包計數器：第一次回空月份，之後回剛剛那筆交通費——
-		// 這條測試守的是「記了一筆，總額真的變了」，光看清單 GET 被重取
-		// 幾次（expenseListGetCount）看不出總額有沒有跟著動。
-		let summaryCallCount = 0;
-		mockApi([
-			{
-				method: "GET",
-				path: "/api/expenses/summary",
-				handler: () => {
-					summaryCallCount += 1;
-					if (summaryCallCount === 1) {
-						return json({ month: "2026-12", total: "0.00", by_category: [] });
-					}
-					return json({
-						month: "2026-12",
-						total: "250.50",
-						by_category: [{ category: "transport", total: "250.50", count: 1 }],
-					});
-				},
-			},
-			{ method: "GET", path: "/api/expenses", handler: () => json([]) },
-			{
-				method: "POST",
-				path: "/api/expenses",
-				handler: () => json(TRAIN, 201),
-			},
-		]);
-
-		render(wrap(<Expenses />));
-		await screen.findByText("這個月還沒有記錄花費");
-
-		await userEvent.type(screen.getByLabelText("金額"), "250.50");
-		await userEvent.selectOptions(screen.getByLabelText("分類"), "transport");
-		await userEvent.click(screen.getByRole("button", { name: "記一筆" }));
-
-		// **不能直接 `findByText("250.50")`**：這筆交通費是這個月唯一一筆，
-		// 所以分類佔比是 100%，「總計」跟「交通」分類列剛好顯示同一個金額
-		// 字串，會撞成「Found multiple elements」。鎖定「總計」那一段文字，
-		// 才是在斷言總額本身更新了，不是隨便哪裡出現這個數字。
-		await waitFor(() =>
-			expect(
-				within(screen.getByTestId("expense-summary")).getByText(/總計/),
-			).toHaveTextContent("250.50"),
-		);
 	});
 });

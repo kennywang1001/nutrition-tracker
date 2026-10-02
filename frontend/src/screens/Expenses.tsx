@@ -5,9 +5,7 @@ import { ApiError } from "../api/errors";
 import {
 	AMOUNT_FORMAT_ERROR,
 	CATEGORY_LABELS,
-	CATEGORY_ORDER,
 	type Expense,
-	type ExpenseCategory,
 	useExpenseSummary,
 	useExpenses,
 } from "../api/expenses";
@@ -73,7 +71,7 @@ function ExpenseRow({ expense, onChanged }: RowProps) {
 
 	function handleSave(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		// 跟新增表單同一個理由：空字串擋在前端，不要白打一次請求。
+		// 空字串擋在前端，不要白打一次請求。
 		if (draftAmount.trim() === "") {
 			setRowError("請輸入金額");
 			return;
@@ -94,8 +92,8 @@ function ExpenseRow({ expense, onChanged }: RowProps) {
 			{expense.meal_id !== null && <span>（餐費）</span>}
 
 			{editing ? (
-				// 用 <form> 不是 onClick：Enter / 手機鍵盤的「前往」都該能儲存，
-				// 跟新增表單同一個作法。**故意不給 amount 加 required**——
+				// 用 <form> 不是 onClick：Enter / 手機鍵盤的「前往」都該能儲存。
+				// **故意不給 amount 加 required**——
 				// 原生驗證會搶在「請輸入金額」這條 JS 擋欄之前擋下送出。
 				<form onSubmit={handleSave}>
 					<label htmlFor={`edit-amount-${expense.id}`}>修改金額</label>
@@ -205,11 +203,10 @@ function MonthSummary({ query }: MonthSummaryProps) {
 	);
 }
 
-/** 記帳：這個月的花費清單 + 新增。
+/** 報表：這個月的總額、分類佔比與花費清單（可改金額、刪除）。
  *
- *  **入口在 `Today.tsx`，不是第六個 tab**（規格 §6.1、§6.2 方向 1）——
- *  tab bar 現在 4 格（管理員 5 格），320px 寬度下第六格只剩 53.3px，
- *  而「今日總覽」四個字約 56px，塞不進去。
+ *  新增改由「＋」→ 記帳（`AddExpense.tsx`）；入口是 tab bar 的「報表」
+ *  （`/reports`，舊網址 `/expenses` 會轉址過來）。
  *
  *  **`month` 固定傳 `null`**：讓後端用使用者時區決定「這個月」
  *  （`this_month_in_timezone`）。前端沒有月份選擇器——規格 §1.1 要回答的
@@ -221,116 +218,9 @@ export function Expenses() {
 	const expenses = expensesQuery.data ?? [];
 	const summaryQuery = useExpenseSummary(null);
 
-	const [amount, setAmount] = useState("");
-	const [category, setCategory] = useState<ExpenseCategory>("food");
-	const [note, setNote] = useState("");
-	const [error, setError] = useState<string | null>(null);
-
-	const createExpense = useMutation({
-		mutationFn: () =>
-			apiFetch<Expense>("/api/expenses", {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({
-					// 金額一律以字串送出，不要 Number()（規格 §2.4）。
-					amount,
-					category,
-					// **一律用 toISOString()，永遠帶 Z。**
-					// 後端是 AwareDatetime，沒有 offset 的 datetime 會回 422
-					// （P5 計畫一最終審查修掉的那個 bug）。這也是這個畫面
-					// 刻意沒有日期選擇器的原因之一——<input type="datetime-local">
-					// 產出的就是沒有 offset 的格式。
-					spent_at: new Date().toISOString(),
-					note: note.trim() === "" ? null : note.trim(),
-				}),
-			}),
-		onSuccess: () => {
-			setAmount("");
-			setNote("");
-			setError(null);
-			// 一次失效打到清單與報表兩者（queryKeys.expensesAll 是兩者的前綴）。
-			void queryClient.invalidateQueries({ queryKey: queryKeys.expensesAll });
-		},
-		onError: (caught: unknown) => {
-			if (caught instanceof ApiError && caught.code === "VALIDATION_ERROR") {
-				setError(AMOUNT_FORMAT_ERROR);
-				return;
-			}
-			setError("記帳失敗，請再試一次");
-		},
-	});
-
-	function handleSubmit(event: FormEvent<HTMLFormElement>) {
-		event.preventDefault();
-		// 擋在前端，不是靠後端回 422——空字串送出去只會換來一個
-		// 使用者看不懂的驗證錯誤，而且白打一次請求。
-		if (amount.trim() === "") {
-			setError("請輸入金額");
-			return;
-		}
-		setError(null);
-		createExpense.mutate();
-	}
-
 	return (
 		<section>
 			<h1>報表</h1>
-
-			<h2>記一筆</h2>
-			{/* 用 <form> 不是 onClick：手機鍵盤的「前往」/ Enter 都該能送出，
-			    跟其他每一個新增表單（Supplements.tsx 等）同一個作法。
-			    **故意不給 amount 加 required**——原生驗證會搶在「請輸入金額」
-			    這條 JS 擋欄之前擋下送出，讓那條測試失去鑑別力。 */}
-			<form onSubmit={handleSubmit}>
-				<div>
-					<label htmlFor="expense-amount">金額</label>
-					{/* inputMode="decimal" 讓手機跳數字鍵盤。
-					    font-size 由 index.css 的全域規則保證 ≥16px（iOS Safari
-					    在 <16px 時會自動放大整個頁面，P3-C 踩過）——
-					    **不要在這裡覆寫成更小的字**。 */}
-					<input
-						id="expense-amount"
-						type="text"
-						inputMode="decimal"
-						value={amount}
-						onChange={(event) => setAmount(event.target.value)}
-					/>
-				</div>
-				<div>
-					<label htmlFor="expense-category">分類</label>
-					<select
-						id="expense-category"
-						value={category}
-						onChange={(event) =>
-							setCategory(event.target.value as ExpenseCategory)
-						}
-					>
-						{CATEGORY_ORDER.map((value) => (
-							<option key={value} value={value}>
-								{CATEGORY_LABELS[value]}
-							</option>
-						))}
-					</select>
-				</div>
-				<div>
-					<label htmlFor="expense-note">備註</label>
-					{/* maxLength 對齊後端 ExpenseCreateRequest.note 的
-					    Field(max_length=500)（app/schemas/expense.py）。 */}
-					<input
-						id="expense-note"
-						type="text"
-						maxLength={500}
-						value={note}
-						onChange={(event) => setNote(event.target.value)}
-					/>
-				</div>
-				{/* disabled while pending——跟每一個手足畫面一樣（Supplements.tsx
-				    的「新增補劑」按鈕）：連點兩下不該把同一筆錢記兩次。 */}
-				<button type="submit" disabled={createExpense.isPending}>
-					記一筆
-				</button>
-				{error !== null && <p role="alert">{error}</p>}
-			</form>
 
 			<h2>這個月花了多少</h2>
 			<div data-testid="expense-summary">

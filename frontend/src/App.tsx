@@ -19,6 +19,7 @@ import { offlinePersistOptions } from "./api/persist";
 import { queryClient } from "./api/queries";
 import { getRefreshToken } from "./auth/store";
 import { TabBar } from "./components/TabBar";
+import { AddExpense } from "./screens/AddExpense";
 import { AdminRevisions } from "./screens/AdminRevisions";
 import { Expenses } from "./screens/Expenses";
 import { FoodDetail } from "./screens/FoodDetail";
@@ -40,6 +41,12 @@ import { Trend } from "./screens/Trend";
 function LogMealRoute() {
 	const navigate = useNavigate();
 	return <LogMeal onSaved={() => navigate("/")} />;
+}
+
+/** `/expenses/new`：記完或關閉都回總覽。 */
+function AddExpenseRoute() {
+	const navigate = useNavigate();
+	return <AddExpense onDone={() => navigate("/")} />;
 }
 
 export function App() {
@@ -65,6 +72,7 @@ export function App() {
 								path="/me"
 								element={<Me onLoggedOut={() => setLoggedIn(false)} />}
 							/>
+							<Route path="/expenses/new" element={<AddExpenseRoute />} />
 							<Route path="/meals/new" element={<LogMealRoute />} />
 							{/* 舊網址轉址（規格 §3.3）：手機上可能有書籤或 PWA 的舊
 									狀態。`replace`：上一頁不會回到一個只會再轉走的網址。 */}

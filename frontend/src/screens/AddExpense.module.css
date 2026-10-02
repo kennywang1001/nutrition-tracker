@@ -1,0 +1,109 @@
+.screen {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+}
+
+.header {
+	display: flex;
+	align-items: center;
+}
+
+.header h1 {
+	flex: 1;
+	margin: 0;
+	font-size: 18px;
+	text-align: center;
+}
+
+/* 標題置中：右邊補一個跟關閉鈕等寬的空位。 */
+.header::after {
+	content: "";
+	width: 44px;
+}
+
+.close {
+	width: 44px;
+	height: 44px;
+	border: none;
+	background: transparent;
+	color: var(--color-text);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.amount {
+	display: block;
+	text-align: right;
+	font-size: var(--font-size-amount);
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+	padding: var(--space-2) 0;
+}
+
+.currency {
+	font-size: 18px;
+	color: var(--color-text-muted);
+	margin-right: var(--space-1);
+}
+
+.categories {
+	border: none;
+	padding: 0;
+	margin: 0;
+}
+
+.categories legend {
+	font-size: 12px;
+	color: var(--color-text-muted);
+	margin-bottom: var(--space-2);
+}
+
+.categoryGrid {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+	gap: var(--space-2);
+}
+
+.category {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: var(--space-1);
+	min-height: 44px;
+	padding: var(--space-1);
+	border: none;
+	border-radius: var(--radius-button);
+	background: transparent;
+	color: var(--color-text-muted);
+	font-size: 12px;
+}
+
+.category[aria-pressed="true"] {
+	background: var(--color-accent-soft);
+	color: var(--color-text);
+	font-weight: 600;
+}
+
+.note {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	font-size: 12px;
+	color: var(--color-text-muted);
+}
+
+/* 字級不在這裡設——index.css 的全域規則保證 input ≥ 16px（iOS 自動放大）。 */
+.note input {
+	padding: var(--space-2) var(--space-3);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-button);
+	background: var(--color-surface);
+	color: var(--color-text);
+}
+
+.error {
+	margin: 0;
+	color: var(--color-danger);
+}
