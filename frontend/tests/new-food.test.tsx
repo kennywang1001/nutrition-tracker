@@ -417,6 +417,55 @@ describe("新增食物 /foods/new", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
+	it("每一份模式下清掉重量再重打：回到每一份，送出的是照新重量換算的值", async () => {
+		const fetchMock = mockCreate();
+		render(wrap(<NewFood />));
+
+		await userEvent.type(screen.getByLabelText("名稱"), "洋芋片");
+		await userEvent.type(screen.getByLabelText("份量名稱"), "份");
+		await userEvent.type(screen.getByLabelText("每份重量（g）"), "45");
+		await userEvent.click(screen.getByRole("radio", { name: "每一份" }));
+		await userEvent.type(screen.getByLabelText("熱量（每份 kcal）"), "210");
+		await userEvent.type(screen.getByLabelText("蛋白質（每份 g）"), "9");
+		await userEvent.type(screen.getByLabelText("脂肪（每份 g）"), "4.5");
+		await userEvent.type(screen.getByLabelText("碳水化合物（每份 g）"), "30");
+
+		await userEvent.clear(screen.getByLabelText("每份重量（g）"));
+		await userEvent.type(screen.getByLabelText("每份重量（g）"), "50");
+
+		expect(screen.getByRole("radio", { name: "每一份" })).toBeChecked();
+		await userEvent.click(screen.getByRole("button", { name: "建立食物" }));
+
+		expect(await screen.findByText("food-detail:42")).toBeInTheDocument();
+		expect(postBody(fetchMock)?.nutrition).toMatchObject({ kcal: "420.00" });
+	});
+
+	it.each([
+		["0", "每份重量要大於 0"],
+		["abc", "每份重量要大於 0"],
+		["10001", "每份重量不能超過 10000"],
+	])("每份重量 %s：擋下來，不送請求", async (grams, message) => {
+		const fetchMock = mockApi([]);
+		render(wrap(<NewFood />));
+
+		await userEvent.type(screen.getByLabelText("名稱"), "滷肉飯");
+		await userEvent.type(screen.getByLabelText("份量名稱"), "碗");
+		await userEvent.type(screen.getByLabelText("每份重量（g）"), grams);
+		await fillNutrition();
+		await userEvent.click(screen.getByRole("button", { name: "建立食物" }));
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(message);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("每份重量前後有空白也算合法，「每一份」可以選", async () => {
+		render(wrap(<NewFood />));
+
+		await userEvent.type(screen.getByLabelText("每份重量（g）"), " 45 ");
+
+		expect(screen.getByRole("radio", { name: "每一份" })).toBeEnabled();
+	});
+
 	it("「每 100」模式下四個欄位的標籤跟以前一字不差", () => {
 		// 守既有 e2e（foods / admin / mobile-form-zoom）與 FoodDetail 共用的標籤。
 		// 用字面字串，不是引用 NUMERIC_FIELDS——引用常數的話，改了常數這條照樣綠。

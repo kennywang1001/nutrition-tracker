@@ -4,7 +4,7 @@ import { useNavigate } from "react-router";
 import { apiFetch } from "../api/client";
 import { ApiError } from "../api/errors";
 import type { components } from "../api/schema";
-import { isPositiveAmount, perServingToPer100 } from "../lib/decimal";
+import { perServingToPer100 } from "../lib/decimal";
 
 type Food = components["schemas"]["FoodResponse"];
 type BaseUnit = components["schemas"]["BaseUnit"];
@@ -94,8 +94,16 @@ export function NewFood() {
 	// 「一份」（選填，食物份量規格 §4.1）。兩個要一起填。
 	const [portionLabel, setPortionLabel] = useState("");
 	const [portionGrams, setPortionGrams] = useState("");
-	const [basis, setBasis] = useState<NutritionBasis>("per100");
-	const servingGramsValid = isPositiveAmount(portionGrams);
+	const [basisChoice, setBasisChoice] = useState<NutritionBasis>("per100");
+	// 重量合法與否用跟換算同一個嚴格解析（會 trim、只收一般小數、要大於 0）。
+	// isPositiveAmount 不 trim 又接受 "1e3"，會讓「 45」停用每一份、"1e3" 卻啟用
+	// 它，再因為換算失敗而把錯誤怪到熱量欄位。
+	const servingGramsValid = perServingToPer100("0", portionGrams) !== null;
+	// 實際生效的模式。重量無法換算時退回每 100（規格：不能停在無法換算的狀態），
+	// 重量重新合法後回到使用者的選擇。舊的單向切換會在重量清掉又重打之後
+	// 停在每 100，把每份的數字默默當成每 100 存進去。
+	const basis: NutritionBasis =
+		basisChoice === "perServing" && servingGramsValid ? "perServing" : "per100";
 
 	const [clientError, setClientError] = useState<string | null>(null);
 	const [conflictError, setConflictError] = useState<string | null>(null);
@@ -268,13 +276,7 @@ export function NewFood() {
 						type="text"
 						inputMode="decimal"
 						value={portionGrams}
-						onChange={(event) => {
-							const next = event.target.value;
-							setPortionGrams(next);
-							// 清掉或改成不合法的重量時切回每 100——不能停在
-							// 一個無法換算的狀態（規格 §4.1）。
-							if (!isPositiveAmount(next)) setBasis("per100");
-						}}
+						onChange={(event) => setPortionGrams(event.target.value)}
 					/>
 				</fieldset>
 
@@ -286,7 +288,7 @@ export function NewFood() {
 							name="nutrition-basis"
 							value="per100"
 							checked={basis === "per100"}
-							onChange={() => setBasis("per100")}
+							onChange={() => setBasisChoice("per100")}
 						/>
 						每 100 {baseUnit}
 					</label>
@@ -297,11 +299,12 @@ export function NewFood() {
 							value="perServing"
 							checked={basis === "perServing"}
 							disabled={!servingGramsValid}
-							onChange={() => setBasis("perServing")}
+							aria-describedby={servingGramsValid ? undefined : "serving-hint"}
+							onChange={() => setBasisChoice("perServing")}
 						/>
 						每一份
 					</label>
-					{!servingGramsValid && <span>先填每份的重量</span>}
+					{!servingGramsValid && <span id="serving-hint">先填每份的重量</span>}
 				</fieldset>
 
 				{NUMERIC_FIELDS.map(({ field, label }) => (
