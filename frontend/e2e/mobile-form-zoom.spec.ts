@@ -94,7 +94,8 @@ test("登入後的食物庫／新增食物／記一餐畫面，表單控制項�
 	// 建一筆食物，讓後面的「記一餐」畫面能選到它、展開份量與餐別欄位——
 	// 那兩個欄位只有選了食物之後才會渲染，不建一筆真的選不到。
 	const foodName = `E2E 縮放守衛食物 ${Date.now()}`;
-	await page.getByLabel("名稱").fill(foodName);
+	// 新增食物多了「份量名稱」，getByLabel 預設是子字串比對——要 exact。
+	await page.getByLabel("名稱", { exact: true }).fill(foodName);
 	await page.getByLabel("熱量（每 100 單位 kcal）").fill("100");
 	await page.getByLabel("蛋白質（g）").fill("10");
 	await page.getByLabel("脂肪（g）").fill("5");

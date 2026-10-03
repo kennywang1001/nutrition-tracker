@@ -29,7 +29,8 @@ test("建立食物 → 在記一餐搜尋得到 → 記一筆 → 飲食頁數�
 	await page.getByRole("link", { name: "食物庫" }).click();
 	await page.getByRole("link", { name: "新增食物" }).click();
 
-	await page.getByLabel("名稱").fill(foodName);
+	// 新增食物多了「份量名稱」，getByLabel 預設是子字串比對——要 exact。
+	await page.getByLabel("名稱", { exact: true }).fill(foodName);
 	await page.getByLabel("熱量（每 100 單位 kcal）").fill("100");
 	await page.getByLabel("蛋白質（g）").fill("10");
 	await page.getByLabel("脂肪（g）").fill("5");
