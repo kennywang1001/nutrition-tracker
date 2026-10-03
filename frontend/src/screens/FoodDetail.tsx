@@ -6,6 +6,7 @@ import { ApiError } from "../api/errors";
 import { useFood, useFoodRevisions } from "../api/foods";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
+import { AddPortionForm } from "../components/AddPortionForm";
 import { formatMacro } from "../lib/decimal";
 import {
 	BASE_UNITS,
@@ -158,6 +159,9 @@ export function FoodDetail() {
 
 	const revisions = revisionsQuery.data ?? [];
 	const portions = portionsQuery.data ?? [];
+	// 份量的重量單位跟著食物（液體是 ml）。營養素還沒生效時沒有單位資訊，
+	// 用 g——跟新增食物的預設一樣。
+	const unit: BaseUnit = food?.nutrition?.base_unit ?? "g";
 
 	return (
 		<section>
@@ -193,20 +197,23 @@ export function FoodDetail() {
 
 					<section>
 						<h2>份量</h2>
-						{/* 唯讀：只顯示 GET /api/foods/{id}/portions 的結果，沒有新增或
-							修改的表單——份量管理 UI 不在 P3-B 範圍（規格 §1.4、§5.3）。 */}
 						{portions.length === 0 ? (
 							<p>這個食物還沒有份量資料</p>
 						) : (
 							<ul>
 								{portions.map((portion) => (
 									<li key={portion.id}>
-										{portion.label}（{formatMacro(portion.grams)} g）
+										{portion.label}（{formatMacro(portion.grams)} {unit}）
 										{portion.is_default && "・預設"}
 									</li>
 								))}
 							</ul>
 						)}
+						<AddPortionForm
+							foodId={foodId}
+							unit={unit}
+							hasDefault={portions.some((portion) => portion.is_default)}
+						/>
 					</section>
 
 					<section>

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { MemoryRouter, Route, Routes } from "react-router";
@@ -97,6 +97,33 @@ const PORTIONS = [
 	{ id: 1, label: "一份", grams: "150.00", is_default: true, is_global: true },
 ];
 
+const LIQUID_FOOD = {
+	id: 4,
+	name: "豆漿",
+	brand: null,
+	is_global: false,
+	nutrition: { ...nutrition("60.00"), base_unit: "ml" as const },
+};
+
+function postedPortion(
+	fetchMock: ReturnType<typeof mockApi>,
+): Record<string, unknown> | null {
+	const call = fetchMock.mock.calls.find(
+		([input, init]) =>
+			(init?.method ?? "GET").toUpperCase() === "POST" &&
+			String(input).includes("/portions"),
+	);
+	return call === undefined ? null : JSON.parse(String(call[1]?.body));
+}
+
+function portionGets(fetchMock: ReturnType<typeof mockApi>): number {
+	return fetchMock.mock.calls.filter(
+		([input, init]) =>
+			(init?.method ?? "GET").toUpperCase() === "GET" &&
+			String(input).includes("/portions"),
+	).length;
+}
+
 /** 三個 GET 共用同一個路徑前綴（`/api/foods/{id}`），而 mock-api 的比對是
  *  `url.includes(path)`——`/api/foods/1/revisions` 也「包含」`/api/foods/1`。
  *  所以更具體的路徑（revisions、portions）一定要排在通用的食物路徑之前，
@@ -155,20 +182,183 @@ describe("食物詳情 /foods/:id", () => {
 		expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
 	});
 
-	it("份量清單唯讀——顯示得出來，但沒有新增或修改的表單", async () => {
+	it("份量清單顯示名稱與重量", async () => {
 		mockApi(foodRoutes(PRIVATE_FOOD, [], PORTIONS));
 
 		render(wrap(<FoodDetail />, "/foods/1"));
 
 		expect(await screen.findByText(/一份/)).toBeInTheDocument();
 		expect(screen.getByText(/150 g/)).toBeInTheDocument();
-		// 唯讀：不能新增也不能修改（規格 §5.3，份量管理 UI 不在 P3-B 範圍）。
+	});
+
+	it("新增份量：送出名稱、重量與預設，成功後清單重抓、表單清空", async () => {
+		const fetchMock = mockApi(
+			foodRoutes(
+				PRIVATE_FOOD,
+				[],
+				[],
+				[
+					{
+						method: "POST",
+						path: "/api/foods/1/portions",
+						handler: () =>
+							json(
+								{
+									id: 9,
+									label: "碗",
+									grams: "150.00",
+									is_default: true,
+									is_global: false,
+								},
+								201,
+							),
+					},
+				],
+			),
+		);
+		render(wrap(<FoodDetail />, "/foods/1"));
+		await screen.findByText("自製便當");
+
+		await userEvent.type(screen.getByLabelText("份量名稱"), "碗");
+		await userEvent.type(screen.getByLabelText("重量（g）"), "150");
+		await userEvent.click(screen.getByRole("button", { name: "新增份量" }));
+
+		await waitFor(() =>
+			expect(portionGets(fetchMock)).toBeGreaterThanOrEqual(2),
+		);
+		expect(postedPortion(fetchMock)).toEqual({
+			label: "碗",
+			grams: "150",
+			is_default: true,
+		});
+		expect(screen.getByLabelText("份量名稱")).toHaveValue("");
+	});
+
+	it("重量前後有空白：照樣接受，送出時去掉空白", async () => {
+		const fetchMock = mockApi(
+			foodRoutes(
+				PRIVATE_FOOD,
+				[],
+				[],
+				[
+					{
+						method: "POST",
+						path: "/api/foods/1/portions",
+						handler: () =>
+							json(
+								{
+									id: 9,
+									label: "碗",
+									grams: "150.00",
+									is_default: true,
+									is_global: false,
+								},
+								201,
+							),
+					},
+				],
+			),
+		);
+		render(wrap(<FoodDetail />, "/foods/1"));
+		await screen.findByText("自製便當");
+
+		await userEvent.type(screen.getByLabelText("份量名稱"), "碗");
+		await userEvent.type(screen.getByLabelText("重量（g）"), " 150 ");
+		await userEvent.click(screen.getByRole("button", { name: "新增份量" }));
+
+		await waitFor(() => expect(postedPortion(fetchMock)).not.toBeNull());
+		expect(postedPortion(fetchMock)).toEqual({
+			label: "碗",
+			grams: "150",
+			is_default: true,
+		});
+	});
+
+	it("已經有預設份量時，「預設」勾選框一開始不勾；沒有時勾起來", async () => {
+		mockApi(foodRoutes(PRIVATE_FOOD, [], PORTIONS));
+		const { unmount } = render(wrap(<FoodDetail />, "/foods/1"));
+		await screen.findByText(/一份/);
+
 		expect(
-			screen.queryByRole("button", { name: /新增份量/ }),
-		).not.toBeInTheDocument();
+			screen.getByRole("checkbox", { name: "記一餐時預設用這個份量" }),
+		).not.toBeChecked();
+		unmount();
+
+		vi.restoreAllMocks();
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockApi(foodRoutes(PRIVATE_FOOD, [], []));
+		render(wrap(<FoodDetail />, "/foods/1"));
+		await screen.findByText("這個食物還沒有份量資料");
+
 		expect(
-			screen.queryByRole("button", { name: /編輯份量/ }),
-		).not.toBeInTheDocument();
+			screen.getByRole("checkbox", { name: "記一餐時預設用這個份量" }),
+		).toBeChecked();
+	});
+
+	it("同名份量：顯示後端的訊息", async () => {
+		mockApi(
+			foodRoutes(PRIVATE_FOOD, [], PORTIONS, [
+				{
+					method: "POST",
+					path: "/api/foods/1/portions",
+					handler: () =>
+						json(
+							{
+								error: {
+									code: "PORTION_EXISTS",
+									message: "你已經為這個食物建過同名的份量了",
+									details: {},
+								},
+							},
+							409,
+						),
+				},
+			]),
+		);
+		render(wrap(<FoodDetail />, "/foods/1"));
+		await screen.findByText(/一份/);
+
+		await userEvent.type(screen.getByLabelText("份量名稱"), "一份");
+		await userEvent.type(screen.getByLabelText("重量（g）"), "150");
+		await userEvent.click(screen.getByRole("button", { name: "新增份量" }));
+
+		expect(
+			await screen.findByText("你已經為這個食物建過同名的份量了"),
+		).toBeInTheDocument();
+	});
+
+	it("名稱或重量沒填：擋下來，不送請求", async () => {
+		const fetchMock = mockApi(foodRoutes(PRIVATE_FOOD, [], []));
+		render(wrap(<FoodDetail />, "/foods/1"));
+		await screen.findByText("自製便當");
+
+		await userEvent.type(screen.getByLabelText("重量（g）"), "150");
+		await userEvent.click(screen.getByRole("button", { name: "新增份量" }));
+
+		expect(await screen.findByText("請輸入份量名稱")).toBeInTheDocument();
+		expect(postedPortion(fetchMock)).toBeNull();
+	});
+
+	it("液體食物的份量與重量欄位顯示 ml", async () => {
+		mockApi(
+			foodRoutes(
+				LIQUID_FOOD,
+				[],
+				[
+					{
+						id: 2,
+						label: "杯",
+						grams: "300.00",
+						is_default: true,
+						is_global: false,
+					},
+				],
+			),
+		);
+		render(wrap(<FoodDetail />, "/foods/4"));
+
+		expect(await screen.findByText(/300 ml/)).toBeInTheDocument();
+		expect(screen.getByLabelText("重量（ml）")).toBeInTheDocument();
 	});
 
 	it("編輯歷史每一筆顯示 status / change_note / created_at，被駁回的那筆顯示 reject_reason", async () => {
