@@ -112,6 +112,19 @@ describe("perServingToPer100", () => {
 		expect(perServingToPer100("2", "3")).toBe("66.67");
 	});
 
+	it("前後空白會先去掉", () => {
+		expect(perServingToPer100(" 210 ", " 45 ")).toBe("466.67");
+	});
+
+	it("「4.」與「.5」是合法的寫法", () => {
+		expect(perServingToPer100("4.", "100")).toBe("4.00");
+		expect(perServingToPer100(".5", "100")).toBe("0.50");
+	});
+
+	it("剛好在中間的值進位（half-up，不是 half-even）", () => {
+		expect(perServingToPer100("1.005", "100")).toBe("1.01");
+	});
+
 	it("0 也是合法的營養素值", () => {
 		expect(perServingToPer100("0", "45")).toBe("0.00");
 	});
@@ -124,6 +137,13 @@ describe("perServingToPer100", () => {
 		["", "45"],
 		["abc", "45"],
 		["-1", "45"],
+		["1e3", "45"],
+		["0x10", "45"],
+		["+5", "45"],
+		["Infinity", "45"],
+		["NaN", "45"],
+		["210", "1e3"],
+		["210", "Infinity"],
 	])("(%s, %s) 不能換算時回 null，不丟例外、不除以零", (value, grams) => {
 		expect(perServingToPer100(value, grams)).toBeNull();
 	});

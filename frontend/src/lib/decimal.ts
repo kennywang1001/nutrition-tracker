@@ -50,6 +50,8 @@ export function isPositiveAmount(value: string): boolean {
 	}
 }
 
+const PLAIN_DECIMAL = /^(\d+(\.\d*)?|\.\d+)$/;
+
 /** 「每一份」的營養素換算成「每 100 單位」（食物份量規格 §4.2）。
  *
  *  結果四捨五入到小數兩位（half-up）——後端的 `NutritionInput` 是
@@ -59,19 +61,27 @@ export function isPositiveAmount(value: string): boolean {
  *  在第三位小數以下。例：每份 45 g、210 kcal → 存 466.67 → 記一份算出
  *  210.0015，顯示 210。可以接受，但要知道它存在。
  *
- *  任何一個參數不是合法數字、營養素是負數、或份量不是正數 → `null`。
- *  **不丟例外、不除以零**：表單打到一半的值是常態。 */
+ *  任何一個參數不是一般的小數寫法（前後空白會先去掉；只接受 `12`、`4.`、
+ *  `.5`、`12.5` 這類，不接受 `1e3`、`0x10`、`+5`、`-1`、`Infinity`、`NaN`）、
+ *  或份量不是正數 → `null`。
+ *  **不丟例外、不除以零**：表單打到一半的值是常態。
+ *
+ *  **不會被夾在後端上限內**：結果可能超過 `NutritionInput` 的範圍
+ *  （例：份量 "0.01" 會換出 ≥ 10000 的值），呼叫端要自己檢查範圍。 */
 export function perServingToPer100(
 	value: string,
 	servingGrams: string,
 ): string | null {
-	if (value.trim() === "" || servingGrams.trim() === "") return null;
+	const v = value.trim();
+	const g = servingGrams.trim();
+	if (!PLAIN_DECIMAL.test(v) || !PLAIN_DECIMAL.test(g)) return null;
 	try {
-		const amount = new Decimal(value);
-		const grams = new Decimal(servingGrams);
-		if (!amount.isFinite() || !grams.isFinite()) return null;
-		if (amount.isNegative() || !grams.greaterThan(0)) return null;
-		return amount.times(100).dividedBy(grams).toFixed(2, Decimal.ROUND_HALF_UP);
+		const grams = new Decimal(g);
+		if (!grams.greaterThan(0)) return null;
+		return new Decimal(v)
+			.times(100)
+			.dividedBy(grams)
+			.toFixed(2, Decimal.ROUND_HALF_UP);
 	} catch {
 		return null;
 	}
