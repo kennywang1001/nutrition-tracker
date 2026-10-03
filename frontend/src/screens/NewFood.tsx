@@ -4,6 +4,7 @@ import { useNavigate } from "react-router";
 import { apiFetch } from "../api/client";
 import { ApiError } from "../api/errors";
 import type { components } from "../api/schema";
+import { isPositiveAmount, perServingToPer100 } from "../lib/decimal";
 
 type Food = components["schemas"]["FoodResponse"];
 type BaseUnit = components["schemas"]["BaseUnit"];
@@ -31,6 +32,20 @@ export const NUMERIC_FIELDS: ReadonlyArray<{
 	{ field: "fat_g", label: "脂肪（g）", max: 1000 },
 	{ field: "carb_g", label: "碳水化合物（g）", max: 1000 },
 ];
+
+/** 「每一份」模式的欄位標籤。**只有 NewFood 用**——`NUMERIC_FIELDS` 的
+ *  標籤不能動（FoodDetail 共用、e2e 用它找欄位）。 */
+const PER_SERVING_LABELS: Record<NumericField, string> = {
+	kcal: "熱量（每份 kcal）",
+	protein_g: "蛋白質（每份 g）",
+	fat_g: "脂肪（每份 g）",
+	carb_g: "碳水化合物（每份 g）",
+};
+
+/** 份量重量的後端上限（`DefaultPortionInput.grams` 的 `le=10000`）。 */
+const MAX_PORTION_GRAMS = 10000;
+
+type NutritionBasis = "per100" | "perServing";
 
 /** 把 `VALIDATION_ERROR` 的 `details.errors`（規格 §5.4：每一筆有
  *  `loc` / `msg` / `type`）轉成人看得懂的一行行文字。
@@ -76,9 +91,27 @@ export function NewFood() {
 		carb_g: "",
 	});
 
+	// 「一份」（選填，食物份量規格 §4.1）。兩個要一起填。
+	const [portionLabel, setPortionLabel] = useState("");
+	const [portionGrams, setPortionGrams] = useState("");
+	const [basis, setBasis] = useState<NutritionBasis>("per100");
+	const servingGramsValid = isPositiveAmount(portionGrams);
+
 	const [clientError, setClientError] = useState<string | null>(null);
 	const [conflictError, setConflictError] = useState<string | null>(null);
 	const [fieldErrors, setFieldErrors] = useState<string[]>([]);
+
+	// 送出與預覽用的「每 100」值。「每一份」模式下換算不了的欄位是 null。
+	const per100: Record<NumericField, string | null> =
+		basis === "per100"
+			? values
+			: {
+					kcal: perServingToPer100(values.kcal, portionGrams),
+					protein_g: perServingToPer100(values.protein_g, portionGrams),
+					fat_g: perServingToPer100(values.fat_g, portionGrams),
+					carb_g: perServingToPer100(values.carb_g, portionGrams),
+				};
+	const hasPortion = portionLabel.trim() !== "" && portionGrams.trim() !== "";
 
 	const createFood = useMutation({
 		mutationFn: async () =>
@@ -94,13 +127,22 @@ export function NewFood() {
 					brand: brand.trim() === "" ? null : brand.trim(),
 					nutrition: {
 						base_unit: baseUnit,
-						// 四個數值一律以字串送出（規格 §5.1）——<input> 本來就是
-						// 字串，這裡刻意不 Number() 轉一手。
-						kcal: values.kcal,
-						protein_g: values.protein_g,
-						fat_g: values.fat_g,
-						carb_g: values.carb_g,
+						// 四個數值一律以字串送出（規格 §5.1）。「每一份」模式送的是
+						// 換算後的每 100 值——後端只存每 100（食物份量規格 §4.2）。
+						// validate() 已經保證走到這裡時不會是 null。
+						kcal: per100.kcal,
+						protein_g: per100.protein_g,
+						fat_g: per100.fat_g,
+						carb_g: per100.carb_g,
 					},
+					...(hasPortion
+						? {
+								default_portion: {
+									label: portionLabel.trim(),
+									grams: portionGrams.trim(),
+								},
+							}
+						: {}),
 				}),
 			}),
 		onSuccess: (created) => {
@@ -129,9 +171,29 @@ export function NewFood() {
 
 	function validate(): string | null {
 		if (name.trim() === "") return "請輸入名稱";
+
+		const labelFilled = portionLabel.trim() !== "";
+		const gramsFilled = portionGrams.trim() !== "";
+		if (labelFilled !== gramsFilled) return "份量名稱與重量要一起填";
+		if (gramsFilled) {
+			if (!servingGramsValid) return "每份重量要大於 0";
+			if (Number(portionGrams) > MAX_PORTION_GRAMS) {
+				return `每份重量不能超過 ${MAX_PORTION_GRAMS}`;
+			}
+		}
+
 		for (const { field, label, max } of NUMERIC_FIELDS) {
 			const raw = values[field];
-			if (raw.trim() === "") return `請輸入${label}`;
+			const shownLabel =
+				basis === "perServing" ? PER_SERVING_LABELS[field] : label;
+			if (raw.trim() === "") return `請輸入${shownLabel}`;
+			if (basis === "perServing") {
+				const converted = per100[field];
+				if (converted === null) return `${shownLabel}必須是 0 以上的數字`;
+				// 換算後超過上限，通常代表每份重量少打一位數。
+				if (Number(converted) > max) return "換算後超過上限，請確認每份重量";
+				continue;
+			}
 			const parsed = Number(raw);
 			if (!Number.isFinite(parsed) || parsed < 0 || parsed > max) {
 				return `${label}必須介於 0 到 ${max} 之間`;
@@ -189,9 +251,64 @@ export function NewFood() {
 					))}
 				</select>
 
+				<fieldset>
+					<legend>一份（選填）</legend>
+					<label htmlFor="portion-label">份量名稱</label>
+					<input
+						id="portion-label"
+						type="text"
+						maxLength={50}
+						placeholder="例如：碗、片、包"
+						value={portionLabel}
+						onChange={(event) => setPortionLabel(event.target.value)}
+					/>
+					<label htmlFor="portion-grams">每份重量（{baseUnit}）</label>
+					<input
+						id="portion-grams"
+						type="text"
+						inputMode="decimal"
+						value={portionGrams}
+						onChange={(event) => {
+							const next = event.target.value;
+							setPortionGrams(next);
+							// 清掉或改成不合法的重量時切回每 100——不能停在
+							// 一個無法換算的狀態（規格 §4.1）。
+							if (!isPositiveAmount(next)) setBasis("per100");
+						}}
+					/>
+				</fieldset>
+
+				<fieldset>
+					<legend>營養標示是</legend>
+					<label>
+						<input
+							type="radio"
+							name="nutrition-basis"
+							value="per100"
+							checked={basis === "per100"}
+							onChange={() => setBasis("per100")}
+						/>
+						每 100 {baseUnit}
+					</label>
+					<label>
+						<input
+							type="radio"
+							name="nutrition-basis"
+							value="perServing"
+							checked={basis === "perServing"}
+							disabled={!servingGramsValid}
+							onChange={() => setBasis("perServing")}
+						/>
+						每一份
+					</label>
+					{!servingGramsValid && <span>先填每份的重量</span>}
+				</fieldset>
+
 				{NUMERIC_FIELDS.map(({ field, label }) => (
 					<div key={field}>
-						<label htmlFor={`food-${field}`}>{label}</label>
+						<label htmlFor={`food-${field}`}>
+							{basis === "perServing" ? PER_SERVING_LABELS[field] : label}
+						</label>
 						<input
 							id={`food-${field}`}
 							type="text"
@@ -204,6 +321,14 @@ export function NewFood() {
 						/>
 					</div>
 				))}
+
+				{basis === "perServing" && (
+					<p data-testid="per100-preview">
+						換算成每 100 {baseUnit}：熱量 {per100.kcal ?? "—"} kcal、蛋白質{" "}
+						{per100.protein_g ?? "—"} g、脂肪 {per100.fat_g ?? "—"} g、碳水{" "}
+						{per100.carb_g ?? "—"} g
+					</p>
+				)}
 
 				{clientError !== null && <p role="alert">{clientError}</p>}
 				{conflictError !== null && <p role="alert">{conflictError}</p>}

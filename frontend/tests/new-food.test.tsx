@@ -57,6 +57,37 @@ async function fillNutrition(overrides: Partial<Record<string, string>> = {}) {
 	}
 }
 
+const CREATED = {
+	id: 42,
+	name: "滷肉飯",
+	brand: null,
+	is_global: false,
+	nutrition: {
+		base_unit: "g",
+		kcal: "180.00",
+		protein_g: "6.00",
+		fat_g: "7.00",
+		carb_g: "22.00",
+	},
+};
+
+function postBody(
+	fetchMock: ReturnType<typeof mockApi>,
+): Record<string, unknown> | null {
+	const call = fetchMock.mock.calls.find(
+		([input, init]) =>
+			(init?.method ?? "GET").toUpperCase() === "POST" &&
+			String(input).includes("/api/foods"),
+	);
+	return call === undefined ? null : JSON.parse(String(call[1]?.body));
+}
+
+function mockCreate() {
+	return mockApi([
+		{ method: "POST", path: "/api/foods", handler: () => json(CREATED, 201) },
+	]);
+}
+
 describe("新增食物 /foods/new", () => {
 	it("送出時 body 的形狀正確，而且四個數值是字串不是 number", async () => {
 		const fetchMock = mockApi([
@@ -271,5 +302,133 @@ describe("新增食物 /foods/new", () => {
 		// useNavigate「有被呼叫」，而是確認 URL 真的變成 /foods/99，
 		// 而且 <Route path="/foods/:id"> 真的比對到、把 id 解析出來。
 		expect(await screen.findByText("food-detail:99")).toBeInTheDocument();
+	});
+
+	it("填了一份：body 帶 default_portion，營養素照原樣（每 100）", async () => {
+		const fetchMock = mockCreate();
+		render(wrap(<NewFood />));
+
+		await userEvent.type(screen.getByLabelText("名稱"), "滷肉飯");
+		await userEvent.type(screen.getByLabelText("份量名稱"), "碗");
+		await userEvent.type(screen.getByLabelText("每份重量（g）"), "150");
+		await fillNutrition();
+		await userEvent.click(screen.getByRole("button", { name: "建立食物" }));
+
+		expect(await screen.findByText("food-detail:42")).toBeInTheDocument();
+		const body = postBody(fetchMock);
+		expect(body?.default_portion).toEqual({ label: "碗", grams: "150" });
+		expect(body?.nutrition).toMatchObject({ kcal: "165" });
+	});
+
+	it("沒填一份：body 不帶 default_portion", async () => {
+		const fetchMock = mockCreate();
+		render(wrap(<NewFood />));
+
+		await userEvent.type(screen.getByLabelText("名稱"), "滷肉飯");
+		await fillNutrition();
+		await userEvent.click(screen.getByRole("button", { name: "建立食物" }));
+
+		expect(await screen.findByText("food-detail:42")).toBeInTheDocument();
+		expect(postBody(fetchMock)).not.toHaveProperty("default_portion");
+	});
+
+	it("「每一份」模式：送出的是換算成每 100 的值，畫面上看得到換算結果", async () => {
+		const fetchMock = mockCreate();
+		render(wrap(<NewFood />));
+
+		await userEvent.type(screen.getByLabelText("名稱"), "洋芋片");
+		await userEvent.type(screen.getByLabelText("份量名稱"), "份");
+		await userEvent.type(screen.getByLabelText("每份重量（g）"), "45");
+		await userEvent.click(screen.getByRole("radio", { name: "每一份" }));
+		await userEvent.type(screen.getByLabelText("熱量（每份 kcal）"), "210");
+		await userEvent.type(screen.getByLabelText("蛋白質（每份 g）"), "9");
+		await userEvent.type(screen.getByLabelText("脂肪（每份 g）"), "4.5");
+		await userEvent.type(screen.getByLabelText("碳水化合物（每份 g）"), "30");
+
+		expect(screen.getByTestId("per100-preview")).toHaveTextContent("466.67");
+
+		await userEvent.click(screen.getByRole("button", { name: "建立食物" }));
+
+		expect(await screen.findByText("food-detail:42")).toBeInTheDocument();
+		expect(postBody(fetchMock)?.nutrition).toMatchObject({
+			kcal: "466.67",
+			protein_g: "20.00",
+			fat_g: "10.00",
+			carb_g: "66.67",
+		});
+	});
+
+	it.each([
+		["只填份量名稱", "份量名稱", "碗"],
+		["只填重量", "每份重量（g）", "150"],
+	])("%s：擋下來，不送請求", async (_case, label, value) => {
+		const fetchMock = mockApi([]);
+		render(wrap(<NewFood />));
+
+		await userEvent.type(screen.getByLabelText("名稱"), "滷肉飯");
+		await userEvent.type(screen.getByLabelText(label), value);
+		await fillNutrition();
+		await userEvent.click(screen.getByRole("button", { name: "建立食物" }));
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"份量名稱與重量要一起填",
+		);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("沒填每份重量時「每一份」不能選；清掉重量會切回每 100", async () => {
+		render(wrap(<NewFood />));
+
+		expect(screen.getByRole("radio", { name: "每一份" })).toBeDisabled();
+		expect(screen.getByRole("radio", { name: "每 100 g" })).toBeChecked();
+
+		await userEvent.type(screen.getByLabelText("每份重量（g）"), "45");
+		await userEvent.click(screen.getByRole("radio", { name: "每一份" }));
+		expect(screen.getByRole("radio", { name: "每一份" })).toBeChecked();
+
+		await userEvent.clear(screen.getByLabelText("每份重量（g）"));
+
+		expect(screen.getByRole("radio", { name: "每 100 g" })).toBeChecked();
+		expect(screen.getByRole("radio", { name: "每一份" })).toBeDisabled();
+		// 標籤也跟著切回每 100
+		expect(
+			screen.getByLabelText("熱量（每 100 單位 kcal）"),
+		).toBeInTheDocument();
+	});
+
+	it("換算後超過上限：擋下來並提示檢查重量", async () => {
+		const fetchMock = mockApi([]);
+		render(wrap(<NewFood />));
+
+		await userEvent.type(screen.getByLabelText("名稱"), "打錯重量");
+		await userEvent.type(screen.getByLabelText("份量名稱"), "份");
+		// 實際是 10 g 打成 1 g：200 kcal / 1 g → 每 100 g 20000 kcal
+		await userEvent.type(screen.getByLabelText("每份重量（g）"), "1");
+		await userEvent.click(screen.getByRole("radio", { name: "每一份" }));
+		await userEvent.type(screen.getByLabelText("熱量（每份 kcal）"), "200");
+		await userEvent.type(screen.getByLabelText("蛋白質（每份 g）"), "1");
+		await userEvent.type(screen.getByLabelText("脂肪（每份 g）"), "1");
+		await userEvent.type(screen.getByLabelText("碳水化合物（每份 g）"), "1");
+		await userEvent.click(screen.getByRole("button", { name: "建立食物" }));
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"換算後超過上限，請確認每份重量",
+		);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("「每 100」模式下四個欄位的標籤跟以前一字不差", () => {
+		// 守既有 e2e（foods / admin / mobile-form-zoom）與 FoodDetail 共用的標籤。
+		// 用字面字串，不是引用 NUMERIC_FIELDS——引用常數的話，改了常數這條照樣綠。
+		render(wrap(<NewFood />));
+
+		for (const label of [
+			"熱量（每 100 單位 kcal）",
+			"蛋白質（g）",
+			"脂肪（g）",
+			"碳水化合物（g）",
+		]) {
+			expect(screen.getByLabelText(label)).toBeInTheDocument();
+		}
 	});
 });
