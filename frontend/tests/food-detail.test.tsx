@@ -295,6 +295,30 @@ describe("食物詳情 /foods/:id", () => {
 		).toBeChecked();
 	});
 
+	it("「會取代原本的預設」只在自己已有預設、而且勾了預設時才出現", async () => {
+		const checkboxName = "記一餐時預設用這個份量";
+		// 只有公開的預設：後端不會動它，不能說「會取代」。
+		mockApi(foodRoutes(PRIVATE_FOOD, [], PORTIONS));
+		const { unmount } = render(wrap(<FoodDetail />, "/foods/1"));
+		await screen.findByText(/一份/);
+		await userEvent.click(screen.getByRole("checkbox", { name: checkboxName }));
+		expect(screen.getByRole("checkbox", { name: checkboxName })).toBeChecked();
+		expect(screen.queryByText("會取代原本的預設")).not.toBeInTheDocument();
+		unmount();
+
+		// 自己已有預設：勾了就會取代。
+		vi.restoreAllMocks();
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockApi(
+			foodRoutes(PRIVATE_FOOD, [], [{ ...PORTIONS[0], is_global: false }]),
+		);
+		render(wrap(<FoodDetail />, "/foods/1"));
+		await screen.findByText(/一份/);
+		expect(screen.queryByText("會取代原本的預設")).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("checkbox", { name: checkboxName }));
+		expect(screen.getByText("會取代原本的預設")).toBeInTheDocument();
+	});
+
 	it("同名份量：顯示後端的訊息", async () => {
 		mockApi(
 			foodRoutes(PRIVATE_FOOD, [], PORTIONS, [

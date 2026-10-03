@@ -213,6 +213,9 @@ export function FoodDetail() {
 							foodId={foodId}
 							unit={unit}
 							hasDefault={portions.some((portion) => portion.is_default)}
+							hasOwnDefault={portions.some(
+								(portion) => portion.is_default && !portion.is_global,
+							)}
 						/>
 					</section>
 

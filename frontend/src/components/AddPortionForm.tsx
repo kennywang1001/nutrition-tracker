@@ -16,6 +16,9 @@ type Props = {
 	unit: BaseUnit;
 	/** 這個食物目前看得到的份量裡有沒有預設的。決定勾選框的初始值。 */
 	hasDefault: boolean;
+	/** 其中有沒有「自己的」預設。後端只取消同一個人的預設，公開的預設
+	 *  不會被動到，所以「會取代原本的預設」只在這個為真時才成立。 */
+	hasOwnDefault: boolean;
 };
 
 /** 食物詳情頁的「新增份量」（食物份量規格 §5）。
@@ -26,7 +29,12 @@ type Props = {
  *  「預設」勾選框的初始值：目前沒有任何預設份量時勾起來。使用者動過
  *  勾選框之後以使用者為準（`defaultChoice` 不是 null）；送出成功後回到
  *  跟著 `hasDefault` 走。 */
-export function AddPortionForm({ foodId, unit, hasDefault }: Props) {
+export function AddPortionForm({
+	foodId,
+	unit,
+	hasDefault,
+	hasOwnDefault,
+}: Props) {
 	const queryClient = useQueryClient();
 	const [label, setLabel] = useState("");
 	const [grams, setGrams] = useState("");
@@ -118,7 +126,7 @@ export function AddPortionForm({ foodId, unit, hasDefault }: Props) {
 				/>
 				記一餐時預設用這個份量
 			</label>
-			{hasDefault && isDefault && <p>會取代原本的預設</p>}
+			{hasOwnDefault && isDefault && <p>會取代原本的預設</p>}
 			{error !== null && <p role="alert">{error}</p>}
 			{fieldErrors.length > 0 && (
 				<ul role="alert">
