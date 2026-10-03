@@ -14,6 +14,7 @@ import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
 import { FoodResultList } from "../components/FoodResultList";
 import { formatMacro } from "../lib/decimal";
+import { pickDefaultPortion } from "../lib/portions";
 import { useDebounced } from "../lib/use-debounced";
 import styles from "./LogMeal.module.css";
 
@@ -99,7 +100,15 @@ function dedupeById(lists: Food[][]): Food[] {
 export function LogMeal({ onSaved }: Props) {
 	const queryClient = useQueryClient();
 	const [selectedFood, setSelectedFood] = useState<Food | null>(null);
-	const [portionId, setPortionId] = useState<number | null>(null);
+	// 份量的選擇（食物份量規格 §6）：
+	//   null     → 使用者還沒動過，用推導出來的預設份量（有的話）
+	//   "manual" → 使用者選了「直接輸入數量」
+	//   number   → 使用者選了某個份量
+	// **不用 effect 在份量清單到的時候寫 state**：預設份量是從清單推導的，
+	// 使用者一旦手動選過就以使用者為準，不會被重新抓到的清單蓋回去。
+	const [portionChoice, setPortionChoice] = useState<number | "manual" | null>(
+		null,
+	);
 	const [quantity, setQuantity] = useState("1");
 	// 選填的餐費（P5 規格 §4.1）。有值時 POST /api/meals 會在同一個交易裡
 	// 建一筆 category=food、meal_id 指過來的支出。
@@ -161,6 +170,12 @@ export function LogMeal({ onSaved }: Props) {
 			apiFetch<Portion[]>(`/api/foods/${selectedFood?.id}/portions`),
 		enabled: selectedFood !== null,
 	});
+
+	const defaultPortion = pickDefaultPortion(portionsQuery.data ?? []);
+	const portionId =
+		portionChoice === "manual"
+			? null
+			: (portionChoice ?? defaultPortion?.id ?? null);
 
 	const saveMeal = useMutation({
 		mutationFn: async () => {
@@ -235,7 +250,7 @@ export function LogMeal({ onSaved }: Props) {
 			// 餐費會建出一筆支出——記帳的清單與報表都要重取。
 			queryClient.invalidateQueries({ queryKey: queryKeys.expensesAll });
 			setSelectedFood(null);
-			setPortionId(null);
+			setPortionChoice(null);
 			setQuantity("1");
 			setCost("");
 			setPhoto(null);
@@ -275,7 +290,7 @@ export function LogMeal({ onSaved }: Props) {
 
 	function selectFood(food: Food) {
 		setSelectedFood(food);
-		setPortionId(null);
+		setPortionChoice(null);
 	}
 
 	const foods = dedupeById([frequentQuery.data ?? [], recentQuery.data ?? []]);
@@ -349,9 +364,9 @@ export function LogMeal({ onSaved }: Props) {
 									id="portion"
 									value={portionId ?? ""}
 									onChange={(event) =>
-										setPortionId(
+										setPortionChoice(
 											event.target.value === ""
-												? null
+												? "manual"
 												: Number(event.target.value),
 										)
 									}
@@ -375,6 +390,13 @@ export function LogMeal({ onSaved }: Props) {
 						onChange={(event) => setQuantity(event.target.value)}
 						required
 					/>
+					{/* 選了份量時數量是「幾份」；直接輸入時是公克（或毫升）——
+					    預設的「1」在直接輸入模式下是 1 g，這個提示讓它看得出來。 */}
+					<span className={styles.unit} data-testid="quantity-unit">
+						{portionId !== null
+							? "份"
+							: (selectedFood.nutrition?.base_unit ?? "g")}
+					</span>
 
 					<label htmlFor="meal-type">餐別</label>
 					<select

@@ -48,6 +48,48 @@ const FREQUENT_FOODS = [
 	},
 ];
 
+const MY_BOWL = {
+	id: 7,
+	label: "我的碗",
+	grams: "220.00",
+	is_default: true,
+	is_global: false,
+};
+const PUBLIC_BOWL = {
+	id: 8,
+	label: "碗",
+	grams: "200.00",
+	is_default: true,
+	is_global: true,
+};
+const PUBLIC_PLATE = {
+	id: 9,
+	label: "盤",
+	grams: "300.00",
+	is_default: false,
+	is_global: true,
+};
+
+function mealBody(
+	fetchMock: ReturnType<typeof mockApi>,
+): { items: Array<Record<string, unknown>> } | null {
+	const call = fetchMock.mock.calls.find(
+		([input, init]) =>
+			(init?.method ?? "GET").toUpperCase() === "POST" &&
+			String(input).includes("/api/meals"),
+	);
+	return call === undefined ? null : JSON.parse(String(call[1]?.body));
+}
+
+function mockWithPortions(portions: unknown[]) {
+	return mockApi({
+		"/api/foods/frequent": () => json(FREQUENT_FOODS),
+		"/api/foods/recent": () => json([]),
+		"/api/foods/1/portions": () => json(portions),
+		"/api/meals": () => json({ id: 99 }, 201),
+	});
+}
+
 function photoFile(size?: number): File {
 	const file = new File(["fake-jpeg"], "lunch.jpg", { type: "image/jpeg" });
 	if (size !== undefined) {
@@ -525,5 +567,78 @@ describe("記一餐", () => {
 				queryKey: queryKeys.expensesAll,
 			});
 		});
+	});
+
+	it("有自己的預設份量：自動選上，數量 1，送出帶它的 portion_id", async () => {
+		const fetchMock = mockWithPortions([PUBLIC_BOWL, MY_BOWL, PUBLIC_PLATE]);
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+
+		await waitFor(() =>
+			expect(screen.getByLabelText("份量選項")).toHaveValue("7"),
+		);
+		expect(screen.getByLabelText("份量")).toHaveValue("1");
+
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() => expect(mealBody(fetchMock)).not.toBeNull());
+		expect(mealBody(fetchMock)?.items[0]).toMatchObject({
+			portion_id: 7,
+			quantity: "1",
+		});
+	});
+
+	it("只有公開的預設份量：選公開的", async () => {
+		mockWithPortions([PUBLIC_BOWL, PUBLIC_PLATE]);
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+
+		await waitFor(() =>
+			expect(screen.getByLabelText("份量選項")).toHaveValue("8"),
+		);
+	});
+
+	it("沒有預設份量：維持「直接輸入數量」，送出不帶 portion_id", async () => {
+		const fetchMock = mockWithPortions([PUBLIC_PLATE]);
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+		await screen.findByLabelText("份量選項");
+
+		expect(screen.getByLabelText("份量選項")).toHaveValue("");
+
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() => expect(mealBody(fetchMock)).not.toBeNull());
+		expect(mealBody(fetchMock)?.items[0]).not.toHaveProperty("portion_id");
+	});
+
+	it("手動改成「直接輸入數量」之後就照使用者的，不會被預設份量蓋回去", async () => {
+		const fetchMock = mockWithPortions([MY_BOWL]);
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+		await waitFor(() =>
+			expect(screen.getByLabelText("份量選項")).toHaveValue("7"),
+		);
+
+		await userEvent.selectOptions(screen.getByLabelText("份量選項"), "");
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() => expect(mealBody(fetchMock)).not.toBeNull());
+		expect(mealBody(fetchMock)?.items[0]).not.toHaveProperty("portion_id");
+	});
+
+	it("數量旁邊的單位提示：選了份量是「份」，直接輸入是「g」", async () => {
+		mockWithPortions([MY_BOWL]);
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+		await waitFor(() =>
+			expect(screen.getByLabelText("份量選項")).toHaveValue("7"),
+		);
+
+		expect(screen.getByTestId("quantity-unit")).toHaveTextContent("份");
+
+		await userEvent.selectOptions(screen.getByLabelText("份量選項"), "");
+
+		expect(screen.getByTestId("quantity-unit")).toHaveTextContent("g");
 	});
 });
