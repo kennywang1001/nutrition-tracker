@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, status
-from sqlalchemy import ColumnElement, Select, func, or_, select
+from sqlalchemy import ColumnElement, Select, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -367,9 +367,26 @@ async def create_portion(
         # 資源存在、使用者也看得到，只是不能做這個動作。
         raise ForbiddenError("FORBIDDEN", "只有管理員能建立全域份量")
 
+    owner_id = None if payload.is_global else user.id
+    if payload.is_default:
+        # 同一個人、同一個食物只會有一個預設份量。沒有刪除／編輯份量的端點，
+        # 一旦出現兩個預設就無法修正，而前端 pickDefaultPortion 只能依標籤
+        # 順序挑——所以新增預設時，在同一個交易裡取消舊的。
+        # （create_food 的 default_portion 是全新食物，不會有其他份量，
+        # 不需要這一步。）
+        await db.execute(
+            update(FoodPortion)
+            .where(
+                FoodPortion.food_id == food.id,
+                FoodPortion.owner_id.is_not_distinct_from(owner_id),
+                FoodPortion.is_default.is_(True),
+            )
+            .values(is_default=False)
+        )
+
     portion = FoodPortion(
         food_id=food.id,
-        owner_id=None if payload.is_global else user.id,
+        owner_id=owner_id,
         label=payload.label,
         grams=payload.grams,
         is_default=payload.is_default,

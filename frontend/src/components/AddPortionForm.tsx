@@ -118,6 +118,7 @@ export function AddPortionForm({ foodId, unit, hasDefault }: Props) {
 				/>
 				記一餐時預設用這個份量
 			</label>
+			{hasDefault && isDefault && <p>會取代原本的預設</p>}
 			{error !== null && <p role="alert">{error}</p>}
 			{fieldErrors.length > 0 && (
 				<ul role="alert">

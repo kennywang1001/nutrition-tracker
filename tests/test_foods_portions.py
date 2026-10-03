@@ -144,3 +144,66 @@ async def test_grams_must_be_positive(client, db_session):
     )
 
     assert response.status_code == 422
+
+
+async def _post_portion(client, user, food, label, *, is_default, is_global=False):
+    response = await client.post(
+        f"/api/foods/{food.id}/portions",
+        headers=auth(user),
+        json={"label": label, "grams": "200", "is_default": is_default, "is_global": is_global},
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
+async def _defaults(client, user, food):
+    response = await client.get(f"/api/foods/{food.id}/portions", headers=auth(user))
+    return {item["label"] for item in response.json() if item["is_default"]}
+
+
+async def test_a_second_own_default_replaces_the_first(client, db_session):
+    admin = await create_user(db_session)
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=admin)
+
+    await _post_portion(client, user, food, "小碗", is_default=True)
+    await _post_portion(client, user, food, "大碗", is_default=True)
+
+    assert await _defaults(client, user, food) == {"大碗"}
+
+
+async def test_a_new_default_does_not_touch_other_owners_defaults(client, db_session):
+    admin = await create_user(db_session)
+    alice = await create_user(db_session)
+    bob = await create_user(db_session)
+    food = await create_food(db_session, created_by=admin)
+    await create_portion(db_session, food=food, label="公開碗", is_default=True)
+    await create_portion(db_session, food=food, label="鮑伯碗", owner=bob, is_default=True)
+
+    await _post_portion(client, alice, food, "愛麗絲碗", is_default=True)
+
+    assert await _defaults(client, alice, food) == {"公開碗", "愛麗絲碗"}
+    assert await _defaults(client, bob, food) == {"公開碗", "鮑伯碗"}
+
+
+async def test_a_new_global_default_replaces_only_the_global_default(client, db_session):
+    admin = await create_user(db_session, role=UserRole.ADMIN)
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=admin)
+    await create_portion(db_session, food=food, label="舊公開", is_default=True)
+    await create_portion(db_session, food=food, label="我的碗", owner=user, is_default=True)
+
+    await _post_portion(client, admin, food, "新公開", is_default=True, is_global=True)
+
+    assert await _defaults(client, user, food) == {"新公開", "我的碗"}
+
+
+async def test_a_non_default_portion_leaves_the_existing_default_alone(client, db_session):
+    admin = await create_user(db_session)
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=admin)
+    await _post_portion(client, user, food, "小碗", is_default=True)
+
+    await _post_portion(client, user, food, "大碗", is_default=False)
+
+    assert await _defaults(client, user, food) == {"小碗"}
