@@ -3,6 +3,7 @@ import {
 	formatMacro,
 	formatMoney,
 	isPositiveAmount,
+	perServingToPer100,
 	ratioOf,
 	sumMacros,
 } from "../src/lib/decimal";
@@ -93,5 +94,37 @@ describe("isPositiveAmount", () => {
 
 	it.each(["0.01", "5.", "12345678.99"])("%s 是正數", (value) => {
 		expect(isPositiveAmount(value)).toBe(true);
+	});
+});
+
+describe("perServingToPer100", () => {
+	it("每份換算成每 100，四捨五入到小數兩位", () => {
+		// 包裝標示：每一份量 45 公克，熱量 210 大卡 → 每 100 公克 466.666…
+		expect(perServingToPer100("210", "45")).toBe("466.67");
+	});
+
+	it("剛好 100 的份量不變", () => {
+		expect(perServingToPer100("12.5", "100")).toBe("12.50");
+	});
+
+	it("四捨五入是 half-up，不是無條件捨去", () => {
+		// 2 / 3 × 100 = 66.666… → 66.67（無條件捨去會是 66.66）
+		expect(perServingToPer100("2", "3")).toBe("66.67");
+	});
+
+	it("0 也是合法的營養素值", () => {
+		expect(perServingToPer100("0", "45")).toBe("0.00");
+	});
+
+	it.each([
+		["210", "0"],
+		["210", ""],
+		["210", "-5"],
+		["210", "abc"],
+		["", "45"],
+		["abc", "45"],
+		["-1", "45"],
+	])("(%s, %s) 不能換算時回 null，不丟例外、不除以零", (value, grams) => {
+		expect(perServingToPer100(value, grams)).toBeNull();
 	});
 });
