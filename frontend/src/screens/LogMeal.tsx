@@ -387,12 +387,26 @@ export function LogMeal({ onSaved }: Props) {
 						type="text"
 						inputMode="decimal"
 						value={quantity}
-						onChange={(event) => setQuantity(event.target.value)}
+						aria-describedby="quantity-unit"
+						onChange={(event) => {
+							// 使用者一動數量，就把「此刻看到的單位」鎖住：份量清單
+							// 可能晚到（或是快取裡過期的空清單被換掉），若還是
+							// null，晚到的預設份量會把使用者輸入的「200」（當時
+							// 提示是 g）變成 200 份。
+							if (portionChoice === null) {
+								setPortionChoice(portionId ?? "manual");
+							}
+							setQuantity(event.target.value);
+						}}
 						required
 					/>
 					{/* 選了份量時數量是「幾份」；直接輸入時是公克（或毫升）——
 					    預設的「1」在直接輸入模式下是 1 g，這個提示讓它看得出來。 */}
-					<span className={styles.unit} data-testid="quantity-unit">
+					<span
+						id="quantity-unit"
+						className={styles.unit}
+						data-testid="quantity-unit"
+					>
 						{portionId !== null
 							? "份"
 							: (selectedFood.nutrition?.base_unit ?? "g")}

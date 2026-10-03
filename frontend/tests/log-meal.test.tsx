@@ -627,6 +627,44 @@ describe("記一餐", () => {
 		expect(mealBody(fetchMock)?.items[0]).not.toHaveProperty("portion_id");
 	});
 
+	it("使用者動過數量之後，晚到的份量清單不會把「200 g」變成「200 份」", async () => {
+		let resolvePortions: (response: Response) => void = () => {};
+		const portionsGate = new Promise<Response>((resolve) => {
+			resolvePortions = resolve;
+		});
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockImplementation(async (input) => {
+				const url = String(input);
+				if (url.includes("/api/foods/1/portions")) return portionsGate;
+				if (url.includes("/api/foods/frequent")) return json(FREQUENT_FOODS);
+				if (url.includes("/api/foods/recent")) return json([]);
+				if (url.includes("/api/meals")) return json({ id: 99 }, 201);
+				throw new Error(`未預期的請求：${url}`);
+			});
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+
+		const quantity = screen.getByLabelText("份量");
+		await userEvent.clear(quantity);
+		await userEvent.type(quantity, "200");
+		expect(screen.getByTestId("quantity-unit")).toHaveTextContent("g");
+
+		resolvePortions(json([MY_BOWL]));
+		await waitFor(() =>
+			expect(screen.getByLabelText("份量選項")).toBeInTheDocument(),
+		);
+		expect(screen.getByLabelText("份量選項")).toHaveValue("");
+		expect(screen.getByTestId("quantity-unit")).toHaveTextContent("g");
+
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() => expect(mealBody(fetchMock)).not.toBeNull());
+		const item = mealBody(fetchMock)?.items[0];
+		expect(item).not.toHaveProperty("portion_id");
+		expect(item).toMatchObject({ quantity: "200" });
+	});
+
 	it("數量旁邊的單位提示：選了份量是「份」，直接輸入是「g」", async () => {
 		mockWithPortions([MY_BOWL]);
 		render(wrap(<LogMeal onSaved={vi.fn()} />));
