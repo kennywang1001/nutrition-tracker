@@ -91,7 +91,8 @@ test("記一餐之後，趨勢圖上今天那根柱子跟著變", async ({ page,
 	await page.getByRole("button", { name: "新增紀錄" }).click();
 	await page.getByRole("link", { name: "記一餐" }).click();
 	await page.getByText(foodName).first().click();
-	await page.getByLabel("份量").fill("250");
+	// 記一餐的食物有份量時會多一個「份量選項」，子字串比對會撞到。
+	await page.getByLabel("份量", { exact: true }).fill("250");
 	await page.getByRole("button", { name: "記錄" }).click();
 
 	// **等記錄真的完成再走。** `LogMeal` 的 mutation `onSuccess` 會呼叫
