@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	formatMacro,
 	formatMoney,
+	isPlainPositiveDecimal,
 	isPositiveAmount,
 	perServingToPer100,
 	ratioOf,
@@ -146,5 +147,23 @@ describe("perServingToPer100", () => {
 		["210", "Infinity"],
 	])("(%s, %s) 不能換算時回 null，不丟例外、不除以零", (value, grams) => {
 		expect(perServingToPer100(value, grams)).toBeNull();
+	});
+});
+
+describe("isPlainPositiveDecimal", () => {
+	it.each([
+		[" 45 ", true],
+		["12.5", true],
+		["4.", true],
+		[".5", true],
+		["0", false],
+		["0.0", false],
+		["1e3", false],
+		["abc", false],
+		["", false],
+		["-1", false],
+		["+5", false],
+	])("%j → %s", (value, expected) => {
+		expect(isPlainPositiveDecimal(value)).toBe(expected);
 	});
 });

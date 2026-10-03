@@ -52,6 +52,19 @@ export function isPositiveAmount(value: string): boolean {
 
 const PLAIN_DECIMAL = /^(\d+(\.\d*)?|\.\d+)$/;
 
+/** 「嚴格的正小數」：前後空白會先去掉，只接受 `12`、`4.`、`.5`、`12.5`
+ *  這類一般寫法（不接受 `1e3`、`0x10`、`+5`、`-1`），而且要大於 0。
+ *  跟 `perServingToPer100` 的重量參數用同一條規則。不丟例外。 */
+export function isPlainPositiveDecimal(value: string): boolean {
+	const v = value.trim();
+	if (!PLAIN_DECIMAL.test(v)) return false;
+	try {
+		return new Decimal(v).greaterThan(0);
+	} catch {
+		return false;
+	}
+}
+
 /** 「每一份」的營養素換算成「每 100 單位」（食物份量規格 §4.2）。
  *
  *  結果四捨五入到小數兩位（half-up）——後端的 `NutritionInput` 是

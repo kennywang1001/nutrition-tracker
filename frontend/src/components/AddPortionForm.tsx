@@ -4,7 +4,7 @@ import { apiFetch } from "../api/client";
 import { ApiError } from "../api/errors";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
-import { perServingToPer100 } from "../lib/decimal";
+import { isPlainPositiveDecimal } from "../lib/decimal";
 import { describeFieldErrors } from "../screens/NewFood";
 
 type Portion = components["schemas"]["PortionResponse"];
@@ -82,8 +82,8 @@ export function AddPortionForm({ foodId, unit, hasDefault }: Props) {
 			setError("請輸入份量名稱");
 			return;
 		}
-		// 跟 NewFood 同一條規則：trim、只收一般小數寫法、要大於 0。
-		if (perServingToPer100("0", grams) === null) {
+		// 跟 NewFood 同一條規則（isPlainPositiveDecimal）：trim、只收一般小數寫法、要大於 0。
+		if (!isPlainPositiveDecimal(grams)) {
 			setError("重量要大於 0");
 			return;
 		}
