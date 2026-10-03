@@ -363,7 +363,9 @@ async def test_food_and_default_portion_are_written_in_one_transaction(
         },
     )
 
-    assert response.status_code != 201
+    # 份量的 CHECK 在 commit 時失敗，由既有的 except IntegrityError 接住、
+    # rollback、回 409。
+    assert response.status_code == 409
     monkeypatch.undo()
     count = await db_session.scalar(
         select(func.count()).select_from(Food).where(Food.name == "交易測試食物")
