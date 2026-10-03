@@ -34,12 +34,25 @@ class NutritionResponse(BaseModel):
     carb_g: Decimal
 
 
+class DefaultPortionInput(BaseModel):
+    """新增食物時一併建立的「一份」（食物份量規格 §3.1）。
+
+    限制跟 `PortionCreateRequest` 的同名欄位一樣——同一個資料庫欄位，
+    不該有兩套規則。
+    """
+
+    label: str = Field(min_length=1, max_length=50)
+    grams: Decimal = Field(gt=0, le=10000, max_digits=8, decimal_places=2)
+
+
 class FoodCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     brand: str | None = Field(default=None, max_length=100)
     nutrition: NutritionInput
     # 只有管理員能建立全域食物
     is_global: bool = False
+    # 選填的「一份」，跟食物在同一個交易裡建立（食物份量規格 §3.1）。
+    default_portion: DefaultPortionInput | None = None
     # P1 就預留好的三個欄位（`food_revisions`），P2 是第一個使用者。
     # 規格 §5：「直接確認」與「改過才確認」要分得出來——編輯這個動作本身
     # 帶著資訊。'user' 不代表「沒有 AI 參與」，可能是「AI 估過、但改過才

@@ -1,4 +1,6 @@
-from sqlalchemy import select
+from decimal import Decimal
+
+from sqlalchemy import func, select
 
 from app.models.food import Food, FoodRevision, RevisionStatus
 from app.models.user import UserRole
@@ -256,3 +258,139 @@ async def test_create_food_without_is_global_defaults_to_a_private_food(client, 
     food = await db_session.scalar(select(Food).where(Food.id == body["id"]))
     assert food is not None
     assert food.owner_id == user.id
+
+
+NUTRITION = {"kcal": "180", "protein_g": "6", "fat_g": "7", "carb_g": "22"}
+
+
+async def test_create_food_with_a_default_portion_creates_it(client, db_session):
+    """新增食物時一併建立「一份」（食物份量規格 §3.1）。"""
+    user = await create_user(db_session)
+
+    response = await client.post(
+        "/api/foods",
+        headers=auth(user),
+        json={
+            "name": "滷肉飯",
+            "nutrition": NUTRITION,
+            "default_portion": {"label": "碗", "grams": "150"},
+        },
+    )
+
+    assert response.status_code == 201
+    portions = await client.get(
+        f"/api/foods/{response.json()['id']}/portions", headers=auth(user)
+    )
+    body = portions.json()
+    assert len(body) == 1
+    assert body[0]["label"] == "碗"
+    assert body[0]["grams"] == "150.00"
+    assert body[0]["is_default"] is True
+    assert body[0]["is_global"] is False
+
+
+async def test_create_food_without_a_default_portion_has_no_portions(client, db_session):
+    """不帶 default_portion 時行為完全不變——加欄位不能改變預設行為。"""
+    user = await create_user(db_session)
+
+    response = await client.post(
+        "/api/foods", headers=auth(user), json={"name": "白飯", "nutrition": NUTRITION}
+    )
+
+    assert response.status_code == 201
+    portions = await client.get(
+        f"/api/foods/{response.json()['id']}/portions", headers=auth(user)
+    )
+    assert portions.json() == []
+
+
+async def test_default_portion_with_zero_grams_is_rejected_before_anything_is_written(
+    client, db_session
+):
+    """份量格式錯誤 → 422，而且食物沒有被建立。
+
+    **這條守的是「驗證在任何寫入之前」，不是「同一個交易」**：Pydantic 在
+    進入 handler 之前就擋下來了，不管實作是一次還是兩次 commit 都會綠。
+    「同一個交易」由下一條測試守。
+    """
+    user = await create_user(db_session)
+
+    response = await client.post(
+        "/api/foods",
+        headers=auth(user),
+        json={
+            "name": "零克食物",
+            "nutrition": NUTRITION,
+            "default_portion": {"label": "碗", "grams": "0"},
+        },
+    )
+
+    assert response.status_code == 422
+    count = await db_session.scalar(
+        select(func.count()).select_from(Food).where(Food.name == "零克食物")
+    )
+    assert count == 0
+
+
+async def test_food_and_default_portion_are_written_in_one_transaction(
+    client, db_session, monkeypatch
+):
+    """份量寫入失敗時，食物也不能留下來（規格 §2「同一個交易」）。
+
+    讓份量的 grams 在 commit 時被資料庫的 CHECK (grams > 0) 擋下——
+    Pydantic 已經放行，所以這是真的走到寫入才失敗。
+
+    **如果實作把份量放在另一次 commit（食物先 commit），這條會紅**：
+    食物已經寫進去了，第二次 commit 失敗也撤不回來。
+    """
+    from app.api.routes import foods as foods_route
+
+    real_portion = foods_route.FoodPortion
+
+    def portion_that_violates_the_check(**kwargs):
+        return real_portion(**{**kwargs, "grams": Decimal("-1")})
+
+    monkeypatch.setattr(foods_route, "FoodPortion", portion_that_violates_the_check)
+    user = await create_user(db_session)
+
+    response = await client.post(
+        "/api/foods",
+        headers=auth(user),
+        json={
+            "name": "交易測試食物",
+            "nutrition": NUTRITION,
+            "default_portion": {"label": "碗", "grams": "150"},
+        },
+    )
+
+    assert response.status_code != 201
+    monkeypatch.undo()
+    count = await db_session.scalar(
+        select(func.count()).select_from(Food).where(Food.name == "交易測試食物")
+    )
+    assert count == 0
+
+
+async def test_admin_global_food_gets_a_global_default_portion(client, db_session):
+    """份量跟著食物走：公開食物的預設份量是公開的，別的使用者也看得到。"""
+    admin = await create_user(db_session, role=UserRole.ADMIN)
+    other = await create_user(db_session)
+
+    response = await client.post(
+        "/api/foods",
+        headers=auth(admin),
+        json={
+            "name": "公開滷肉飯",
+            "nutrition": NUTRITION,
+            "is_global": True,
+            "default_portion": {"label": "碗", "grams": "200"},
+        },
+    )
+
+    assert response.status_code == 201
+    portions = await client.get(
+        f"/api/foods/{response.json()['id']}/portions", headers=auth(other)
+    )
+    body = portions.json()
+    assert [item["label"] for item in body] == ["碗"]
+    assert body[0]["is_global"] is True

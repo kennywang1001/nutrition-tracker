@@ -106,6 +106,20 @@ async def create_food(
     # 回填指標。三步在同一個交易裡。
     food.current_revision_id = revision.id
 
+    if payload.default_portion is not None:
+        # 跟食物、第一個版本在同一個交易裡（食物份量規格 §3.1）：任何一步
+        # 失敗，下面的 commit 不會成功，不會留下「食物建了、份量沒建」的
+        # 半套狀態。份量跟著食物走——私人食物建私人份量，公開食物建公開份量。
+        db.add(
+            FoodPortion(
+                food_id=food.id,
+                owner_id=owner_id,
+                label=payload.default_portion.label,
+                grams=payload.default_portion.grams,
+                is_default=True,
+            )
+        )
+
     try:
         # 延後外鍵（fk_foods_current_revision_id_food_revisions 是
         # DEFERRABLE INITIALLY DEFERRED）要到這裡才檢查，所以 commit 仍然需要保護。

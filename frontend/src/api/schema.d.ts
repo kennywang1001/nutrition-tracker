@@ -1079,6 +1079,19 @@ export interface components {
             ratio: components["schemas"]["NullableMacrosResponse"] | null;
         };
         /**
+         * DefaultPortionInput
+         * @description 新增食物時一併建立的「一份」（食物份量規格 §3.1）。
+         *
+         *     限制跟 `PortionCreateRequest` 的同名欄位一樣——同一個資料庫欄位，
+         *     不該有兩套規則。
+         */
+        DefaultPortionInput: {
+            /** Label */
+            label: string;
+            /** Grams */
+            grams: number | string;
+        };
+        /**
          * ExpenseCategory
          * @description 寫死的分類清單（規格 §3.2）。
          *
@@ -1171,6 +1184,7 @@ export interface components {
              * @default false
              */
             is_global: boolean;
+            default_portion?: components["schemas"]["DefaultPortionInput"] | null;
             /**
              * Source
              * @default user
