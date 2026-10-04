@@ -109,6 +109,10 @@ class MealResponse(BaseModel):
     # 相對於 photo_dir 的路徑；沒有照片是 None。計畫 3 Task 14：上傳成功後
     # 這個端點自己回的、以及之後 GET /api/meals/{id} 回的都要看得到同一個值。
     photo_path: str | None
+    # 這一餐的餐費（`expenses.meal_id` 指過來的那一筆）；沒有就是 None。
+    # 編輯餐點規格 §3.3：**每一條回 MealResponse 的路徑都要帶**——
+    # 只有建立時有值、讀取時永遠 null 的欄位比沒有這個欄位更糟。
+    cost: Decimal | None
     items: list[MealItemResponse]
     # 營養素總計：各項已四捨五入後的和，不是精確總和再四捨五入
     # （見 app/nutrition.py 的 total()）。

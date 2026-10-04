@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 from app.models.expense import Expense, ExpenseCategory
 from app.models.meal import Meal
 from app.security.tokens import create_access_token
-from tests.factories import create_user
+from tests.factories import create_food, create_user
 
 
 def auth(user):
@@ -55,27 +55,6 @@ async def test_creating_a_meal_without_cost_creates_no_expense(client, db_sessio
     assert await db_session.scalar(select(func.count()).select_from(Expense)) == 0
 
 
-async def test_meal_response_does_not_include_cost(client, db_session):
-    """**刻意不在 MealResponse 裡回 cost。**
-
-    要在回應裡帶 cost，讀取路徑（GET /api/meals、GET /api/meals/{id}）
-    就得 LEFT JOIN expenses。不做的話，同一個 MealResponse 型別會在
-    建立時有值、在讀取時永遠是 null——一個永遠說謊的欄位比沒有這個欄位更糟。
-
-    金額的確認在 /expenses 頁看。真的需要每一餐都顯示金額時，
-    那是一次獨立的改動（把 LEFT JOIN 加進三條讀取路徑），不是順手加一個欄位。
-    """
-    user = await create_user(db_session)
-
-    response = await client.post(
-        "/api/meals",
-        headers=auth(user),
-        json={"eaten_at": "2026-12-15T12:00:00+08:00", "meal_type": "lunch", "cost": "180"},
-    )
-
-    assert "cost" not in response.json()
-
-
 async def test_rejected_cost_creates_neither_meal_nor_expense(client, db_session):
     """cost = 0 被 Pydantic 擋下來時，餐點也不能留下。
 
@@ -116,3 +95,59 @@ async def test_create_meal_commits_exactly_once(client, db_session):
 
     source = inspect.getsource(create_meal)
     assert source.count("await db.commit()") == 1
+
+
+def _meal(cost=None, eaten_at="2026-12-15T12:00:00+08:00"):
+    body = {"eaten_at": eaten_at, "meal_type": "lunch"}
+    if cost is not None:
+        body["cost"] = cost
+    return body
+
+
+async def test_create_meal_response_includes_cost(client, db_session):
+    user = await create_user(db_session)
+
+    response = await client.post("/api/meals", headers=auth(user), json=_meal(cost="180"))
+
+    assert response.json()["cost"] == "180.00"
+
+
+async def test_create_meal_without_cost_responds_with_null_cost(client, db_session):
+    user = await create_user(db_session)
+
+    response = await client.post("/api/meals", headers=auth(user), json=_meal())
+
+    assert response.json()["cost"] is None
+
+
+async def test_every_read_path_returns_the_meals_cost(client, db_session):
+    """取代舊的 test_meal_response_does_not_include_cost。
+
+    舊測試的理由是「只在建立時有值、讀取時永遠 null 的欄位比沒有更糟」。
+    這條守的就是那件事：清單、單筆、PATCH、加項目四條路徑都要回真的值。
+    """
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=user, owner=user)
+    created = await client.post("/api/meals", headers=auth(user), json=_meal(cost="180"))
+    with_cost = created.json()["id"]
+    created = await client.post("/api/meals", headers=auth(user), json=_meal())
+    without_cost = created.json()["id"]
+
+    listing = await client.get("/api/meals?date=2026-12-15", headers=auth(user))
+    costs = {meal["id"]: meal["cost"] for meal in listing.json()}
+    assert costs == {with_cost: "180.00", without_cost: None}
+
+    single = await client.get(f"/api/meals/{with_cost}", headers=auth(user))
+    assert single.json()["cost"] == "180.00"
+
+    patched = await client.patch(
+        f"/api/meals/{with_cost}", headers=auth(user), json={"note": "改備註"}
+    )
+    assert patched.json()["cost"] == "180.00"
+
+    added = await client.post(
+        f"/api/meals/{with_cost}/items",
+        headers=auth(user),
+        json={"food_id": food.id, "quantity": "100"},
+    )
+    assert added.json()["cost"] == "180.00"

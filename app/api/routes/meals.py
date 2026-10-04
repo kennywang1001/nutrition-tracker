@@ -5,7 +5,7 @@ from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, File, Query, Response, UploadFile, status
-from sqlalchemy import Row, Select, select
+from sqlalchemy import Row, Select, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -170,17 +170,17 @@ async def create_meal(
     #
     # spent_at 用 payload.eaten_at 不是「現在」：跨月補記一餐時，
     # 那筆錢屬於吃那一餐的月份，不是補記的月份。
+    expense: Expense | None = None
     if payload.cost is not None:
-        db.add(
-            Expense(
-                user_id=user.id,
-                meal_id=meal.id,
-                category=ExpenseCategory.FOOD,
-                amount=payload.cost,
-                spent_at=payload.eaten_at,
-                note=None,
-            )
+        expense = Expense(
+            user_id=user.id,
+            meal_id=meal.id,
+            category=ExpenseCategory.FOOD,
+            amount=payload.cost,
+            spent_at=payload.eaten_at,
+            note=None,
         )
+        db.add(expense)
 
     item_rows: list[MealItem] = []
     for resolved in resolved_items:
@@ -196,6 +196,9 @@ async def create_meal(
 
     await db.commit()
     await db.refresh(meal)
+    if expense is not None:
+        # "180" 在記憶體裡還是使用者給的精度；refresh 才是 numeric(10,2) 的 "180.00"。
+        await db.refresh(expense)
 
     items_response: list[MealItemResponse] = []
     macros_list: list[Macros] = []
@@ -214,6 +217,7 @@ async def create_meal(
         meal_type=meal.meal_type,
         note=meal.note,
         photo_path=meal.photo_path,
+        cost=expense.amount if expense is not None else None,
         items=items_response,
         kcal=totals.kcal,
         protein_g=totals.protein_g,
@@ -237,8 +241,37 @@ def _item_join_query() -> Select[tuple[MealItem, FoodRevision, Food]]:
     )
 
 
+async def _costs_by_meal(db: AsyncSession, meal_ids: Sequence[int]) -> dict[int, Decimal]:
+    """這幾餐各自的餐費（`expenses.meal_id` 指過來的那一筆）。
+
+    **一次查完**（`meal_id IN (...)`），跟 `list_meals` 查項目同一個作法——
+    不是每一餐各查一次。
+
+    **前提：一餐最多一筆餐費**（編輯餐點規格 §3.2）：`POST /api/meals` 只建
+    一筆、`PATCH /api/expenses/{id}` 不能改 `meal_id`、手動記帳的 `meal_id`
+    一律是 NULL。萬一前提被打破，取 id 最小的那一筆——跟 `update_meal` 改
+    金額時動的是同一筆。
+    """
+    if not meal_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(Expense.meal_id, Expense.amount)
+            .where(Expense.meal_id.in_(meal_ids))
+            .order_by(Expense.id)
+        )
+    ).all()
+    costs: dict[int, Decimal] = {}
+    for meal_id, amount in rows:
+        if meal_id is not None and meal_id not in costs:
+            costs[meal_id] = amount
+    return costs
+
+
 def _build_meal_response(
-    meal: Meal, item_rows: Sequence[Row[tuple[MealItem, FoodRevision, Food]]]
+    meal: Meal,
+    item_rows: Sequence[Row[tuple[MealItem, FoodRevision, Food]]],
+    cost: Decimal | None,
 ) -> MealResponse:
     """把一筆 Meal 與它已經 join 好的項目列組成回應。
 
@@ -262,6 +295,7 @@ def _build_meal_response(
         meal_type=meal.meal_type,
         note=meal.note,
         photo_path=meal.photo_path,
+        cost=cost,
         items=items_response,
         kcal=totals.kcal,
         protein_g=totals.protein_g,
@@ -300,7 +334,8 @@ async def read_meal(
             _item_join_query().where(MealItem.meal_id == meal.id).order_by(MealItem.id)
         )
     ).all()
-    return _build_meal_response(meal, rows)
+    costs = await _costs_by_meal(db, [meal.id])
+    return _build_meal_response(meal, rows, costs.get(meal.id))
 
 
 @router.patch("/{meal_id}", response_model=MealResponse)
@@ -330,7 +365,8 @@ async def update_meal(
             _item_join_query().where(MealItem.meal_id == meal.id).order_by(MealItem.id)
         )
     ).all()
-    return _build_meal_response(meal, rows)
+    costs = await _costs_by_meal(db, [meal.id])
+    return _build_meal_response(meal, rows, costs.get(meal.id))
 
 
 @router.delete("/{meal_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -339,7 +375,9 @@ async def delete_meal(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    """刪一餐。`meal_items` 靠 `ON DELETE CASCADE` 跟著走，這裡不逐筆刪。
+    """刪一餐，連這一餐的餐費一起刪（編輯餐點規格 §3.4）。
+
+    `meal_items` 靠 `ON DELETE CASCADE` 跟著走，這裡不逐筆刪。
 
     擁有權檢查（`_load_owned_meal`）必須在刪除**之前**：先查到、確認是
     自己的，才刪；不能「先刪、再檢查」，那種順序下「回 404」跟「真的沒刪掉」
@@ -353,6 +391,12 @@ async def delete_meal(
     """
     meal = await _load_owned_meal(db, meal_id, user)
     photo_path = meal.photo_path
+    # 連餐費一起刪（編輯餐點規格 §2、§3.4），跟刪餐點在同一個交易裡。
+    #
+    # **不改 expenses.meal_id 的 ON DELETE SET NULL**：那條約束守的是
+    # 「別的路徑刪了餐點時，錢不會無聲消失」（P5 規格 §2.3）。這裡是使用者
+    # 明確要「撤銷這一餐」，所以先自己刪掉那筆支出。
+    await db.execute(delete(Expense).where(Expense.meal_id == meal.id))
     await db.delete(meal)
     await db.commit()
 
@@ -406,7 +450,11 @@ async def list_meals(
     for row in rows:
         items_by_meal[row[0].meal_id].append(row)
 
-    return [_build_meal_response(meal, items_by_meal.get(meal.id, [])) for meal in meals]
+    costs = await _costs_by_meal(db, meal_ids)
+    return [
+        _build_meal_response(meal, items_by_meal.get(meal.id, []), costs.get(meal.id))
+        for meal in meals
+    ]
 
 
 @router.post(
@@ -447,7 +495,8 @@ async def add_meal_item(
             _item_join_query().where(MealItem.meal_id == meal.id).order_by(MealItem.id)
         )
     ).all()
-    return _build_meal_response(meal, rows)
+    costs = await _costs_by_meal(db, [meal.id])
+    return _build_meal_response(meal, rows, costs.get(meal.id))
 
 
 @router.delete("/{meal_id}/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -542,7 +591,8 @@ async def upload_meal_photo(
             _item_join_query().where(MealItem.meal_id == meal.id).order_by(MealItem.id)
         )
     ).all()
-    return _build_meal_response(meal, rows)
+    costs = await _costs_by_meal(db, [meal.id])
+    return _build_meal_response(meal, rows, costs.get(meal.id))
 
 
 @router.get("/{meal_id}/photo")

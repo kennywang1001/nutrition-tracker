@@ -1,5 +1,8 @@
+from sqlalchemy import func, select
+
+from app.models.expense import Expense
 from app.security.tokens import create_access_token
-from tests.factories import create_user
+from tests.factories import create_expense, create_user
 
 
 def auth(user):
@@ -235,3 +238,46 @@ async def test_delete_meal_requires_authentication(client, db_session):
     response = await client.delete(f"/api/meals/{meal_id}")
 
     assert response.status_code == 401
+
+
+async def test_deleting_a_meal_deletes_its_cost_but_nothing_else(client, db_session):
+    """刪一餐連餐費一起刪（編輯餐點規格 §2、§3.4）——**只刪這一餐的**。
+
+    沒有這條測試，ON DELETE SET NULL 會讓那筆錢默默留下來，
+    報表多一筆沒有對應餐點的「飲食」支出。
+    """
+    user = await create_user(db_session)
+    meal_a = await client.post(
+        "/api/meals",
+        headers=auth(user),
+        json={"eaten_at": "2026-12-15T12:00:00+08:00", "meal_type": "lunch", "cost": "180"},
+    )
+    await client.post(
+        "/api/meals",
+        headers=auth(user),
+        json={"eaten_at": "2026-12-15T18:00:00+08:00", "meal_type": "dinner", "cost": "50"},
+    )
+    await create_expense(db_session, user=user, amount=999)  # 手動記帳，meal_id 是 NULL
+
+    response = await client.delete(f"/api/meals/{meal_a.json()['id']}", headers=auth(user))
+
+    assert response.status_code == 204
+    amounts = sorted(
+        str(amount) for amount in (await db_session.scalars(select(Expense.amount))).all()
+    )
+    assert amounts == ["50.00", "999.00"]
+
+
+async def test_deleting_someone_elses_meal_keeps_their_cost(client, db_session):
+    alice = await create_user(db_session)
+    bob = await create_user(db_session)
+    meal = await client.post(
+        "/api/meals",
+        headers=auth(alice),
+        json={"eaten_at": "2026-12-15T12:00:00+08:00", "meal_type": "lunch", "cost": "180"},
+    )
+
+    response = await client.delete(f"/api/meals/{meal.json()['id']}", headers=auth(bob))
+
+    assert response.status_code == 404
+    assert await db_session.scalar(select(func.count()).select_from(Expense)) == 1
