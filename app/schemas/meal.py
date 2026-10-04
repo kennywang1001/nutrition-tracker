@@ -52,7 +52,7 @@ class MealUpdateRequest(BaseModel):
     """`PATCH /api/meals/{id}` 的請求（計畫 3 決定 2）：只改餐點本身，
     項目的增刪走另外兩個端點（Task 12），這裡不收 `items`。
 
-    跟 `UpdateMeRequest` 同一種哨兵寫法：三個欄位都是 `X | None = None`，
+    跟 `UpdateMeRequest` 同一種哨兵寫法：四個欄位都是 `X | None = None`，
     `None` 代表「這次請求沒帶這個欄位」，路由層用
     `model_dump(exclude_unset=True)` 決定要更新哪些。
 
@@ -61,11 +61,16 @@ class MealUpdateRequest(BaseModel):
     否則會一路流到 `setattr`，撞上 `asyncpg.NotNullViolationError` 變成
     已認證使用者就能觸發的 500（`UpdateMeRequest` 踩過的同一個坑）。
     `note` 是 nullable，`{"note": null}` 是合法輸入、必須放行到底。
+    `cost` 也是：`null` 代表刪掉這一餐的餐費。
     """
 
     eaten_at: AwareInstant | None = None
     meal_type: MealType | None = None
     note: str | None = Field(default=None, max_length=500)
+    # 編輯餐點規格 §3.2：不帶＝不動；數字＝改那筆餐費或補一筆；null＝刪掉餐費。
+    # null 是合法的（「拿掉金額」），所以不在下面驗證器的 non_nullable 集合裡。
+    # 限制同 MealCreateRequest.cost。
+    cost: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=2)
 
     @model_validator(mode="after")
     def _reject_explicit_nulls_on_non_nullable_fields(self) -> "MealUpdateRequest":

@@ -151,3 +151,101 @@ async def test_every_read_path_returns_the_meals_cost(client, db_session):
         json={"food_id": food.id, "quantity": "100"},
     )
     assert added.json()["cost"] == "180.00"
+
+
+async def _create(client, user, cost=None) -> int:
+    response = await client.post("/api/meals", headers=auth(user), json=_meal(cost=cost))
+    return response.json()["id"]
+
+
+async def test_patch_cost_updates_the_existing_expense(client, db_session):
+    user = await create_user(db_session)
+    meal_id = await _create(client, user, cost="180")
+
+    response = await client.patch(
+        f"/api/meals/{meal_id}", headers=auth(user), json={"cost": "200"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["cost"] == "200.00"
+    amounts = (await db_session.scalars(select(Expense.amount))).all()
+    assert [str(a) for a in amounts] == ["200.00"]  # 改的是同一筆，不是多一筆
+
+
+async def test_patch_cost_creates_an_expense_when_there_was_none(client, db_session):
+    user = await create_user(db_session)
+    meal_id = await _create(client, user)
+
+    response = await client.patch(
+        f"/api/meals/{meal_id}", headers=auth(user), json={"cost": "90"}
+    )
+
+    assert response.json()["cost"] == "90.00"
+    expense = await db_session.scalar(select(Expense))
+    assert expense is not None
+    assert expense.meal_id == meal_id
+    assert expense.category is ExpenseCategory.FOOD
+    # 跟記一餐帶 cost 一樣：錢屬於吃那一餐的時間，不是補上金額的時間。
+    assert expense.spent_at.isoformat() == "2026-12-15T04:00:00+00:00"
+
+
+async def test_patch_cost_null_deletes_the_expense(client, db_session):
+    user = await create_user(db_session)
+    meal_id = await _create(client, user, cost="180")
+
+    response = await client.patch(
+        f"/api/meals/{meal_id}", headers=auth(user), json={"cost": None}
+    )
+
+    assert response.json()["cost"] is None
+    assert await db_session.scalar(select(func.count()).select_from(Expense)) == 0
+
+
+async def test_patch_without_cost_leaves_the_expense_alone(client, db_session):
+    user = await create_user(db_session)
+    meal_id = await _create(client, user, cost="180")
+
+    await client.patch(f"/api/meals/{meal_id}", headers=auth(user), json={"note": "x"})
+
+    amounts = (await db_session.scalars(select(Expense.amount))).all()
+    assert [str(a) for a in amounts] == ["180.00"]
+
+
+async def test_patch_with_a_rejected_cost_changes_nothing(client, db_session):
+    """cost = 0 被 Pydantic 擋下時，同一個請求裡的 note 也不能改。"""
+    user = await create_user(db_session)
+    meal_id = await _create(client, user, cost="180")
+
+    response = await client.patch(
+        f"/api/meals/{meal_id}", headers=auth(user), json={"note": "不該被存", "cost": "0"}
+    )
+
+    assert response.status_code == 422
+    meal = await db_session.get(Meal, meal_id)
+    assert meal is not None
+    assert meal.note is None
+    amounts = (await db_session.scalars(select(Expense.amount))).all()
+    assert [str(a) for a in amounts] == ["180.00"]
+
+
+async def test_patch_cost_on_someone_elses_meal_is_404_and_changes_nothing(client, db_session):
+    alice = await create_user(db_session)
+    bob = await create_user(db_session)
+    meal_id = await _create(client, alice, cost="180")
+
+    response = await client.patch(
+        f"/api/meals/{meal_id}", headers=auth(bob), json={"cost": None}
+    )
+
+    assert response.status_code == 404
+    assert await db_session.scalar(select(func.count()).select_from(Expense)) == 1
+
+
+async def test_update_meal_commits_exactly_once():
+    """原始碼掃描，同 test_create_meal_commits_exactly_once：餐點的欄位與餐費
+    要嘛都改、要嘛都不改，靠的是只有一次 commit。"""
+    import inspect
+
+    from app.api.routes.meals import update_meal
+
+    assert inspect.getsource(update_meal).count("await db.commit()") == 1

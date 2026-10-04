@@ -345,8 +345,13 @@ async def update_meal(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> MealResponse:
-    """只改餐點本身：`eaten_at` / `meal_type` / `note`（計畫 3 決定 2）。
+    """改餐點本身：`eaten_at` / `meal_type` / `note`（計畫 3 決定 2），
+    以及這一餐的餐費 `cost`（編輯餐點規格 §3.2）。
     項目不在這個端點的範圍內 —— 那是 `POST/DELETE .../items` 的事。
+
+    **餐點的欄位與餐費在同一次 commit**——`test_update_meal_commits_exactly_once`
+    會掃。已知的落差：同時改 `eaten_at` 時，**既有**餐費的 `spent_at` 不跟著動
+    （前端這次不提供改時間，規格 §1.3）。
 
     用 `exclude_unset` 決定要更新哪些欄位（沒帶的欄位維持原樣），
     `MealUpdateRequest` 自己的驗證器已經擋掉 `eaten_at` / `meal_type`
@@ -354,8 +359,36 @@ async def update_meal(
     """
     meal = await _load_owned_meal(db, meal_id, user)
 
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    changes = payload.model_dump(exclude_unset=True)
+    cost_was_sent = "cost" in changes
+    new_cost = changes.pop("cost", None)
+
+    for field, value in changes.items():
         setattr(meal, field, value)
+
+    if cost_was_sent:
+        # 前提：一餐最多一筆餐費（見 _costs_by_meal）。取 id 最小的那一筆，
+        # 跟回應裡顯示的是同一筆。
+        existing = await db.scalar(
+            select(Expense).where(Expense.meal_id == meal.id).order_by(Expense.id).limit(1)
+        )
+        if new_cost is None:
+            if existing is not None:
+                await db.delete(existing)
+        elif existing is not None:
+            existing.amount = new_cost
+        else:
+            # 跟 create_meal 的 cost 同一個形狀：錢屬於吃那一餐的時間。
+            db.add(
+                Expense(
+                    user_id=user.id,
+                    meal_id=meal.id,
+                    category=ExpenseCategory.FOOD,
+                    amount=new_cost,
+                    spent_at=meal.eaten_at,
+                    note=None,
+                )
+            )
 
     await db.commit()
     await db.refresh(meal)
