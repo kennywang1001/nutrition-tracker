@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
+import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_PHOTO_BYTES } from "../src/api/photos";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
@@ -20,11 +21,16 @@ vi.mock("../src/lib/resize-image", () => ({
 	shrinkToLongestEdge: vi.fn((file: File) => Promise.resolve(file)),
 }));
 
+// 需要 MemoryRouter：每張卡片有連到編輯畫面的 <Link>（編輯餐點規格 §4.3）。
 function wrap(children: ReactNode) {
 	const client = new QueryClient({
 		defaultOptions: { queries: { retry: false } },
 	});
-	return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+	return (
+		<QueryClientProvider client={client}>
+			<MemoryRouter>{children}</MemoryRouter>
+		</QueryClientProvider>
+	);
 }
 
 function meal(overrides: Record<string, unknown> = {}) {

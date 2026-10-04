@@ -1,17 +1,23 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { MealList } from "../src/screens/MealList";
 import { json, mockApiByPath as mockApi } from "./helpers/mock-api";
 
+// 需要 MemoryRouter：每張卡片有連到編輯畫面的 <Link>（編輯餐點規格 §4.3）。
 function wrap(children: ReactNode) {
 	const client = new QueryClient({
 		defaultOptions: { queries: { retry: false } },
 	});
-	return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+	return (
+		<QueryClientProvider client={client}>
+			<MemoryRouter>{children}</MemoryRouter>
+		</QueryClientProvider>
+	);
 }
 
 const MEALS = [
@@ -120,5 +126,18 @@ describe("今日餐點清單", () => {
 		// photo_path 為 null 的那一餐（id 12）不該有任何照片相關的東西
 		expect(screen.queryByTestId("meal-photo-12")).not.toBeInTheDocument();
 		expect(screen.getByTestId("meal-photo-11")).toBeInTheDocument();
+	});
+
+	it("每張卡片有連到那一餐編輯畫面的連結", async () => {
+		mockApi({ "/api/meals": () => json(MEALS) });
+
+		render(wrap(<MealList />));
+
+		// MEALS 有兩餐，所以有兩個連結，各連到自己那一餐。
+		const links = await screen.findAllByRole("link", { name: /^編輯/ });
+		expect(links.map((link) => link.getAttribute("href"))).toEqual([
+			"/meals/11/edit",
+			"/meals/12/edit",
+		]);
 	});
 });

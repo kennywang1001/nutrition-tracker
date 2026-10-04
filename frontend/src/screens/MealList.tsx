@@ -1,4 +1,5 @@
 import type { ChangeEvent } from "react";
+import { Link } from "react-router";
 import { MEAL_TYPE_LABELS, type Meal, useTodayMeals } from "../api/meals";
 import {
 	describePhotoUploadError,
@@ -73,9 +74,20 @@ function MealPhotoUpload({ mealId }: { mealId: number }) {
 function MealCard({ meal }: { meal: Meal }) {
 	return (
 		<li className={styles.meal}>
-			<h3>
-				{formatTime(meal.eaten_at)} · {MEAL_TYPE_LABELS[meal.meal_type]}
-			</h3>
+			<div className={styles.cardHeader}>
+				<h3>
+					{formatTime(meal.eaten_at)} · {MEAL_TYPE_LABELS[meal.meal_type]}
+				</h3>
+				{/* 名稱帶時間與餐別：一頁有好幾張卡片，每張都寫「編輯」的話
+				    螢幕閱讀器分不出是哪一餐。 */}
+				<Link
+					to={`/meals/${meal.id}/edit`}
+					className={styles.editLink}
+					aria-label={`編輯 ${formatTime(meal.eaten_at)} ${MEAL_TYPE_LABELS[meal.meal_type]}`}
+				>
+					編輯
+				</Link>
+			</div>
 			{meal.photo_path !== null && <MealPhoto meal={meal} />}
 			<MealPhotoUpload mealId={meal.id} />
 			<ul>

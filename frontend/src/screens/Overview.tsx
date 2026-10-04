@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
-import { useLocation, useNavigate } from "react-router";
+import { Link, useLocation, useNavigate } from "react-router";
 import {
 	CATEGORY_LABELS,
 	useExpenseSummary,
@@ -96,35 +96,47 @@ function TodayKcalCard() {
 	);
 }
 
+/** 時間線的一列。**餐點列是連到編輯畫面的連結**（編輯餐點規格 §4.3）；
+ *  支出列只能看（支出在報表改，介面改版規格 §1.3）。
+ *
+ *  `data-testid` 留在 `<li>` 上（`e2e/money-loop.spec.ts` 用它找列），
+ *  格線排版在裡面那一層（`.row`）。 */
 function TimelineItem({ row }: { row: TimelineRow }) {
 	if (row.kind === "meal") {
 		const foods = row.meal.items.map((item) => item.food_name).join("、");
 		return (
-			<li className={styles.row} data-testid="timeline-row">
-				<MealTypeIcon mealType={row.meal.meal_type} />
-				<span className={styles.title}>
-					{MEAL_TYPE_LABELS[row.meal.meal_type]}・
-					{foods === "" ? "（沒有項目）" : foods}
-				</span>
-				<span className={styles.time}>{formatTime(row.time)}</span>
-				<span className={styles.value}>
-					{row.cost !== null
-						? `$${formatMoney(row.cost)}`
-						: `${formatMacro(row.meal.kcal)} kcal`}
-				</span>
+			<li className={styles.item} data-testid="timeline-row">
+				<Link
+					to={`/meals/${row.meal.id}/edit`}
+					className={`${styles.row} ${styles.rowLink}`}
+				>
+					<MealTypeIcon mealType={row.meal.meal_type} />
+					<span className={styles.title}>
+						{MEAL_TYPE_LABELS[row.meal.meal_type]}・
+						{foods === "" ? "（沒有項目）" : foods}
+					</span>
+					<span className={styles.time}>{formatTime(row.time)}</span>
+					<span className={styles.value}>
+						{row.cost !== null
+							? `$${formatMoney(row.cost)}`
+							: `${formatMacro(row.meal.kcal)} kcal`}
+					</span>
+				</Link>
 			</li>
 		);
 	}
 
 	const { expense } = row;
 	return (
-		<li className={styles.row} data-testid="timeline-row">
-			<CategoryIcon category={expense.category} />
-			<span className={styles.title}>
-				{expense.note?.trim() || CATEGORY_LABELS[expense.category]}
-			</span>
-			<span className={styles.time}>{formatTime(row.time)}</span>
-			<span className={styles.value}>${formatMoney(expense.amount)}</span>
+		<li className={styles.item} data-testid="timeline-row">
+			<div className={styles.row}>
+				<CategoryIcon category={expense.category} />
+				<span className={styles.title}>
+					{expense.note?.trim() || CATEGORY_LABELS[expense.category]}
+				</span>
+				<span className={styles.time}>{formatTime(row.time)}</span>
+				<span className={styles.value}>${formatMoney(expense.amount)}</span>
+			</div>
 		</li>
 	);
 }
@@ -203,7 +215,7 @@ function OfflineBanner() {
 
 /** 總覽（介面改版規格 §5.2）：本月支出、今天熱量、今天的時間線。
  *  三塊**各自**處理載入與錯誤——一塊失敗不拖垮整頁。
- *  時間線的列只能看、不能點（規格 §1.3）。 */
+ *  時間線的餐點列連到編輯畫面；支出列只能看（編輯餐點規格 §4.3）。 */
 export function Overview() {
 	const location = useLocation();
 	const navigate = useNavigate();

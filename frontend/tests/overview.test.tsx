@@ -181,6 +181,23 @@ describe("總覽", () => {
 		expect(rows[1]).toHaveTextContent("$25.00");
 	});
 
+	it("時間線的餐點列連到那一餐的編輯畫面；支出列不是連結", async () => {
+		mockOverview();
+
+		render(wrap(<Overview />));
+
+		const [mealRow, expenseRow] = await screen.findAllByTestId("timeline-row");
+		// noUncheckedIndexedAccess：先確認兩列都在，型別才會收窄。
+		if (mealRow === undefined || expenseRow === undefined) {
+			throw new Error("時間線應該有兩列");
+		}
+		expect(within(mealRow).getByRole("link")).toHaveAttribute(
+			"href",
+			"/meals/11/edit",
+		);
+		expect(within(expenseRow).queryByRole("link")).not.toBeInTheDocument();
+	});
+
 	it("今天的支出用後端回的日期去查——前端不自己算今天", async () => {
 		const fetchMock = mockOverview();
 

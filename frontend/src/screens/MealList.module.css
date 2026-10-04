@@ -12,9 +12,27 @@
 }
 
 .meal h3 {
-	margin: 0 0 var(--space-2);
+	margin: 0;
 	font-size: 14px;
 	color: var(--color-text-muted);
+}
+
+.cardHeader {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-2);
+	margin-bottom: var(--space-2);
+}
+
+.editLink {
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+	padding: 0 var(--space-2);
+	color: var(--color-action);
+	font-weight: 600;
+	text-decoration: none;
 }
 
 .meal img {
