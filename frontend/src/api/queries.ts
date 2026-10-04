@@ -39,6 +39,12 @@ export const queryKeys = {
 	 *  （`app/days.py`，跟 `/api/stats/daily`、`/api/supplements/today`
 	 *  同一個函式）。記一餐成功後要讓這個 key 失效，清單才會顯示新的一餐。 */
 	meals: ["meals"] as const,
+	/** 單一餐（編輯畫面 `useMeal`）。**刻意掛在 `meals` 底下**：記一餐、改
+	 *  項目、改金額之後都失效 `meals`，前綴比對會一起打到正在編輯的那一餐。
+	 *
+	 *  刪掉一餐之後要先 `removeQueries` 這個 key 再失效其他——不然失效會讓
+	 *  還掛著的 `useMeal` 去重抓一個已經刪掉的餐，打出一個 404。 */
+	meal: (mealId: number) => ["meals", mealId] as const,
 	/** 趨勢：一段期間的逐日統計。
 	 *
 	 *  **帶 from / to 兩個參數，而它們來自 `stats/daily` 回應裡的 `date`**

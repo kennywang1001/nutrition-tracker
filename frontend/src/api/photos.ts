@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { shrinkToLongestEdge } from "../lib/resize-image";
 import { apiFetch, fetchPhotoBlob } from "./client";
+import { ApiError } from "./errors";
 import { queryKeys } from "./queries";
 import type { components } from "./schema";
 
@@ -150,4 +151,21 @@ export function useUploadMealPhoto(mealId: number) {
 			});
 		},
 	});
+}
+
+/** 把上傳失敗的原因翻成使用者看得懂的訊息。
+ *
+ *  **不是直接顯示 `error.message`**：後端 `INVALID_PHOTO` 的訊息是
+ *  「無法識別的圖片內容」，這裡刻意換成更短的「無法識別的圖片」——
+ *  這個 code 理論上不會發生（前端已經先用 `shrinkToLongestEdge` 把圖
+ *  降尺寸過，能被降尺寸就代表瀏覽器認得那是一張圖），但「理論上不會
+ *  發生」的東西如果讓畫面白掉，代價不對稱，所以仍然要有對應的文字，
+ *  不能放著讓一個沒被接住的例外把畫面炸掉。 */
+export function describePhotoUploadError(error: unknown): string {
+	if (error instanceof PhotoTooLargeError) return error.message;
+	if (error instanceof ApiError) {
+		if (error.code === "PHOTO_TOO_LARGE") return error.message;
+		if (error.code === "INVALID_PHOTO") return "無法識別的圖片";
+	}
+	return "上傳照片失敗，請再試一次";
 }

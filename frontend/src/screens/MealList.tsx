@@ -1,8 +1,7 @@
 import type { ChangeEvent } from "react";
-import { ApiError } from "../api/errors";
 import { MEAL_TYPE_LABELS, type Meal, useTodayMeals } from "../api/meals";
 import {
-	PhotoTooLargeError,
+	describePhotoUploadError,
 	useMealPhoto,
 	useUploadMealPhoto,
 } from "../api/photos";
@@ -35,23 +34,6 @@ function MealPhoto({ meal }: { meal: Meal }) {
 	);
 }
 
-/** 把上傳失敗的原因翻成使用者看得懂的訊息。
- *
- *  **不是直接顯示 `error.message`**：後端 `INVALID_PHOTO` 的訊息是
- *  「無法識別的圖片內容」，這裡刻意換成更短的「無法識別的圖片」——
- *  這個 code 理論上不會發生（前端已經先用 `shrinkToLongestEdge` 把圖
- *  降尺寸過，能被降尺寸就代表瀏覽器認得那是一張圖），但「理論上不會
- *  發生」的東西如果讓畫面白掉，代價不對稱，所以仍然要有對應的文字，
- *  不能放著讓一個沒被接住的例外把畫面炸掉。 */
-function describeUploadError(error: unknown): string {
-	if (error instanceof PhotoTooLargeError) return error.message;
-	if (error instanceof ApiError) {
-		if (error.code === "PHOTO_TOO_LARGE") return error.message;
-		if (error.code === "INVALID_PHOTO") return "無法識別的圖片";
-	}
-	return "上傳照片失敗，請再試一次";
-}
-
 /** 上傳／取代一餐照片的控制項。**每一餐都有這個控制項**，不管目前有沒有
  *  照片——後端的 `upload_meal_photo` 本來就是「有就取代、沒有就新增」
  *  的語意（`app/api/routes/meals.py` 的函式註解）。
@@ -82,7 +64,7 @@ function MealPhotoUpload({ mealId }: { mealId: number }) {
 				onChange={handleChange}
 			/>
 			{upload.isError && (
-				<p role="alert">{describeUploadError(upload.error)}</p>
+				<p role="alert">{describePhotoUploadError(upload.error)}</p>
 			)}
 		</div>
 	);

@@ -59,3 +59,23 @@ describe("花費的 query key", () => {
 		expect(queryKeys.expenses(null)).not.toEqual(queryKeys.expenses("2026-12"));
 	});
 });
+
+describe("單一餐的 query key", () => {
+	it("掛在 meals 底下——改了任何一餐，今日清單與那一餐一起重取", () => {
+		const prefix = queryKeys.meals;
+		expect(queryKeys.meal(5).slice(0, prefix.length)).toEqual([...prefix]);
+	});
+
+	it("移除某一餐的快取不會連帶移除今日清單", () => {
+		// 刪一餐之後要 removeQueries(meal(id))（見 EditMeal 的 DeleteMeal）。
+		// 這條守的是那一行不會順手清掉別的東西。
+		const client = new QueryClient();
+		client.setQueryData(queryKeys.meals, []);
+		client.setQueryData(queryKeys.meal(5), { id: 5 });
+
+		client.removeQueries({ queryKey: queryKeys.meal(5) });
+
+		expect(client.getQueryData(queryKeys.meals)).toEqual([]);
+		expect(client.getQueryData(queryKeys.meal(5))).toBeUndefined();
+	});
+});

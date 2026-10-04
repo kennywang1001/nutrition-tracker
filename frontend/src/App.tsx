@@ -21,6 +21,7 @@ import { getRefreshToken } from "./auth/store";
 import { TabBar } from "./components/TabBar";
 import { AddExpense } from "./screens/AddExpense";
 import { AdminRevisions } from "./screens/AdminRevisions";
+import { EditMeal } from "./screens/EditMeal";
 import { Expenses } from "./screens/Expenses";
 import { FoodDetail } from "./screens/FoodDetail";
 import { FoodLibrary } from "./screens/FoodLibrary";
@@ -85,6 +86,9 @@ export function App() {
 							/>
 							<Route path="/expenses/new" element={<AddExpenseRoute />} />
 							<Route path="/meals/new" element={<LogMealRoute />} />
+							{/* 修改或刪除一筆已經記下的餐（編輯餐點規格 §4.2）。入口：飲食頁
+									餐點卡片的「編輯」、總覽時間線的餐點列。 */}
+							<Route path="/meals/:id/edit" element={<EditMeal />} />
 							{/* 舊網址轉址（規格 §3.3）：手機上可能有書籤或 PWA 的舊
 									狀態。`replace`：上一頁不會回到一個只會再轉走的網址。 */}
 							<Route path="/today" element={<Navigate to="/diet" replace />} />

@@ -4,6 +4,7 @@ import { type ChangeEvent, useEffect, useState } from "react";
 import { apiFetch } from "../api/client";
 import { ApiError, hasFieldError } from "../api/errors";
 import { AMOUNT_FORMAT_ERROR } from "../api/expenses";
+import { MEAL_TYPE_LABELS, MEAL_TYPE_ORDER } from "../api/meals";
 import {
 	MAX_PHOTO_BYTES,
 	PhotoTooLargeError,
@@ -30,13 +31,6 @@ type Props = {
 /** 餐存好、照片沒傳上去時給總覽顯示的話。補傳走飲食頁 `MealList` 既有的上傳。 */
 export const PHOTO_UPLOAD_FAILED_NOTICE =
 	"這一餐已記錄，照片沒有傳上去，可以到飲食頁的那一餐補傳";
-
-const MEAL_TYPES: Array<{ value: MealType; label: string }> = [
-	{ value: "breakfast", label: "早餐" },
-	{ value: "lunch", label: "午餐" },
-	{ value: "dinner", label: "晚餐" },
-	{ value: "snack", label: "點心" },
-];
 
 export function LogMeal({ onSaved }: Props) {
 	const queryClient = useQueryClient();
@@ -218,9 +212,9 @@ export function LogMeal({ onSaved }: Props) {
 						value={mealType}
 						onChange={(event) => setMealType(event.target.value as MealType)}
 					>
-						{MEAL_TYPES.map((option) => (
-							<option key={option.value} value={option.value}>
-								{option.label}
+						{MEAL_TYPE_ORDER.map((value) => (
+							<option key={value} value={value}>
+								{MEAL_TYPE_LABELS[value]}
 							</option>
 						))}
 					</select>

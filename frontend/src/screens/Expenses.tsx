@@ -91,9 +91,9 @@ function ExpenseRow({ expense, onChanged }: RowProps) {
 			<span className={styles.amount}>{formatMoney(expense.amount)}</span>
 			{expense.note !== null && <span>{expense.note}</span>}
 			{/* meal_id 有值＝這筆是記一餐時順手建立的餐費（規格 §4.1）。
-			    刪掉那一餐時後端是 SET NULL（app/models/expense.py）：標示會
-			    消失，但錢保留。**將來前端加刪除餐點時，要一併失效
-			    queryKeys.expensesAll**，不然快取裡還會顯示（餐費）。 */}
+			    在編輯畫面刪掉那一餐時，後端連這筆一起刪（編輯餐點規格 §3.4），
+			    EditMeal 會失效 expensesAll；別的路徑刪了餐點時是 SET NULL
+			    （app/models/expense.py）：標示消失，但錢保留。 */}
 			{expense.meal_id !== null && <span>（餐費）</span>}
 
 			{editing ? (

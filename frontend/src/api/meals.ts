@@ -33,3 +33,21 @@ export function useTodayMeals() {
 		queryFn: () => apiFetch<Meal[]>("/api/meals"),
 	});
 }
+
+/** 餐別在下拉選單裡的順序（一天裡的時間順序）。標籤用 `MEAL_TYPE_LABELS`。 */
+export const MEAL_TYPE_ORDER: readonly MealType[] = [
+	"breakfast",
+	"lunch",
+	"dinner",
+	"snack",
+];
+
+/** 一餐（編輯畫面）。`useParams` 給的 id 可能是 `NaN`——那時不發請求，
+ *  畫面自己說「找不到這一餐」（跟 `useFood` 同一個作法）。 */
+export function useMeal(mealId: number) {
+	return useQuery({
+		queryKey: queryKeys.meal(mealId),
+		queryFn: () => apiFetch<Meal>(`/api/meals/${mealId}`),
+		enabled: Number.isFinite(mealId),
+	});
+}
