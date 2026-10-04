@@ -5,7 +5,7 @@ import {
 } from "@tanstack/react-query";
 import { useState } from "react";
 import { apiFetch } from "../api/client";
-import { ApiError } from "../api/errors";
+import { ApiError, hasFieldError } from "../api/errors";
 import { type Food, useFood } from "../api/foods";
 import type { Meal } from "../api/meals";
 import { queryKeys } from "../api/queries";
@@ -19,23 +19,39 @@ import styles from "./EditMeal.module.css";
 
 type MealItem = Meal["items"][number];
 
-/** 同一時間只開一個編輯器：改某一項，或加一項。兩個同時開的話，畫面上
- *  會有兩組「份量」欄位——標籤對不上（`getByLabelText` 與螢幕閱讀器都
- *  分不清），使用者也分不清在改哪一個。 */
-type Editor = { kind: "item"; itemId: number } | { kind: "add" } | null;
+/** 同一時間只開一個編輯器：改某一項、確認刪某一項，或加一項。兩個同時開
+ *  的話，畫面上會有兩組「份量」欄位——標籤對不上（`getByLabelText` 與螢幕
+ *  閱讀器都分不清），使用者也分不清在改哪一個。刪除確認也算一個：它不能
+ *  跟任何編輯器（同一列或別列）同時開著。 */
+type Editor =
+	| { kind: "item"; itemId: number }
+	| { kind: "confirmDelete"; itemId: number }
+	| { kind: "add" }
+	| null;
 
 /** 項目變了：這一餐、今天的營養素、趨勢、常吃／最近吃都跟著變（同記一餐）。
- *  餐費不受影響，不失效 `expensesAll`。 */
-function invalidateAfterItemChange(queryClient: QueryClient) {
-	for (const queryKey of [
-		queryKeys.meals,
-		queryKeys.dailyStats,
-		queryKeys.rangeStatsAll,
-		queryKeys.frequentFoods,
-		queryKeys.recentFoods,
-	]) {
-		queryClient.invalidateQueries({ queryKey });
+ *  餐費不受影響，不失效 `expensesAll`。
+ *
+ *  `updated`（PATCH／POST 的回應）直接寫進這一餐的快取，不等重抓；
+ *  DELETE 回 204 沒有內容，不傳。回傳失效的 Promise：呼叫端可以回傳它，
+ *  讓 mutation 到重抓完成才算結束。 */
+function afterItemChange(
+	queryClient: QueryClient,
+	mealId: number,
+	updated?: Meal | null,
+) {
+	if (updated != null) {
+		queryClient.setQueryData(queryKeys.meal(mealId), updated);
 	}
+	return Promise.all(
+		[
+			queryKeys.meals,
+			queryKeys.dailyStats,
+			queryKeys.rangeStatsAll,
+			queryKeys.frequentFoods,
+			queryKeys.recentFoods,
+		].map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+	);
 }
 
 function describeItemError(error: unknown): string {
@@ -43,13 +59,16 @@ function describeItemError(error: unknown): string {
 		if (error.code === "PORTION_FOOD_MISMATCH") {
 			return "這個份量不屬於這個食物";
 		}
+		// 別的裝置把這一項刪掉了。
+		if (error.code === "MEAL_ITEM_NOT_FOUND") {
+			return "這一項已經不在了（可能在別的裝置刪掉了）";
+		}
 		// 搜尋到送出之間食物失去生效版本（同記一餐）：用後端的訊息。
 		if (error.code === "FOOD_HAS_NO_REVISION") {
 			return error.message;
 		}
-		// 這兩個端點的 422 只可能來自數量（或份量）——不是金額。
-		// 限制同 MealItemCreateRequest.quantity。
-		if (error.code === "VALIDATION_ERROR") {
+		// 限制同 MealItemCreateRequest.quantity。其他欄位的 422 走通用訊息。
+		if (error.code === "VALIDATION_ERROR" && hasFieldError(error, "quantity")) {
 			return "數量要大於 0、不超過 10000，最多兩位小數";
 		}
 	}
@@ -82,9 +101,13 @@ function ItemEditor({
 	const foodQuery = useFood(item.food_id);
 	// 初始值是這一項當初怎麼記的（不是 null）：食物後來才設的預設份量
 	// 不能把「直接輸入 200 g」變成 200 碗。
+	// `portion_id` 是 ON DELETE SET NULL：份量被刪掉的項目 `portion_id` 變
+	// null，但 `quantity` 還是當初的份數，`quantity_g` 才是公克數。
 	const portion = usePortionQuantity(item.food_id, {
 		choice: item.portion_id ?? "manual",
-		quantity: formatMacro(item.quantity),
+		quantity: formatMacro(
+			item.portion_id === null ? item.quantity_g : item.quantity,
+		),
 	});
 
 	const save = useMutation({
@@ -99,9 +122,14 @@ function ItemEditor({
 					portion_id: portion.portionId,
 				}),
 			}),
-		onSuccess: () => {
-			invalidateAfterItemChange(queryClient);
-			onClose();
+		// 只做不依賴畫面的事（快取）。「關編輯器」放在 `mutate` 的第二個參數：
+		// TanStack v5 在 observer 卸載或 reset 之後會丟掉那種 callback，所以使用
+		// 者在存檔還在送的時候改開別的編輯器，存好不會把那個新的關掉。
+		onSuccess: (updated) => afterItemChange(queryClient, mealId, updated),
+		onError: (error) => {
+			if (error instanceof ApiError && error.code === "MEAL_ITEM_NOT_FOUND") {
+				queryClient.invalidateQueries({ queryKey: queryKeys.meals });
+			}
 		},
 	});
 
@@ -111,7 +139,7 @@ function ItemEditor({
 			aria-label={`修改${item.food_name}`}
 			onSubmit={(event) => {
 				event.preventDefault();
-				save.mutate();
+				save.mutate(undefined, { onSuccess: onClose });
 			}}
 		>
 			<PortionQuantityFields
@@ -138,25 +166,39 @@ function ItemRow({
 	mealId,
 	item,
 	editing,
+	confirming,
 	onEdit,
+	onConfirmDelete,
 	onClose,
 }: {
 	mealId: number;
 	item: MealItem;
 	editing: boolean;
+	confirming: boolean;
 	onEdit: () => void;
+	onConfirmDelete: () => void;
 	onClose: () => void;
 }) {
 	const queryClient = useQueryClient();
-	const [confirming, setConfirming] = useState(false);
 
 	const remove = useMutation({
-		mutationFn: () =>
-			apiFetch(`/api/meals/${mealId}/items/${item.id}`, { method: "DELETE" }),
-		onSuccess: () => {
-			setConfirming(false);
-			invalidateAfterItemChange(queryClient);
+		mutationFn: async () => {
+			try {
+				await apiFetch(`/api/meals/${mealId}/items/${item.id}`, {
+					method: "DELETE",
+				});
+			} catch (error) {
+				// 別的裝置已經刪掉了：目的達成，當作成功。
+				if (
+					!(error instanceof ApiError && error.code === "MEAL_ITEM_NOT_FOUND")
+				) {
+					throw error;
+				}
+			}
 		},
+		// 回傳失效的 Promise：到重抓完成（這一列消失）之前 `isPending` 都是
+		// true，確定刪除按鈕不能再按第二次。
+		onSuccess: () => afterItemChange(queryClient, mealId),
 	});
 
 	return (
@@ -165,9 +207,8 @@ function ItemRow({
 			<span className={styles.itemMeta}>
 				{amountText(item)} · {formatMacro(item.kcal)} kcal
 			</span>
-			{editing ? (
-				<ItemEditor mealId={mealId} item={item} onClose={onClose} />
-			) : (
+			{editing && <ItemEditor mealId={mealId} item={item} onClose={onClose} />}
+			{!editing && !confirming && (
 				<>
 					{/* 名稱帶食物名：每一列都有「修改」「刪除」，只寫動詞的話
 					    螢幕閱讀器（與測試）分不出是哪一項。 */}
@@ -181,23 +222,28 @@ function ItemRow({
 					<button
 						type="button"
 						aria-label={`刪除${item.food_name}`}
-						onClick={() => setConfirming(true)}
+						onClick={onConfirmDelete}
 					>
 						刪除
 					</button>
 				</>
 			)}
 			{confirming && (
-				<div role="alertdialog" aria-label={`確認刪除${item.food_name}`}>
+				<div
+					className={styles.confirm}
+					role="alertdialog"
+					aria-label={`確認刪除${item.food_name}`}
+				>
 					<p>確定要刪除「{item.food_name}」嗎？</p>
 					<button
 						type="button"
+						className={styles.danger}
 						disabled={remove.isPending}
-						onClick={() => remove.mutate()}
+						onClick={() => remove.mutate(undefined, { onSuccess: onClose })}
 					>
 						確定刪除
 					</button>
-					<button type="button" onClick={() => setConfirming(false)}>
+					<button type="button" onClick={onClose}>
 						取消
 					</button>
 				</div>
@@ -227,17 +273,15 @@ function AddItem({ mealId, onClose }: { mealId: number; onClose: () => void }) {
 						: {}),
 				}),
 			}),
-		onSuccess: () => {
-			invalidateAfterItemChange(queryClient);
-			onClose();
-		},
+		// 關編輯器放在 `mutate` 的第二個參數，理由見 ItemEditor。
+		onSuccess: (updated) => afterItemChange(queryClient, mealId, updated),
 	});
 
 	return (
 		<div className={styles.editor}>
 			<FoodPicker
 				onSelect={(selected) => {
-					// 換食物時份量選擇由 usePortionQuantity 自己重設（Task 4 審查後的修正）。
+					// 換食物時份量選擇由 usePortionQuantity 自己重設。
 					setFood(selected);
 					add.reset();
 				}}
@@ -248,7 +292,7 @@ function AddItem({ mealId, onClose }: { mealId: number; onClose: () => void }) {
 					aria-label="加一項"
 					onSubmit={(event) => {
 						event.preventDefault();
-						add.mutate(food);
+						add.mutate(food, { onSuccess: onClose });
 					}}
 				>
 					<p>已選擇：{food.name}</p>
@@ -293,7 +337,13 @@ export function EditMealItems({ meal }: { meal: Meal }) {
 							mealId={meal.id}
 							item={item}
 							editing={editor?.kind === "item" && editor.itemId === item.id}
+							confirming={
+								editor?.kind === "confirmDelete" && editor.itemId === item.id
+							}
 							onEdit={() => setEditor({ kind: "item", itemId: item.id })}
+							onConfirmDelete={() =>
+								setEditor({ kind: "confirmDelete", itemId: item.id })
+							}
 							onClose={close}
 						/>
 					))}

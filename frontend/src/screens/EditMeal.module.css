@@ -141,3 +141,11 @@
 .photoButton:has(+ .fileInput:disabled) {
 	opacity: 0.4;
 }
+
+.confirm {
+	width: 100%;
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+	align-items: center;
+}
