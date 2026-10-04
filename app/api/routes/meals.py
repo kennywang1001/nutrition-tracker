@@ -355,7 +355,8 @@ async def update_meal(
 
     用 `exclude_unset` 決定要更新哪些欄位（沒帶的欄位維持原樣），
     `MealUpdateRequest` 自己的驗證器已經擋掉 `eaten_at` / `meal_type`
-    的顯式 `null`，所以流到這裡的 `None` 只可能是合法的 `note` 清空。
+    的顯式 `null`；`cost: null` 在下面先被 pop 出來（代表「刪掉餐費」），
+    所以流到 setattr 迴圈的 `None` 只可能是合法的 `note` 清空。
     """
     meal = await _load_owned_meal(db, meal_id, user)
 

@@ -56,7 +56,7 @@ class MealUpdateRequest(BaseModel):
     `None` 代表「這次請求沒帶這個欄位」，路由層用
     `model_dump(exclude_unset=True)` 決定要更新哪些。
 
-    但跟 `UpdateMeRequest` 不同的是，這裡三個欄位對 NOT NULL 的態度不一樣：
+    但跟 `UpdateMeRequest` 不同的是，這裡四個欄位對 NOT NULL 的態度不一樣：
     `eaten_at` 與 `meal_type` 是 NOT NULL，顯式 `null` 必須擋在這裡 ——
     否則會一路流到 `setattr`，撞上 `asyncpg.NotNullViolationError` 變成
     已認證使用者就能觸發的 500（`UpdateMeRequest` 踩過的同一個坑）。

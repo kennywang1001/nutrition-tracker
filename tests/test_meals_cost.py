@@ -184,6 +184,7 @@ async def test_patch_cost_creates_an_expense_when_there_was_none(client, db_sess
     expense = await db_session.scalar(select(Expense))
     assert expense is not None
     assert expense.meal_id == meal_id
+    assert expense.user_id == user.id
     assert expense.category is ExpenseCategory.FOOD
     # 跟記一餐帶 cost 一樣：錢屬於吃那一餐的時間，不是補上金額的時間。
     assert expense.spent_at.isoformat() == "2026-12-15T04:00:00+00:00"
@@ -197,6 +198,19 @@ async def test_patch_cost_null_deletes_the_expense(client, db_session):
         f"/api/meals/{meal_id}", headers=auth(user), json={"cost": None}
     )
 
+    assert response.json()["cost"] is None
+    assert await db_session.scalar(select(func.count()).select_from(Expense)) == 0
+
+
+async def test_patch_cost_null_without_an_expense_does_nothing(client, db_session):
+    user = await create_user(db_session)
+    meal_id = await _create(client, user)
+
+    response = await client.patch(
+        f"/api/meals/{meal_id}", headers=auth(user), json={"cost": None}
+    )
+
+    assert response.status_code == 200
     assert response.json()["cost"] is None
     assert await db_session.scalar(select(func.count()).select_from(Expense)) == 0
 
