@@ -3,8 +3,9 @@ from decimal import Decimal
 from sqlalchemy import func, select
 
 from app.models.meal import MealItem
+from app.models.user import UserRole
 from app.security.tokens import create_access_token
-from tests.factories import create_food, create_portion, create_user
+from tests.factories import create_food, create_pending_revision, create_portion, create_user
 
 
 def auth(user):
@@ -256,3 +257,172 @@ async def test_delete_item_requires_authentication(client, db_session):
     response = await client.delete(f"/api/meals/{meal_id}/items/{item_id}")
 
     assert response.status_code == 401
+
+
+async def _meal_with_one_item(client, user, food, quantity="100", portion_id=None):
+    item = {"food_id": food.id, "quantity": quantity}
+    if portion_id is not None:
+        item["portion_id"] = portion_id
+    response = await client.post(
+        "/api/meals", headers=auth(user), json=_create_payload(items=[item])
+    )
+    body = response.json()
+    return body["id"], body["items"][0]["id"]
+
+
+async def test_patching_quantity_recomputes_grams_and_totals(client, db_session):
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=user, owner=user, kcal=100)
+    meal_id, item_id = await _meal_with_one_item(client, user, food, quantity="100")
+
+    response = await client.patch(
+        f"/api/meals/{meal_id}/items/{item_id}",
+        headers=auth(user),
+        json={"quantity": "250"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["items"][0]["quantity_g"] == "250.00"
+    assert body["kcal"] == "250.00"
+
+
+async def test_switching_to_a_portion_uses_its_grams(client, db_session):
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=user, owner=user)
+    portion = await create_portion(db_session, food=food, label="碗", grams=150)
+    meal_id, item_id = await _meal_with_one_item(client, user, food, quantity="100")
+
+    response = await client.patch(
+        f"/api/meals/{meal_id}/items/{item_id}",
+        headers=auth(user),
+        json={"portion_id": portion.id, "quantity": "2"},
+    )
+
+    assert response.json()["items"][0]["quantity_g"] == "300.00"
+    assert response.json()["items"][0]["portion_id"] == portion.id
+
+
+async def test_patching_only_quantity_keeps_the_existing_portion(client, db_session):
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=user, owner=user)
+    portion = await create_portion(db_session, food=food, label="碗", grams=150)
+    meal_id, item_id = await _meal_with_one_item(
+        client, user, food, quantity="1", portion_id=portion.id
+    )
+
+    response = await client.patch(
+        f"/api/meals/{meal_id}/items/{item_id}",
+        headers=auth(user),
+        json={"quantity": "2"},
+    )
+
+    assert response.json()["items"][0]["quantity_g"] == "300.00"
+
+
+async def test_explicit_null_portion_switches_back_to_grams(client, db_session):
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=user, owner=user)
+    portion = await create_portion(db_session, food=food, label="碗", grams=150)
+    meal_id, item_id = await _meal_with_one_item(
+        client, user, food, quantity="1", portion_id=portion.id
+    )
+
+    response = await client.patch(
+        f"/api/meals/{meal_id}/items/{item_id}",
+        headers=auth(user),
+        json={"portion_id": None, "quantity": "80"},
+    )
+
+    item = response.json()["items"][0]
+    assert item["portion_id"] is None
+    assert item["quantity_g"] == "80.00"
+
+
+async def test_a_portion_of_another_food_is_rejected(client, db_session):
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=user, owner=user)
+    other_food = await create_food(db_session, created_by=user, owner=user)
+    other_portion = await create_portion(db_session, food=other_food, label="盤", grams=300)
+    meal_id, item_id = await _meal_with_one_item(client, user, food)
+
+    response = await client.patch(
+        f"/api/meals/{meal_id}/items/{item_id}",
+        headers=auth(user),
+        json={"portion_id": other_portion.id},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "PORTION_FOOD_MISMATCH"
+
+
+async def test_explicit_null_quantity_is_rejected(client, db_session):
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=user, owner=user)
+    meal_id, item_id = await _meal_with_one_item(client, user, food)
+
+    response = await client.patch(
+        f"/api/meals/{meal_id}/items/{item_id}",
+        headers=auth(user),
+        json={"quantity": None},
+    )
+
+    assert response.status_code == 422
+
+
+async def test_patching_someone_elses_item_is_404_and_changes_nothing(client, db_session):
+    alice = await create_user(db_session)
+    bob = await create_user(db_session)
+    food = await create_food(db_session, created_by=alice, owner=alice)
+    meal_id, item_id = await _meal_with_one_item(client, alice, food, quantity="100")
+
+    response = await client.patch(
+        f"/api/meals/{meal_id}/items/{item_id}",
+        headers=auth(bob),
+        json={"quantity": "999"},
+    )
+
+    assert response.status_code == 404
+    item = await db_session.get(MealItem, item_id)
+    assert item is not None
+    assert str(item.quantity_g) == "100.00"
+
+
+async def test_patching_an_item_through_another_meal_is_404(client, db_session):
+    """擁有權沿著 meal_items.meal_id 檢查：item 要屬於「這一餐」，
+    不能只因為兩餐都是自己的就放行。"""
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=user, owner=user)
+    _, item_id = await _meal_with_one_item(client, user, food)
+    other_meal_id, _ = await _meal_with_one_item(client, user, food)
+
+    response = await client.patch(
+        f"/api/meals/{other_meal_id}/items/{item_id}",
+        headers=auth(user),
+        json={"quantity": "999"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "MEAL_ITEM_NOT_FOUND"
+
+
+async def test_patching_keeps_the_pinned_revision(client, db_session):
+    """凍結歷史（handover §4.3）：改的是「吃了多少」，不是「用哪一版營養素」。
+    食物後來有了新版本，改數量時仍然用記錄當下那一版。"""
+    admin = await create_user(db_session, role=UserRole.ADMIN)
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=user, kcal=200)  # 全域食物
+    meal_id, item_id = await _meal_with_one_item(client, user, food, quantity="100")
+    pending = await create_pending_revision(db_session, food=food, created_by=admin, kcal=999)
+    approve = await client.post(
+        f"/api/admin/food-revisions/{pending.id}/approve", headers=auth(admin)
+    )
+    assert approve.status_code == 200
+
+    response = await client.patch(
+        f"/api/meals/{meal_id}/items/{item_id}",
+        headers=auth(user),
+        json={"quantity": "50"},
+    )
+
+    assert response.json()["items"][0]["kcal"] == "100.00"  # 200 × 0.5，不是 999 × 0.5

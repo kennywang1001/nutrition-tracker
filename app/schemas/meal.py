@@ -30,6 +30,27 @@ class MealItemCreateRequest(BaseModel):
     portion_id: int | None = Field(default=None, gt=0, le=_MAX_BIGINT)
 
 
+class MealItemUpdateRequest(BaseModel):
+    """`PATCH /api/meals/{id}/items/{item_id}`（編輯餐點規格 §3.1）：只改
+    「吃了多少」。
+
+    **不收 `food_id`**——換食物是刪掉再加一項。`portion_id` 的顯式 null 合法
+    （改回直接輸入數量）；`quantity` 是 NOT NULL，顯式 null 擋在這裡
+    （跟 `MealUpdateRequest` 同一個坑：不擋會一路流到 asyncpg 變成 500）。
+    """
+
+    quantity: Decimal | None = Field(
+        default=None, gt=0, le=10000, max_digits=8, decimal_places=2
+    )
+    portion_id: int | None = Field(default=None, gt=0, le=_MAX_BIGINT)
+
+    @model_validator(mode="after")
+    def _reject_explicit_null_quantity(self) -> "MealItemUpdateRequest":
+        if "quantity" in self.model_fields_set and self.quantity is None:
+            raise ValueError("quantity 可以省略，但不接受 null")
+        return self
+
+
 class MealCreateRequest(BaseModel):
     eaten_at: AwareInstant
     meal_type: MealType
@@ -95,7 +116,8 @@ class MealItemResponse(BaseModel):
     food_name: str
     portion_id: int | None
     # quantity + portion_id 只用於顯示；quantity_g 才是所有計算的依據，
-    # 寫入當下就換算好、之後永不改變（見計畫陷阱 1）。
+    # 寫入時（建立或 PATCH 這一項時）就換算好——讀取時不重算，所以份量後來
+    # 改了重量，舊的紀錄不跟著變（見計畫陷阱 1）。
     quantity: Decimal
     quantity_g: Decimal
     kcal: Decimal

@@ -358,10 +358,12 @@ export interface paths {
          *     省略 `date` 時預設「使用者時區的今天」，靠 `today_in_timezone()` 算，
          *     不是伺服器所在時區的今天，也不是 UTC 的今天。
          *
-         *     兩次查詢，跟這一天有幾筆餐、每筆餐有幾個項目都無關：
+         *     三次查詢，跟這一天有幾筆餐、每筆餐有幾個項目都無關：
          *     第一次查出這天的所有 Meal，第二次用 `meal_id IN (...)` 一次把所有
          *     Meal 的項目、revision、food 都 join 回來，在記憶體裡依 meal_id 分組——
          *     不是對每筆 Meal 各查一次項目（那會是「這天吃了幾餐」次的往返）。
+         *     第三次是 `_costs_by_meal`，同樣用一個 `meal_id IN (...)` 查餐費，
+         *     所以查詢次數仍然不會隨餐數或項目數增加。
          */
         get: operations["list_meals_api_meals_get"];
         put?: never;
@@ -389,7 +391,9 @@ export interface paths {
         post?: never;
         /**
          * Delete Meal
-         * @description 刪一餐。`meal_items` 靠 `ON DELETE CASCADE` 跟著走，這裡不逐筆刪。
+         * @description 刪一餐，連這一餐的餐費一起刪（編輯餐點規格 §3.4）。
+         *
+         *     `meal_items` 靠 `ON DELETE CASCADE` 跟著走，這裡不逐筆刪。
          *
          *     擁有權檢查（`_load_owned_meal`）必須在刪除**之前**：先查到、確認是
          *     自己的，才刪；不能「先刪、再檢查」，那種順序下「回 404」跟「真的沒刪掉」
@@ -406,12 +410,18 @@ export interface paths {
         head?: never;
         /**
          * Update Meal
-         * @description 只改餐點本身：`eaten_at` / `meal_type` / `note`（計畫 3 決定 2）。
+         * @description 改餐點本身：`eaten_at` / `meal_type` / `note`（計畫 3 決定 2），
+         *     以及這一餐的餐費 `cost`（編輯餐點規格 §3.2）。
          *     項目不在這個端點的範圍內 —— 那是 `POST/DELETE .../items` 的事。
+         *
+         *     **餐點的欄位與餐費在同一次 commit**——`test_update_meal_commits_exactly_once`
+         *     會掃。已知的落差：同時改 `eaten_at` 時，**既有**餐費的 `spent_at` 不跟著動
+         *     （前端這次不提供改時間，規格 §1.3）。
          *
          *     用 `exclude_unset` 決定要更新哪些欄位（沒帶的欄位維持原樣），
          *     `MealUpdateRequest` 自己的驗證器已經擋掉 `eaten_at` / `meal_type`
-         *     的顯式 `null`，所以流到這裡的 `None` 只可能是合法的 `note` 清空。
+         *     的顯式 `null`；`cost: null` 在下面先被 pop 出來（代表「刪掉餐費」），
+         *     所以流到 setattr 迴圈的 `None` 只可能是合法的 `note` 清空。
          */
         patch: operations["update_meal_api_meals__meal_id__patch"];
         trace?: never;
@@ -466,7 +476,17 @@ export interface paths {
         delete: operations["delete_meal_item_api_meals__meal_id__items__item_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Update Meal Item
+         * @description 改一個項目的數量或份量（編輯餐點規格 §3.1）。
+         *
+         *     擁有權同 `delete_meal_item`：這一餐是自己的，而且 item 屬於**這一餐**。
+         *
+         *     **`food_revision_id` 不動**——凍結歷史（handover §4.3）：改的是「吃了
+         *     多少」，不是「用哪一版營養素」。`quantity_g` 用跟 `_resolve_item` 同一套
+         *     規則重算：份量看得到、屬於這個食物，`grams × quantity` 四捨五入到分。
+         */
+        patch: operations["update_meal_item_api_meals__meal_id__items__item_id__patch"];
         trace?: never;
     };
     "/api/meals/{meal_id}/photo": {
@@ -1304,6 +1324,21 @@ export interface components {
             /** Carb G */
             carb_g: string;
         };
+        /**
+         * MealItemUpdateRequest
+         * @description `PATCH /api/meals/{id}/items/{item_id}`（編輯餐點規格 §3.1）：只改
+         *     「吃了多少」。
+         *
+         *     **不收 `food_id`**——換食物是刪掉再加一項。`portion_id` 的顯式 null 合法
+         *     （改回直接輸入數量）；`quantity` 是 NOT NULL，顯式 null 擋在這裡
+         *     （跟 `MealUpdateRequest` 同一個坑：不擋會一路流到 asyncpg 變成 500）。
+         */
+        MealItemUpdateRequest: {
+            /** Quantity */
+            quantity?: number | string | null;
+            /** Portion Id */
+            portion_id?: number | null;
+        };
         /** MealResponse */
         MealResponse: {
             /** Id */
@@ -1318,6 +1353,8 @@ export interface components {
             note: string | null;
             /** Photo Path */
             photo_path: string | null;
+            /** Cost */
+            cost: string | null;
             /** Items */
             items: components["schemas"]["MealItemResponse"][];
             /** Kcal */
@@ -1339,15 +1376,16 @@ export interface components {
          * @description `PATCH /api/meals/{id}` 的請求（計畫 3 決定 2）：只改餐點本身，
          *     項目的增刪走另外兩個端點（Task 12），這裡不收 `items`。
          *
-         *     跟 `UpdateMeRequest` 同一種哨兵寫法：三個欄位都是 `X | None = None`，
+         *     跟 `UpdateMeRequest` 同一種哨兵寫法：四個欄位都是 `X | None = None`，
          *     `None` 代表「這次請求沒帶這個欄位」，路由層用
          *     `model_dump(exclude_unset=True)` 決定要更新哪些。
          *
-         *     但跟 `UpdateMeRequest` 不同的是，這裡三個欄位對 NOT NULL 的態度不一樣：
+         *     但跟 `UpdateMeRequest` 不同的是，這裡四個欄位對 NOT NULL 的態度不一樣：
          *     `eaten_at` 與 `meal_type` 是 NOT NULL，顯式 `null` 必須擋在這裡 ——
          *     否則會一路流到 `setattr`，撞上 `asyncpg.NotNullViolationError` 變成
          *     已認證使用者就能觸發的 500（`UpdateMeRequest` 踩過的同一個坑）。
          *     `note` 是 nullable，`{"note": null}` 是合法輸入、必須放行到底。
+         *     `cost` 也是：`null` 代表刪掉這一餐的餐費。
          */
         MealUpdateRequest: {
             /** Eaten At */
@@ -1355,6 +1393,8 @@ export interface components {
             meal_type?: components["schemas"]["MealType"] | null;
             /** Note */
             note?: string | null;
+            /** Cost */
+            cost?: number | string | null;
         };
         /**
          * NullableMacrosResponse
@@ -2748,6 +2788,42 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_meal_item_api_meals__meal_id__items__item_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                meal_id: number;
+                item_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MealItemUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MealResponse"];
+                };
             };
             /** @description Validation Error */
             422: {

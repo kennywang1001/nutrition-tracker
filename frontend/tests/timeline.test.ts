@@ -10,6 +10,7 @@ function meal(id: number, eatenAt: string): Meal {
 		meal_type: "lunch",
 		note: null,
 		photo_path: null,
+		cost: null,
 		items: [],
 		kcal: "500.00",
 		protein_g: "0.00",

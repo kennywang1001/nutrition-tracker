@@ -28,6 +28,7 @@ from app.schemas.meal import (
     MealCreateRequest,
     MealItemCreateRequest,
     MealItemResponse,
+    MealItemUpdateRequest,
     MealResponse,
     MealUpdateRequest,
 )
@@ -525,6 +526,64 @@ async def add_meal_item(
     )
     db.add(item)
     await db.commit()
+
+    rows = (
+        await db.execute(
+            _item_join_query().where(MealItem.meal_id == meal.id).order_by(MealItem.id)
+        )
+    ).all()
+    costs = await _costs_by_meal(db, [meal.id])
+    return _build_meal_response(meal, rows, costs.get(meal.id))
+
+
+@router.patch("/{meal_id}/items/{item_id}", response_model=MealResponse)
+async def update_meal_item(
+    meal_id: ResourceId,
+    item_id: ResourceId,
+    payload: MealItemUpdateRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MealResponse:
+    """改一個項目的數量或份量（編輯餐點規格 §3.1）。
+
+    擁有權同 `delete_meal_item`：這一餐是自己的，而且 item 屬於**這一餐**。
+
+    **`food_revision_id` 不動**——凍結歷史（handover §4.3）：改的是「吃了
+    多少」，不是「用哪一版營養素」。`quantity_g` 用跟 `_resolve_item` 同一套
+    規則重算：份量看得到、屬於這個食物，`grams × quantity` 四捨五入到分。
+    """
+    meal = await _load_owned_meal(db, meal_id, user)
+
+    item = await db.scalar(
+        select(MealItem).where(MealItem.id == item_id, MealItem.meal_id == meal.id)
+    )
+    if item is None:
+        raise NotFoundError("MEAL_ITEM_NOT_FOUND", "找不到該項目")
+
+    changes = payload.model_dump(exclude_unset=True)
+    quantity: Decimal = changes.get("quantity", item.quantity)
+    portion_id: int | None = changes.get("portion_id", item.portion_id)
+
+    if portion_id is None:
+        quantity_g = quantity
+    else:
+        revision = await db.get(FoodRevision, item.food_revision_id)
+        portion = await load_visible_portion(db, portion_id, user)
+        if revision is None or portion.food_id != revision.food_id:
+            raise UnprocessableEntityError(
+                "PORTION_FOOD_MISMATCH", "這個份量不屬於指定的食物"
+            )
+        quantity_g = (portion.grams * quantity).quantize(_CENTS, rounding=ROUND_HALF_UP)
+
+    item.quantity = quantity
+    item.portion_id = portion_id
+    item.quantity_g = quantity_g
+    await db.commit()
+    await db.refresh(meal)
+    # expire_on_commit=False：不 refresh 的話，下面的 join 查詢從 identity map
+    # 拿回同一個 item，數量還是使用者給的精度（"250"），不是 NUMERIC(8,2) 的
+    # "250.00"——跟 _item_response 註解裡說的是同一個坑。
+    await db.refresh(item)
 
     rows = (
         await db.execute(
