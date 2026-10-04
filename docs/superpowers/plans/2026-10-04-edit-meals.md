@@ -3363,8 +3363,8 @@ function AddItem({ mealId, onClose }: { mealId: number; onClose: () => void }) {
 		<div className={styles.editor}>
 			<FoodPicker
 				onSelect={(selected) => {
+					// 換食物時份量選擇由 usePortionQuantity 自己重設（Task 4 審查後的修正）。
 					setFood(selected);
-					portion.resetChoice();
 					add.reset();
 				}}
 			/>

@@ -2,7 +2,7 @@
 
 **專案：** nutrition-tracker —— 飲食紀錄系統
 **Repo：** https://github.com/kennywang1001/nutrition-tracker（公開）
-**狀態：** 後端完成並可部署、session 撤銷已完成；前端介面改版第一階段（`feat/ui-redesign-phase1`）已實作完成，待合併
+**狀態：** 後端完成並可部署、session 撤銷已完成；介面改版第一階段、食物的一份已上線；修改與刪除已記錄的餐點已實作於 `feat/edit-meals`
 **文件產出日：** 2026-09-11（session 撤銷完成後更新於 2026-09-12）
 
 ---
@@ -46,6 +46,7 @@
 | **P3 介面** | **PWA（TypeScript + React）** | 🟡 **P3-A ✅、P3-B 計畫一 ✅、計畫二待 PR** |
 | P4 上線 | NAS 部署 + Tailscale | ✅ |
 | **UI 改版 第一階段** | tab bar 總覽｜報表｜＋｜飲食｜我的；MOZE 風格外觀（設計變數 + 深色模式，跟隨系統）；自訂數字鍵盤記帳；記一餐可選填照片；總覽時間線（規格 `docs/superpowers/specs/2026-10-02-ui-redesign-phase1-design.md`、計畫 `docs/superpowers/plans/2026-10-02-ui-redesign-phase1.md`） | ✅ 已實作於 `feat/ui-redesign-phase1`，待合併 |
+| 修改與刪除已記錄的餐點 | 編輯畫面 `/meals/:id/edit`：改份量或數量、加刪項目、改餐別、改金額（改、補、拿掉）、換或刪照片、刪整餐（連餐費）。入口：飲食頁卡片的「編輯」、總覽時間線的餐點列（規格 `docs/superpowers/specs/2026-10-04-edit-meals-design.md`、計畫 `docs/superpowers/plans/2026-10-04-edit-meals.md`） | ✅ 已實作於 `feat/edit-meals` |
 | UI 改版 第二階段 | 圖表與其餘畫面換新外觀 | ⬜ |
 | UI 改版 第三階段 | 社群（P7），草稿在分支 `docs/p7-social-decisions` | ⬜ |
 
@@ -224,7 +225,7 @@ userland proxy 對發佈的埠做 SNAT）。按 IP 限速會把 tailnet 上所�
 
 ---
 
-## 6. 這個專案最有價值的產出：四十八種「綠燈說謊」
+## 6. 這個專案最有價值的產出：五十種「綠燈說謊」
 
 **每一種的機制都不同，而且都是實測踩到的，不是理論。**
 新加的任何測試都應該對照這份清單檢查一次。
@@ -723,6 +724,21 @@ monkeypatch 讓份量的 grams 變成 -1，在 commit 時被 CHECK 擋下，再�
 `getByLabelText` 預設是完整比對，所以單元測試完全看不出來（9714183 與 trend
 那一筆 ce38e06）。
 
+### 第 49、50 種是「修改與刪除已記錄的餐點」長出來的
+
+**第 49 種：比的是算出來的數字，回應的精度從來沒人看。** `POST /api/meals/{id}/items`
+從 P1 起就回 `quantity_g: "100"`，不是 `"100.00"`——session 是
+`expire_on_commit=False`，新建的項目沒有 refresh，join 查詢從 identity map 拿回
+記憶體裡使用者給的 `Decimal`。既有測試只斷言 kcal 與總計（那些是重新算的），
+所以一直綠。新的 PATCH 一項端點寫計畫時就踩到同一個坑才回頭發現（96d136a）。
+
+**第 50 種：斷言「呼叫了 `removeQueries`」，證明不了「沒有重抓」。** 刪照片的
+測試 spy 到 `removeQueries(mealPhoto)` 有被呼叫，就綠了；但照片預覽還掛著，
+下一次 render 把剛移除的 query 重建、又抓了一次已經刪掉的照片（404）——正好是
+那一行註解說要避免的事。品質審查直接跑 query-core 才看到。有鑑別力的斷言是數
+`GET .../photo` 的次數（9d51747）。斷言「做了某個動作」跟斷言「那個動作要達成
+的效果」是兩件事。
+
 ---
 
 ## 7. 踩過的技術坑（節錄，完整版在各計畫文件）
@@ -810,7 +826,19 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
 - **孤兒照片的背景清理排程**：指令已有（`python -m app.cli cleanup-photos`），
   cron 設定寫在部署手冊，但**必須在容器內執行**（照片在 Docker volume，
   在 host 跑會看錯目錄）。
-- **`meal_items` 的修改端點**：目前改數量 = 刪掉再加。
+- **修改與刪除已記錄的餐點：已完成**（見階段進度）。已知的缺口：
+  - 不能改時間（規格 §1.3）。後端的 `PATCH /api/meals/{id}` 可以改 `eaten_at`，
+    但**既有餐費的 `spent_at` 不跟著動**。
+  - 兩個請求同時替同一餐補金額（原本沒有餐費），可能建出兩筆支出——
+    `expenses.meal_id` 沒有唯一約束。可加 partial unique index
+    `expenses(meal_id) WHERE meal_id IS NOT NULL`。
+  - 份量重量（≤10000）× 數量（≤10000）可能超過 `meal_items.quantity_g` 的
+    `Numeric(8,2)`（999,999.99），asyncpg `DataError` 變成 500——POST 與 PATCH
+    項目都有（P1 就存在）。
+  - 編輯畫面：`useMeal`／`useFood` 遇到 404 仍然重試 3 次（約 7 秒才顯示
+    「找不到這一餐」）；確認框沒有移動焦點（跟報表頁一樣）；從清單點進來仍會先
+    看到「載入中」（可用清單快取當 `placeholderData`）；改項目後要等五個 query
+    重抓完編輯器才收起。
 - **照片縮圖**：清單頁載入多張 1280px 圖會慢，等前端量到再說。
 - **速率限制的計數器不持久**：單容器記憶體，重啟歸零。這個規模可接受。
 - **`GET /api/foods/frequent` 的可見性過濾今天是空轉的** ——
