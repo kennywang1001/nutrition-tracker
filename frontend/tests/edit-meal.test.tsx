@@ -55,6 +55,27 @@ const RICE = {
 	},
 };
 
+const BOWL = {
+	id: 8,
+	label: "碗",
+	grams: "150.00",
+	is_default: true,
+	is_global: true,
+};
+
+const WHITE_RICE = { ...RICE, id: 3, name: "白飯" };
+
+const PORTION_MISMATCH = json(
+	{
+		error: {
+			code: "PORTION_FOOD_MISMATCH",
+			message: "這個份量不屬於指定的食物",
+			details: {},
+		},
+	},
+	422,
+);
+
 /** `extra` 排在前面：`mockApi` 依序用 `url.includes` 比對，而
  *  `/api/meals/5/photo`、`/api/meals/5/items/51` 都「包含」`/api/meals/5`。 */
 function routes(
@@ -703,5 +724,237 @@ describe("編輯這一餐：其他", () => {
 
 		expect(await screen.findByText("上傳中…")).toBeInTheDocument();
 		release();
+	});
+});
+
+describe("編輯這一餐：項目", () => {
+	/** 這一項的份量清單有一個公開的預設份量「碗」。 */
+	function itemRoutes(patch: () => Response = () => json(MEAL)) {
+		return routes(MEAL, [
+			{ method: "PATCH", path: "/api/meals/5/items/51", handler: patch },
+			{
+				method: "DELETE",
+				path: "/api/meals/5/items/51",
+				handler: () => new Response(null, { status: 204 }),
+			},
+			{ path: "/api/foods/1/portions", handler: () => json([BOWL]) },
+		]);
+	}
+
+	async function openEditor() {
+		await userEvent.click(
+			await screen.findByRole("button", { name: "修改滷肉飯" }),
+		);
+		const editor = screen.getByRole("form", { name: "修改滷肉飯" });
+		await within(editor).findByRole("option", { name: "碗" });
+		return editor;
+	}
+
+	it("改數量：帶入目前的值、預設份量不蓋掉它，PATCH 帶 quantity 與 portion_id", async () => {
+		const fetchMock = mockApi(itemRoutes());
+		const client = renderEditMeal();
+		const invalidate = vi.spyOn(client, "invalidateQueries");
+
+		const editor = await openEditor();
+		// 這一項當初是「直接輸入 200 g」：食物後來才有的預設份量「碗」
+		// 不能把它變成 200 碗。
+		expect(within(editor).getByLabelText("份量選項")).toHaveValue("");
+		const quantity = within(editor).getByLabelText("份量");
+		expect(quantity).toHaveValue("200");
+		await userEvent.clear(quantity);
+		await userEvent.type(quantity, "250");
+		await userEvent.click(within(editor).getByRole("button", { name: "儲存" }));
+
+		await waitFor(() =>
+			expect(bodyOf(fetchMock, "PATCH", "/api/meals/5/items/51")).toEqual({
+				quantity: "250",
+				portion_id: null,
+			}),
+		);
+		await waitFor(() =>
+			expect(keysOf(invalidate)).toEqual(
+				expect.arrayContaining([
+					queryKeys.meals,
+					queryKeys.dailyStats,
+					queryKeys.rangeStatsAll,
+					queryKeys.frequentFoods,
+					queryKeys.recentFoods,
+				]),
+			),
+		);
+		// 改項目不動餐費。
+		expect(keysOf(invalidate)).not.toContainEqual(queryKeys.expensesAll);
+		// 存好就收起來。
+		await waitFor(() =>
+			expect(
+				screen.queryByRole("form", { name: "修改滷肉飯" }),
+			).not.toBeInTheDocument(),
+		);
+	});
+
+	it("改成某個份量：送那個份量的 id", async () => {
+		const fetchMock = mockApi(itemRoutes());
+		renderEditMeal();
+
+		const editor = await openEditor();
+		await userEvent.selectOptions(
+			within(editor).getByLabelText("份量選項"),
+			"8",
+		);
+		const quantity = within(editor).getByLabelText("份量");
+		await userEvent.clear(quantity);
+		await userEvent.type(quantity, "1");
+		await userEvent.click(within(editor).getByRole("button", { name: "儲存" }));
+
+		await waitFor(() =>
+			expect(bodyOf(fetchMock, "PATCH", "/api/meals/5/items/51")).toEqual({
+				quantity: "1",
+				portion_id: 8,
+			}),
+		);
+	});
+
+	it("原本用份量記的一項：帶入那個份量與份數", async () => {
+		mockApi(
+			routes(
+				{
+					...MEAL,
+					items: [{ ...ITEM, portion_id: 8, quantity: "1.50" }],
+				},
+				[{ path: "/api/foods/1/portions", handler: () => json([BOWL]) }],
+			),
+		);
+		renderEditMeal();
+
+		const editor = await openEditor();
+		expect(within(editor).getByLabelText("份量選項")).toHaveValue("8");
+		expect(within(editor).getByLabelText("份量")).toHaveValue("1.5");
+	});
+
+	it("份量不屬於這個食物：說清楚", async () => {
+		mockApi(itemRoutes(() => PORTION_MISMATCH));
+		renderEditMeal();
+
+		const editor = await openEditor();
+		await userEvent.click(within(editor).getByRole("button", { name: "儲存" }));
+
+		expect(
+			await within(editor).findByText("這個份量不屬於這個食物"),
+		).toBeInTheDocument();
+	});
+
+	it("數量格式錯誤：指到數量，不說成金額錯誤", async () => {
+		mockApi(itemRoutes(() => validationError(["body", "quantity"])));
+		renderEditMeal();
+
+		const editor = await openEditor();
+		await userEvent.click(within(editor).getByRole("button", { name: "儲存" }));
+
+		expect(
+			await within(editor).findByText(
+				"數量要大於 0、不超過 10000，最多兩位小數",
+			),
+		).toBeInTheDocument();
+		expect(screen.queryByText(AMOUNT_FORMAT_ERROR)).not.toBeInTheDocument();
+	});
+
+	it("放棄：收起來，不送", async () => {
+		const fetchMock = mockApi(itemRoutes());
+		renderEditMeal();
+
+		const editor = await openEditor();
+		await userEvent.click(within(editor).getByRole("button", { name: "放棄" }));
+
+		expect(
+			screen.queryByRole("form", { name: "修改滷肉飯" }),
+		).not.toBeInTheDocument();
+		expect(calls(fetchMock, "PATCH", "/api/meals/5/items/51")).toHaveLength(0);
+	});
+
+	it("同一時間只開一個編輯器：打開「加一項」就收起正在改的那一項", async () => {
+		mockApi(itemRoutes());
+		renderEditMeal();
+
+		await openEditor();
+		await userEvent.click(screen.getByRole("button", { name: "＋ 加一項" }));
+
+		expect(
+			screen.queryByRole("form", { name: "修改滷肉飯" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("刪除一項要先確認；取消就不送", async () => {
+		const fetchMock = mockApi(itemRoutes());
+		renderEditMeal();
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "刪除滷肉飯" }),
+		);
+		const dialog = screen.getByRole("alertdialog", { name: "確認刪除滷肉飯" });
+		await userEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+
+		expect(calls(fetchMock, "DELETE", "/api/meals/5/items/51")).toHaveLength(0);
+	});
+
+	it("確認刪除一項：送 DELETE，失效營養素相關的 query", async () => {
+		const fetchMock = mockApi(itemRoutes());
+		const client = renderEditMeal();
+		const invalidate = vi.spyOn(client, "invalidateQueries");
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "刪除滷肉飯" }),
+		);
+		const dialog = screen.getByRole("alertdialog", { name: "確認刪除滷肉飯" });
+		await userEvent.click(
+			within(dialog).getByRole("button", { name: "確定刪除" }),
+		);
+
+		await waitFor(() =>
+			expect(calls(fetchMock, "DELETE", "/api/meals/5/items/51")).toHaveLength(
+				1,
+			),
+		);
+		await waitFor(() =>
+			expect(keysOf(invalidate)).toEqual(
+				expect.arrayContaining([queryKeys.meals, queryKeys.dailyStats]),
+			),
+		);
+	});
+
+	it("加一項：選食物、填數量，POST 到這一餐", async () => {
+		const fetchMock = mockApi(
+			routes(MEAL, [
+				{
+					method: "POST",
+					path: "/api/meals/5/items",
+					handler: () => json(MEAL, 201),
+				},
+				{ path: "/api/foods/frequent", handler: () => json([WHITE_RICE]) },
+				{ path: "/api/foods/3/portions", handler: () => json([]) },
+			]),
+		);
+		const client = renderEditMeal();
+		const invalidate = vi.spyOn(client, "invalidateQueries");
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "＋ 加一項" }),
+		);
+		await userEvent.click(await screen.findByRole("button", { name: "白飯" }));
+		const form = screen.getByRole("form", { name: "加一項" });
+		expect(within(form).getByText("已選擇：白飯")).toBeInTheDocument();
+		const quantity = within(form).getByLabelText("份量");
+		await userEvent.clear(quantity);
+		await userEvent.type(quantity, "150");
+		await userEvent.click(within(form).getByRole("button", { name: "加入" }));
+
+		await waitFor(() =>
+			expect(bodyOf(fetchMock, "POST", "/api/meals/5/items")).toEqual({
+				food_id: 3,
+				quantity: "150",
+			}),
+		);
+		await waitFor(() =>
+			expect(keysOf(invalidate)).toContainEqual(queryKeys.dailyStats),
+		);
 	});
 });
