@@ -69,9 +69,15 @@
 
 /* 整列可以點：連結本身就是那一格，不是裡面某個字。 */
 .rowLink {
+	box-sizing: border-box;
 	min-height: 44px;
 	color: inherit;
 	text-decoration: none;
+}
+
+.rowLink:hover,
+.rowLink:active {
+	background: var(--color-accent-soft);
 }
 
 .row > :first-child {

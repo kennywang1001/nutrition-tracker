@@ -135,6 +135,12 @@ describe("今日餐點清單", () => {
 
 		// MEALS 有兩餐，所以有兩個連結，各連到自己那一餐。
 		const links = await screen.findAllByRole("link", { name: /^編輯/ });
+		// 名稱要帶餐別（時間依時區，用正規表示式）：沒有 aria-label 的話
+		// 名稱只剩「編輯」，螢幕閱讀器分不出是哪一餐。
+		expect(links.map((link) => link.getAttribute("aria-label"))).toEqual([
+			expect.stringMatching(/^編輯 .+ 午餐$/),
+			expect.stringMatching(/^編輯 .+ 晚餐$/),
+		]);
 		expect(links.map((link) => link.getAttribute("href"))).toEqual([
 			"/meals/11/edit",
 			"/meals/12/edit",
