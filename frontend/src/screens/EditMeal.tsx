@@ -98,9 +98,14 @@ function MealDetailsForm({ meal }: { meal: Meal }) {
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify(body),
 			}),
-		onSuccess: (_meal, body) => {
-			// 先清草稿：之後顯示的就是伺服器的值（重抓回來之前先顯示舊值，
-			// 重抓完換成新值）；「儲存」因為沒有草稿而 disabled。
+		onSuccess: (updated, body) => {
+			// PATCH 的回應就是更新後的整餐：先寫進這一餐的快取，再清草稿。
+			// 只清草稿的話，重抓回來之前表單會閃回舊的伺服器值（慢速連線上
+			// 使用者會以為沒存成功）。重抓（下面的失效）照樣做：今日清單與
+			// 其他快取還需要它。
+			if (updated != null) {
+				queryClient.setQueryData(queryKeys.meal(meal.id), updated);
+			}
 			setMealType(undefined);
 			setCost(undefined);
 			setNote(undefined);

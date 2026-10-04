@@ -532,6 +532,45 @@ describe("編輯這一餐：草稿只記動過的欄位", () => {
 		expect(screen.getByRole("button", { name: "儲存" })).toBeDisabled();
 	});
 
+	it("存好之後直接用 PATCH 的回應更新表單，不等重抓、不閃回舊值", async () => {
+		const updated = { ...MEAL, cost: "200.00" };
+		const fetchMock = mockApi(
+			routes(MEAL, [
+				{ method: "PATCH", path: "/api/meals/5", handler: () => json(updated) },
+			]),
+		);
+		// 存好之後的重抓（invalidate）刻意卡住：慢速連線上，重抓回來之前使用者
+		// 看到的就是快取裡的值。沒有用回應更新快取的話，那會是舊的 180.00。
+		const real = fetchMock.getMockImplementation();
+		let patched = false;
+		let release: () => void = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		fetchMock.mockImplementation(async (input, init) => {
+			const method = (init?.method ?? "GET").toUpperCase();
+			if (method === "PATCH") patched = true;
+			if (
+				method === "GET" &&
+				patched &&
+				String(input).endsWith("/api/meals/5")
+			) {
+				await gate;
+			}
+			return real === undefined ? fetch(input, init) : real(input, init);
+		});
+		renderEditMeal();
+
+		const cost = await screen.findByLabelText("金額（選填）");
+		await userEvent.clear(cost);
+		await userEvent.type(cost, "200");
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		expect(await screen.findByText("已儲存")).toBeInTheDocument();
+		expect(screen.getByLabelText("金額（選填）")).toHaveValue("200.00");
+		release();
+	});
+
 	it("另一台裝置改了餐別：沒動過的欄位跟著伺服器，不會變成「有改動」", async () => {
 		let current: typeof MEAL = MEAL;
 		mockApi(routes(() => current));
