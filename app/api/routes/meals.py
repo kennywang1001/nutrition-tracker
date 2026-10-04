@@ -417,10 +417,12 @@ async def list_meals(
     省略 `date` 時預設「使用者時區的今天」，靠 `today_in_timezone()` 算，
     不是伺服器所在時區的今天，也不是 UTC 的今天。
 
-    兩次查詢，跟這一天有幾筆餐、每筆餐有幾個項目都無關：
+    三次查詢，跟這一天有幾筆餐、每筆餐有幾個項目都無關：
     第一次查出這天的所有 Meal，第二次用 `meal_id IN (...)` 一次把所有
     Meal 的項目、revision、food 都 join 回來，在記憶體裡依 meal_id 分組——
     不是對每筆 Meal 各查一次項目（那會是「這天吃了幾餐」次的往返）。
+    第三次是 `_costs_by_meal`，同樣用一個 `meal_id IN (...)` 查餐費，
+    所以查詢次數仍然不會隨餐數或項目數增加。
     """
     day = date or today_in_timezone(user.timezone)
     start, end = day_bounds(day, user.timezone)
