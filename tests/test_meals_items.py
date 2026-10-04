@@ -426,3 +426,41 @@ async def test_patching_keeps_the_pinned_revision(client, db_session):
     )
 
     assert response.json()["items"][0]["kcal"] == "100.00"  # 200 × 0.5，不是 999 × 0.5
+
+
+async def test_patching_to_someone_elses_private_portion_is_not_found(client, db_session):
+    alice = await create_user(db_session)
+    bob = await create_user(db_session)
+    food = await create_food(db_session, created_by=alice)  # 全域食物，兩人都看得到
+    bobs_portion = await create_portion(db_session, food=food, owner=bob, grams=500)
+    meal_id, item_id = await _meal_with_one_item(client, alice, food, quantity="100")
+
+    response = await client.patch(
+        f"/api/meals/{meal_id}/items/{item_id}",
+        headers=auth(alice),
+        json={"portion_id": bobs_portion.id, "quantity": "2"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "PORTION_NOT_FOUND"
+    item = await db_session.get(MealItem, item_id)
+    assert item is not None
+    await db_session.refresh(item)
+    assert str(item.quantity_g) == "100.00"
+    assert item.portion_id is None
+
+
+async def test_added_item_comes_back_with_stored_precision(client, db_session):
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=user, owner=user)
+    meal_id, _ = await _meal_with_one_item(client, user, food, quantity="50")
+
+    response = await client.post(
+        f"/api/meals/{meal_id}/items",
+        headers=auth(user),
+        json={"food_id": food.id, "quantity": "100"},
+    )
+
+    added = response.json()["items"][-1]
+    assert added["quantity"] == "100.00"
+    assert added["quantity_g"] == "100.00"
