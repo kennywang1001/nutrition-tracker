@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ApiError, parseErrorResponse } from "../src/api/errors";
+import { ApiError, hasFieldError, parseErrorResponse } from "../src/api/errors";
 
 function jsonResponse(
 	status: number,
@@ -108,5 +108,34 @@ describe("parseErrorResponse", () => {
 		const error = await parseErrorResponse(response);
 
 		expect(error.code).toBe("UNPARSEABLE_ERROR");
+	});
+});
+
+describe("hasFieldError", () => {
+	function validationError(locs: unknown[]) {
+		return new ApiError(422, "VALIDATION_ERROR", "格式錯誤", {
+			errors: locs.map((loc) => ({ loc, msg: "x" })),
+		});
+	}
+
+	it("loc 裡有這個欄位名就是", () => {
+		expect(hasFieldError(validationError([["body", "cost"]]), "cost")).toBe(
+			true,
+		);
+	});
+
+	it("別的欄位不算——份量填錯不能被說成金額錯誤", () => {
+		expect(
+			hasFieldError(
+				validationError([["body", "items", 0, "quantity"]]),
+				"cost",
+			),
+		).toBe(false);
+	});
+
+	it("details 沒有 errors 陣列時不丟例外", () => {
+		expect(
+			hasFieldError(new ApiError(422, "VALIDATION_ERROR", "x"), "cost"),
+		).toBe(false);
 	});
 });

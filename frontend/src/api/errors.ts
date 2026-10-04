@@ -95,3 +95,22 @@ export async function parseErrorResponse(
 		retryAfter,
 	);
 }
+
+/** 422 `VALIDATION_ERROR` 是不是出在某個欄位（看 `details.errors[].loc`）。
+ *
+ *  一個請求可能有好幾個欄位會被擋——記一餐的 `cost` 與 `items[0].quantity`
+ *  是同一次 POST——只有真的是那個欄位才顯示那個欄位的訊息，不然份量填錯
+ *  會被誤報成「金額格式不對」。原本是 `LogMeal.tsx` 裡的
+ *  `isCostValidationError`，編輯餐點也要用，所以搬到這裡。
+ *
+ *  **不看 `error.code`**：呼叫端自己判斷是不是 `VALIDATION_ERROR`
+ *  （跟原本的函式一樣）。 */
+export function hasFieldError(error: ApiError, field: string): boolean {
+	const raw = error.details.errors;
+	if (!Array.isArray(raw)) return false;
+	return raw.some((item) => {
+		if (typeof item !== "object" || item === null) return false;
+		const loc = (item as { loc?: unknown }).loc;
+		return Array.isArray(loc) && loc.includes(field);
+	});
+}

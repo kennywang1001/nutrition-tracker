@@ -1,10 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Camera } from "lucide-react";
 import { type ChangeEvent, useEffect, useState } from "react";
 import { apiFetch } from "../api/client";
-import { ApiError } from "../api/errors";
+import { ApiError, hasFieldError } from "../api/errors";
 import { AMOUNT_FORMAT_ERROR } from "../api/expenses";
-import { useFoodSearch } from "../api/foods";
 import {
 	MAX_PHOTO_BYTES,
 	PhotoTooLargeError,
@@ -12,14 +11,14 @@ import {
 } from "../api/photos";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
-import { FoodResultList } from "../components/FoodResultList";
-import { formatMacro } from "../lib/decimal";
-import { pickDefaultPortion } from "../lib/portions";
-import { useDebounced } from "../lib/use-debounced";
+import { FoodPicker } from "../components/FoodPicker";
+import {
+	PortionQuantityFields,
+	usePortionQuantity,
+} from "../components/PortionQuantityFields";
 import styles from "./LogMeal.module.css";
 
 type Food = components["schemas"]["FoodResponse"];
-type Portion = components["schemas"]["PortionResponse"];
 type MealResponse = components["schemas"]["MealResponse"];
 type MealType = components["schemas"]["MealType"];
 
@@ -39,77 +38,10 @@ const MEAL_TYPES: Array<{ value: MealType; label: string }> = [
 	{ value: "snack", label: "點心" },
 ];
 
-/** `FoodResponse.nutrition` 為 `null` 時要顯示的說明。跟 `FoodDetail.tsx`
- *  「目前生效的營養素」區塊的空狀態用同一句文字——不重寫一份是為了不讓
- *  兩處的說法飄走。 */
-const NO_REVISION_MESSAGE = "這個食物還沒有生效的營養素資料";
-
-/** `VALIDATION_ERROR` 可能來自 `cost`，也可能來自 `items[0].quantity`——
- *  兩者是同一次 POST 的不同欄位。看 `details.errors` 的 `loc` 確認錯誤
- *  真的是 `cost` 才顯示金額專屬訊息，不然份量填錯會被誤報成「金額格式
- *  不對」。 */
-function isCostValidationError(error: ApiError): boolean {
-	const raw = error.details.errors;
-	if (!Array.isArray(raw)) return false;
-	return raw.some((item) => {
-		if (typeof item !== "object" || item === null) return false;
-		const loc = (item as { loc?: unknown }).loc;
-		return Array.isArray(loc) && loc.includes("cost");
-	});
-}
-
-/** 一個食物項目的營養素預覽，同時決定這個食物能不能被選。
- *
- *  **`nutrition` 可以是 `null`**（`FoodResponse.nutrition` 的註解：「沒有生效
- *  版本時為 None——全域食物的初版被駁回就會是這個狀態」）。這不是理論上的
- *  邊界情況，是後端明寫的合法狀態。
- *
- *  **這種食物不能被選。** 舊版這裡的註解寫「仍然要能被選、只是不顯示
- *  預覽」——那句話是錯的，而且是實測確認過的錯：`search_foods` /
- *  `list_frequent_foods` / `list_recent_foods` 三個列表端點都用
- *  `outerjoin`，沒有一個把它過濾掉，所以這種食物「查得到」；但
- *  `POST /api/meals` 對它一律回 `409 FOOD_HAS_NO_REVISION`
- *  （`app/api/routes/meals.py`），所以「記不了」。照舊版寫法做的話，
- *  使用者會選了食物、填好份量、按下「記錄」，然後看到 `onError` 的通用
- *  訊息「記錄失敗，請再試一次」——而再試一次永遠不會成功。
- *
- *  所以按鈕（見 `selectFood` 的呼叫端）要 `disabled`，這裡旁邊要講清楚
- *  原因。`409 FOOD_HAS_NO_REVISION` 仍然要具名處理（見 `saveMeal` 的
- *  `onError`）——disabled 擋的是送出當下已知的狀態，搜尋到送出之間，
- *  食物有可能剛好失去生效版本，具名 409 是後備，兩者都要。 */
-function NutritionPreview({ nutrition }: { nutrition: Food["nutrition"] }) {
-	if (nutrition === null) {
-		return <span className="food-no-nutrition">{NO_REVISION_MESSAGE}</span>;
-	}
-	return <span>{formatMacro(nutrition.kcal)} kcal</span>;
-}
-
-function dedupeById(lists: Food[][]): Food[] {
-	const seen = new Set<number>();
-	const result: Food[] = [];
-	for (const list of lists) {
-		for (const food of list) {
-			if (seen.has(food.id)) continue;
-			seen.add(food.id);
-			result.push(food);
-		}
-	}
-	return result;
-}
-
 export function LogMeal({ onSaved }: Props) {
 	const queryClient = useQueryClient();
 	const [selectedFood, setSelectedFood] = useState<Food | null>(null);
-	// 份量的選擇（食物份量規格 §6）：
-	//   null     → 使用者還沒動過，用推導出來的預設份量（有的話）
-	//   "manual" → 使用者選了「直接輸入數量」
-	//   number   → 使用者選了某個份量
-	// **不用 effect 在份量清單到的時候寫 state**：預設份量是從清單推導的，
-	// 使用者一旦手動選過就以使用者為準，不會被重新抓到的清單蓋回去。
-	const [portionChoice, setPortionChoice] = useState<number | "manual" | null>(
-		null,
-	);
-	const [quantity, setQuantity] = useState("1");
+	const portion = usePortionQuantity(selectedFood?.id ?? null);
 	// 選填的餐費（P5 規格 §4.1）。有值時 POST /api/meals 會在同一個交易裡
 	// 建一筆 category=food、meal_id 指過來的支出。
 	const [cost, setCost] = useState("");
@@ -143,40 +75,6 @@ export function LogMeal({ onSaved }: Props) {
 	}
 	const [mealType, setMealType] = useState<MealType>("snack");
 	const [error, setError] = useState<string | null>(null);
-	const [searchInput, setSearchInput] = useState("");
-
-	// P1 規格第 11 節：這兩個端點的索引就是為了這個畫面顧的——
-	// 「記一餐」是每天走最多次的路徑（規格 §7.1）。
-	const frequentQuery = useQuery({
-		queryKey: queryKeys.frequentFoods,
-		queryFn: () => apiFetch<Food[]>("/api/foods/frequent"),
-	});
-	const recentQuery = useQuery({
-		queryKey: queryKeys.recentFoods,
-		queryFn: () => apiFetch<Food[]>("/api/foods/recent"),
-	});
-
-	// 規格 §5.4：跟食物庫共用同一支 useFoodSearch query hook，不共用元件——
-	// 兩邊選完之後的去向不一樣（這裡進份量輸入，食物庫進詳情頁）。
-	// 這裡不給 scope 選擇器：記一餐要的是「這個字能不能找到食物」，
-	// 不是像食物庫那樣要瀏覽「我建立的」跟「公開的」的差異。
-	const debouncedSearch = useDebounced(searchInput, 300);
-	const hasSearchQuery = debouncedSearch.trim() !== "";
-	const searchQuery = useFoodSearch(debouncedSearch, "all");
-
-	const portionsQuery = useQuery({
-		queryKey: queryKeys.portions(selectedFood?.id ?? 0),
-		queryFn: () =>
-			apiFetch<Portion[]>(`/api/foods/${selectedFood?.id}/portions`),
-		enabled: selectedFood !== null,
-	});
-
-	const defaultPortion = pickDefaultPortion(portionsQuery.data ?? []);
-	const portionId =
-		portionChoice === "manual"
-			? null
-			: (portionChoice ?? defaultPortion?.id ?? null);
-
 	const saveMeal = useMutation({
 		mutationFn: async () => {
 			if (selectedFood === null) {
@@ -196,11 +94,13 @@ export function LogMeal({ onSaved }: Props) {
 						{
 							food_id: selectedFood.id,
 							// 數值一律以字串送出（規格 §5.1），不要 Number()。
-							quantity,
+							quantity: portion.quantity,
 							// quantity_g 不在這裡算——伺服器在寫入當下算好並凍結
 							// （交接文件 §4.3）。前端算一次就是把「凍結歷史」
 							// 這個保證從另一頭破壞掉。
-							...(portionId !== null ? { portion_id: portionId } : {}),
+							...(portion.portionId !== null
+								? { portion_id: portion.portionId }
+								: {}),
 						},
 					],
 					// **留空時整個不帶這個欄位**，不是送 "" 也不是送 null。
@@ -250,8 +150,7 @@ export function LogMeal({ onSaved }: Props) {
 			// 餐費會建出一筆支出——記帳的清單與報表都要重取。
 			queryClient.invalidateQueries({ queryKey: queryKeys.expensesAll });
 			setSelectedFood(null);
-			setPortionChoice(null);
-			setQuantity("1");
+			portion.reset();
 			setCost("");
 			setPhoto(null);
 			setPhotoError(null);
@@ -279,7 +178,7 @@ export function LogMeal({ onSaved }: Props) {
 			if (
 				caught instanceof ApiError &&
 				caught.code === "VALIDATION_ERROR" &&
-				isCostValidationError(caught)
+				hasFieldError(caught, "cost")
 			) {
 				setError(AMOUNT_FORMAT_ERROR);
 				return;
@@ -290,60 +189,14 @@ export function LogMeal({ onSaved }: Props) {
 
 	function selectFood(food: Food) {
 		setSelectedFood(food);
-		setPortionChoice(null);
+		portion.resetChoice();
 	}
-
-	const foods = dedupeById([frequentQuery.data ?? [], recentQuery.data ?? []]);
 
 	return (
 		<section className={styles.screen}>
 			<h1>記一餐</h1>
 
-			<div className={styles.search}>
-				<label htmlFor="food-search-input">搜尋食物</label>
-				<input
-					id="food-search-input"
-					type="text"
-					value={searchInput}
-					onChange={(event) => setSearchInput(event.target.value)}
-				/>
-			</div>
-
-			{hasSearchQuery && (
-				<>
-					{searchQuery.isLoading && <p>搜尋中…</p>}
-					<FoodResultList
-						foods={searchQuery.data ?? []}
-						noNutritionMessage={NO_REVISION_MESSAGE}
-						renderAction={(food) => (
-							<button
-								type="button"
-								disabled={food.nutrition === null}
-								onClick={() => selectFood(food)}
-							>
-								{food.name}
-							</button>
-						)}
-					/>
-				</>
-			)}
-
-			{frequentQuery.isLoading && <p>載入中…</p>}
-
-			<ul className={styles.foods}>
-				{foods.map((food) => (
-					<li key={food.id}>
-						<button
-							type="button"
-							disabled={food.nutrition === null}
-							onClick={() => selectFood(food)}
-						>
-							{food.name}
-						</button>
-						<NutritionPreview nutrition={food.nutrition} />
-					</li>
-				))}
-			</ul>
+			<FoodPicker onSelect={selectFood} />
 
 			{selectedFood !== null && (
 				<form
@@ -355,62 +208,10 @@ export function LogMeal({ onSaved }: Props) {
 				>
 					<p className={styles.selected}>已選擇：{selectedFood.name}</p>
 
-					{portionsQuery.data !== undefined &&
-						portionsQuery.data !== null &&
-						portionsQuery.data.length > 0 && (
-							<>
-								<label htmlFor="portion">份量選項</label>
-								<select
-									id="portion"
-									value={portionId ?? ""}
-									onChange={(event) =>
-										setPortionChoice(
-											event.target.value === ""
-												? "manual"
-												: Number(event.target.value),
-										)
-									}
-								>
-									<option value="">直接輸入數量</option>
-									{portionsQuery.data.map((portion) => (
-										<option key={portion.id} value={portion.id}>
-											{portion.label}
-										</option>
-									))}
-								</select>
-							</>
-						)}
-
-					<label htmlFor="quantity">份量</label>
-					<input
-						id="quantity"
-						type="text"
-						inputMode="decimal"
-						value={quantity}
-						aria-describedby="quantity-unit"
-						onChange={(event) => {
-							// 使用者一動數量，就把「此刻看到的單位」鎖住：份量清單
-							// 可能晚到（或是快取裡過期的空清單被換掉），若還是
-							// null，晚到的預設份量會把使用者輸入的「200」（當時
-							// 提示是 g）變成 200 份。
-							if (portionChoice === null) {
-								setPortionChoice(portionId ?? "manual");
-							}
-							setQuantity(event.target.value);
-						}}
-						required
+					<PortionQuantityFields
+						state={portion}
+						unit={selectedFood.nutrition?.base_unit ?? "g"}
 					/>
-					{/* 選了份量時數量是「幾份」；直接輸入時是公克（或毫升）——
-					    預設的「1」在直接輸入模式下是 1 g，這個提示讓它看得出來。 */}
-					<span
-						id="quantity-unit"
-						className={styles.unit}
-						data-testid="quantity-unit"
-					>
-						{portionId !== null
-							? "份"
-							: (selectedFood.nutrition?.base_unit ?? "g")}
-					</span>
 
 					<label htmlFor="meal-type">餐別</label>
 					<select
