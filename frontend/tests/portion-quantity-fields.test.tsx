@@ -34,14 +34,24 @@ const PLATE = {
 	is_global: true,
 };
 
+const SOUP_BOWL = {
+	id: 21,
+	label: "湯碗",
+	grams: "250.00",
+	is_default: true,
+	is_global: false,
+};
+
 function Harness({
 	initial,
 	idPrefix,
+	foodId = 1,
 }: {
 	initial?: { choice: PortionChoice; quantity: string };
 	idPrefix?: string;
+	foodId?: number;
 }) {
-	const state = usePortionQuantity(1, initial);
+	const state = usePortionQuantity(foodId, initial);
 	return (
 		<>
 			<PortionQuantityFields state={state} unit="ml" idPrefix={idPrefix} />
@@ -56,7 +66,10 @@ beforeEach(() => {
 	resetRefreshStateForTests();
 	vi.restoreAllMocks();
 	setTokens({ access_token: "a", refresh_token: "r" });
-	mockApi({ "/api/foods/1/portions": () => json([MY_BOWL, PLATE]) });
+	mockApi({
+		"/api/foods/1/portions": () => json([MY_BOWL, PLATE]),
+		"/api/foods/2/portions": () => json([SOUP_BOWL]),
+	});
 });
 
 describe("usePortionQuantity／PortionQuantityFields", () => {
@@ -87,6 +100,7 @@ describe("usePortionQuantity／PortionQuantityFields", () => {
 
 		await screen.findByRole("option", { name: "盤" });
 		expect(screen.getByLabelText("份量選項")).toHaveValue("9");
+		expect(screen.getByLabelText("份量")).toHaveValue("2");
 		expect(screen.getByTestId("portion-id")).toHaveTextContent("9");
 	});
 
@@ -112,5 +126,37 @@ describe("usePortionQuantity／PortionQuantityFields", () => {
 		await userEvent.selectOptions(screen.getByLabelText("份量選項"), "9");
 
 		expect(screen.getByTestId("portion-id")).toHaveTextContent("9");
+	});
+
+	it("選「直接輸入數量」：portionId 變 null，單位提示變成食物的單位", async () => {
+		render(wrap(<Harness />));
+		await screen.findByRole("option", { name: "盤" });
+
+		await userEvent.selectOptions(screen.getByLabelText("份量選項"), "");
+
+		expect(screen.getByTestId("portion-id")).toHaveTextContent("null");
+		expect(screen.getByTestId("quantity-unit")).toHaveTextContent("ml");
+	});
+
+	it("換食物：上一個食物的「直接輸入」不會帶過去，用新食物的預設份量", async () => {
+		const client = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const tree = (foodId: number) => (
+			<QueryClientProvider client={client}>
+				<Harness foodId={foodId} />
+			</QueryClientProvider>
+		);
+		const { rerender } = render(tree(1));
+		await screen.findByRole("option", { name: "盤" });
+		await userEvent.selectOptions(screen.getByLabelText("份量選項"), "");
+		expect(screen.getByTestId("portion-id")).toHaveTextContent("null");
+
+		rerender(tree(2));
+
+		await screen.findByRole("option", { name: "湯碗" });
+		await waitFor(() =>
+			expect(screen.getByTestId("portion-id")).toHaveTextContent("21"),
+		);
 	});
 });

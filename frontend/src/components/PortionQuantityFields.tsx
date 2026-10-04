@@ -22,7 +22,10 @@ export type PortionChoice = number | "manual" | null;
 /** 份量下拉與數量的狀態。放在 hook 而不是元件裡：送出時呼叫端要拿
  *  `portionId` 與 `quantity` 組 body（記一餐、編輯餐點都是）。
  *
- *  `foodId` 是 `null` 時不抓份量清單。 */
+ *  `foodId` 是 `null` 時不抓份量清單。換食物（`foodId` 變了）時份量的選擇
+ *  自己回到「還沒動過」，數量不動。
+ *
+ *  回傳的物件每次 render 都是新的，不要放進依賴陣列。 */
 export function usePortionQuantity(
 	foodId: number | null,
 	initial?: { choice: PortionChoice; quantity: string },
@@ -31,6 +34,16 @@ export function usePortionQuantity(
 		initial?.choice ?? null,
 	);
 	const [quantity, setQuantityValue] = useState(initial?.quantity ?? "1");
+
+	// 換食物就把份量的選擇清掉：上一個食物的「直接輸入」鎖定或份量 id
+	// 不能帶到新食物——別的食物的 portion_id 送出去會被後端 422
+	// （PORTION_FOOD_MISMATCH）。用「把上一個 prop 存在 state 裡、render
+	// 當下比對」的寫法，不用 effect（effect 會多一次帶著舊選擇的 render）。
+	const [previousFoodId, setPreviousFoodId] = useState(foodId);
+	if (foodId !== previousFoodId) {
+		setPreviousFoodId(foodId);
+		setPortionChoice(null);
+	}
 
 	const portionsQuery = useQuery({
 		queryKey: queryKeys.portions(foodId ?? 0),
@@ -61,11 +74,7 @@ export function usePortionQuantity(
 		choosePortion(choice: number | "manual") {
 			setPortionChoice(choice);
 		},
-		/** 換了一個食物：份量回到「還沒動過」，數量不動（記一餐原本的行為）。 */
-		resetChoice() {
-			setPortionChoice(null);
-		},
-		/** 存好之後：兩個都回到初始狀態。 */
+		/** 存好之後：回到沒動過——份量選擇 null、數量 "1"。 */
 		reset() {
 			setPortionChoice(null);
 			setQuantityValue("1");

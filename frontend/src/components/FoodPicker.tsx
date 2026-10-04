@@ -28,10 +28,11 @@ const NO_REVISION_MESSAGE = "這個食物還沒有生效的營養素資料";
  *  使用者會選了食物、填好份量、按下「記錄」，然後看到 `onError` 的通用
  *  訊息「記錄失敗，請再試一次」——而再試一次永遠不會成功。
  *
- *  所以按鈕（見 `selectFood` 的呼叫端）要 `disabled`，這裡旁邊要講清楚
- *  原因。`409 FOOD_HAS_NO_REVISION` 仍然要具名處理（見 `saveMeal` 的
- *  `onError`）——disabled 擋的是送出當下已知的狀態，搜尋到送出之間，
- *  食物有可能剛好失去生效版本，具名 409 是後備，兩者都要。 */
+ *  所以本檔的兩個選擇按鈕要 `disabled`，這裡旁邊要講清楚原因。
+ *  `409 FOOD_HAS_NO_REVISION` 仍然要由呼叫端具名處理（`LogMeal.tsx` 的
+ *  `saveMeal` `onError`；編輯餐點的畫面也一樣）——disabled 擋的是送出
+ *  當下已知的狀態，搜尋到送出之間，食物有可能剛好失去生效版本，具名
+ *  409 是後備，兩者都要。 */
 function NutritionPreview({ nutrition }: { nutrition: Food["nutrition"] }) {
 	if (nutrition === null) {
 		return <span className="food-no-nutrition">{NO_REVISION_MESSAGE}</span>;

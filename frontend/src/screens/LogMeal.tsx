@@ -189,7 +189,6 @@ export function LogMeal({ onSaved }: Props) {
 
 	function selectFood(food: Food) {
 		setSelectedFood(food);
-		portion.resetChoice();
 	}
 
 	return (
