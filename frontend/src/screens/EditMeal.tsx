@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Camera, X } from "lucide-react";
-import { type ChangeEvent, type ReactNode, useState } from "react";
+import { type ChangeEvent, type ReactNode, useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { apiFetch } from "../api/client";
 import { ApiError, hasFieldError } from "../api/errors";
@@ -39,19 +39,27 @@ function initialCost(meal: Meal): string {
  *  `note: null`。 */
 function mealChanges(
 	meal: Meal,
-	draft: { mealType: MealType; cost: string; note: string },
+	draft: {
+		mealType: MealType | undefined;
+		cost: string | undefined;
+		note: string | undefined;
+	},
 ): MealChanges | null {
 	const changes: MealChanges = {};
-	if (draft.mealType !== meal.meal_type) {
+	if (draft.mealType !== undefined && draft.mealType !== meal.meal_type) {
 		changes.meal_type = draft.mealType;
 	}
-	const cost = draft.cost.trim();
-	if (cost !== initialCost(meal)) {
-		changes.cost = cost === "" ? null : cost;
+	if (draft.cost !== undefined) {
+		const cost = draft.cost.trim();
+		if (cost !== initialCost(meal)) {
+			changes.cost = cost === "" ? null : cost;
+		}
 	}
-	const note = draft.note.trim();
-	if (note !== (meal.note ?? "")) {
-		changes.note = note === "" ? null : note;
+	if (draft.note !== undefined) {
+		const note = draft.note.trim();
+		if (note !== (meal.note ?? "")) {
+			changes.note = note === "" ? null : note;
+		}
 	}
 	return Object.keys(changes).length === 0 ? null : changes;
 }
@@ -70,13 +78,16 @@ function describeSaveError(error: unknown): string {
 
 /** 餐別、金額、備註（編輯餐點規格 §4.2 第 2 點）。一顆「儲存」，只送有改的欄位。
  *
- *  草稿在掛載時從這一餐帶入。存好之後 `meals` 失效、這一餐重抓，草稿跟
- *  新的值一樣，「儲存」回到 disabled。 */
+ *  每個欄位的草稿是 `undefined`＝沒動過，顯示的是伺服器現在的值
+ *  （`draft ?? 伺服器值`）；使用者動過才有草稿。這樣背景重抓帶來另一台
+ *  裝置的新值時，沒動過的欄位跟著更新，不會被誤算成「有改動」而在儲存時
+ *  蓋回去。只送動過、且跟伺服器不同的欄位。存好之後三個草稿都清掉，表單
+ *  顯示伺服器的值，「儲存」回到 disabled。 */
 function MealDetailsForm({ meal }: { meal: Meal }) {
 	const queryClient = useQueryClient();
-	const [mealType, setMealType] = useState<MealType>(meal.meal_type);
-	const [cost, setCost] = useState(initialCost(meal));
-	const [note, setNote] = useState(meal.note ?? "");
+	const [mealType, setMealType] = useState<MealType | undefined>(undefined);
+	const [cost, setCost] = useState<string | undefined>(undefined);
+	const [note, setNote] = useState<string | undefined>(undefined);
 
 	const changes = mealChanges(meal, { mealType, cost, note });
 
@@ -88,6 +99,11 @@ function MealDetailsForm({ meal }: { meal: Meal }) {
 				body: JSON.stringify(body),
 			}),
 		onSuccess: (_meal, body) => {
+			// 先清草稿：之後顯示的就是伺服器的值（重抓回來之前先顯示舊值，
+			// 重抓完換成新值）；「儲存」因為沒有草稿而 disabled。
+			setMealType(undefined);
+			setCost(undefined);
+			setNote(undefined);
 			queryClient.invalidateQueries({ queryKey: queryKeys.meals });
 			// 餐費改了（改、補、拿掉）——報表與總覽的支出都要重取。
 			if ("cost" in body) {
@@ -98,10 +114,11 @@ function MealDetailsForm({ meal }: { meal: Meal }) {
 
 	// 一改欄位就把上一次的「已儲存」或錯誤收掉，不然它會掛在一個已經不是
 	// 那次送出內容的表單上。
+	// 送出中不 reset：reset 會讓進行中的那次送出不再回報結果。
 	function edit<T>(setter: (value: T) => void) {
 		return (value: T) => {
 			setter(value);
-			save.reset();
+			if (!save.isPending) save.reset();
 		};
 	}
 
@@ -111,7 +128,7 @@ function MealDetailsForm({ meal }: { meal: Meal }) {
 			className={styles.section}
 			onSubmit={(event) => {
 				event.preventDefault();
-				if (changes !== null) save.mutate(changes);
+				if (changes !== null && !save.isPending) save.mutate(changes);
 			}}
 		>
 			<h2 id="edit-meal-details">這一餐</h2>
@@ -119,7 +136,7 @@ function MealDetailsForm({ meal }: { meal: Meal }) {
 			<label htmlFor="edit-meal-type">餐別</label>
 			<select
 				id="edit-meal-type"
-				value={mealType}
+				value={mealType ?? meal.meal_type}
 				onChange={(event) => edit(setMealType)(event.target.value as MealType)}
 			>
 				{MEAL_TYPE_ORDER.map((value) => (
@@ -134,7 +151,7 @@ function MealDetailsForm({ meal }: { meal: Meal }) {
 				id="edit-meal-cost"
 				type="text"
 				inputMode="decimal"
-				value={cost}
+				value={cost ?? initialCost(meal)}
 				onChange={(event) => edit(setCost)(event.target.value)}
 			/>
 
@@ -142,7 +159,7 @@ function MealDetailsForm({ meal }: { meal: Meal }) {
 			<input
 				id="edit-meal-note"
 				type="text"
-				value={note}
+				value={note ?? meal.note ?? ""}
 				onChange={(event) => edit(setNote)(event.target.value)}
 			/>
 
@@ -179,18 +196,33 @@ function MealPhotoSection({ meal }: { meal: Meal }) {
 	const queryClient = useQueryClient();
 	const upload = useUploadMealPhoto(meal.id);
 	const [confirming, setConfirming] = useState(false);
+	const mealId = meal.id;
 	const hasPhoto = meal.photo_path !== null;
+
+	// 沒有照片了（這裡刪的、或別台裝置刪的）：收起確認框，並丟掉照片快取。
+	// 此時 PhotoPreview 已經卸載，移除不會讓它把 query 重建回來。
+	useEffect(() => {
+		if (hasPhoto) return;
+		setConfirming(false);
+		queryClient.removeQueries({ queryKey: queryKeys.mealPhoto(mealId) });
+	}, [hasPhoto, queryClient, mealId]);
 
 	const removePhoto = useMutation({
 		mutationFn: () =>
 			apiFetch(`/api/meals/${meal.id}/photo`, { method: "DELETE" }),
 		onSuccess: () => {
-			setConfirming(false);
+			// **順序有講究。** 還掛著的 PhotoPreview 訂閱著 mealPhoto：這裡立刻
+			// removeQueries 的話，PhotoPreview 在卸載之前又 render 一次，把剛移除
+			// 的 query 重建出來、重抓一張已經刪掉的照片（404）。所以這裡只先把
+			// 快取裡這一餐的 photo_path 改成 null（PhotoPreview 隨之卸載），再失效
+			// meals；照片 query 與確認框由下面的 effect 在 photo_path 變成 null
+			// （PhotoPreview 已經不在）之後收掉。同樣不呼叫 setConfirming(false)：
+			// 它會比 TanStack 排程的通知早一步 render，跟上面同一個問題。
+			queryClient.setQueryData<Meal | null | undefined>(
+				queryKeys.meal(meal.id),
+				(cached) => (cached ? { ...cached, photo_path: null } : cached),
+			);
 			queryClient.invalidateQueries({ queryKey: queryKeys.meals });
-			// **移除，不是失效**：失效會讓還掛著的 PhotoPreview 立刻重抓一張
-			// 已經刪掉的照片（404）。這一餐重抓回來 photo_path 是 null，
-			// PhotoPreview 就卸載了。
-			queryClient.removeQueries({ queryKey: queryKeys.mealPhoto(meal.id) });
 		},
 	});
 
@@ -219,6 +251,7 @@ function MealPhotoSection({ meal }: { meal: Meal }) {
 				disabled={upload.isPending}
 				onChange={handleChange}
 			/>
+			{upload.isPending && <p role="status">上傳中…</p>}
 			{upload.isError && (
 				<p role="alert">{describePhotoUploadError(upload.error)}</p>
 			)}
@@ -229,6 +262,7 @@ function MealPhotoSection({ meal }: { meal: Meal }) {
 						<p>確定要刪除這張照片嗎？</p>
 						<button
 							type="button"
+							className={styles.danger}
 							disabled={removePhoto.isPending}
 							onClick={() => removePhoto.mutate()}
 						>
@@ -298,6 +332,7 @@ function DeleteMeal({
 					{/* 送出中停用：刪兩次第二次會 404，顯示一個誤導的錯誤。 */}
 					<button
 						type="button"
+						className={styles.danger}
 						disabled={remove.isPending}
 						onClick={() => remove.mutate()}
 					>

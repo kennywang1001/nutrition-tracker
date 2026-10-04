@@ -57,7 +57,11 @@ const RICE = {
 
 /** `extra` 排在前面：`mockApi` 依序用 `url.includes` 比對，而
  *  `/api/meals/5/photo`、`/api/meals/5/items/51` 都「包含」`/api/meals/5`。 */
-function routes(meal: unknown = MEAL, extra: MockRoute[] = []): MockRoute[] {
+function routes(
+	meal: unknown | (() => unknown) = MEAL,
+	extra: MockRoute[] = [],
+): MockRoute[] {
+	const current = () => (typeof meal === "function" ? meal() : meal);
 	return [
 		...extra,
 		{
@@ -66,8 +70,8 @@ function routes(meal: unknown = MEAL, extra: MockRoute[] = []): MockRoute[] {
 			handler: () =>
 				new Response(new Blob(["fake-jpeg"], { type: "image/jpeg" })),
 		},
-		{ method: "GET", path: "/api/meals/5", handler: () => json(meal) },
-		{ method: "PATCH", path: "/api/meals/5", handler: () => json(meal) },
+		{ method: "GET", path: "/api/meals/5", handler: () => json(current()) },
+		{ method: "PATCH", path: "/api/meals/5", handler: () => json(current()) },
 		{
 			method: "DELETE",
 			path: "/api/meals/5",
@@ -87,13 +91,14 @@ function newClient() {
 /** 預設從總覽點進來（history 有上一頁）。`entries` 只給一個時＝直接打開網址。 */
 function renderEditMeal(
 	client = newClient(),
-	entries: string[] = ["/", "/meals/5/edit"],
+	entries: string[] = ["/", "/diet", "/meals/5/edit"],
 ) {
 	render(
 		<QueryClientProvider client={client}>
 			<MemoryRouter initialEntries={entries} initialIndex={entries.length - 1}>
 				<Routes>
 					<Route path="/" element={<p>總覽頁</p>} />
+					<Route path="/diet" element={<p>飲食頁</p>} />
 					<Route path="/meals/:id/edit" element={<EditMeal />} />
 				</Routes>
 			</MemoryRouter>
@@ -323,14 +328,24 @@ describe("編輯這一餐：照片", () => {
 	});
 
 	it("確認刪除照片：送 DELETE，失效清單、移除這一餐的照片快取", async () => {
+		let current: Record<string, unknown> = {
+			...MEAL,
+			photo_path: "3/abc.jpg",
+		};
 		const fetchMock = mockApi(
-			routes({ ...MEAL, photo_path: "3/abc.jpg" }, [
-				{
-					method: "DELETE",
-					path: "/api/meals/5/photo",
-					handler: () => new Response(null, { status: 204 }),
-				},
-			]),
+			routes(
+				() => current,
+				[
+					{
+						method: "DELETE",
+						path: "/api/meals/5/photo",
+						handler: () => {
+							current = { ...MEAL, photo_path: null };
+							return new Response(null, { status: 204 });
+						},
+					},
+				],
+			),
 		);
 		const client = renderEditMeal();
 		const invalidate = vi.spyOn(client, "invalidateQueries");
@@ -349,7 +364,53 @@ describe("編輯這一餐：照片", () => {
 		await waitFor(() =>
 			expect(keysOf(invalidate)).toContainEqual(queryKeys.meals),
 		);
-		expect(keysOf(remove)).toContainEqual(queryKeys.mealPhoto(5));
+		await waitFor(() =>
+			expect(keysOf(remove)).toContainEqual(queryKeys.mealPhoto(5)),
+		);
+	});
+
+	it("刪除照片之後不再回頭抓那張照片", async () => {
+		let current: Record<string, unknown> = {
+			...MEAL,
+			photo_path: "3/abc.jpg",
+		};
+		const fetchMock = mockApi(
+			routes(
+				() => current,
+				[
+					{
+						method: "DELETE",
+						path: "/api/meals/5/photo",
+						handler: () => {
+							current = { ...MEAL, photo_path: null };
+							return new Response(null, { status: 204 });
+						},
+					},
+				],
+			),
+		);
+		renderEditMeal();
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "刪除照片" }),
+		);
+		const dialog = screen.getByRole("alertdialog", { name: "確認刪除照片" });
+		await userEvent.click(
+			within(dialog).getByRole("button", { name: "確定刪除" }),
+		);
+
+		await waitFor(() =>
+			expect(
+				screen.queryByRole("button", { name: "刪除照片" }),
+			).not.toBeInTheDocument(),
+		);
+		expect(
+			fetchMock.mock.calls.filter(
+				([input, init]) =>
+					(init?.method ?? "GET").toUpperCase() === "GET" &&
+					String(input).endsWith("/api/meals/5/photo"),
+			),
+		).toHaveLength(1);
 	});
 });
 
@@ -394,7 +455,7 @@ describe("編輯這一餐：刪除這一餐", () => {
 			within(dialog).getByRole("button", { name: "確定刪除" }),
 		);
 
-		expect(await screen.findByText("總覽頁")).toBeInTheDocument();
+		expect(await screen.findByText("飲食頁")).toBeInTheDocument();
 		expect(calls(fetchMock, "DELETE", "/api/meals/5")).toHaveLength(1);
 		expect(keysOf(remove)).toEqual(
 			expect.arrayContaining([queryKeys.meal(5), queryKeys.mealPhoto(5)]),
@@ -435,6 +496,173 @@ describe("編輯這一餐：刪除這一餐", () => {
 
 		await userEvent.click(await screen.findByRole("button", { name: "關閉" }));
 
-		expect(await screen.findByText("總覽頁")).toBeInTheDocument();
+		expect(await screen.findByText("飲食頁")).toBeInTheDocument();
+	});
+});
+
+describe("編輯這一餐：草稿只記動過的欄位", () => {
+	it("存好之後表單顯示伺服器的值、儲存回到 disabled", async () => {
+		let current: typeof MEAL = MEAL;
+		mockApi(
+			routes(
+				() => current,
+				[
+					{
+						method: "PATCH",
+						path: "/api/meals/5",
+						handler: () => {
+							current = { ...MEAL, cost: "200.00" };
+							return json(current);
+						},
+					},
+				],
+			),
+		);
+		renderEditMeal();
+
+		const cost = await screen.findByLabelText("金額（選填）");
+		await userEvent.clear(cost);
+		await userEvent.type(cost, "200");
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		expect(await screen.findByText("已儲存")).toBeInTheDocument();
+		await waitFor(() =>
+			expect(screen.getByLabelText("金額（選填）")).toHaveValue("200.00"),
+		);
+		expect(screen.getByRole("button", { name: "儲存" })).toBeDisabled();
+	});
+
+	it("另一台裝置改了餐別：沒動過的欄位跟著伺服器，不會變成「有改動」", async () => {
+		let current: typeof MEAL = MEAL;
+		mockApi(routes(() => current));
+		const client = renderEditMeal();
+
+		expect(await screen.findByLabelText("餐別")).toHaveValue("lunch");
+		current = { ...MEAL, meal_type: "dinner" };
+		await client.invalidateQueries({ queryKey: queryKeys.meal(5) });
+
+		await waitFor(() =>
+			expect(screen.getByLabelText("餐別")).toHaveValue("dinner"),
+		);
+		expect(screen.getByRole("button", { name: "儲存" })).toBeDisabled();
+	});
+
+	it("只動備註、伺服器同時改了餐別：PATCH 只有 note", async () => {
+		let current: typeof MEAL = MEAL;
+		const fetchMock = mockApi(routes(() => current));
+		const client = renderEditMeal();
+
+		const note = await screen.findByLabelText("備註（選填）");
+		await userEvent.type(note, "加蛋");
+		current = { ...MEAL, meal_type: "dinner" };
+		await client.invalidateQueries({ queryKey: queryKeys.meal(5) });
+		await waitFor(() =>
+			expect(screen.getByLabelText("餐別")).toHaveValue("dinner"),
+		);
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		await waitFor(() =>
+			expect(bodyOf(fetchMock, "PATCH", "/api/meals/5")).toEqual({
+				note: "加蛋",
+			}),
+		);
+	});
+
+	it("備註：清空既有的備註送 note: null", async () => {
+		const fetchMock = mockApi(routes({ ...MEAL, note: "原本的備註" }));
+		renderEditMeal();
+
+		const note = await screen.findByLabelText("備註（選填）");
+		expect(note).toHaveValue("原本的備註");
+		await userEvent.clear(note);
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		await waitFor(() =>
+			expect(bodyOf(fetchMock, "PATCH", "/api/meals/5")).toEqual({
+				note: null,
+			}),
+		);
+	});
+
+	it("備註：輸入新的備註送 note", async () => {
+		const fetchMock = mockApi(routes());
+		renderEditMeal();
+
+		await userEvent.type(await screen.findByLabelText("備註（選填）"), "加蛋");
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		await waitFor(() =>
+			expect(bodyOf(fetchMock, "PATCH", "/api/meals/5")).toEqual({
+				note: "加蛋",
+			}),
+		);
+	});
+
+	it.each([
+		["非金額欄位的 422", () => validationError(["body", "note"])],
+		[
+			"500",
+			() => json({ error: { code: "X", message: "x", details: {} } }, 500),
+		],
+	])("儲存失敗（%s）：說儲存失敗，不說金額格式", async (_name, failure) => {
+		mockApi(
+			routes(MEAL, [
+				{ method: "PATCH", path: "/api/meals/5", handler: failure },
+			]),
+		);
+		renderEditMeal();
+
+		await userEvent.type(await screen.findByLabelText("備註（選填）"), "x");
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		expect(await screen.findByText("儲存失敗，請再試一次")).toBeInTheDocument();
+		expect(screen.queryByText(AMOUNT_FORMAT_ERROR)).not.toBeInTheDocument();
+	});
+});
+
+describe("編輯這一餐：其他", () => {
+	it("網址的 id 不是數字：說找不到，也不打 /api/meals", async () => {
+		const fetchMock = mockApi(routes());
+		const client = newClient();
+		render(
+			<QueryClientProvider client={client}>
+				<MemoryRouter initialEntries={["/meals/abc/edit"]}>
+					<Routes>
+						<Route path="/meals/:id/edit" element={<EditMeal />} />
+					</Routes>
+				</MemoryRouter>
+			</QueryClientProvider>,
+		);
+
+		expect(await screen.findByText("找不到這一餐")).toBeInTheDocument();
+		expect(calls(fetchMock, "GET", "/api/meals")).toHaveLength(0);
+	});
+
+	it("上傳照片進行中顯示「上傳中…」", async () => {
+		const fetchMock = mockApi(routes());
+		const real = fetchMock.getMockImplementation();
+		let release: () => void = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		fetchMock.mockImplementation(async (input, init) => {
+			if (
+				(init?.method ?? "GET").toUpperCase() === "POST" &&
+				String(input).includes("/api/meals/5/photo")
+			) {
+				await gate;
+				return json(MEAL);
+			}
+			return real === undefined ? fetch(input, init) : real(input, init);
+		});
+		renderEditMeal();
+
+		await userEvent.upload(
+			await screen.findByLabelText("加照片"),
+			new File(["x"], "a.jpg", { type: "image/jpeg" }),
+		);
+
+		expect(await screen.findByText("上傳中…")).toBeInTheDocument();
+		release();
 	});
 });
