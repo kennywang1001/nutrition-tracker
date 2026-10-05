@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Camera } from "lucide-react";
-import { type ChangeEvent, useEffect, useState } from "react";
+import { type ChangeEvent, useEffect, useRef, useState } from "react";
 import { apiFetch } from "../api/client";
 import { ApiError, hasFieldError } from "../api/errors";
 import { AMOUNT_FORMAT_ERROR } from "../api/expenses";
@@ -68,6 +68,16 @@ export function LogMeal({ onSaved }: Props) {
 		setPhotoError(null);
 		setPhoto(file);
 	}
+	// 面板交回食物後，確認鈕消失、焦點掉到 body：把焦點移到「已選擇」那一行。
+	// 只在交回那一次移（旗標），不是每次 render。
+	const focusSelectedRef = useRef(false);
+	const selectedRef = useRef<HTMLParagraphElement>(null);
+	useEffect(() => {
+		if (focusSelectedRef.current && selectedRef.current !== null) {
+			focusSelectedRef.current = false;
+			selectedRef.current.focus();
+		}
+	});
 	const [mealType, setMealType] = useState<MealType>("snack");
 	const [error, setError] = useState<string | null>(null);
 	const saveMeal = useMutation({
@@ -192,12 +202,19 @@ export function LogMeal({ onSaved }: Props) {
 					<AiEstimatePanel
 						text={query}
 						onFoodReady={(food, { image }) => {
+							// 份量自動是一份 × 1（AI 估算前端規格 §5.1）：數量不會跟著
+							// 換食物歸位，先 reset，不然上一個食物打的 200 會留下來。
+							portion.reset();
 							setSelectedFood(food);
+							focusSelectedRef.current = true;
 							// 拍照估算的照片當這一餐的照片——但已經選了別張就不覆蓋
 							// （AI 估算前端規格 §5.1）。放進去的是原始檔案：記一餐上傳時
 							// 自己會縮（uploadMealPhoto）。大小已經在面板擋過。
-							if (image !== null && photo === null) {
-								setPhoto(image);
+							// 用 updater 看「現在」的照片：面板存食物的期間使用者還能選
+							// 照片，閉包裡的 photo 是按下確認那一刻的舊值。
+							// photoError 非 null 時 photo 一定是 null，所以直接清掉安全。
+							if (image !== null) {
+								setPhoto((current) => current ?? image);
 								setPhotoError(null);
 							}
 						}}
@@ -213,7 +230,9 @@ export function LogMeal({ onSaved }: Props) {
 						saveMeal.mutate();
 					}}
 				>
-					<p className={styles.selected}>已選擇：{selectedFood.name}</p>
+					<p ref={selectedRef} tabIndex={-1} className={styles.selected}>
+						已選擇：{selectedFood.name}
+					</p>
 
 					<PortionQuantityFields
 						state={portion}

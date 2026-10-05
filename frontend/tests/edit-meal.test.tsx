@@ -976,6 +976,9 @@ describe("編輯這一餐：項目", () => {
 		await userEvent.click(
 			await screen.findByRole("button", { name: "＋ 加一項" }),
 		);
+		// 「加一項」不給 AI 估算（只有記一餐有）：選擇器出現了、拍照估算沒有。
+		expect(screen.getByLabelText("搜尋食物")).toBeInTheDocument();
+		expect(screen.queryByLabelText("拍照估算")).toBeNull();
 		await userEvent.click(await screen.findByRole("button", { name: "白飯" }));
 		const form = screen.getByRole("form", { name: "加一項" });
 		expect(within(form).getByText("已選擇：白飯")).toBeInTheDocument();

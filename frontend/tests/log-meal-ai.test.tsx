@@ -65,10 +65,11 @@ const ONE_SERVING = {
 };
 
 /** 路徑順序：mockApi 依序用 url.includes 比對——具體的排前面。 */
-function mockLogMeal() {
+function mockLogMeal(frequent: unknown[] = []) {
 	return mockApi([
-		{ path: "/api/foods/frequent", handler: () => json([]) },
+		{ path: "/api/foods/frequent", handler: () => json(frequent) },
 		{ path: "/api/foods/recent", handler: () => json([]) },
+		{ path: "/api/foods/10/portions", handler: () => json([]) },
 		{ path: "/api/foods/30/portions", handler: () => json([ONE_SERVING]) },
 		{ method: "GET", path: "/api/foods?q=", handler: () => json([]) },
 		{ method: "POST", path: "/api/ai/analyze", handler: () => json(ESTIMATE) },
@@ -192,6 +193,102 @@ describe("記一餐：AI 估算", () => {
 
 		await waitFor(() =>
 			expect(uploadedPhotoName(fetchMock)).toBe("chosen.jpg"),
+		);
+	});
+
+	it("確認之後、食物還在存的時候才選的照片：不會被估算的照片蓋掉", async () => {
+		const fetchMock = mockLogMeal();
+		// 把 POST /api/foods 擋住，直到測試放行。
+		const base = fetchMock.getMockImplementation();
+		if (base === undefined) throw new Error("mockApi 沒有 implementation");
+		let gate: Promise<void> | null = null;
+		let release: () => void = () => {};
+		fetchMock.mockImplementation(async (input, init) => {
+			const isCreateFood =
+				(init?.method ?? "GET").toUpperCase() === "POST" &&
+				String(input).endsWith("/api/foods");
+			if (isCreateFood && gate !== null) await gate;
+			return base(input, init);
+		});
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		const chosen = new File(["a"], "chosen.jpg", { type: "image/jpeg" });
+		const forEstimate = new File(["b"], "noodle.jpg", { type: "image/jpeg" });
+
+		await userEvent.type(screen.getByLabelText("搜尋食物"), "牛肉麵");
+		await userEvent.click(
+			screen.getByRole("button", { name: "用 AI 估算「牛肉麵」" }),
+		);
+		await confirmEstimate();
+
+		gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		await userEvent.upload(screen.getByLabelText("拍照估算"), forEstimate);
+		const card = await screen.findByRole("region", { name: "AI 估算結果" });
+		await userEvent.click(within(card).getByRole("button", { name: "確認" }));
+		// 存食物還在送：這時才選照片。
+		await userEvent.upload(screen.getByLabelText("照片（選填）"), chosen);
+		expect(await screen.findByAltText("選好的照片")).toBeInTheDocument();
+		release();
+		await waitFor(() =>
+			expect(
+				screen.queryByRole("region", { name: "AI 估算結果" }),
+			).not.toBeInTheDocument(),
+		);
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() =>
+			expect(uploadedPhotoName(fetchMock)).toBe("chosen.jpg"),
+		);
+	});
+
+	it("原本選的食物份量打了 200：確認 AI 估算後新食物回到「一份 × 1」", async () => {
+		mockLogMeal([
+			{
+				id: 10,
+				name: "白飯",
+				brand: null,
+				is_global: true,
+				nutrition: {
+					base_unit: "g",
+					kcal: "130.00",
+					protein_g: "2.70",
+					fat_g: "0.30",
+					carb_g: "28.00",
+				},
+			},
+		]);
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+
+		await userEvent.click(await screen.findByRole("button", { name: "白飯" }));
+		const quantity = screen.getByLabelText("份量");
+		await userEvent.clear(quantity);
+		await userEvent.type(quantity, "200");
+
+		await userEvent.type(screen.getByLabelText("搜尋食物"), "牛肉麵");
+		await userEvent.click(
+			screen.getByRole("button", { name: "用 AI 估算「牛肉麵」" }),
+		);
+		await confirmEstimate();
+
+		await waitFor(() =>
+			expect(screen.getByLabelText("份量選項")).toHaveValue("300"),
+		);
+		expect(screen.getByLabelText("份量")).toHaveValue("1");
+	});
+
+	it("交回食物之後，焦點在「已選擇」那一行", async () => {
+		mockLogMeal();
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+
+		await userEvent.type(screen.getByLabelText("搜尋食物"), "牛肉麵");
+		await userEvent.click(
+			screen.getByRole("button", { name: "用 AI 估算「牛肉麵」" }),
+		);
+		await confirmEstimate();
+
+		await waitFor(() =>
+			expect(document.activeElement).toBe(screen.getByText("已選擇：牛肉麵")),
 		);
 	});
 });
