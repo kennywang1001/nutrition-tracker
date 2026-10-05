@@ -9,7 +9,8 @@
     ② 檢查今日額度（數 ai_analyses 今天的列數）
     ③ 呼叫 LLM。不管成功失敗都寫一列 ai_analyses —— 兩種都花了錢
     ④ 純函式一致性檢查（app/ai/consistency.py）
-    ⑤ 回傳估算值 + 一致性結果 + analysis_id，到這裡為止沒有寫入任何食物
+    ⑤ 回傳估算值 + 一致性結果 + analysis_id + food_id（只有命中食物庫才有）
+       + remaining_today，到這裡為止沒有寫入任何食物
 """
 
 import base64
@@ -70,7 +71,9 @@ async def _find_in_food_library(
     §4.1 範例「一碗滷肉飯」），子字串比對在多義詞情境下會不可預期地挑中
     一筆當作「找到」，那比直接呼叫 LLM 更危險。隨著使用者確認過的 AI 結果
     越存越多（規格 §3：那些都會變成食物庫的一部分），精確比對命中的機率
-    會自然提升。
+    會自然提升。比較用 `lower() ==`，不用 `ilike`——後者把使用者文字裡的 `%`、`_`
+    當萬用字元，`%麵` 會命中任意一個食物。同名的自己的食物與全域食物並存時，
+    回自己的。
 
     範圍是使用者看得到的食物（自己的 + 全域），跟 `search_foods` 同一個
     可見性規則——全域食物（例如「白飯」）一樣不需要為它多花一次 LLM 呼叫，
@@ -86,8 +89,11 @@ async def _find_in_food_library(
             .join(FoodRevision, Food.current_revision_id == FoodRevision.id)
             .where(
                 or_(Food.owner_id.is_(None), Food.owner_id == user.id),
-                Food.name.ilike(text.strip()),
+                # 不用 ilike：`%`、`_` 會被當萬用字元，`%麵` 會命中任意一個食物。
+                func.lower(Food.name) == text.strip().lower(),
             )
+            # 自己的食物優先於全域的（False 排前面），再用 id 讓結果固定。
+            .order_by(Food.owner_id.is_(None), Food.id)
             .limit(1)
         )
     ).first()

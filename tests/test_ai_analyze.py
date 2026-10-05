@@ -494,7 +494,7 @@ async def test_library_hit_does_not_even_build_an_estimator(client, db_session):
     """比「結果對」更強的斷言（P2 規格 §8.3 同一個道理）：命中食物庫時
     連建實作的函式都沒被呼叫。"""
     user = await create_user(db_session)
-    await create_food(db_session, created_by=user, owner=user, name="牛肉麵")
+    food = await create_food(db_session, created_by=user, owner=user, name="牛肉麵")
     built = {"n": 0}
 
     def factory():
@@ -503,10 +503,13 @@ async def test_library_hit_does_not_even_build_an_estimator(client, db_session):
 
     app.dependency_overrides[get_estimator_factory] = lambda: factory
 
-    await client.post(
+    response = await client.post(
         "/api/ai/analyze", headers=auth(user), json={"kind": "text", "text": "牛肉麵"}
     )
 
+    # 先證明走的真的是食物庫命中那條路，再斷言沒建實作。
+    assert response.status_code == 200
+    assert response.json()["food_id"] == food.id
     assert built["n"] == 0
 
 
@@ -592,3 +595,32 @@ async def test_library_hit_does_not_use_up_the_quota(client, db_session):
         select(func.count()).select_from(AiAnalysis).where(AiAnalysis.user_id == user.id)
     )
     assert rows == 5
+
+
+async def test_wildcards_in_the_text_do_not_match_library_foods(client, db_session):
+    """`%麵` 不是萬用字元：比對是精確的，不然它會命中任意一個看得到的食物。"""
+    user = await create_user(db_session)
+    await create_food(db_session, created_by=user, owner=user, name="牛肉麵")
+    fake = FakeEstimator()
+    _inject(fake)
+
+    response = await client.post(
+        "/api/ai/analyze", headers=auth(user), json={"kind": "text", "text": "%麵"}
+    )
+
+    assert response.status_code == 200
+    assert fake.text_calls == 1
+    assert response.json()["food_id"] is None
+
+
+async def test_library_hit_prefers_the_users_own_food_over_a_global_one(client, db_session):
+    user = await create_user(db_session)
+    await create_food(db_session, created_by=user, owner=None, name="牛肉麵")
+    own = await create_food(db_session, created_by=user, owner=user, name="牛肉麵")
+    _inject(FakeEstimator())
+
+    response = await client.post(
+        "/api/ai/analyze", headers=auth(user), json={"kind": "text", "text": "牛肉麵"}
+    )
+
+    assert response.json()["food_id"] == own.id

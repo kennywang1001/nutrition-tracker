@@ -152,6 +152,8 @@ async def create_food(
         # rollback 是必要的 —— 少了它，這個 session 之後所有操作都會拋
         # PendingRollbackError（見計畫 1 Task 7 的第四個邊界）。
         await db.rollback()
+        # 防禦性的：commit 時的 IntegrityError 通常是延後外鍵或份量約束，不是撞名，
+        # 重查通常找不到東西，此時 `_food_exists(None)` 不附 details。
         raced = await _find_same_named_food(
             db, owner_id=owner_id, name=payload.name, brand=payload.brand
         )
