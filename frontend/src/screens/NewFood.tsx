@@ -4,6 +4,7 @@ import { useNavigate } from "react-router";
 import { apiFetch } from "../api/client";
 import { ApiError, describeFieldErrors } from "../api/errors";
 import type { components } from "../api/schema";
+import { AiEstimatePanel } from "../components/AiEstimatePanel";
 import { isPlainPositiveDecimal, perServingToPer100 } from "../lib/decimal";
 
 type Food = components["schemas"]["FoodResponse"];
@@ -59,6 +60,7 @@ type NutritionBasis = "per100" | "perServing";
 export function NewFood() {
 	const navigate = useNavigate();
 
+	const [aiText, setAiText] = useState("");
 	const [name, setName] = useState("");
 	const [brand, setBrand] = useState("");
 	const [baseUnit, setBaseUnit] = useState<BaseUnit>("g");
@@ -205,6 +207,24 @@ export function NewFood() {
 	return (
 		<section>
 			<h1>新增食物</h1>
+			{/* 用 AI 填（AI 估算前端規格 §5.2）：跟記一餐同一個面板。存好之後跟
+			    手動建立成功一樣導到詳情頁。放在表單外面——面板自己的修改模式
+			    也是一個 <form>，巢狀 form 不合法。 */}
+			<section aria-labelledby="new-food-ai">
+				<h2 id="new-food-ai">用 AI 填</h2>
+				<label htmlFor="ai-describe">描述這個食物</label>
+				<input
+					id="ai-describe"
+					type="text"
+					value={aiText}
+					onChange={(event) => setAiText(event.target.value)}
+				/>
+				<AiEstimatePanel
+					text={aiText}
+					textButtonLabel={() => "估算"}
+					onFoodReady={(food) => navigate(`/foods/${food.id}`)}
+				/>
+			</section>
 			<form onSubmit={handleSubmit}>
 				<label htmlFor="food-name">名稱</label>
 				<input
