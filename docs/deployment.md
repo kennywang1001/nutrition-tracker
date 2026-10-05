@@ -66,19 +66,33 @@ BIND_ADDR=127.0.0.1
 > 填什麼都不影響，填 `127.0.0.1` 是為了讓它至少不誤導（對外入口是
 > `tailscale serve`，不是任何一個綁在 tailnet 位址上的埠）。
 
-`.env.production.example` 還有一個選配的 `ANTHROPIC_API_KEY`（AI
-營養素估算用的 Anthropic 金鑰）。跟 `JWT_SECRET`、`BIND_ADDR` 不一樣，
-**這個留白也沒關係**：應用程式本身沒設就把 AI 分析功能整個關閉
-（該端點回 `503 AI_NOT_CONFIGURED`），其他既有功能完全不受影響，
-`docker compose config` 也不會因為它沒填就報錯。理由是「沒有 AI key」
-不是安全性問題，只是少一個功能——不該讓整個 app 因為一個選配功能而起不來。
+`.env.production.example` 還有四個選配的 AI 變數（AI 營養素估算）。
+**全部留白也沒關係**：`AI_PROVIDER` 沒填，AI 功能就整個關閉（估算端點回
+`503 AI_NOT_CONFIGURED`，畫面上說「AI 分析未設定」），其他功能完全不受影響。
+「沒有 AI」不是安全性問題，只是少一個功能——不該讓整個 app 因此起不來。
 
-> **這個變數目前還沒有被 `docker-compose.yml` / `docker-compose.prod.yml`
-> 傳進容器**（兩個檔案的 `api.environment` 都沒有列出它）——單填
-> `.env.production` 這個值本身不會讓容器裡的 `Settings` 讀到它。
-> 要讓 production 真的能開啟 AI 分析，還需要在 compose 檔補一條
-> `ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"`（可留白，跟 `JWT_SECRET`
-> 的 `:?` 必填語法不同）。這一步目前不在這份 task 的範圍內。
+要打開 AI：
+
+| 變數 | 填什麼 |
+|---|---|
+| `AI_PROVIDER` | `anthropic` 或 `gemini`（小寫）。**填了別的值，api 容器會啟動失敗**——打錯字要大聲說出來 |
+| `AI_MODEL` | 那一家的模型名稱。**沒有預設值**：從供應商的文件確認目前可用的名稱再填（Anthropic：https://docs.anthropic.com/en/docs/about-claude/models、Gemini：https://ai.google.dev/gemini-api/docs/models） |
+| `ANTHROPIC_API_KEY` | 選 `anthropic` 時必填 |
+| `GEMINI_API_KEY` | 選 `gemini` 時必填 |
+
+選了一家卻沒填它的金鑰或 `AI_MODEL`：端點回 503，訊息會說缺哪一個
+（例如「AI 分析未設定：缺 GEMINI_API_KEY」）。四個變數都由
+`docker-compose.yml` 用 `${VAR:-}` 傳進 api 容器（空字串＝沒設）。
+
+**換供應商**：改 `AI_PROVIDER` 與 `AI_MODEL`（以及那一家的金鑰），然後
+`up -d`（不是 `restart`，見「二、更新」）。每日上限（預設 20 次）兩家共用、
+照樣算。
+
+**打開之後怎麼確認**：在記一餐打一個食物庫沒有的東西，按「用 AI 估算」——
+看到結果卡片就是通的；看到「AI 分析未設定」就照訊息補設定；看到「AI 估算
+失敗，請再試一次」通常是金鑰或 `AI_MODEL` 填錯（供應商的 SDK 丟出錯誤、端點
+回 500），看 api 容器的 log。**這種失敗也算在當天的次數裡**——設定錯的時候
+別一直重按。
 
 > **不要**把這個檔案改名成 `.env` —— 那個名字是本機開發用的，
 > 而且 `docker compose` 只會自動讀 `.env`，兩者混在一起遲早出事。
@@ -240,6 +254,10 @@ git pull
 docker compose --env-file .env.production \
   -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
+
+> **2026-10 這一版（AI 估算的前端）多了一個 Python 套件（`google-genai`）**，
+> 上面的 `--build` 會裝進去；沒有 migration。要打開 AI，先照「4. 產生密鑰並
+> 填設定」在 `.env.production` 填好 AI 變數再 `up -d --build`。
 
 如果這次的更新有 migration：
 

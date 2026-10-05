@@ -2112,17 +2112,15 @@ import { ApiError, describeFieldErrors } from "../api/errors";
 import type { Food } from "../api/foods";
 import { describePhotoUploadError, PhotoTooLargeError } from "../api/photos";
 import { queryKeys } from "../api/queries";
-import type { components } from "../api/schema";
 import { formatMacro } from "../lib/decimal";
 import {
+	type AiFoodBody,
 	confirmedFoodRequest,
 	draftFromEstimate,
 	type EstimateDraft,
 	editedFoodRequest,
 } from "../lib/ai-food";
 import styles from "./AiEstimatePanel.module.css";
-
-type FoodCreateRequest = components["schemas"]["FoodCreateRequest"];
 
 type AnalyzeInput = { kind: "text"; text: string } | { kind: "image"; file: File };
 
@@ -2223,7 +2221,7 @@ export function AiEstimatePanel({
 	}
 
 	const save = useMutation({
-		mutationFn: (body: FoodCreateRequest) =>
+		mutationFn: (body: AiFoodBody) =>
 			apiFetch<Food>("/api/foods", {
 				method: "POST",
 				headers: { "content-type": "application/json" },

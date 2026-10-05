@@ -2,7 +2,7 @@
 
 **專案：** nutrition-tracker —— 飲食紀錄系統
 **Repo：** https://github.com/kennywang1001/nutrition-tracker（公開）
-**狀態：** 後端完成並可部署、session 撤銷已完成；介面改版第一階段、食物的一份已上線；修改與刪除已記錄的餐點已實作於 `feat/edit-meals`
+**狀態：** 後端完成並可部署、session 撤銷已完成；介面改版第一階段、食物的一份、修改與刪除已記錄的餐點已上線；AI 估算的前端已實作於 `feat/ai-estimate`
 **文件產出日：** 2026-09-11（session 撤銷完成後更新於 2026-09-12）
 
 ---
@@ -42,7 +42,7 @@
 |---|---|---|
 | P0 骨架 | Docker Compose + CI + repo 結構 | ✅ 隨 P1 長出來 |
 | P1 核心 | 資料模型 + CRUD API + 測試框架 | ✅ |
-| P2 AI 分析 | 拍照 → 辨識 → 估算 → **驗證** → 落庫 | ⬜ |
+| P2 AI 分析 | 拍照 → 辨識 → 估算 → **驗證** → 落庫。後端（Anthropic 與 Gemini 擇一，`AI_PROVIDER`）與前端（記一餐、新增食物的估算面板；規格 `docs/superpowers/specs/2026-10-05-ai-estimate-frontend-design.md`、計畫 `docs/superpowers/plans/2026-10-05-ai-estimate-frontend.md`） | ✅ 已實作於 `feat/ai-estimate` |
 | **P3 介面** | **PWA（TypeScript + React）** | 🟡 **P3-A ✅、P3-B 計畫一 ✅、計畫二待 PR** |
 | P4 上線 | NAS 部署 + Tailscale | ✅ |
 | **UI 改版 第一階段** | tab bar 總覽｜報表｜＋｜飲食｜我的；MOZE 風格外觀（設計變數 + 深色模式，跟隨系統）；自訂數字鍵盤記帳；記一餐可選填照片；總覽時間線（規格 `docs/superpowers/specs/2026-10-02-ui-redesign-phase1-design.md`、計畫 `docs/superpowers/plans/2026-10-02-ui-redesign-phase1.md`） | ✅ 已實作於 `feat/ui-redesign-phase1`，待合併 |
@@ -225,7 +225,7 @@ userland proxy 對發佈的埠做 SNAT）。按 IP 限速會把 tailnet 上所�
 
 ---
 
-## 6. 這個專案最有價值的產出：五十種「綠燈說謊」
+## 6. 這個專案最有價值的產出：五十二種「綠燈說謊」
 
 **每一種的機制都不同，而且都是實測踩到的，不是理論。**
 新加的任何測試都應該對照這份清單檢查一次。
@@ -739,6 +739,27 @@ monkeypatch 讓份量的 grams 變成 -1，在 commit 時被 CHECK 擋下，再�
 `GET .../photo` 的次數（9d51747）。斷言「做了某個動作」跟斷言「那個動作要達成
 的效果」是兩件事。
 
+### 第 51、52 種是「AI 估算的前端」長出來的
+
+**第 51 種：`toHaveBeenCalledWith({ image: file })` 對任何一個 File 都成立。**
+File 沒有自己的可列舉屬性，Vitest 的深比較把兩個內容、名稱都不同的 File 當成
+相等——「交回的是原始照片，不是縮過的那張」這條規則（AI 估算規格 §5.1）
+其實沒被驗到。而且縮圖的 mock 原樣回傳同一個物件，就算比對得出來也分不出差別。
+有鑑別力的寫法：讓 mock 回另一個 File，再用 `toBe(photo)` 比同一性（05b2ac2）。
+
+**第 52 種：測試只改了一個欄位，其他「要照使用者改的值」的保證沒被驗到。**
+「改過才確認」的測試只改熱量，名稱與一份的重量維持 AI 的原值——於是把
+`default_portion.grams` 寫成 AI 的重量、或把名稱寫成 AI 的名稱，測試照樣綠，
+因為那兩個值本來就相等。規格寫「改過的一份重量」，而測試資料讓「改過的」與
+「原本的」無法區分（c89bf5a）。跟第 2 種同一個家族：測試資料在原理上不可能讓錯的
+實作失敗。
+
+**附記：第 48 種又踩了一次，而且是反過來的。** 記一餐的搜尋框下面多了「用 AI 估算
+『{食物名}』」按鈕——名稱**含有**食物名，所以既有 e2e 的
+`getByRole("button", { name: foodName })` 點到了 AI 按鈕（4 個 spec 紅）。新元件的
+可及名稱包含既有元件的名稱時，舊測試會被新元件「搶走」；點食物一律 `exact: true`
+（d7e2c0e）。
+
 ---
 
 ## 7. 踩過的技術坑（節錄，完整版在各計畫文件）
@@ -757,6 +778,8 @@ monkeypatch 讓份量的 grams 變成 -1，在 commit 時被 CHECK 擋下，再�
 | PG `AT TIME ZONE` vs Python `zoneinfo` | 兩套獨立實作。實測 90 個時刻 0 不一致，但有測試釘住漂移 |
 | asyncpg `contype` | `"char"` 回傳成 **bytes**（`b'c'`），比對要加 `::text` |
 | asyncpg 日期參數 | 要傳真的 `date` 物件，`$1::date` 配字串會拋 `DataError` |
+| testing-library 的文字正規化 | `getByText` 把 DOM 文字裡的空白（含全形空白 U+3000）壓成一個半形空白，但**傳進去的字串不會**——寫了全形空白的斷言永遠對不上（AI 估算 Task 4） |
+| TanStack v5 mutation 的 callback | `useMutation({ onSuccess })` 在元件卸載之後**仍然會跑**；`mutate(vars, { onSuccess })` 不會。會導頁或改父層狀態的事放在後者（編輯餐點 Task 6、AI 估算 Task 4） |
 | `docker ps` 顯示 `Up` | **不代表活著**。uvicorn reloader 父行程在子行程崩潰時仍活著 |
 | 改環境變數後 `restart` | **不夠**，要 `up -d`（會重建容器） |
 | 在本機起 prod 疊加設定 | 會**接管同名的 dev 容器**（專案名稱相同），dev 的 `db` 會失去 `5433` 的埠發佈。驗證完要 `down` 再 `docker compose up -d` 把 dev 收回來，否則 host 上的 pytest 連不到資料庫 |
@@ -823,6 +846,19 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
 
 ### 8.2 其他延後項目
 
+- **AI 估算的已知限制與後續**（AI 估算前端規格、計畫 `docs/superpowers/plans/2026-10-05-ai-estimate-frontend.md`）：
+  - 一次一樣食物（P2 規格 §9）；「編輯這一餐」的加一項沒有 AI（`FoodPicker` 的
+    `renderBelowSearch` 沒給，要加只是多傳一個 prop）。
+  - 估算用的照片不存（記一餐的拍照估算會把那張照片當這一餐的照片，那是另一件事）。
+  - `ai_raw_response` 存的是前端送來的估算回應（不是後端自己留的 LLM 原文）——它是
+    你自己的資料，偽造它只會騙到你自己。
+  - 供應商的 SDK 丟錯（金鑰或 `AI_MODEL` 錯）時端點回 500、畫面說「AI 估算失敗」，
+    而且**算一次額度**（失敗的呼叫也記一列）。之後可以把 SDK 的錯誤分類成 502／503。
+  - `remaining_today` 在同時多個請求時可能多報（各自以為只有自己用了一次）；額度檢查
+    本身也有同樣的競爭（P2 就存在）。單人使用可接受。
+  - `analyzeImage` 與 `uploadMealPhoto` 重複「擋大小＋縮到 1280」，可抽成 `preparePhoto`。
+  - 面板在「結果卡片 ↔ 修改表單」切換時沒有移動焦點（交回食物之後由記一餐把焦點
+    移到「已選擇」）。
 - **孤兒照片的背景清理排程**：指令已有（`python -m app.cli cleanup-photos`），
   cron 設定寫在部署手冊，但**必須在容器內執行**（照片在 Docker volume，
   在 host 跑會看錯目錄）。
