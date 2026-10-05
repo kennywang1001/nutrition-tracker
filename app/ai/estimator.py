@@ -5,38 +5,31 @@
 規格 §8.3：「搜得到就不呼叫 LLM」這條保證，如果測試只斷言「回傳的營養素
 等於食物庫裡那筆」，那麼一個**先呼叫 LLM、再用食物庫的值覆蓋**的實作
 也會全綠 —— 而它每次都在花錢。必須斷言的是「那個方法被呼叫了 0 次」，
-而那需要一個可以注入的假實作（Task 5：`app.dependency_overrides[get_estimator]`）。
+而那需要一個可以注入的假實作（Task 5：`app.dependency_overrides[get_estimator_factory]`）。
 
-## 這個模組不獨立測試 Anthropic 實作本身
+## 兩家實作各一個檔案
 
-打真的網路：慢、花錢、不可重現（規格 §8.1）。Task 5 用一個假的
-`NutritionEstimator` 注入到 FastAPI 依賴裡，間接驗證整條路徑接得起來。
+`app/ai/anthropic_estimator.py` 與 `app/ai/gemini_estimator.py`，用哪一家由
+`AI_PROVIDER` 決定（`app/api/deps.py` 的 `build_estimator`）。這個檔案只放兩家
+共用的：Protocol、`RawEstimate`、提示詞、回覆的形狀與 `parse_raw_estimate()`。
+
+兩家實作都不獨立測試——打真的網路：慢、花錢、不可重現（P2 規格 §8.1）。路由的
+測試注入假實作，間接驗證整條路徑接得起來。
 
 **但 `parse_raw_estimate()` 是純函式**（不碰網路、不碰資料庫），拆出來單獨測，
 見 `tests/test_ai_estimator.py`。它就是規格 §8.2「LLM 回傳垃圾不能讓畫面
 炸掉」那條保證實際落地的地方。
 """
 
-import base64
 import json
 import logging
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Literal, Protocol, cast
+from typing import Protocol
 
-from anthropic import AsyncAnthropic, transform_schema
-from anthropic.types import (
-    Base64ImageSourceParam,
-    ImageBlockParam,
-    Message,
-    MessageParam,
-    OutputConfigParam,
-    TextBlock,
-    TextBlockParam,
-)
 from pydantic import BaseModel, Field, ValidationError
 
-from app.errors import BadGatewayError, UnprocessableEntityError
+from app.errors import BadGatewayError
 
 logger = logging.getLogger(__name__)
 
@@ -68,24 +61,25 @@ class RawEstimate:
 
 
 class NutritionEstimator(Protocol):
+    # 實際用的模型名稱——ai_analyses.model 記的是它（AI 估算前端計畫 Task 1），
+    # 之後才問得出「哪個模型的估算常被改」。
+    model: str
+
     async def estimate_text(self, text: str) -> RawEstimate: ...
     async def estimate_image(self, image: bytes, media_type: str) -> RawEstimate: ...
 
 
-# Anthropic 的 Base64ImageSourceParam.media_type 是一個 Literal，只接受這四種。
-# Protocol 的 estimate_image() 刻意收 `str`（呼叫端——Task 5 的路由——用既有的
-# 照片驗證慣例，也就是 Pillow 實際解碼後判斷格式，不是信任 client 宣告的
-# Content-Type），所以這裡要在打 API 之前重新驗證一次、縮成 Literal 給
-# mypy，也是防禦性的第二道關卡。
-_ImageMediaType = Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
-_ALLOWED_IMAGE_MEDIA_TYPES: frozenset[str] = frozenset(
+# 兩家實作打 API 之前的第二道關卡：路由已經用 Pillow 實際解碼判斷過格式
+# （`app/api/routes/ai.py` 的 `_decode_photo`），這裡擋掉理論上不該出現、但也沒有
+# 理由假設不會出現的格式。
+ALLOWED_IMAGE_MEDIA_TYPES: frozenset[str] = frozenset(
     {"image/jpeg", "image/png", "image/gif", "image/webp"}
 )
 
 # 一份估算的 JSON 很短（8 個欄位），這個上限只是防止模型跑題輸出一大段文字
 # 還是被硬截斷在 JSON 中間，那種半成品一樣會在 parse_raw_estimate() 被擋下來，
 # 但不需要讓它有機會輸出到幾千 token 才被擋。
-_MAX_OUTPUT_TOKENS = 1024
+MAX_OUTPUT_TOKENS = 1024
 
 # 四個硬要求（計畫 Task 4）：
 # 1. 回 JSON，欄位名跟 RawEstimate 對齊（含 serving_ 前綴）
@@ -93,7 +87,7 @@ _MAX_OUTPUT_TOKENS = 1024
 # 3. 只回一樣食物 —— 規格 §9，這一版不做多食物辨識
 # 4. 不要求它自己檢查 Atwater —— 那是 app/ai/consistency.py 的工作，
 #    那一層的價值就在於它不是 LLM 說的
-_SYSTEM_PROMPT = """你是一個幫忙記錄飲食的營養分析助手。你的任務是估算「一份」\
+SYSTEM_PROMPT = """你是一個幫忙記錄飲食的營養分析助手。你的任務是估算「一份」\
 食物的營養素，讓使用者可以快速記錄一餐。
 
 你會收到一段文字描述，或一張食物照片。不管哪一種，你都只回傳一個 JSON 物件，
@@ -123,11 +117,11 @@ JSON 物件要包含這些欄位：
 "serving_protein_g": 14, "serving_fat_g": 18, "serving_carb_g": 62, "confidence": 0.7}
 """
 
-_TEXT_ESTIMATE_INSTRUCTION = "請估算以下食物的營養素，只回傳前面說明的那個 JSON 物件：\n\n{text}"
-_IMAGE_ESTIMATE_INSTRUCTION = "請估算這張照片裡那份食物的營養素，只回傳前面說明的那個 JSON 物件。"
+TEXT_ESTIMATE_INSTRUCTION = "請估算以下食物的營養素，只回傳前面說明的那個 JSON 物件：\n\n{text}"
+IMAGE_ESTIMATE_INSTRUCTION = "請估算這張照片裡那份食物的營養素，只回傳前面說明的那個 JSON 物件。"
 
 
-class _LLMEstimateSchema(BaseModel):
+class LLMEstimateSchema(BaseModel):
     """驗證 LLM 回傳 JSON 的形狀。
 
     規格 §8.2：「缺欄位、負數、超出範圍、不是 JSON」都要被擋下來——
@@ -148,17 +142,6 @@ class _LLMEstimateSchema(BaseModel):
     confidence: Decimal = Field(ge=0, le=1, decimal_places=2)
 
 
-# 用 anthropic 官方提供的 transform_schema() 從上面的 pydantic model 產生
-# structured output 要的 JSON schema，請模型直接照這個形狀輸出（`anthropic`
-# 套件的實際 API 形狀是讀 .venv 裡的原始碼確認的，見開工前必讀）。
-# **這不是唯一的防線** —— 就算 API 忽略這個提示，parse_raw_estimate() 的
-# pydantic 驗證仍然會擋下任何不合規的回應。
-_RESPONSE_SCHEMA: dict[str, object] = transform_schema(_LLMEstimateSchema)
-_OUTPUT_CONFIG: OutputConfigParam = {
-    "format": {"type": "json_schema", "schema": _RESPONSE_SCHEMA}
-}
-
-
 def parse_raw_estimate(response_text: str) -> RawEstimate:
     """把 LLM 回覆的文字解析成 `RawEstimate`，解析失敗拋 `AI_BAD_RESPONSE`。
 
@@ -166,7 +149,7 @@ def parse_raw_estimate(response_text: str) -> RawEstimate:
     餵它任何字串，不需要打 API。
 
     **`raw` 存的是 `json.loads` 解出來的原始字典**，不是驗證過、型別轉換過的
-    `_LLMEstimateSchema` 物件 —— 規格 §5：「AI 常常錯很多嗎」要靠它回答，
+    `LLMEstimateSchema` 物件 —— 規格 §5：「AI 常常錯很多嗎」要靠它回答，
     存下驗證後的版本會讓這個欄位失去「LLM 原始說了什麼」這個意義。
     """
     try:
@@ -180,7 +163,7 @@ def parse_raw_estimate(response_text: str) -> RawEstimate:
         raise BadGatewayError("AI_BAD_RESPONSE", "AI 回傳的 JSON 不是一個物件")
 
     try:
-        validated = _LLMEstimateSchema.model_validate(parsed_json)
+        validated = LLMEstimateSchema.model_validate(parsed_json)
     except ValidationError as exc:
         raise BadGatewayError(
             "AI_BAD_RESPONSE", "AI 回傳的內容缺欄位、型別錯誤，或數值超出範圍"
@@ -197,64 +180,3 @@ def parse_raw_estimate(response_text: str) -> RawEstimate:
         confidence=validated.confidence,
         raw=parsed_json,
     )
-
-
-def _extract_text(message: Message) -> str:
-    """從回應裡取出第一個文字內容區塊。
-
-    正常情況下（沒有開 extended thinking、沒有用 tool）content 就是一個
-    TextBlock。找不到文字區塊本身就是一種「垃圾回應」，跟 JSON 解析失敗
-    走同一條錯誤路徑。
-    """
-    for block in message.content:
-        if isinstance(block, TextBlock):
-            return block.text
-    raise BadGatewayError("AI_BAD_RESPONSE", "AI 回應沒有文字內容")
-
-
-class AnthropicEstimator:
-    """用 Anthropic Claude 估算「一份」的營養素。
-
-    這個類別本身沒有獨立測試 —— 打真的 API 會花錢、不可重現（規格 §8.1）。
-    `NutritionEstimator` Protocol 的存在就是為了讓 Task 5 能用假實作取代它，
-    然後斷言「這個類別的方法被呼叫了幾次」。
-    """
-
-    def __init__(self, *, api_key: str, model: str) -> None:
-        self._client = AsyncAnthropic(api_key=api_key)
-        self._model = model
-
-    async def estimate_text(self, text: str) -> RawEstimate:
-        message: MessageParam = {
-            "role": "user",
-            "content": _TEXT_ESTIMATE_INSTRUCTION.format(text=text),
-        }
-        return await self._estimate(message)
-
-    async def estimate_image(self, image: bytes, media_type: str) -> RawEstimate:
-        if media_type not in _ALLOWED_IMAGE_MEDIA_TYPES:
-            # Task 5 的路由在呼叫這裡之前應該已經用 Pillow 實際解碼過圖片、
-            # 確認過格式（跟 app/storage/photos.py 同一個「不信任宣告」的
-            # 原則）。這裡是第二道關卡，理論上不會踩到。
-            raise UnprocessableEntityError("INVALID_PHOTO", "無法識別的圖片格式")
-
-        source: Base64ImageSourceParam = {
-            "type": "base64",
-            "media_type": cast(_ImageMediaType, media_type),
-            "data": base64.standard_b64encode(image).decode("ascii"),
-        }
-        image_block: ImageBlockParam = {"type": "image", "source": source}
-        text_block: TextBlockParam = {"type": "text", "text": _IMAGE_ESTIMATE_INSTRUCTION}
-        message: MessageParam = {"role": "user", "content": [image_block, text_block]}
-        return await self._estimate(message)
-
-    async def _estimate(self, message: MessageParam) -> RawEstimate:
-        response = await self._client.messages.create(
-            model=self._model,
-            max_tokens=_MAX_OUTPUT_TOKENS,
-            system=_SYSTEM_PROMPT,
-            messages=[message],
-            output_config=_OUTPUT_CONFIG,
-        )
-        response_text = _extract_text(response)
-        return parse_raw_estimate(response_text)

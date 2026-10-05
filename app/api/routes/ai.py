@@ -25,8 +25,8 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.consistency import check_consistency
-from app.ai.estimator import NutritionEstimator, RawEstimate
-from app.api.deps import get_current_user, get_estimator
+from app.ai.estimator import RawEstimate
+from app.api.deps import EstimatorFactory, get_current_user, get_estimator_factory
 from app.api.routes.meals import MAX_PHOTO_BYTES
 from app.config import settings
 from app.days import day_bounds, today_in_timezone
@@ -166,6 +166,7 @@ async def _call_estimator_or_record_failure(
     user_id: int,
     kind: AnalysisKind,
     input_hash: str,
+    model: str,
     call: Callable[[], Awaitable[RawEstimate]],
 ) -> RawEstimate:
     """呼叫 LLM；不管成功或失敗都要在 `ai_analyses` 留一列（規格 §7：
@@ -186,7 +187,7 @@ async def _call_estimator_or_record_failure(
             AiAnalysis(
                 user_id=user_id,
                 kind=kind,
-                model=settings.ai_model,
+                model=model,
                 input_hash=input_hash,
                 succeeded=False,
             )
@@ -282,8 +283,9 @@ async def analyze(
     payload: AnalyzeRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    estimator: NutritionEstimator = Depends(get_estimator),
+    make_estimator: EstimatorFactory = Depends(get_estimator_factory),
 ) -> AnalyzeResponse:
+    estimator = make_estimator()
     if isinstance(payload, AnalyzeTextRequest):
         hit = await _find_in_food_library(db, user, payload.text)
         if hit is not None:
@@ -304,6 +306,7 @@ async def analyze(
             user_id=user.id,
             kind=kind,
             input_hash=input_hash,
+            model=estimator.model,
             call=lambda: estimator.estimate_text(text),
         )
     else:
@@ -315,13 +318,14 @@ async def analyze(
             user_id=user.id,
             kind=kind,
             input_hash=input_hash,
+            model=estimator.model,
             call=lambda: estimator.estimate_image(content, media_type),
         )
 
     analysis = AiAnalysis(
         user_id=user.id,
         kind=kind,
-        model=settings.ai_model,
+        model=estimator.model,
         input_hash=input_hash,
         succeeded=True,
     )

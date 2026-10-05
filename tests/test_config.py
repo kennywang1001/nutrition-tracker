@@ -51,19 +51,6 @@ def test_settings_accept_a_real_looking_secret():
     assert settings.jwt_secret == "a-secret-that-is-not-the-placeholder"
 
 
-def test_anthropic_key_defaults_to_none():
-    """沒設 AI key 不該讓整個 app 起不來——它是選配功能，不是安全性設定。
-
-    跟 jwt_secret 刻意相反：那個沒有預設值（fail closed），因為「沒有密鑰」
-    等於「任何人都能偽造 token」。少一個 AI 功能不會讓系統變得不安全。
-    """
-    settings = Settings(jwt_secret="x" * 32)
-
-    assert settings.anthropic_api_key is None
-    assert settings.ai_daily_limit == 20
-    assert settings.ai_model == "claude-sonnet-5"
-
-
 def test_ai_daily_limit_must_be_positive():
     """0 或負數會讓每日上限的比較變成一個永遠成立或永遠不成立的條件——
     兩種都不是「關閉 AI」的正確表達方式（那是不設 key）。
@@ -102,3 +89,66 @@ def test_a_real_anthropic_key_survives_normalisation(monkeypatch):
     """
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-not-a-real-key")
     assert Settings(jwt_secret="x" * 32).anthropic_api_key == "sk-ant-not-a-real-key"
+
+
+_AI_ENV_VARS = ("AI_PROVIDER", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "AI_MODEL")
+
+
+def _clear_ai_env(monkeypatch):
+    for name in _AI_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_ai_is_off_by_default(monkeypatch):
+    """沒設 AI 不該讓 app 起不來——它是選配功能，不是安全性設定
+    （跟 jwt_secret 刻意相反）。`_env_file=None`：本機自己的 .env 不能讓
+    這條測試多一個變因。"""
+    _clear_ai_env(monkeypatch)
+
+    settings = Settings(jwt_secret="x" * 32, _env_file=None)
+
+    assert settings.ai_provider is None
+    assert settings.anthropic_api_key is None
+    assert settings.gemini_api_key is None
+    # 不猜模型名稱：猜錯的名字要到第一次真的呼叫才失敗，而且錯在更難查的地方。
+    assert settings.ai_model is None
+    assert settings.ai_daily_limit == 20
+
+
+def test_empty_ai_settings_mean_unset(monkeypatch):
+    """docker-compose 用 `${VAR:-}` 傳選配變數，沒設時容器收到的是空字串——
+    四個 AI 變數都要把空字串（含空白）當成沒設。"""
+    for value in ("", "   "):
+        for name in _AI_ENV_VARS:
+            monkeypatch.setenv(name, value)
+
+        settings = Settings(jwt_secret="x" * 32, _env_file=None)
+
+        assert settings.ai_provider is None
+        assert settings.anthropic_api_key is None
+        assert settings.gemini_api_key is None
+        assert settings.ai_model is None
+
+
+def test_real_ai_settings_survive_normalisation(monkeypatch):
+    """跟上一條成對：一個永遠回 None 的 validator 也會讓上一條全綠。"""
+    _clear_ai_env(monkeypatch)
+    monkeypatch.setenv("AI_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
+    monkeypatch.setenv("AI_MODEL", "some-model")
+
+    settings = Settings(jwt_secret="x" * 32, _env_file=None)
+
+    assert settings.ai_provider == "gemini"
+    assert settings.gemini_api_key == "not-a-real-key"
+    assert settings.ai_model == "some-model"
+
+
+@pytest.mark.parametrize("value", ["openai", "Gemini", "claude"])
+def test_unknown_ai_provider_fails_at_startup(monkeypatch, value):
+    """打錯字是設定錯誤，要在啟動時大聲說出來——不是安靜地關掉 AI。"""
+    _clear_ai_env(monkeypatch)
+    monkeypatch.setenv("AI_PROVIDER", value)
+
+    with pytest.raises(ValidationError):
+        Settings(jwt_secret="x" * 32, _env_file=None)

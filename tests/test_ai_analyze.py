@@ -1,7 +1,7 @@
 """`POST /api/ai/analyze`（計畫 P2 一 Task 5）。
 
 規格 §8.1：LLM 一律 mock，不打真的網路（沒有 key，而且會花錢）。用
-`app.dependency_overrides[get_estimator]` 注入一個可以數呼叫次數的假
+`app.dependency_overrides[get_estimator_factory]` 注入一個可以數呼叫次數的假
 estimator——`FakeEstimator` 就是為了讓 §8.3 那條「斷言結果沒有鑑別力」
 的假綠燈測不出來而存在：食物庫命中那條測試斷言的是 `fake.calls == 0`，
 不是回傳的營養素等不等於食物庫裡那筆。
@@ -16,7 +16,7 @@ from PIL import Image
 from sqlalchemy import select
 
 from app.ai.estimator import NutritionEstimator, RawEstimate
-from app.api.deps import get_estimator
+from app.api.deps import get_estimator_factory
 from app.config import settings
 from app.errors import BadGatewayError
 from app.main import app
@@ -48,6 +48,9 @@ class FakeEstimator:
     要斷言的正是這裡的計數，不是回應內容（規格 §8.3）。
     """
 
+    # NutritionEstimator 的一部分：ai_analyses.model 記的是實作自己的 model。
+    model = "fake-model"
+
     def __init__(
         self, *, estimate: RawEstimate | None = None, error: Exception | None = None
     ) -> None:
@@ -74,7 +77,8 @@ class FakeEstimator:
 
 
 def _inject(fake: NutritionEstimator) -> None:
-    app.dependency_overrides[get_estimator] = lambda: fake
+    # 路由拿的是「建實作的函式」（先查食物庫，真的要呼叫 AI 才建）。
+    app.dependency_overrides[get_estimator_factory] = lambda: lambda: fake
 
 
 async def _seed_analyses(db_session, user, count: int) -> None:
@@ -83,7 +87,7 @@ async def _seed_analyses(db_session, user, count: int) -> None:
             AiAnalysis(
                 user_id=user.id,
                 kind=AnalysisKind.TEXT,
-                model=settings.ai_model,
+                model="seed-model",
                 input_hash="seed",
                 succeeded=True,
             )
@@ -279,13 +283,13 @@ async def test_llm_garbage_response_is_502_not_500(client, db_session):
 
 
 async def test_analyze_without_api_key_returns_503(client, db_session, monkeypatch):
-    """刻意不 override `get_estimator`——直接用 `app/api/deps.py` 真正的
-    `get_estimator()`，它在 `settings.anthropic_api_key is None` 時就會拋
+    """刻意不 override `get_estimator_factory`——直接用 `app/api/deps.py` 真正的
+    `build_estimator()`，它在沒有選供應商時就會拋
     503（Task 4 已經做好）。測試環境預設沒有 `ANTHROPIC_API_KEY`
     （見根目錄 conftest.py），這裡明確 monkeypatch 一次，不依賴那個環境
     細節、也不受其他測試汙染設定影響。
     """
-    monkeypatch.setattr(settings, "anthropic_api_key", None)
+    monkeypatch.setattr(settings, "ai_provider", None)
     user = await create_user(db_session)
 
     response = await client.post(
@@ -420,3 +424,21 @@ async def test_per_100g_and_serving_values_stay_consistent_under_rounding(client
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
         assert Decimal(nutrition[serving_key]) == expected_serving
+
+
+async def test_analysis_records_the_estimators_model(client, db_session):
+    """ai_analyses.model 記的是實際用的那個實作的 model——之後才查得出
+    「哪個模型的估算常被改」。不是 settings 裡的值（它可以是 None）。"""
+    user = await create_user(db_session)
+    _inject(FakeEstimator())
+
+    response = await client.post(
+        "/api/ai/analyze",
+        headers=auth(user),
+        json={"kind": "text", "text": "食物庫裡找不到的一段描述"},
+    )
+
+    assert response.status_code == 200
+    row = await db_session.scalar(select(AiAnalysis).where(AiAnalysis.user_id == user.id))
+    assert row is not None
+    assert row.model == "fake-model"
