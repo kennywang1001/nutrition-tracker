@@ -349,7 +349,7 @@ async def test_a_portion_of_another_food_is_rejected(client, db_session):
     response = await client.patch(
         f"/api/meals/{meal_id}/items/{item_id}",
         headers=auth(user),
-        json={"portion_id": other_portion.id},
+        json={"portion_id": other_portion.id, "quantity": "1"},
     )
 
     assert response.status_code == 422
