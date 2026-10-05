@@ -18,21 +18,22 @@ from app.ai.estimator import (
 )
 from app.errors import BadGatewayError, UnprocessableEntityError
 
-# **不能直接把 `_LLMEstimateSchema` 這個 pydantic model 傳給
+# **不能直接把 `LLMEstimateSchema` 這個 pydantic model 傳給
 # `response_schema`。** 計畫要求查證 `response_schema` 實際吃什麼形狀
-# （見開工前必讀），實測結果是：`google-genai` 2.25.0 確實接受直接傳一個
+# （P2 計畫一 b 的開工前必讀，`feat/p2-gemini` 分支），實測結果是：
+# `google-genai` 2.25.0 確實接受直接傳一個
 # pydantic `BaseModel` 子類別（`google.genai._transformers.t_schema()` 會
-# 呼叫它的 `model_json_schema()`），**但 `_LLMEstimateSchema` 的
+# 呼叫它的 `model_json_schema()`），**但 `LLMEstimateSchema` 的
 # `Field(gt=..., decimal_places=..., max_digits=...)` 這些約束會讓
 # pydantic 產生 `exclusiveMinimum` 這種 JSON Schema 關鍵字，而 Google 自己
 # 的 `types.Schema`（是一個嚴格子集，不是完整 JSON Schema）不接受它**——
-# 實測直接把 `_LLMEstimateSchema` 傳進去，會在還沒打 API 之前就在 SDK 內部
+# 實測直接把 `LLMEstimateSchema` 傳進去，會在還沒打 API 之前就在 SDK 內部
 # 因為 `types.Schema.model_validate()` 而炸 `pydantic_core.ValidationError:
 # ...exclusiveMinimum ... Extra inputs are not permitted`。
 #
 # 所以這裡手刻一份只用 Google `Schema` 認得的關鍵字（`type` /
 # `properties` / `required` / `nullable`，型別字串是大寫）的字典，
-# 純粹是「提示模型輸出的形狀」，跟 `_LLMEstimateSchema` 是兩件事——
+# 純粹是「提示模型輸出的形狀」，跟 `LLMEstimateSchema` 是兩件事——
 # **真正的數值範圍驗證（`gt=0`、`le=10000` 那些）仍然只由
 # `parse_raw_estimate()` 事後做一次**，不會因為這裡少了約束就變寬鬆。
 # 這不是唯一的防線 —— 就算 API 忽略這個提示，`parse_raw_estimate()` 的

@@ -249,12 +249,16 @@ async def test_a_failed_llm_call_is_still_recorded_in_ai_analyses(client, db_ses
     await db_session.rollback()
     rows = (
         await db_session.execute(
-            select(AiAnalysis.succeeded, AiAnalysis.kind).where(AiAnalysis.user_id == user_id)
+            select(AiAnalysis.succeeded, AiAnalysis.kind, AiAnalysis.model).where(
+                AiAnalysis.user_id == user_id
+            )
         )
     ).all()
     assert len(rows) == 1
     assert rows[0].succeeded is False
     assert rows[0].kind is AnalysisKind.TEXT
+    # 失敗那一列也要記實作自己的 model（NOT NULL，而且之後要靠它分模型）。
+    assert rows[0].model == "fake-model"
 
 
 # ---------------------------------------------------------------------------
@@ -283,11 +287,10 @@ async def test_llm_garbage_response_is_502_not_500(client, db_session):
 
 
 async def test_analyze_without_api_key_returns_503(client, db_session, monkeypatch):
-    """刻意不 override `get_estimator_factory`——直接用 `app/api/deps.py` 真正的
-    `build_estimator()`，它在沒有選供應商時就會拋
-    503（Task 4 已經做好）。測試環境預設沒有 `ANTHROPIC_API_KEY`
-    （見根目錄 conftest.py），這裡明確 monkeypatch 一次，不依賴那個環境
-    細節、也不受其他測試汙染設定影響。
+    """沒有選供應商（`monkeypatch` 把 `ai_provider` 設成 None）時，回 503。
+
+    刻意不 override `get_estimator_factory`——走 `app/api/deps.py` 真正的
+    `build_estimator()`，由它拋 503 AI_NOT_CONFIGURED。
     """
     monkeypatch.setattr(settings, "ai_provider", None)
     user = await create_user(db_session)

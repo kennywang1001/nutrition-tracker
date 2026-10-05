@@ -36,12 +36,11 @@ services:
       # 不像 JWT_SECRET 那樣中止。所以它可以寫在這個共用檔案裡，
       # 不需要像 JWT_SECRET 一樣拆到兩個 override。
       #
-      # ⚠️ 沒設時容器收到的是**空字串**，不是「沒有這個變數」。
-      # `app/config.py` 的 `_empty_means_unset` validator 把它正規化回
-      # `None` —— 少了那一步，`is None` 會是 False，程式會拿一把空字串
-      # 金鑰去打 API，而使用者看到的是來自供應商的認證錯誤，
-      # 不是「你沒設定 AI」。四個都是選配，空字串由 `app/config.py` 的
-      # `_empty_means_unset` 正規化成沒設。
+      # ⚠️ 沒設時容器收到的是**空字串**，不是「沒有這個變數」。下面四個都是
+      # 選配，`app/config.py` 的 `_empty_means_unset` 把空字串正規化成沒設。
+      # 少了那一步：金鑰會是空字串而不是 None，程式會拿它去打供應商的 API，
+      # 使用者看到的是供應商的認證錯誤，不是「AI 分析未設定」；
+      # AI_PROVIDER 是空字串則會撞上 Literal，讓整個 app 起不來。
       AI_PROVIDER: "${AI_PROVIDER:-}"
       AI_MODEL: "${AI_MODEL:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
