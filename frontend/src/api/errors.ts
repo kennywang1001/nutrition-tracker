@@ -114,3 +114,25 @@ export function hasFieldError(error: ApiError, field: string): boolean {
 		return Array.isArray(loc) && loc.includes(field);
 	});
 }
+
+/** 把 `VALIDATION_ERROR` 的 `details.errors`（規格 §5.4：每一筆有
+ *  `loc` / `msg` / `type`）轉成人看得懂的一行行文字。
+ *
+ *  `ApiError.details` 的型別是 `Record<string, unknown>`——後端的信封
+ *  沒有另外給欄位錯誤一個專屬型別，這裡要自己做執行期窄化，不能假設形狀。
+ *
+ *  `NewFood`、`FoodDetail`、`AddPortionForm`、`Supplements`、`AiEstimatePanel`
+ *  共用——422 的欄位錯誤信封是同一個形狀，沒有理由重寫一份窄化邏輯。 */
+export function describeFieldErrors(error: ApiError): string[] {
+	const raw = error.details.errors;
+	if (!Array.isArray(raw) || raw.length === 0) return [error.message];
+	return raw.map((item) => {
+		if (typeof item !== "object" || item === null) return error.message;
+		const entry = item as { loc?: unknown; msg?: unknown };
+		const msg = typeof entry.msg === "string" ? entry.msg : error.message;
+		const loc = Array.isArray(entry.loc)
+			? entry.loc.filter((part) => part !== "body").join(".")
+			: "";
+		return loc === "" ? msg : `${loc}：${msg}`;
+	});
+}

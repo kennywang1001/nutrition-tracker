@@ -2,7 +2,7 @@ import { useMutation } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 import { useNavigate } from "react-router";
 import { apiFetch } from "../api/client";
-import { ApiError } from "../api/errors";
+import { ApiError, describeFieldErrors } from "../api/errors";
 import type { components } from "../api/schema";
 import { isPlainPositiveDecimal, perServingToPer100 } from "../lib/decimal";
 
@@ -46,28 +46,6 @@ const PER_SERVING_LABELS: Record<NumericField, string> = {
 const MAX_PORTION_GRAMS = 10000;
 
 type NutritionBasis = "per100" | "perServing";
-
-/** 把 `VALIDATION_ERROR` 的 `details.errors`（規格 §5.4：每一筆有
- *  `loc` / `msg` / `type`）轉成人看得懂的一行行文字。
- *
- *  `ApiError.details` 的型別是 `Record<string, unknown>`——後端的信封
- *  沒有另外給欄位錯誤一個專屬型別，這裡要自己做執行期窄化，不能假設形狀。
- *
- *  匯出給 `FoodDetail.tsx`（Task 5）重用——422 的欄位錯誤信封是同一個
- *  `RevisionCreateRequest.nutrition` 形狀，沒有理由重寫一份窄化邏輯。 */
-export function describeFieldErrors(error: ApiError): string[] {
-	const raw = error.details.errors;
-	if (!Array.isArray(raw) || raw.length === 0) return [error.message];
-	return raw.map((item) => {
-		if (typeof item !== "object" || item === null) return error.message;
-		const entry = item as { loc?: unknown; msg?: unknown };
-		const msg = typeof entry.msg === "string" ? entry.msg : error.message;
-		const loc = Array.isArray(entry.loc)
-			? entry.loc.filter((part) => part !== "body").join(".")
-			: "";
-		return loc === "" ? msg : `${loc}：${msg}`;
-	});
-}
 
 /** 新增食物（規格 §5.2）。**私人食物**——`POST /api/foods` 建立的一律是
  *  `owner_id = user.id`，立刻生效，不用送審（送審是 §5.3 對「既有的全域

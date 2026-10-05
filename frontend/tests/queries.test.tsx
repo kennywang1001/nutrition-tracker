@@ -79,3 +79,12 @@ describe("單一餐的 query key", () => {
 		expect(client.getQueryData(queryKeys.meal(5))).toBeUndefined();
 	});
 });
+
+describe("食物搜尋的 query key", () => {
+	it("foodSearchAll 是每一組搜尋結果的前綴——存了新食物要一次失效全部", () => {
+		const prefix = queryKeys.foodSearchAll;
+		expect(
+			queryKeys.foodSearch("牛肉麵", "all").slice(0, prefix.length),
+		).toEqual([...prefix]);
+	});
+});

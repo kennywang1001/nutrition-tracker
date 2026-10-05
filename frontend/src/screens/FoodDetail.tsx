@@ -2,18 +2,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 import { useParams } from "react-router";
 import { apiFetch } from "../api/client";
-import { ApiError } from "../api/errors";
+import { ApiError, describeFieldErrors } from "../api/errors";
 import { useFood, useFoodRevisions } from "../api/foods";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
 import { AddPortionForm } from "../components/AddPortionForm";
 import { formatMacro } from "../lib/decimal";
-import {
-	BASE_UNITS,
-	describeFieldErrors,
-	NUMERIC_FIELDS,
-	type NumericField,
-} from "./NewFood";
+import { BASE_UNITS, NUMERIC_FIELDS, type NumericField } from "./NewFood";
 
 type Revision = components["schemas"]["RevisionResponse"];
 type Portion = components["schemas"]["PortionResponse"];

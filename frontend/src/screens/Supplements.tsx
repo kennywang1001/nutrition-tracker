@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 import { apiFetch } from "../api/client";
-import { ApiError } from "../api/errors";
+import { ApiError, describeFieldErrors } from "../api/errors";
 import { queryKeys } from "../api/queries";
 import {
 	type Supplement,
@@ -9,7 +9,6 @@ import {
 	useTodaySupplements,
 } from "../api/supplements";
 import { useDebounced } from "../lib/use-debounced";
-import { describeFieldErrors } from "./NewFood";
 
 type NumericField = "kcal" | "protein_g" | "fat_g" | "carb_g";
 

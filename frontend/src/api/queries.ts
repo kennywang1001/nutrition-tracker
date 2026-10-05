@@ -87,6 +87,10 @@ export const queryKeys = {
 	 *  它也**不進離線持久化**（`api/persist.ts`）—— 理由見那個檔案。 */
 	foodSearch: (q: string, scope: FoodScope) =>
 		["food-search", q, scope] as const,
+	/** 「所有搜尋結果」這個前綴，給 `invalidateQueries` 用。存了新食物
+	 *  （AI 估算確認、新增食物）之後，任何一組已經快取的搜尋結果都可能該
+	 *  多一筆——一次失效全部，不是猜哪幾組。 */
+	foodSearchAll: ["food-search"] as const,
 	/** 待審提案清單（管理員）。 */
 	pendingRevisions: ["admin", "food-revisions"] as const,
 	/** 某個月的花費清單。`month` 是 `"YYYY-MM"`，或 `null` 代表

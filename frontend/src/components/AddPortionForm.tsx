@@ -1,11 +1,10 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 import { apiFetch } from "../api/client";
-import { ApiError } from "../api/errors";
+import { ApiError, describeFieldErrors } from "../api/errors";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
 import { isPlainPositiveDecimal } from "../lib/decimal";
-import { describeFieldErrors } from "../screens/NewFood";
 
 type Portion = components["schemas"]["PortionResponse"];
 type BaseUnit = components["schemas"]["BaseUnit"];
