@@ -384,7 +384,7 @@ export interface paths {
         };
         /**
          * Read Meal
-         * @description 讀單一餐點：只有 2 次查詢，跟項目數無關（見 `_item_join_query`）。
+         * @description 讀單一餐點：只有 3 次查詢（餐點、項目、餐費），跟項目數無關（見 `_item_join_query`）。
          */
         get: operations["read_meal_api_meals__meal_id__get"];
         put?: never;
@@ -1332,6 +1332,10 @@ export interface components {
          *     **不收 `food_id`**——換食物是刪掉再加一項。`portion_id` 的顯式 null 合法
          *     （改回直接輸入數量）；`quantity` 是 NOT NULL，顯式 null 擋在這裡
          *     （跟 `MealUpdateRequest` 同一個坑：不擋會一路流到 asyncpg 變成 500）。
+         *
+         *     **換份量（送了 `portion_id`，含 null）時必須一起給 `quantity`**：同一個數字
+         *     在不同份量下意思不一樣——只送 `{"portion_id": null}` 會把「2 份」變成
+         *     2 g，只送 `{"portion_id": X}` 會把「200 g」變成 200 份。
          */
         MealItemUpdateRequest: {
             /** Quantity */

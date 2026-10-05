@@ -37,6 +37,10 @@ class MealItemUpdateRequest(BaseModel):
     **不收 `food_id`**——換食物是刪掉再加一項。`portion_id` 的顯式 null 合法
     （改回直接輸入數量）；`quantity` 是 NOT NULL，顯式 null 擋在這裡
     （跟 `MealUpdateRequest` 同一個坑：不擋會一路流到 asyncpg 變成 500）。
+
+    **換份量（送了 `portion_id`，含 null）時必須一起給 `quantity`**：同一個數字
+    在不同份量下意思不一樣——只送 `{"portion_id": null}` 會把「2 份」變成
+    2 g，只送 `{"portion_id": X}` 會把「200 g」變成 200 份。
     """
 
     quantity: Decimal | None = Field(
@@ -48,6 +52,8 @@ class MealItemUpdateRequest(BaseModel):
     def _reject_explicit_null_quantity(self) -> "MealItemUpdateRequest":
         if "quantity" in self.model_fields_set and self.quantity is None:
             raise ValueError("quantity 可以省略，但不接受 null")
+        if "portion_id" in self.model_fields_set and "quantity" not in self.model_fields_set:
+            raise ValueError("換份量時要一起給 quantity——同一個數字在不同份量下意思不一樣")
         return self
 
 

@@ -48,9 +48,7 @@ test("記一餐（有金額）→ 從總覽進編輯 → 改數量 → 刪掉這
 	await expect(row).toHaveCount(1);
 	await expect(row).toContainText(`$${cost}`);
 	await row.getByRole("link").click();
-	await expect(
-		page.getByRole("heading", { name: "編輯這一餐" }),
-	).toBeVisible();
+	await expect(page.getByRole("heading", { name: "編輯這一餐" })).toBeVisible();
 	await expect(page.getByLabel("金額（選填）")).toHaveValue(cost);
 
 	// 改數量：100 → 250。

@@ -356,6 +356,50 @@ async def test_a_portion_of_another_food_is_rejected(client, db_session):
     assert response.json()["error"]["code"] == "PORTION_FOOD_MISMATCH"
 
 
+async def test_portion_without_quantity_is_rejected_and_changes_nothing(client, db_session):
+    """同一個數字在不同份量下意思不一樣：200 g 不能默默變成 200 份。"""
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=user, owner=user)
+    portion = await create_portion(db_session, food=food, label="碗", grams=150)
+    meal_id, item_id = await _meal_with_one_item(client, user, food, quantity="200")
+
+    response = await client.patch(
+        f"/api/meals/{meal_id}/items/{item_id}",
+        headers=auth(user),
+        json={"portion_id": portion.id},
+    )
+
+    assert response.status_code == 422
+    item = await db_session.get(MealItem, item_id)
+    assert item is not None
+    await db_session.refresh(item)
+    assert str(item.quantity_g) == "200.00"
+    assert item.portion_id is None
+
+
+async def test_null_portion_without_quantity_is_rejected(client, db_session):
+    """「2 份」不能默默變成 2 g。"""
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=user, owner=user)
+    portion = await create_portion(db_session, food=food, label="碗", grams=150)
+    meal_id, item_id = await _meal_with_one_item(
+        client, user, food, quantity="2", portion_id=portion.id
+    )
+
+    response = await client.patch(
+        f"/api/meals/{meal_id}/items/{item_id}",
+        headers=auth(user),
+        json={"portion_id": None},
+    )
+
+    assert response.status_code == 422
+    item = await db_session.get(MealItem, item_id)
+    assert item is not None
+    await db_session.refresh(item)
+    assert str(item.quantity_g) == "300.00"
+    assert item.portion_id == portion.id
+
+
 async def test_explicit_null_quantity_is_rejected(client, db_session):
     user = await create_user(db_session)
     food = await create_food(db_session, created_by=user, owner=user)

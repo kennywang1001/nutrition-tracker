@@ -181,15 +181,11 @@ export function LogMeal({ onSaved }: Props) {
 		},
 	});
 
-	function selectFood(food: Food) {
-		setSelectedFood(food);
-	}
-
 	return (
 		<section className={styles.screen}>
 			<h1>記一餐</h1>
 
-			<FoodPicker onSelect={selectFood} />
+			<FoodPicker onSelect={setSelectedFood} />
 
 			{selectedFood !== null && (
 				<form
