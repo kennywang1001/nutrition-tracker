@@ -3,6 +3,7 @@ import { analyzeImage, analyzeText } from "../src/api/ai";
 import { MAX_PHOTO_BYTES, PhotoTooLargeError } from "../src/api/photos";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
+import { shrinkToLongestEdge } from "../src/lib/resize-image";
 import { json, mockApi } from "./helpers/mock-api";
 
 // 照片會先經過 shrinkToLongestEdge（canvas，jsdom 沒有）——原樣回傳。
@@ -54,6 +55,7 @@ describe("AI 估算的 API", () => {
 			kind: "image",
 			image_base64: btoa("fake-jpeg"),
 		});
+		expect(vi.mocked(shrinkToLongestEdge)).toHaveBeenCalledWith(file, 1280);
 	});
 
 	it("照片太大：送出前就擋，不打網路", async () => {
