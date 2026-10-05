@@ -47,7 +47,7 @@ test("建立食物 → 在記一餐搜尋得到 → 記一筆 → 飲食頁數�
 	// 不填「份量」——LogMeal 的 quantity 預設就是 "1"，跟
 	// daily-loop.spec.ts 同一個作法：這條測試要驗的是「搜尋得到、記得進去、
 	// 總覽會變」，不是份量計算本身，用預設值最少互動就能觸發要驗的行為。
-	await page.getByRole("button", { name: foodName }).click();
+	await page.getByRole("button", { name: foodName, exact: true }).click();
 	await page.getByRole("button", { name: "記錄" }).click();
 
 	// 記錄成功後 LogMealRoute 的 onSaved 導去 `/`（總覽）；macro-kcal 在

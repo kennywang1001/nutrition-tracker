@@ -39,7 +39,7 @@ test("新增食物時設一份 → 記一餐自動選上那一份 → 記下的�
 	await page.getByRole("button", { name: "新增紀錄" }).click();
 	await page.getByRole("link", { name: "記一餐" }).click();
 	await page.getByLabel("搜尋食物").fill(foodName);
-	await page.getByRole("button", { name: foodName }).click();
+	await page.getByRole("button", { name: foodName, exact: true }).click();
 
 	// 預設份量自動選上，數量 1。
 	await expect(page.locator("#portion option:checked")).toHaveText("碗");

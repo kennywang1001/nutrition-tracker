@@ -37,7 +37,7 @@ test("記一餐（有金額）→ 從總覽進編輯 → 改數量 → 刪掉這
 	await page.getByRole("button", { name: "新增紀錄" }).click();
 	await page.getByRole("link", { name: "記一餐" }).click();
 	await page.getByLabel("搜尋食物").fill(foodName);
-	await page.getByRole("button", { name: foodName }).click();
+	await page.getByRole("button", { name: foodName, exact: true }).click();
 	await page.getByLabel("份量", { exact: true }).fill("100");
 	await page.getByLabel("金額（選填）").fill(cost);
 	await page.getByRole("button", { name: "記錄" }).click();

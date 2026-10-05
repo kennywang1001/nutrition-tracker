@@ -110,7 +110,7 @@ test("登入後的食物庫／新增食物／記一餐畫面，表單控制項�
 	await expectFormControlsAtLeast16px(page, "記一餐畫面（尚未選擇食物）");
 
 	await page.getByLabel("搜尋食物").fill(foodName);
-	await page.getByRole("button", { name: foodName }).click();
+	await page.getByRole("button", { name: foodName, exact: true }).click();
 	// 選了食物之後：份量 input 與餐別 select 會出現（這個食物沒有
 	// portion，份量 select 不會渲染——見 LogMeal.tsx 的條件）。等表單裡
 	// 「已選擇：」那行文字出現，確保這次量到的是選好食物之後展開的欄位。
