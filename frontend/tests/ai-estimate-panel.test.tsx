@@ -8,6 +8,7 @@ import { queryKeys } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { AiEstimatePanel } from "../src/components/AiEstimatePanel";
+import { shrinkToLongestEdge } from "../src/lib/resize-image";
 import { json, mockApi, type Route } from "./helpers/mock-api";
 
 vi.mock("../src/lib/resize-image", () => ({
@@ -186,22 +187,48 @@ describe("AI 估算面板：估算", () => {
 		expect(screen.getByLabelText("拍照估算")).toBeInTheDocument();
 	});
 
-	it("照片估算：送 kind=image；確認後交回的是那張照片", async () => {
+	it("照片估算：送 kind=image（縮小後的）；確認後交回的是原本那張照片", async () => {
 		const fetchMock = mockApi(routes());
 		const { onFoodReady } = renderPanel();
 		const photo = new File(["fake-jpeg"], "noodle.jpg", { type: "image/jpeg" });
+		// 縮圖會回另一個 File：送出去的是它，交回的必須是原圖（規格 §5.1）。
+		vi.mocked(shrinkToLongestEdge).mockResolvedValueOnce(
+			new File(["small"], "small.jpg", { type: "image/jpeg" }),
+		);
 
 		await userEvent.upload(screen.getByLabelText("拍照估算"), photo);
 		const card = await screen.findByRole("region", { name: "AI 估算結果" });
 
 		expect(bodyOf(fetchMock, "POST", "/api/ai/analyze")).toEqual({
 			kind: "image",
-			image_base64: btoa("fake-jpeg"),
+			image_base64: btoa("small"),
 		});
 		await userEvent.click(within(card).getByRole("button", { name: "確認" }));
-		await waitFor(() =>
-			expect(onFoodReady).toHaveBeenCalledWith(CREATED, { image: photo }),
+		await waitFor(() => expect(onFoodReady).toHaveBeenCalled());
+		expect(onFoodReady.mock.calls[0]?.[1].image).toBe(photo);
+	});
+
+	it("估算進行中：狀態區塊念「AI 估算中…」，結束後清空", async () => {
+		let release: () => void = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const fetchMock = mockApi(routes());
+		const original = fetchMock.getMockImplementation();
+		fetchMock.mockImplementation(async (input, init) => {
+			await gate;
+			return original?.(input, init) ?? new Response(null, { status: 500 });
+		});
+		renderPanel();
+
+		await userEvent.click(
+			screen.getByRole("button", { name: "用 AI 估算「一碗牛肉麵」" }),
 		);
+		expect(screen.getByRole("status")).toHaveTextContent("AI 估算中…");
+
+		release();
+		await screen.findByRole("region", { name: "AI 估算結果" });
+		expect(screen.getByRole("status")).toBeEmptyDOMElement();
 	});
 
 	it("照片太大：選的當下就擋，不打網路", async () => {
@@ -378,6 +405,145 @@ describe("AI 估算面板：食物庫已經有", () => {
 		expect(
 			screen.getByRole("form", { name: "修改 AI 估算" }),
 		).toBeInTheDocument();
+	});
+});
+
+describe("AI 估算面板：狀態", () => {
+	const EXISTS_7 = {
+		method: "POST",
+		path: "/api/foods",
+		handler: apiError(409, "FOOD_EXISTS", "你已經建過同名的食物了", {
+			food_id: 7,
+		}),
+	};
+
+	it("放棄修改：清掉撞名，回到有「確認」的卡片", async () => {
+		mockApi(routes(undefined, [EXISTS_7]));
+		renderPanel();
+
+		const card = await estimateByText();
+		await userEvent.click(
+			within(card).getByRole("button", { name: "需要修改" }),
+		);
+		const form = screen.getByRole("form", { name: "修改 AI 估算" });
+		await userEvent.click(
+			within(form).getByRole("button", { name: "存成食物" }),
+		);
+		expect(
+			await within(form).findByText("你已經有同名的食物了，換個名稱"),
+		).toBeInTheDocument();
+		await userEvent.click(
+			within(form).getByRole("button", { name: "放棄修改" }),
+		);
+
+		const back = screen.getByRole("region", { name: "AI 估算結果" });
+		expect(
+			within(back).getByRole("button", { name: "確認" }),
+		).toBeInTheDocument();
+		expect(back).not.toHaveTextContent("你已經有");
+	});
+
+	it("存失敗之後再估算一次：新卡片不帶舊的錯誤", async () => {
+		mockApi(
+			routes(undefined, [
+				{
+					method: "POST",
+					path: "/api/foods",
+					handler: apiError(500, "INTERNAL_ERROR", "boom"),
+				},
+			]),
+		);
+		renderPanel();
+
+		const card = await estimateByText();
+		await userEvent.click(within(card).getByRole("button", { name: "確認" }));
+		expect(await within(card).findByRole("alert")).toHaveTextContent(
+			"存成食物失敗",
+		);
+
+		const next = await estimateByText();
+		expect(next).not.toHaveTextContent("存成食物失敗");
+	});
+
+	it("「用這個」失敗之後再估算一次：新卡片不帶舊的錯誤", async () => {
+		mockApi(
+			routes(
+				() =>
+					json({ ...ESTIMATE, food_id: 7, name: "滷肉飯", analysis_id: null }),
+				[
+					{
+						method: "GET",
+						path: "/api/foods/7",
+						handler: apiError(500, "INTERNAL_ERROR", "boom"),
+					},
+				],
+			),
+		);
+		renderPanel();
+
+		await userEvent.click(
+			screen.getByRole("button", { name: "用 AI 估算「一碗牛肉麵」" }),
+		);
+		const hit = await screen.findByRole("region", { name: "食物庫裡的食物" });
+		await userEvent.click(within(hit).getByRole("button", { name: "用這個" }));
+		expect(await within(hit).findByRole("alert")).toHaveTextContent(
+			"讀取食物失敗",
+		);
+
+		await userEvent.click(
+			screen.getByRole("button", { name: "用 AI 估算「一碗牛肉麵」" }),
+		);
+		const again = await screen.findByRole("region", { name: "食物庫裡的食物" });
+		expect(again).not.toHaveTextContent("讀取食物失敗");
+	});
+
+	it("離開畫面之後才存好：不再交回食物", async () => {
+		let release: () => void = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const fetchMock = mockApi(routes());
+		const original = fetchMock.getMockImplementation();
+		const client = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const onFoodReady = vi.fn();
+		const view = render(
+			<QueryClientProvider client={client}>
+				<AiEstimatePanel text="一碗牛肉麵" onFoodReady={onFoodReady} />
+			</QueryClientProvider>,
+		);
+		const card = await estimateByText();
+		fetchMock.mockImplementation(async (input, init) => {
+			if (String(input).endsWith("/api/foods")) await gate;
+			return original?.(input, init) ?? new Response(null, { status: 500 });
+		});
+		await userEvent.click(within(card).getByRole("button", { name: "確認" }));
+		view.unmount();
+		release();
+		await new Promise((resolve) => setTimeout(resolve, 50));
+
+		expect(onFoodReady).not.toHaveBeenCalled();
+	});
+
+	it("撞名但沒附 food_id：顯示後端的訊息", async () => {
+		mockApi(
+			routes(undefined, [
+				{
+					method: "POST",
+					path: "/api/foods",
+					handler: apiError(409, "FOOD_EXISTS", "你已經建過同名的食物了"),
+				},
+			]),
+		);
+		renderPanel();
+
+		const card = await estimateByText();
+		await userEvent.click(within(card).getByRole("button", { name: "確認" }));
+
+		expect(await within(card).findByRole("alert")).toHaveTextContent(
+			"你已經建過同名的食物了",
+		);
 	});
 });
 

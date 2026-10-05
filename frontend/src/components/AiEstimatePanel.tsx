@@ -56,6 +56,9 @@ function describeAnalyzeError(error: unknown): string {
 }
 
 function describeSaveError(error: unknown): string {
+	if (error instanceof ApiError && error.code === "FOOD_EXISTS") {
+		return error.message;
+	}
 	if (error instanceof ApiError && error.code === "VALIDATION_ERROR") {
 		return describeFieldErrors(error).join("；");
 	}
@@ -73,7 +76,8 @@ export function AiEstimatePanel({
 	textButtonLabel = defaultTextButtonLabel,
 }: Props) {
 	const queryClient = useQueryClient();
-	const photoInputId = useId();
+	const id = useId();
+	const photoInputId = `${id}-photo`;
 	const trimmed = text.trim();
 
 	const [estimate, setEstimate] = useState<AnalyzeResponse | null>(null);
@@ -93,6 +97,9 @@ export function AiEstimatePanel({
 		setDraft(null);
 		setFormError(null);
 		setExistingFoodId(null);
+		// 舊的存檔／讀取失敗訊息不能跟到新的結果卡片上。
+		save.reset();
+		pickExisting.reset();
 	}
 
 	const analyze = useMutation({
@@ -126,10 +133,12 @@ export function AiEstimatePanel({
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify(body),
 			}),
-		onSuccess: (food) => {
+		// 這裡只放「不論畫面還在不在都該做」的事。交回食物（`finish`）放在每次呼叫
+		// 的 `mutate(…, { onSuccess })`：TanStack v5 在元件卸載後不會跑那一種，
+		// 才不會在使用者離開畫面之後才呼叫 `onFoodReady`（例如 NewFood 會跳頁）。
+		onSuccess: () => {
 			// 新食物要出現在食物庫與之後的搜尋裡。
 			queryClient.invalidateQueries({ queryKey: queryKeys.foodSearchAll });
-			if (food) finish(food);
 		},
 		onError: (error) => {
 			if (error instanceof ApiError && error.code === "FOOD_EXISTS") {
@@ -141,10 +150,23 @@ export function AiEstimatePanel({
 
 	const pickExisting = useMutation({
 		mutationFn: (foodId: number) => apiFetch<Food>(`/api/foods/${foodId}`),
-		onSuccess: (food) => {
-			if (food) finish(food);
-		},
 	});
+
+	function saveFood(body: AiFoodBody) {
+		save.mutate(body, {
+			onSuccess: (food) => {
+				if (food) finish(food);
+			},
+		});
+	}
+
+	function takeFood(foodId: number) {
+		pickExisting.mutate(foodId, {
+			onSuccess: (food) => {
+				if (food) finish(food);
+			},
+		});
+	}
 
 	const busy = analyze.isPending || save.isPending || pickExisting.isPending;
 
@@ -172,13 +194,20 @@ export function AiEstimatePanel({
 			return;
 		}
 		setFormError(null);
-		save.mutate(result.body);
+		setExistingFoodId(null);
+		saveFood(result.body);
 	}
 
 	const unit = estimate?.nutrition.base_unit ?? "g";
+	// 撞名而且附了 food_id 時，畫面用「用現有的／改名」處理；沒附 food_id 就當一般
+	// 失敗，顯示後端的訊息。
 	const saveFailed =
 		save.isError &&
-		!(save.error instanceof ApiError && save.error.code === "FOOD_EXISTS");
+		!(
+			save.error instanceof ApiError &&
+			save.error.code === "FOOD_EXISTS" &&
+			existingFoodId !== null
+		);
 
 	return (
 		<div className={styles.panel}>
@@ -207,7 +236,8 @@ export function AiEstimatePanel({
 				/>
 			</div>
 
-			{analyze.isPending && <p role="status">AI 估算中…</p>}
+			{/* 一直掛著、只換文字：動態插入的 live region 常被讀屏軟體略過。 */}
+			<p role="status">{analyze.isPending ? "AI 估算中…" : ""}</p>
 			{analyze.isError && (
 				<p role="alert">{describeAnalyzeError(analyze.error)}</p>
 			)}
@@ -224,8 +254,7 @@ export function AiEstimatePanel({
 							className={styles.primary}
 							disabled={busy}
 							onClick={() => {
-								if (estimate.food_id !== null)
-									pickExisting.mutate(estimate.food_id);
+								if (estimate.food_id !== null) takeFood(estimate.food_id);
 							}}
 						>
 							用這個
@@ -266,7 +295,7 @@ export function AiEstimatePanel({
 									type="button"
 									className={styles.primary}
 									disabled={busy}
-									onClick={() => pickExisting.mutate(existingFoodId)}
+									onClick={() => takeFood(existingFoodId)}
 								>
 									用現有的
 								</button>
@@ -286,7 +315,7 @@ export function AiEstimatePanel({
 								type="button"
 								className={styles.primary}
 								disabled={busy}
-								onClick={() => save.mutate(confirmedFoodRequest(estimate))}
+								onClick={() => saveFood(confirmedFoodRequest(estimate))}
 							>
 								{save.isPending ? "存成食物中…" : "確認"}
 							</button>
@@ -311,9 +340,9 @@ export function AiEstimatePanel({
 					className={`${styles.card} ${styles.form}`}
 					onSubmit={(event) => submitDraft(event, estimate)}
 				>
-					<label htmlFor="ai-name">食物名稱</label>
+					<label htmlFor={`${id}-name`}>食物名稱</label>
 					<input
-						id="ai-name"
+						id={`${id}-name`}
 						type="text"
 						maxLength={100}
 						value={draft.name}
@@ -321,9 +350,11 @@ export function AiEstimatePanel({
 							setDraft({ ...draft, name: event.target.value })
 						}
 					/>
-					<label htmlFor="ai-serving-grams">{`一份的重量（${unit}）`}</label>
+					<label
+						htmlFor={`${id}-serving-grams`}
+					>{`一份的重量（${unit}）`}</label>
 					<input
-						id="ai-serving-grams"
+						id={`${id}-serving-grams`}
 						type="text"
 						inputMode="decimal"
 						value={draft.servingGrams}
@@ -331,9 +362,9 @@ export function AiEstimatePanel({
 							setDraft({ ...draft, servingGrams: event.target.value })
 						}
 					/>
-					<label htmlFor="ai-kcal">一份的熱量（kcal）</label>
+					<label htmlFor={`${id}-kcal`}>一份的熱量（kcal）</label>
 					<input
-						id="ai-kcal"
+						id={`${id}-kcal`}
 						type="text"
 						inputMode="decimal"
 						value={draft.kcal}
@@ -341,9 +372,9 @@ export function AiEstimatePanel({
 							setDraft({ ...draft, kcal: event.target.value })
 						}
 					/>
-					<label htmlFor="ai-protein">一份的蛋白質（g）</label>
+					<label htmlFor={`${id}-protein`}>一份的蛋白質（g）</label>
 					<input
-						id="ai-protein"
+						id={`${id}-protein`}
 						type="text"
 						inputMode="decimal"
 						value={draft.protein_g}
@@ -351,9 +382,9 @@ export function AiEstimatePanel({
 							setDraft({ ...draft, protein_g: event.target.value })
 						}
 					/>
-					<label htmlFor="ai-fat">一份的脂肪（g）</label>
+					<label htmlFor={`${id}-fat`}>一份的脂肪（g）</label>
 					<input
-						id="ai-fat"
+						id={`${id}-fat`}
 						type="text"
 						inputMode="decimal"
 						value={draft.fat_g}
@@ -361,9 +392,9 @@ export function AiEstimatePanel({
 							setDraft({ ...draft, fat_g: event.target.value })
 						}
 					/>
-					<label htmlFor="ai-carb">一份的碳水化合物（g）</label>
+					<label htmlFor={`${id}-carb`}>一份的碳水化合物（g）</label>
 					<input
-						id="ai-carb"
+						id={`${id}-carb`}
 						type="text"
 						inputMode="decimal"
 						value={draft.carb_g}
@@ -387,6 +418,7 @@ export function AiEstimatePanel({
 							onClick={() => {
 								setDraft(null);
 								setFormError(null);
+								setExistingFoodId(null);
 								save.reset();
 							}}
 						>
