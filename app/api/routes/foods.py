@@ -39,6 +39,29 @@ def _to_response(food: Food, revision: FoodRevision | None) -> FoodResponse:
     )
 
 
+async def _find_same_named_food(
+    db: AsyncSession, *, owner_id: int | None, name: str, brand: str | None
+) -> Food | None:
+    """撞名檢查的範圍：同一個擁有者、同名、同品牌（`uq_foods_owner_id_name_brand`）。
+    所以找到的一定是**你自己的**食物（或建全域食物時撞到的全域食物）——
+    把它的 id 附在 409 裡不會洩漏別人的私人食物。"""
+    existing: Food | None = await db.scalar(
+        select(Food).where(
+            Food.owner_id.is_not_distinct_from(owner_id),
+            Food.name == name,
+            Food.brand.is_not_distinct_from(brand),
+        )
+    )
+    return existing
+
+
+def _food_exists(existing: Food | None) -> ConflictError:
+    """409 FOOD_EXISTS，附上撞到的那一筆的 id（AI 估算前端規格 §3.4）——
+    前端才能提供「用現有的」。找不到（理論上不會）就不附。"""
+    details = {"food_id": existing.id} if existing is not None else None
+    return ConflictError("FOOD_EXISTS", "你已經建過同名的食物了", details)
+
+
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=FoodResponse)
 async def create_food(
     payload: FoodCreateRequest,
@@ -52,15 +75,11 @@ async def create_food(
 
     owner_id = None if payload.is_global else user.id
 
-    existing = await db.scalar(
-        select(Food).where(
-            Food.owner_id.is_not_distinct_from(owner_id),
-            Food.name == payload.name,
-            Food.brand.is_not_distinct_from(payload.brand),
-        )
+    existing = await _find_same_named_food(
+        db, owner_id=owner_id, name=payload.name, brand=payload.brand
     )
     if existing is not None:
-        raise ConflictError("FOOD_EXISTS", "你已經建過同名的食物了")
+        raise _food_exists(existing)
 
     food = Food(
         name=payload.name,
@@ -81,7 +100,11 @@ async def create_food(
         await db.flush()
     except IntegrityError as exc:
         await db.rollback()
-        raise ConflictError("FOOD_EXISTS", "你已經建過同名的食物了") from exc
+        # 併發下另一個請求剛建好那一筆：rollback 之後重查一次，附上它的 id。
+        raced = await _find_same_named_food(
+            db, owner_id=owner_id, name=payload.name, brand=payload.brand
+        )
+        raise _food_exists(raced) from exc
 
     revision = FoodRevision(
         food_id=food.id,
@@ -129,7 +152,10 @@ async def create_food(
         # rollback 是必要的 —— 少了它，這個 session 之後所有操作都會拋
         # PendingRollbackError（見計畫 1 Task 7 的第四個邊界）。
         await db.rollback()
-        raise ConflictError("FOOD_EXISTS", "你已經建過同名的食物了") from exc
+        raced = await _find_same_named_food(
+            db, owner_id=owner_id, name=payload.name, brand=payload.brand
+        )
+        raise _food_exists(raced) from exc
 
     await db.refresh(food)
     # kcal 等欄位在記憶體裡還是使用者傳進來的原始精度（例如 "180.5"），

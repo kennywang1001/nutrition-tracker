@@ -69,6 +69,9 @@ class AnalyzeResponse(BaseModel):
     # 走①食物庫短路命中時是 None——那一次沒有呼叫 LLM，也沒有寫
     # ai_analyses（規格 §3：「不計入每日上限」），沒有列可以參照。
     analysis_id: int | None
+    # 命中食物庫時是那個食物的 id——前端直接選它，不再建一個同名的（然後被
+    # 409 FOOD_EXISTS 擋下）。真的呼叫了 AI 時是 None（AI 估算前端規格 §3.2）。
+    food_id: int | None
     name: str
     brand: str | None
     nutrition: AnalyzedNutrition
@@ -76,3 +79,6 @@ class AnalyzeResponse(BaseModel):
     # 可靠度顯示給使用者，畫面上該顯示的是 consistency。
     confidence: Decimal
     consistency: ConsistencyResult
+    # 今天還能呼叫幾次（AI_DAILY_LIMIT − 今天 ai_analyses 的列數，最小 0）。
+    # 命中食物庫不扣次數。
+    remaining_today: int

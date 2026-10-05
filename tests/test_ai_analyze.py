@@ -13,7 +13,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 from PIL import Image
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.ai.estimator import NutritionEstimator, RawEstimate
 from app.api.deps import get_estimator_factory
@@ -445,3 +445,150 @@ async def test_analysis_records_the_estimators_model(client, db_session):
     row = await db_session.scalar(select(AiAnalysis).where(AiAnalysis.user_id == user.id))
     assert row is not None
     assert row.model == "fake-model"
+
+
+async def test_library_hit_reports_the_food_id(client, db_session):
+    """命中食物庫時回那個食物的 id——前端直接選它，不再建一個同名的
+    （然後被 409 FOOD_EXISTS 擋下）。"""
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=user, owner=user, name="牛肉麵")
+    _inject(FakeEstimator())
+
+    response = await client.post(
+        "/api/ai/analyze", headers=auth(user), json={"kind": "text", "text": "牛肉麵"}
+    )
+
+    assert response.json()["food_id"] == food.id
+
+
+async def test_an_ai_estimate_has_no_food_id(client, db_session):
+    user = await create_user(db_session)
+    _inject(FakeEstimator())
+
+    response = await client.post(
+        "/api/ai/analyze",
+        headers=auth(user),
+        json={"kind": "text", "text": "食物庫裡找不到的一段描述"},
+    )
+
+    assert response.json()["food_id"] is None
+
+
+async def test_library_hit_works_without_ai_configured(client, db_session, monkeypatch):
+    """AI 沒設定時，文字命中食物庫照樣能用（AI 估算前端規格 §3.3）。
+
+    刻意不 override——用真正的 build_estimator()，它在沒選供應商時拋 503。"""
+    monkeypatch.setattr(settings, "ai_provider", None)
+    user = await create_user(db_session)
+    await create_food(db_session, created_by=user, owner=user, name="牛肉麵")
+
+    response = await client.post(
+        "/api/ai/analyze", headers=auth(user), json={"kind": "text", "text": "牛肉麵"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "牛肉麵"
+
+
+async def test_library_hit_does_not_even_build_an_estimator(client, db_session):
+    """比「結果對」更強的斷言（P2 規格 §8.3 同一個道理）：命中食物庫時
+    連建實作的函式都沒被呼叫。"""
+    user = await create_user(db_session)
+    await create_food(db_session, created_by=user, owner=user, name="牛肉麵")
+    built = {"n": 0}
+
+    def factory():
+        built["n"] += 1
+        return FakeEstimator()
+
+    app.dependency_overrides[get_estimator_factory] = lambda: factory
+
+    await client.post(
+        "/api/ai/analyze", headers=auth(user), json={"kind": "text", "text": "牛肉麵"}
+    )
+
+    assert built["n"] == 0
+
+
+async def test_not_configured_wins_over_quota(client, db_session, monkeypatch):
+    """AI 沒設定、額度又剛好用完：要說「未設定」，不是「今天用完了」——
+    後者會讓人以為明天就好了。"""
+    monkeypatch.setattr(settings, "ai_provider", None)
+    user = await create_user(db_session)
+    await _seed_analyses(db_session, user, settings.ai_daily_limit)
+
+    response = await client.post(
+        "/api/ai/analyze",
+        headers=auth(user),
+        json={"kind": "text", "text": "食物庫裡找不到的一段描述"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "AI_NOT_CONFIGURED"
+
+
+async def test_remaining_today_counts_this_call(client, db_session):
+    user = await create_user(db_session)
+    await _seed_analyses(db_session, user, 3)
+    _inject(FakeEstimator())
+
+    response = await client.post(
+        "/api/ai/analyze",
+        headers=auth(user),
+        json={"kind": "text", "text": "食物庫裡找不到的一段描述"},
+    )
+
+    assert response.json()["remaining_today"] == settings.ai_daily_limit - 4
+
+
+async def test_the_last_allowed_call_reports_zero_remaining(client, db_session):
+    user = await create_user(db_session)
+    await _seed_analyses(db_session, user, settings.ai_daily_limit - 1)
+    _inject(FakeEstimator())
+
+    response = await client.post(
+        "/api/ai/analyze",
+        headers=auth(user),
+        json={"kind": "text", "text": "食物庫裡找不到的一段描述"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["remaining_today"] == 0
+
+
+async def test_a_failed_call_also_uses_up_the_quota(client, db_session):
+    """失敗的呼叫也花了錢（規格 §7），所以下一次的 remaining 也少算它。"""
+    user = await create_user(db_session)
+    _inject(FakeEstimator(error=BadGatewayError("AI_BAD_RESPONSE", "垃圾")))
+    failed = await client.post(
+        "/api/ai/analyze",
+        headers=auth(user),
+        json={"kind": "text", "text": "食物庫裡找不到的一段描述"},
+    )
+    assert failed.status_code == 502
+
+    _inject(FakeEstimator())
+    response = await client.post(
+        "/api/ai/analyze",
+        headers=auth(user),
+        json={"kind": "text", "text": "食物庫裡找不到的另一段描述"},
+    )
+
+    assert response.json()["remaining_today"] == settings.ai_daily_limit - 2
+
+
+async def test_library_hit_does_not_use_up_the_quota(client, db_session):
+    user = await create_user(db_session)
+    await _seed_analyses(db_session, user, 5)
+    await create_food(db_session, created_by=user, owner=user, name="牛肉麵")
+    _inject(FakeEstimator())
+
+    response = await client.post(
+        "/api/ai/analyze", headers=auth(user), json={"kind": "text", "text": "牛肉麵"}
+    )
+
+    assert response.json()["remaining_today"] == settings.ai_daily_limit - 5
+    rows = await db_session.scalar(
+        select(func.count()).select_from(AiAnalysis).where(AiAnalysis.user_id == user.id)
+    )
+    assert rows == 5

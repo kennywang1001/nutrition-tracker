@@ -5,6 +5,7 @@
 
     ① 先搜自己看得到的食物庫（DB 查詢，不呼叫 LLM）—— 找到就直接回，
        不計入每日上限，也不寫 ai_analyses
+    （命中食物庫之後才建 AI 實作——AI 沒設定時，命中食物庫照樣能用）
     ② 檢查今日額度（數 ai_analyses 今天的列數）
     ③ 呼叫 LLM。不管成功失敗都寫一列 ai_analyses —— 兩種都花了錢
     ④ 純函式一致性檢查（app/ai/consistency.py）
@@ -93,7 +94,9 @@ async def _find_in_food_library(
     return None if row is None else (row[0], row[1])
 
 
-def _library_hit_response(food: Food, revision: FoodRevision) -> AnalyzeResponse:
+def _library_hit_response(
+    food: Food, revision: FoodRevision, *, remaining_today: int
+) -> AnalyzeResponse:
     """食物庫命中：直接用那一版的資料組回應，`serving_grams` 沒有意義，
     取 100（等同「一份 = 每 100g」，讓 serving_* 與 per-100g 的值自然相等）。
 
@@ -108,6 +111,7 @@ def _library_hit_response(food: Food, revision: FoodRevision) -> AnalyzeResponse
     )
     return AnalyzeResponse(
         analysis_id=None,
+        food_id=food.id,
         name=food.name,
         brand=food.brand,
         nutrition=AnalyzedNutrition(
@@ -124,22 +128,19 @@ def _library_hit_response(food: Food, revision: FoodRevision) -> AnalyzeResponse
         ),
         confidence=Decimal("1.00"),
         consistency=ConsistencyResult.model_validate(consistency),
+        remaining_today=remaining_today,
     )
 
 
-async def _assert_quota_available(db: AsyncSession, user: User) -> None:
-    """規格 §7.2：額度直接數 `ai_analyses` 今天的列數，不另設計數器。
+async def _count_used_today(db: AsyncSession, user: User) -> int:
+    """今天呼叫了幾次 AI——直接數 `ai_analyses`（規格 §7.2），不另設計數器。
 
     「今天」用 `day_bounds(today_in_timezone(user.timezone), user.timezone)`
     ——跟 `stats/daily`、`meals`、`supplements/today` 同一個「今天」
     （P1 陷阱 1），不是 `date.today()`。
-
-    **比較必須是 `>=`，不是 `>`。** 上限 20 代表最多存在 20 列，第 21 次
-    呼叫發生時 `used_today` 已經是 20，`20 >= 20` 才會擋下來；`>` 會讓
-    第 21 次還被放行，差一錯誤（計畫 Task 5 突變驗證（三））。
     """
     start, end = day_bounds(today_in_timezone(user.timezone), user.timezone)
-    used_today = (
+    return (
         await db.scalar(
             select(func.count())
             .select_from(AiAnalysis)
@@ -151,13 +152,29 @@ async def _assert_quota_available(db: AsyncSession, user: User) -> None:
         )
         or 0
     )
+
+
+def _remaining(used_today: int) -> int:
+    return max(0, settings.ai_daily_limit - used_today)
+
+
+async def _assert_quota_available(db: AsyncSession, user: User) -> int:
+    """額度用完就 429；沒用完回傳今天已經用了幾次。
+
+    **比較必須是 `>=`，不是 `>`。** 上限 20 代表最多存在 20 列，第 21 次
+    呼叫發生時 `used_today` 已經是 20，`20 >= 20` 才會擋下來；`>` 會讓
+    第 21 次還被放行，差一錯誤（計畫 Task 5 突變驗證（三））。
+    """
+    used_today = await _count_used_today(db, user)
     if used_today >= settings.ai_daily_limit:
+        _, end = day_bounds(today_in_timezone(user.timezone), user.timezone)
         retry_after_seconds = max(1.0, (end - datetime.now(UTC)).total_seconds())
         raise TooManyRequestsError(
             "AI_DAILY_LIMIT",
             f"今天用了 {used_today}/{settings.ai_daily_limit} 次，請明天再試",
             retry_after_seconds,
         )
+    return used_today
 
 
 async def _call_estimator_or_record_failure(
@@ -285,14 +302,18 @@ async def analyze(
     db: AsyncSession = Depends(get_db),
     make_estimator: EstimatorFactory = Depends(get_estimator_factory),
 ) -> AnalyzeResponse:
-    estimator = make_estimator()
     if isinstance(payload, AnalyzeTextRequest):
         hit = await _find_in_food_library(db, user, payload.text)
         if hit is not None:
             food, revision = hit
-            return _library_hit_response(food, revision)
+            used_today = await _count_used_today(db, user)
+            return _library_hit_response(food, revision, remaining_today=_remaining(used_today))
 
-    await _assert_quota_available(db, user)
+    # 到這裡才真的需要 AI：沒設定就 503（AI 估算前端規格 §3.3）。**要在檢查
+    # 額度之前**——沒設定又剛好額度用完時，該說的是「未設定」，不是「今天
+    # 用完了」（後者會讓人以為明天就好了）。
+    estimator = make_estimator()
+    used_today = await _assert_quota_available(db, user)
 
     kind: AnalysisKind
     input_hash: str
@@ -341,9 +362,12 @@ async def analyze(
     )
     return AnalyzeResponse(
         analysis_id=analysis.id,
+        food_id=None,
         name=raw.name,
         brand=raw.brand,
         nutrition=_to_analyzed_nutrition(raw),
         confidence=raw.confidence,
         consistency=ConsistencyResult.model_validate(consistency),
+        # 這一次已經寫進 ai_analyses 了。
+        remaining_today=_remaining(used_today + 1),
     )

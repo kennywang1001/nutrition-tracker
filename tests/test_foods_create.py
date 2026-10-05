@@ -113,7 +113,7 @@ async def test_create_food_rejects_a_duplicate_name_for_the_same_owner(client, d
     不適合留在測試套件裡。
     """
     user = await create_user(db_session)
-    await create_food(db_session, created_by=user, owner=user, name="滷肉飯")
+    existing = await create_food(db_session, created_by=user, owner=user, name="滷肉飯")
     headers = auth(user)
 
     response = await client.post(
@@ -127,6 +127,8 @@ async def test_create_food_rejects_a_duplicate_name_for_the_same_owner(client, d
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "FOOD_EXISTS"
+    # 附上撞到的那一筆，前端才能提供「用現有的」（AI 估算前端規格 §3.4）。
+    assert response.json()["error"]["details"]["food_id"] == existing.id
 
     # rollback 是否必要，要靠「同一個 session 之後還能用」來驗證：漏掉的話
     # 這裡會拋 PendingRollbackError，而不是單純讓上面的斷言變紅。
@@ -163,7 +165,7 @@ async def test_a_concurrent_duplicate_name_returns_409_not_500(client, db_sessio
     因為那時 try/except 只包住好幾行之後的 commit()。
     """
     user = await create_user(db_session)
-    await create_food(db_session, created_by=user, owner=user, name="撞名食物")
+    existing = await create_food(db_session, created_by=user, owner=user, name="撞名食物")
     await db_session.commit()
     headers = auth(user)
 
@@ -189,6 +191,8 @@ async def test_a_concurrent_duplicate_name_returns_409_not_500(client, db_sessio
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "FOOD_EXISTS"
+    # 併發那條路（IntegrityError）也要附上——rollback 之後重查一次那一筆。
+    assert response.json()["error"]["details"]["food_id"] == existing.id
 
     # rollback 有生效：同一個 session 之後還能用（計畫 4a Task 5 的教訓）
     monkeypatch.undo()

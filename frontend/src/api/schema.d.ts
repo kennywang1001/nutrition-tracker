@@ -966,6 +966,8 @@ export interface components {
         AnalyzeResponse: {
             /** Analysis Id */
             analysis_id: number | null;
+            /** Food Id */
+            food_id: number | null;
             /** Name */
             name: string;
             /** Brand */
@@ -974,6 +976,8 @@ export interface components {
             /** Confidence */
             confidence: string;
             consistency: components["schemas"]["ConsistencyResult"];
+            /** Remaining Today */
+            remaining_today: number;
         };
         /** AnalyzeTextRequest */
         AnalyzeTextRequest: {
