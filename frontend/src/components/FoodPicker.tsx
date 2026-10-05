@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { apiFetch } from "../api/client";
 import { type Food, useFoodSearch } from "../api/foods";
 import { queryKeys } from "../api/queries";
@@ -56,6 +56,9 @@ function dedupeById(lists: Food[][]): Food[] {
 type Props = {
 	/** 選了一個食物。`nutrition === null` 的食物按鈕是 disabled，不會走到這裡。 */
 	onSelect: (food: Food) => void;
+	/** 選填：放在搜尋框正下方的東西，拿到目前的搜尋字（trim 過）。記一餐用它
+	 *  放 AI 估算面板（AI 估算前端規格 §5.1）；編輯這一餐的「加一項」不給。 */
+	renderBelowSearch?: (query: string) => ReactNode;
 };
 
 /** 搜尋框＋常吃／最近吃清單（記一餐與編輯餐點的「加一項」共用）。
@@ -65,7 +68,7 @@ type Props = {
  *
  *  食物庫不用這個元件——那邊選完是進詳情頁，而且有 scope 選擇器
  *  （見 `useFoodSearch` 的註解）。 */
-export function FoodPicker({ onSelect }: Props) {
+export function FoodPicker({ onSelect, renderBelowSearch }: Props) {
 	const [searchInput, setSearchInput] = useState("");
 
 	// P1 規格第 11 節：這兩個端點的索引就是為了這個畫面顧的——
@@ -99,6 +102,7 @@ export function FoodPicker({ onSelect }: Props) {
 					onChange={(event) => setSearchInput(event.target.value)}
 				/>
 			</div>
+			{renderBelowSearch?.(searchInput.trim())}
 
 			{hasSearchQuery && (
 				<>

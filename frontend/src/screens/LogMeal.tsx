@@ -12,6 +12,7 @@ import {
 } from "../api/photos";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
+import { AiEstimatePanel } from "../components/AiEstimatePanel";
 import { FoodPicker } from "../components/FoodPicker";
 import {
 	PortionQuantityFields,
@@ -185,7 +186,24 @@ export function LogMeal({ onSaved }: Props) {
 		<section className={styles.screen}>
 			<h1>記一餐</h1>
 
-			<FoodPicker onSelect={setSelectedFood} />
+			<FoodPicker
+				onSelect={setSelectedFood}
+				renderBelowSearch={(query) => (
+					<AiEstimatePanel
+						text={query}
+						onFoodReady={(food, { image }) => {
+							setSelectedFood(food);
+							// 拍照估算的照片當這一餐的照片——但已經選了別張就不覆蓋
+							// （AI 估算前端規格 §5.1）。放進去的是原始檔案：記一餐上傳時
+							// 自己會縮（uploadMealPhoto）。大小已經在面板擋過。
+							if (image !== null && photo === null) {
+								setPhoto(image);
+								setPhotoError(null);
+							}
+						}}
+					/>
+				)}
+			/>
 
 			{selectedFood !== null && (
 				<form
