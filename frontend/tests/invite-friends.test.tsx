@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { queryKeys } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { Me } from "../src/screens/Me";
@@ -253,5 +254,29 @@ describe("邀請朋友", () => {
 			await screen.findByText("這個邀請已經有人用過了，不能撤銷"),
 		).toBeInTheDocument();
 		await waitFor(() => expect(counts.list).toBe(2));
+	});
+
+	it("每次打開都重抓清單，即使快取裡的還算新鮮", async () => {
+		// app 的 queryClient 預設 staleTime 60 秒、快取還會持久化：不覆寫的話，
+		// 朋友剛用掉邀請、管理員一分鐘內重新整理「我的」，看到的是舊清單
+		// （第 17 種的同一個機制，e2e 抓到的）。「誰用掉了」正是回來看的理由。
+		const client = new QueryClient({
+			defaultOptions: { queries: { retry: false, staleTime: 60_000 } },
+		});
+		client.setQueryData(queryKeys.invites, [PENDING]);
+		const { counts } = adminBackend();
+
+		render(
+			<QueryClientProvider client={client}>
+				<MemoryRouter>
+					<Me onLoggedOut={vi.fn()} />
+				</MemoryRouter>
+			</QueryClientProvider>,
+		);
+
+		expect(
+			await screen.findByText("小明（ming@example.com）"),
+		).toBeInTheDocument();
+		expect(counts.list).toBe(1);
 	});
 });

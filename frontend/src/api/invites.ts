@@ -13,6 +13,10 @@ export function useInvites() {
 	return useQuery({
 		queryKey: queryKeys.invites,
 		queryFn: () => apiFetch<InviteListItem[]>("/api/admin/invites"),
+		// 每次打開「我的」都重抓：app 預設 staleTime 60 秒、快取還會持久化，
+		// 朋友剛用掉邀請時重新整理會看到舊清單——而「誰用掉了」正是回來看的理由。
+		// 先顯示快取、抓到再換，不會閃白。
+		staleTime: 0,
 	});
 }
 

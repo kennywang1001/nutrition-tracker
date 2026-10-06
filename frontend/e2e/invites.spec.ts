@@ -55,13 +55,9 @@ test("管理員產生邀請連結，朋友用它開帳號；同一個連結不�
 	).toHaveCount(0);
 	await stranger.close();
 
-	// 管理員的清單：這一張出現在「已經用掉的」，寫著朋友的 email。
-	// 用全新的瀏覽器登入：reload 會從持久化的查詢快取還原，而清單的
-	// staleTime 是 60 秒，所以 reload 看到的是舊清單、不會重取。
-	const admin = await browser.newContext({ viewport: PHONE });
-	const adminPage = await admin.newPage();
-	await login(adminPage);
-	await adminPage.goto("/me");
-	await expect(adminPage.getByText(`E2E 朋友（${email}）`)).toBeVisible();
-	await admin.close();
+	// 管理員的清單：重新整理之後，這一張出現在「已經用掉的」，寫著朋友的 email。
+	// 快取會持久化、app 預設 staleTime 60 秒——清單要自己每次重抓
+	// （`useInvites` 的 staleTime: 0），否則這裡看到的是 reload 之前的舊清單。
+	await page.reload();
+	await expect(page.getByText(`E2E 朋友（${email}）`)).toBeVisible();
 });
