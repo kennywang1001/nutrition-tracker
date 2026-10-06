@@ -257,6 +257,7 @@ async def test_changing_grams_does_not_touch_meals_already_recorded(client, db_s
         headers=auth(user),
         json={"grams": "300"},
     )
+    assert patched.status_code == 200
     assert patched.json()["grams"] == "300.00"
 
     meal = await client.get(f"/api/meals/{meal_id}", headers=auth(user))
@@ -320,7 +321,9 @@ async def test_someone_elses_private_portion_is_404_and_unchanged(client, db_ses
     )
 
     assert patched.status_code == 404
+    assert patched.json()["error"]["code"] == "PORTION_NOT_FOUND"
     assert deleted.status_code == 404
+    assert deleted.json()["error"]["code"] == "PORTION_NOT_FOUND"
     await db_session.refresh(portion)
     assert str(portion.grams) == "200.00"
 
@@ -369,6 +372,9 @@ async def test_a_portion_of_another_food_in_the_path_is_404(client, db_session):
     )
 
     assert response.status_code == 404
+    assert response.json()["error"]["code"] == "PORTION_NOT_FOUND"
+    await db_session.refresh(portion)
+    assert str(portion.grams) == "200.00"
 
 
 async def test_renaming_to_an_existing_label_is_409(client, db_session):
@@ -397,15 +403,56 @@ async def test_explicit_null_is_rejected(client, db_session):
     assert response.status_code == 422
 
 
-async def test_a_portion_on_an_invisible_food_is_404(client, db_session):
-    alice = await create_user(db_session)
+async def test_a_global_portion_on_someone_elses_private_food_is_404(client, db_session):
+    """食物的可見性是唯一擋住它的那一層：私人食物上的公開份量（管理員能建）。
+    份量本身是公開的，份量的擁有者過濾擋不住——拿掉 load_visible_food 的話，
+    一般使用者會拿到 403（等於透露這個私人食物存在），別的管理員甚至改得動。"""
+    owner_admin = await create_user(db_session, role=UserRole.ADMIN)
+    other_admin = await create_user(db_session, role=UserRole.ADMIN)
     bob = await create_user(db_session)
-    food = await create_food(db_session, created_by=alice, owner=alice)  # Alice 的私人食物
-    portion = await create_portion(db_session, food=food, label="碗", grams=200, owner=alice)
+    food = await create_food(db_session, created_by=owner_admin, owner=owner_admin)
+    portion = await create_portion(db_session, food=food, label="碗", grams=200, owner=None)
+    food_id, portion_id = food.id, portion.id
 
-    response = await client.delete(
-        f"/api/foods/{food.id}/portions/{portion.id}", headers=auth(bob)
+    as_bob = await client.patch(
+        f"/api/foods/{food_id}/portions/{portion_id}", headers=auth(bob), json={"grams": "1"}
+    )
+    as_other_admin = await client.delete(
+        f"/api/foods/{food_id}/portions/{portion_id}", headers=auth(other_admin)
     )
 
-    assert response.status_code == 404
-    assert await db_session.scalar(select(FoodPortion).where(FoodPortion.id == portion.id))
+    assert as_bob.status_code == 404
+    assert as_bob.json()["error"]["code"] == "FOOD_NOT_FOUND"
+    assert as_other_admin.status_code == 404
+    assert await db_session.scalar(select(FoodPortion).where(FoodPortion.id == portion_id))
+
+
+async def test_an_admin_making_a_global_portion_default_keeps_private_defaults(
+    client, db_session
+):
+    admin = await create_user(db_session, role=UserRole.ADMIN)
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=admin)
+    old_global = await create_portion(
+        db_session, food=food, label="公開碗", grams=150, owner=None, is_default=True
+    )
+    new_global = await create_portion(db_session, food=food, label="公開盤", grams=300, owner=None)
+    user_default = await create_portion(
+        db_session, food=food, label="我的碗", grams=200, owner=user, is_default=True
+    )
+    admin_default = await create_portion(
+        db_session, food=food, label="管理員的碗", grams=250, owner=admin, is_default=True
+    )
+    food_id, new_id = food.id, new_global.id
+
+    response = await client.patch(
+        f"/api/foods/{food_id}/portions/{new_id}", headers=auth(admin), json={"is_default": True}
+    )
+
+    assert response.status_code == 200
+    for portion in (old_global, new_global, user_default, admin_default):
+        await db_session.refresh(portion)
+    assert old_global.is_default is False
+    assert new_global.is_default is True
+    assert user_default.is_default is True
+    assert admin_default.is_default is True
