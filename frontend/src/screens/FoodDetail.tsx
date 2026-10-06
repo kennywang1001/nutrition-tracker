@@ -7,6 +7,7 @@ import { useFood, useFoodRevisions } from "../api/foods";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
 import { AddPortionForm } from "../components/AddPortionForm";
+import { PortionRow } from "../components/PortionRow";
 import ui from "../components/ui.module.css";
 import { formatMacro } from "../lib/decimal";
 import { BASE_UNITS, NUMERIC_FIELDS, type NumericField } from "./NewFood";
@@ -49,6 +50,7 @@ export function FoodDetail() {
 	const queryClient = useQueryClient();
 	const food = foodQuery.data ?? null;
 
+	const [editingPortionId, setEditingPortionId] = useState<number | null>(null);
 	const [baseUnit, setBaseUnit] = useState<BaseUnit>("g");
 	const [values, setValues] = useState<Record<NumericField, string>>({
 		kcal: "",
@@ -206,14 +208,15 @@ export function FoodDetail() {
 						) : (
 							<ul>
 								{portions.map((portion) => (
-									<li key={portion.id}>
-										{portion.label}（{formatMacro(portion.grams)} {unit}）
-										{portion.is_default && (
-											<>
-												・<span className={ui.tag}>預設</span>
-											</>
-										)}
-									</li>
+									<PortionRow
+										key={portion.id}
+										foodId={foodId}
+										portion={portion}
+										unit={unit}
+										editing={editingPortionId === portion.id}
+										onEdit={() => setEditingPortionId(portion.id)}
+										onClose={() => setEditingPortionId(null)}
+									/>
 								))}
 							</ul>
 						)}

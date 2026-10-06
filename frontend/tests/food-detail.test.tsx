@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { queryKeys } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { FoodDetail } from "../src/screens/FoodDetail";
@@ -463,5 +464,224 @@ describe("食物詳情 /foods/:id", () => {
 		).toBeInTheDocument();
 		// 不是被通用文案蓋過去。
 		expect(screen.queryByText("送出失敗，請再試一次")).not.toBeInTheDocument();
+	});
+});
+
+const MY_BOWL = {
+	id: 5,
+	label: "我的碗",
+	grams: "220.00",
+	is_default: false,
+	is_global: false,
+};
+
+function portionRequests(
+	fetchMock: ReturnType<typeof mockApi>,
+	method: string,
+): Array<[unknown, RequestInit | undefined]> {
+	return fetchMock.mock.calls.filter(
+		([input, init]) =>
+			(init?.method ?? "GET").toUpperCase() === method &&
+			String(input).includes("/portions/5"),
+	) as Array<[unknown, RequestInit | undefined]>;
+}
+
+/** 跟 `wrap` 一樣的外殼，但自己建 client 並回傳，讓測試可以監看 invalidate。 */
+function renderDetail(): QueryClient {
+	const client = new QueryClient({
+		defaultOptions: { queries: { retry: false } },
+	});
+	render(
+		<QueryClientProvider client={client}>
+			<MemoryRouter initialEntries={["/foods/1"]}>
+				<Routes>
+					<Route path="/foods/:id" element={<FoodDetail />} />
+				</Routes>
+			</MemoryRouter>
+		</QueryClientProvider>,
+	);
+	return client;
+}
+
+describe("食物詳情：份量的修改與刪除", () => {
+	it("公開份量沒有修改、刪除按鈕；自己的有", async () => {
+		mockApi(foodRoutes(PRIVATE_FOOD, [], [...PORTIONS, MY_BOWL]));
+		renderDetail();
+
+		await screen.findByText(/我的碗（220 g）/);
+		expect(
+			screen.getByRole("button", { name: "修改我的碗" }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: "刪除我的碗" }),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "修改一份" }),
+		).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "刪除一份" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("修改：只送改過的欄位，成功後重抓份量清單", async () => {
+		const fetchMock = mockApi(
+			foodRoutes(
+				PRIVATE_FOOD,
+				[],
+				[MY_BOWL],
+				[
+					{
+						method: "PATCH",
+						path: "/portions/5",
+						handler: () => json({ ...MY_BOWL, grams: "250.00" }),
+					},
+				],
+			),
+		);
+		const client = renderDetail();
+		const invalidate = vi.spyOn(client, "invalidateQueries");
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "修改我的碗" }),
+		);
+		const form = screen.getByRole("form", { name: "修改我的碗" });
+		const grams = within(form).getByLabelText("重量（g）");
+		expect(grams).toHaveValue("220");
+		await userEvent.clear(grams);
+		await userEvent.type(grams, "250");
+		await userEvent.click(within(form).getByRole("button", { name: "儲存" }));
+
+		await waitFor(() =>
+			expect(portionRequests(fetchMock, "PATCH")).toHaveLength(1),
+		);
+		const body = JSON.parse(
+			String(portionRequests(fetchMock, "PATCH")[0]?.[1]?.body),
+		);
+		expect(body).toEqual({ grams: "250" });
+		await waitFor(() =>
+			expect(invalidate).toHaveBeenCalledWith({
+				queryKey: queryKeys.portions(PRIVATE_FOOD.id),
+			}),
+		);
+	});
+
+	it("沒改任何東西就儲存：不送，收起來", async () => {
+		const fetchMock = mockApi(foodRoutes(PRIVATE_FOOD, [], [MY_BOWL]));
+		renderDetail();
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "修改我的碗" }),
+		);
+		const form = screen.getByRole("form", { name: "修改我的碗" });
+		await userEvent.click(within(form).getByRole("button", { name: "儲存" }));
+
+		expect(
+			screen.queryByRole("form", { name: "修改我的碗" }),
+		).not.toBeInTheDocument();
+		expect(portionRequests(fetchMock, "PATCH")).toHaveLength(0);
+	});
+
+	it("名稱清空：擋下，不送", async () => {
+		const fetchMock = mockApi(foodRoutes(PRIVATE_FOOD, [], [MY_BOWL]));
+		renderDetail();
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "修改我的碗" }),
+		);
+		const form = screen.getByRole("form", { name: "修改我的碗" });
+		await userEvent.clear(within(form).getByLabelText("份量名稱"));
+		await userEvent.click(within(form).getByRole("button", { name: "儲存" }));
+
+		expect(within(form).getByRole("alert")).toHaveTextContent("請輸入份量名稱");
+		expect(portionRequests(fetchMock, "PATCH")).toHaveLength(0);
+	});
+
+	it("改名撞名：顯示後端的訊息", async () => {
+		mockApi(
+			foodRoutes(
+				PRIVATE_FOOD,
+				[],
+				[MY_BOWL],
+				[
+					{
+						method: "PATCH",
+						path: "/portions/5",
+						handler: () =>
+							json(
+								{
+									error: {
+										code: "PORTION_EXISTS",
+										message: "你已經為這個食物建過同名的份量了",
+										details: {},
+									},
+								},
+								409,
+							),
+					},
+				],
+			),
+		);
+		renderDetail();
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "修改我的碗" }),
+		);
+		const form = screen.getByRole("form", { name: "修改我的碗" });
+		await userEvent.type(within(form).getByLabelText("份量名稱"), "2");
+		await userEvent.click(within(form).getByRole("button", { name: "儲存" }));
+
+		expect(await within(form).findByRole("alert")).toHaveTextContent(
+			"你已經為這個食物建過同名的份量了",
+		);
+	});
+
+	it("刪除要先確認，寫明已記的餐不受影響；取消就不送", async () => {
+		const fetchMock = mockApi(foodRoutes(PRIVATE_FOOD, [], [MY_BOWL]));
+		renderDetail();
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "刪除我的碗" }),
+		);
+		const dialog = screen.getByRole("alertdialog", { name: "確認刪除我的碗" });
+		expect(dialog).toHaveTextContent("已經記下的餐不受影響，公克數照舊");
+		await userEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+
+		expect(portionRequests(fetchMock, "DELETE")).toHaveLength(0);
+	});
+
+	it("確認刪除：送 DELETE，成功後重抓份量清單", async () => {
+		const fetchMock = mockApi(
+			foodRoutes(
+				PRIVATE_FOOD,
+				[],
+				[MY_BOWL],
+				[
+					{
+						method: "DELETE",
+						path: "/portions/5",
+						handler: () => new Response(null, { status: 204 }),
+					},
+				],
+			),
+		);
+		const client = renderDetail();
+		const invalidate = vi.spyOn(client, "invalidateQueries");
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "刪除我的碗" }),
+		);
+		const dialog = screen.getByRole("alertdialog", { name: "確認刪除我的碗" });
+		await userEvent.click(
+			within(dialog).getByRole("button", { name: "確定刪除" }),
+		);
+
+		await waitFor(() =>
+			expect(portionRequests(fetchMock, "DELETE")).toHaveLength(1),
+		);
+		await waitFor(() =>
+			expect(invalidate).toHaveBeenCalledWith({
+				queryKey: queryKeys.portions(PRIVATE_FOOD.id),
+			}),
+		);
 	});
 });
