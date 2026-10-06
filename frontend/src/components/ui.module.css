@@ -239,3 +239,11 @@
 	background: transparent;
 	color: var(--color-danger);
 }
+
+/* 食物清單（FoodResultList）在 index.css 有 `.food-results { margin:0; padding:0 }`
+   （權重 0,1,0），會贏過上面零權重的卡片規則。它在記一餐裡也要那個重設，
+   所以不改 index.css，只在 .screen 底下把卡片的內距補回來。
+   刻意不用 :where()：要有真的權重（0,2,0）才贏得過 index.css。 */
+.screen > :global(.food-results) {
+	padding: var(--space-3) var(--space-4);
+}
