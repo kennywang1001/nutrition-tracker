@@ -47,7 +47,8 @@
 | P4 上線 | NAS 部署 + Tailscale | ✅ |
 | **UI 改版 第一階段** | tab bar 總覽｜報表｜＋｜飲食｜我的；MOZE 風格外觀（設計變數 + 深色模式，跟隨系統）；自訂數字鍵盤記帳；記一餐可選填照片；總覽時間線（規格 `docs/superpowers/specs/2026-10-02-ui-redesign-phase1-design.md`、計畫 `docs/superpowers/plans/2026-10-02-ui-redesign-phase1.md`） | ✅ |
 | 修改與刪除已記錄的餐點 | 編輯畫面 `/meals/:id/edit`：改份量或數量、加刪項目、改餐別、改金額（改、補、拿掉）、換或刪照片、刪整餐（連餐費）。入口：飲食頁卡片的「編輯」、總覽時間線的餐點列（規格 `docs/superpowers/specs/2026-10-04-edit-meals-design.md`、計畫 `docs/superpowers/plans/2026-10-04-edit-meals.md`） | ✅ |
-| UI 改版 第二階段 | 六個舊畫面（食物庫、食物詳情、新增食物、補劑、趨勢、管理員審核）換新外觀；報表的分類甜甜圈圖；趨勢的營養素切換（規格 `docs/superpowers/specs/2026-10-06-ui-redesign-phase2-design.md`、計畫 `docs/superpowers/plans/2026-10-06-ui-redesign-phase2.md`） | ✅ 已實作於 `feat/ui-phase2` |
+| UI 改版 第二階段 | 六個舊畫面（食物庫、食物詳情、新增食物、補劑、趨勢、管理員審核）換新外觀；報表的分類甜甜圈圖；趨勢的營養素切換（規格 `docs/superpowers/specs/2026-10-06-ui-redesign-phase2-design.md`、計畫 `docs/superpowers/plans/2026-10-06-ui-redesign-phase2.md`） | ✅ |
+| 小項目包 | 份量的修改與刪除（`PATCH`／`DELETE /api/foods/{id}/portions/{pid}`，已記的餐不受影響）；編輯歷史的日期改成好讀格式；趨勢圖日期軸；報表清單按鈕換新外觀（規格 `docs/superpowers/specs/2026-10-06-small-items-design.md`、計畫 `docs/superpowers/plans/2026-10-06-small-items.md`） | ✅ |
 | UI 改版 第三階段 | 社群（P7），草稿在分支 `docs/p7-social-decisions` | ⬜ |
 
 > **P4 早於 P2/P3 完成是刻意的，但當初的理由有瑕疵。**
@@ -225,7 +226,7 @@ userland proxy 對發佈的埠做 SNAT）。按 IP 限速會把 tailnet 上所�
 
 ---
 
-## 6. 這個專案最有價值的產出：五十三種「綠燈說謊」
+## 6. 這個專案最有價值的產出：五十四種「綠燈說謊」
 
 **每一種的機制都不同，而且都是實測踩到的，不是理論。**
 新加的任何測試都應該對照這份清單檢查一次。
@@ -770,6 +771,17 @@ Playwright 的名稱是子字串比對，而**還沒換頁的飲食頁**剛好�
 偶發紅燈的原因（一直被當成「不穩」略過）。`exact: true` 同時修掉兩件事。
 **換頁之後的第一個斷言，要選一個只有新頁面才有的東西。**
 
+### 第 54 種是「小項目包」長出來的
+
+**第 54 種：守衛被另一層守衛遮住，測試的是另一層。** 份量的修改、刪除有兩層檢查：
+食物要看得到（`load_visible_food`），份量要是公開的或自己的。原本「看不到的食物上
+的份量 → 404」的測試用的是 Alice 私人食物上的 **Alice 私人份量**——Bob 動它的時候，
+份量的擁有者過濾本身就擋住了，拿掉食物那一層照樣 404。真正只有食物那一層擋得住的
+情境是「私人食物上的**公開**份量」（管理員建得出來）：拿掉 `load_visible_food`，
+一般使用者會拿到 403（等於透露那個私人食物存在），別的管理員甚至改得動（4713473）。
+跟第 1 種同一個家族，但機制是「兩層守衛重疊」：**要證明某一層有用，測試資料必須
+讓其他每一層都放行。**
+
 ---
 
 ## 7. 踩過的技術坑（節錄，完整版在各計畫文件）
@@ -801,6 +813,8 @@ Playwright 的名稱是子字串比對，而**還沒換頁的飲食頁**剛好�
 | vitest 的 `Test Files` / `Tests` | **都是實際數量的兩倍**。`vite.config.ts` 的 `typecheck.include` 跟一般 include 蓋到同一組檔案，每個檔案被跑兩次（一次執行、一次交給 tsc）。算數字時要除以二 |
 | 只 grep `Tests ` 那一行 | **會漏掉整個檔案沒編譯成功**。一個 transform parse error 讓 vitest 同時印出 `FAIL tests/x.test.tsx (0 test)` 與 `Tests 8 passed (8)`。驗證要一起 grep `FAIL` 與 `Unhandled` |
 | render 期例外的錯誤訊息 | `Failed Tests` 第一層顯示的是 `TestingLibraryElementError`（找不到元素），**真正的 `TypeError` 在要往下翻的 `Unhandled Errors` 區塊** —— 元件樹整個沒畫出來，沒有 error boundary 接住 |
+| biome `noAriaHiddenOnFocusable` 對 SVG `<text>` | **誤判**。SVG 的 `<text>` 不能聚焦，但規則把它當成可聚焦元素；趨勢圖日期軸的文字是裝飾（柱子的 aria-label 已經有日期），用 `biome-ignore` 加理由（`TrendChart.tsx`） |
+| 份量的「預設」沒有部分唯一索引 | 「同一個擁有者、同一個食物只有一個預設」靠的是同一個交易裡先取消其他預設，**兩個同時送出的請求可能各自成功**、留下兩個預設。單人使用不會發生；要擋就加 `WHERE is_default` 的部分唯一索引（要 migration） |
 | `// biome-ignore` 在 JSX children 位置 | **會被當成文字**，裡面的 `<rect>` 之類會被解析成開始標籤 → parse error。那個位置要用 `{/* biome-ignore … */}`；`return (` 之後屬於運算式位置，`//` 形式合法 |
 | Windows Python 改 markdown | 文字模式寫入會把**整份檔案**轉成 CRLF，跟 `.gitattributes`（`* text=auto eol=lf`）衝突，整個 diff 變成雜訊。用 `newline="
 "` |
@@ -896,13 +910,16 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
 - **建立全域食物只有 API，沒有 UI**（P3-B 計畫二 Task 8 加了
   `POST /api/foods` 的 `is_global`，管理員限定）。`/foods/new` 仍然只建
   私人食物。共用食物庫的建立介面留給之後。
-- **份量管理：新增與選用已完成，刪除與修改還沒有**（規格
+- **份量管理：新增、選用、修改、刪除都已完成**（規格
   `docs/superpowers/specs/2026-10-03-food-portions-design.md`，計畫
   `docs/superpowers/plans/2026-10-03-food-portions.md`）。新增食物可以設一份，
   也可以照包裝「每一份」輸入營養素（前端換算成每 100）；食物詳情頁可以替任何
   食物加自己的份量；記一餐自動選上預設份量（自己的優先於公開的）。同一個人、
   同一個食物只會有一個預設份量（新增預設時後端會取消舊的）；記一餐的餐點清單
-  對液體仍顯示 g（既有問題）。仍缺：刪除與修改份量（後端沒有端點）。
+  對液體仍顯示 g（既有問題）。修改與刪除在小項目包做完（規格
+  `docs/superpowers/specs/2026-10-06-small-items-design.md`）：已記的餐不受影響
+  （改重量不重算 `quantity_g`；刪除時 `portion_id` 變 null、公克數照舊）；
+  介面上只有私人份量能改、刪，公開份量的修改與刪除只開放 API 給管理員。
 - **趨勢圖是刻意的最小版**：七天、只有熱量、實際對目標。指標切換、期間
   切換、自由日期選取都沒做 —— 理由是「要看什麼」在真的每天用過兩週之前
   就是猜（P3-B 規格 §1.1、§12）。而**那兩週還沒發生**，見下。
@@ -1016,10 +1033,8 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
 
 **下一步：**
 
-- **第二階段：已完成**（見階段進度）。順手發現、還沒做的：
-  - 報表頁的支出清單（第一階段的畫面）「修改」「刪除」仍是瀏覽器預設的小按鈕。
-  - 食物詳情的編輯歷史日期仍是原始的 ISO 字串（`2026-10-06T07:32:01…`）。
-  - 趨勢圖沒有日期軸標籤（每根柱子的日期只在 aria-label 裡）。
+- **第二階段：已完成**（見階段進度）。當時順手發現的三件事（報表清單按鈕、
+  編輯歷史日期、趨勢日期軸）已在小項目包做完。
 - **第三階段**：社群（P7），從分支 `docs/p7-social-decisions` 的草稿開始
 
 **已知待辦：**
