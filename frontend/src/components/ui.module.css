@@ -276,3 +276,12 @@
 	padding-top: var(--space-3);
 	border-top: 1px solid var(--color-border);
 }
+
+/* 列表一列裡、接在文字後面的一組按鈕（食物詳情份量列的「修改」「刪除」）：
+   跟前面的文字、彼此之間都留一點空隙。選到的是 span，不會是卡片，
+   順序規則不受影響。 */
+.rowActions {
+	display: inline-flex;
+	gap: var(--space-2);
+	margin-left: var(--space-2);
+}

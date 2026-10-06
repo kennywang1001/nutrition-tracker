@@ -59,6 +59,12 @@ export function PortionRow({
 	const refresh = () =>
 		queryClient.invalidateQueries({ queryKey: queryKeys.portions(foodId) });
 
+	/** 關掉修改表單：錯誤訊息跟著收掉（同 Expenses 的「放棄」）。 */
+	function closeEditor() {
+		setError(null);
+		onClose();
+	}
+
 	const save = useMutation({
 		mutationFn: (body: Record<string, unknown>) =>
 			apiFetch<Portion>(path, {
@@ -79,6 +85,10 @@ export function PortionRow({
 		onSuccess: () => {
 			setConfirming(false);
 			refresh();
+			// 後端把用過這個份量的餐點項目 `portion_id` 設成 null（ON DELETE
+			// SET NULL）——快取裡的餐點（清單與單一餐，都在 `meals` 底下）
+			// 還帶著舊的 id，一起失效。
+			queryClient.invalidateQueries({ queryKey: queryKeys.meals });
 		},
 		onError: (caught) =>
 			setError(describeError(caught, "刪除失敗，請再試一次")),
@@ -116,7 +126,7 @@ export function PortionRow({
 		if (trimmedGrams !== formatMacro(portion.grams)) body.grams = trimmedGrams;
 		if (isDefault !== portion.is_default) body.is_default = isDefault;
 		if (Object.keys(body).length === 0) {
-			onClose();
+			closeEditor();
 			return;
 		}
 		setError(null);
@@ -138,7 +148,7 @@ export function PortionRow({
 			</span>
 
 			{canManage && !editing && !confirming && (
-				<>
+				<span className={ui.rowActions}>
 					<button
 						type="button"
 						aria-label={`修改${portion.label}`}
@@ -157,7 +167,7 @@ export function PortionRow({
 					>
 						刪除
 					</button>
-				</>
+				</span>
 			)}
 
 			{editing && (
@@ -194,7 +204,7 @@ export function PortionRow({
 					<button type="submit" disabled={busy}>
 						{save.isPending ? "儲存中…" : "儲存"}
 					</button>
-					<button type="button" onClick={onClose}>
+					<button type="button" onClick={closeEditor}>
 						放棄
 					</button>
 				</form>
@@ -217,13 +227,22 @@ export function PortionRow({
 					>
 						確定刪除
 					</button>
-					<button type="button" onClick={() => setConfirming(false)}>
+					<button
+						type="button"
+						onClick={() => {
+							setConfirming(false);
+							setError(null);
+						}}
+					>
 						取消
 					</button>
 				</div>
 			)}
 
-			{!editing && error !== null && <p role="alert">{error}</p>}
+			{/* 只有刪除的錯誤顯示在這裡，而且只在確認框開著時：修改的錯誤在表單
+			    裡面；表單被別的列的「修改」關掉時（editing 由食物詳情改成 false，
+			    這一列沒有機會跑 closeEditor），留下來的修改錯誤不能掉到這裡。 */}
+			{confirming && error !== null && <p role="alert">{error}</p>}
 		</li>
 	);
 }

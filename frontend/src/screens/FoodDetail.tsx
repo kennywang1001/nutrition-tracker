@@ -216,7 +216,13 @@ export function FoodDetail() {
 										unit={unit}
 										editing={editingPortionId === portion.id}
 										onEdit={() => setEditingPortionId(portion.id)}
-										onClose={() => setEditingPortionId(null)}
+										// 只關自己：A 的儲存在途中、使用者打開了 B，A 存好時
+										// 不能把 B 的表單一起關掉。
+										onClose={() =>
+											setEditingPortionId((id) =>
+												id === portion.id ? null : id,
+											)
+										}
 									/>
 								))}
 							</ul>

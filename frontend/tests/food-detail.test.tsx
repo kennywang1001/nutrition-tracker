@@ -482,6 +482,14 @@ const MY_BOWL = {
 	is_global: false,
 };
 
+const MY_PLATE = {
+	id: 6,
+	label: "我的盤",
+	grams: "300.00",
+	is_default: false,
+	is_global: false,
+};
+
 function portionRequests(
 	fetchMock: ReturnType<typeof mockApi>,
 	method: string,
@@ -603,6 +611,92 @@ describe("食物詳情：份量的修改與刪除", () => {
 		expect(portionRequests(fetchMock, "PATCH")).toHaveLength(0);
 	});
 
+	it("名稱清空被擋下之後按放棄：錯誤訊息跟著表單一起收掉", async () => {
+		mockApi(foodRoutes(PRIVATE_FOOD, [], [MY_BOWL]));
+		renderDetail();
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "修改我的碗" }),
+		);
+		const form = screen.getByRole("form", { name: "修改我的碗" });
+		await userEvent.clear(within(form).getByLabelText("份量名稱"));
+		await userEvent.click(within(form).getByRole("button", { name: "儲存" }));
+		expect(within(form).getByRole("alert")).toHaveTextContent("請輸入份量名稱");
+
+		await userEvent.click(within(form).getByRole("button", { name: "放棄" }));
+
+		expect(
+			screen.queryByRole("form", { name: "修改我的碗" }),
+		).not.toBeInTheDocument();
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it("表單被別的列的「修改」關掉時，原本那一列的錯誤訊息也不留下來", async () => {
+		mockApi(foodRoutes(PRIVATE_FOOD, [], [MY_BOWL, MY_PLATE]));
+		renderDetail();
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "修改我的碗" }),
+		);
+		const form = screen.getByRole("form", { name: "修改我的碗" });
+		await userEvent.clear(within(form).getByLabelText("份量名稱"));
+		await userEvent.click(within(form).getByRole("button", { name: "儲存" }));
+		expect(within(form).getByRole("alert")).toHaveTextContent("請輸入份量名稱");
+
+		await userEvent.click(screen.getByRole("button", { name: "修改我的盤" }));
+
+		expect(
+			screen.getByRole("form", { name: "修改我的盤" }),
+		).toBeInTheDocument();
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it("存 A 的途中打開 B：A 存好之後 B 的修改表單還開著", async () => {
+		let resolvePatch: (response: Response) => void = () => {};
+		const patchGate = new Promise<Response>((resolve) => {
+			resolvePatch = resolve;
+		});
+		const fetchMock = mockApi(
+			foodRoutes(PRIVATE_FOOD, [], [MY_BOWL, MY_PLATE]),
+		);
+		const real = fetchMock.getMockImplementation();
+		fetchMock.mockImplementation(async (input, init) => {
+			if (
+				(init?.method ?? "GET").toUpperCase() === "PATCH" &&
+				String(input).includes("/portions/5")
+			) {
+				return patchGate;
+			}
+			return real === undefined ? fetch(input, init) : real(input, init);
+		});
+		renderDetail();
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "修改我的碗" }),
+		);
+		const form = screen.getByRole("form", { name: "修改我的碗" });
+		const grams = within(form).getByLabelText("重量（g）");
+		await userEvent.clear(grams);
+		await userEvent.type(grams, "250");
+		await userEvent.click(within(form).getByRole("button", { name: "儲存" }));
+		await waitFor(() =>
+			expect(portionRequests(fetchMock, "PATCH")).toHaveLength(1),
+		);
+
+		await userEvent.click(screen.getByRole("button", { name: "修改我的盤" }));
+		expect(
+			screen.getByRole("form", { name: "修改我的盤" }),
+		).toBeInTheDocument();
+
+		resolvePatch(json({ ...MY_BOWL, grams: "250.00" }));
+		// A 的 onSuccess 跑完的訊號：份量清單被重抓。
+		await waitFor(() => expect(portionGets(fetchMock)).toBeGreaterThan(1));
+
+		expect(
+			screen.getByRole("form", { name: "修改我的盤" }),
+		).toBeInTheDocument();
+	});
+
 	it("改名撞名：顯示後端的訊息", async () => {
 		mockApi(
 			foodRoutes(
@@ -656,6 +750,44 @@ describe("食物詳情：份量的修改與刪除", () => {
 		expect(portionRequests(fetchMock, "DELETE")).toHaveLength(0);
 	});
 
+	it("刪除失敗後按取消：錯誤訊息跟著確認框一起收掉", async () => {
+		mockApi(
+			foodRoutes(
+				PRIVATE_FOOD,
+				[],
+				[MY_BOWL],
+				[
+					{
+						method: "DELETE",
+						path: "/portions/5",
+						handler: () =>
+							json(
+								{ error: { code: "INTERNAL", message: "x", details: {} } },
+								500,
+							),
+					},
+				],
+			),
+		);
+		renderDetail();
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "刪除我的碗" }),
+		);
+		const dialog = screen.getByRole("alertdialog", { name: "確認刪除我的碗" });
+		await userEvent.click(
+			within(dialog).getByRole("button", { name: "確定刪除" }),
+		);
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"刪除失敗，請再試一次",
+		);
+
+		await userEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+
+		expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
 	it("確認刪除：送 DELETE，成功後重抓份量清單", async () => {
 		const fetchMock = mockApi(
 			foodRoutes(
@@ -690,5 +822,8 @@ describe("食物詳情：份量的修改與刪除", () => {
 				queryKey: queryKeys.portions(PRIVATE_FOOD.id),
 			}),
 		);
+		// 後端把用過這個份量的餐點項目 portion_id 設成 null（ON DELETE SET
+		// NULL）——快取裡的餐點還帶著舊的 id，要一起失效。
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.meals });
 	});
 });
