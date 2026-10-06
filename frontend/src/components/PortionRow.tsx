@@ -161,7 +161,11 @@ export function PortionRow({
 			)}
 
 			{editing && (
-				<form aria-label={`修改${portion.label}`} onSubmit={handleSubmit}>
+				<form
+					aria-label={`修改${portion.label}`}
+					className={ui.inlineEditor}
+					onSubmit={handleSubmit}
+				>
 					<label htmlFor={`${idPrefix}-label`}>份量名稱</label>
 					<input
 						id={`${idPrefix}-label`}
@@ -197,7 +201,11 @@ export function PortionRow({
 			)}
 
 			{confirming && (
-				<div role="alertdialog" aria-label={`確認刪除${portion.label}`}>
+				<div
+					role="alertdialog"
+					aria-label={`確認刪除${portion.label}`}
+					className={ui.inlineEditor}
+				>
 					<p>
 						確定要刪除「{portion.label}」嗎？已經記下的餐不受影響，公克數照舊。
 					</p>

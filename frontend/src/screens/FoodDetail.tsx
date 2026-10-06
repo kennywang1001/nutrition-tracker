@@ -220,14 +220,16 @@ export function FoodDetail() {
 								))}
 							</ul>
 						)}
-						<AddPortionForm
-							foodId={foodId}
-							unit={unit}
-							hasDefault={portions.some((portion) => portion.is_default)}
-							hasOwnDefault={portions.some(
-								(portion) => portion.is_default && !portion.is_global,
-							)}
-						/>
+						<div className={ui.divider}>
+							<AddPortionForm
+								foodId={foodId}
+								unit={unit}
+								hasDefault={portions.some((portion) => portion.is_default)}
+								hasOwnDefault={portions.some(
+									(portion) => portion.is_default && !portion.is_global,
+								)}
+							/>
+						</div>
 					</section>
 
 					<section>

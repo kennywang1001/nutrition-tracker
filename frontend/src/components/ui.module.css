@@ -258,3 +258,21 @@
 	flex: 1;
 	min-height: 44px;
 }
+
+/* 列表裡就地展開的編輯框（例如食物詳情的份量修改）：跟後面的內容分得出來。 */
+.inlineEditor {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin-top: var(--space-2);
+	padding: var(--space-3);
+	border-radius: var(--radius-card);
+	background: var(--color-bg);
+}
+
+/* 卡片裡的分隔：上面一條線。 */
+.divider {
+	margin-top: var(--space-3);
+	padding-top: var(--space-3);
+	border-top: 1px solid var(--color-border);
+}
