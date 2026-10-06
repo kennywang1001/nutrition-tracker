@@ -1,5 +1,13 @@
 /* 介面改版第二階段的共用樣式：舊畫面只在最外層加 .screen。
  *
+ * **順序規則（改這個檔案前先讀）：** 這裡所有 :where() 規則的權重都是 0，
+ * 同一個元素被兩條規則選到時，誰贏完全看原始碼的先後。所以：
+ *   1. 通用的元素重設與基本樣式（fieldset、ul、li、p、label……）放最前面；
+ *   2. 卡片規則（`.screen > section, > form, > fieldset, > div, > ul`）跟在後面；
+ *   3. 只有「刻意要蓋過卡片或通用規則」的特例才放在卡片規則之後，並且寫註解。
+ * 在卡片規則之後寫 margin、padding、border、background 的通用重設，
+ * 會把卡片的內距悄悄清掉（第二階段已經踩過兩次：fieldset 與 ul）。
+ *
  * **通用規則全部包在 :where() 裡（權重 0）**——畫面裡已經有自己樣式的元件
  * （例如新增食物裡的 AI 估算面板）任何一個 class 都贏過這裡，不會被蓋掉。
  * 寫成 `:where(.screen button)`，不是 `.screen button`：後者的權重 (0,1,1)
@@ -33,6 +41,14 @@
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-1);
+}
+
+/* 通用的清單重設：必須在卡片規則之前，否則它的 padding: 0 會蓋掉
+ * `.screen > ul` 這張卡片的內距。 */
+:where(.screen ul) {
+	list-style: none;
+	margin: 0;
+	padding: 0;
 }
 
 /* 畫面直接底下的每一個區塊是一張卡片。 */
@@ -141,12 +157,6 @@
 	border-radius: var(--radius-button);
 	text-decoration: none;
 	font-weight: 600;
-}
-
-:where(.screen ul) {
-	list-style: none;
-	margin: 0;
-	padding: 0;
 }
 
 :where(.screen li) {
