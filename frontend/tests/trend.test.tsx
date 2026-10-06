@@ -227,4 +227,30 @@ describe("趨勢：營養素切換", () => {
 		expect(screen.getByTestId("today-summary")).toHaveTextContent("今天 0 g");
 		expect(screen.getByTestId("today-summary")).not.toHaveTextContent("/");
 	});
+
+	it("畫面把 today 傳給圖：今天那一根有 trend-bar-today", async () => {
+		mockTrend();
+		render(wrap(<Trend />));
+
+		await screen.findByTestId("trend-chart");
+
+		expect(screen.getByTestId("trend-bar-2019-07-04")).toHaveClass(
+			"trend-bar-today",
+		);
+		expect(screen.getByTestId("trend-bar-2019-07-03")).not.toHaveClass(
+			"trend-bar-today",
+		);
+	});
+
+	it("今天整天都沒有目標：摘要只寫實際值", async () => {
+		mockApi([
+			{ path: "/api/stats/daily", handler: () => json(DAILY) },
+			{ path: "/api/stats/range", handler: () => json(rangeBody(null)) },
+		]);
+		render(wrap(<Trend />));
+
+		const summary = await screen.findByTestId("today-summary");
+		expect(summary).toHaveTextContent("今天 1800 kcal");
+		expect(summary).not.toHaveTextContent("/");
+	});
 });

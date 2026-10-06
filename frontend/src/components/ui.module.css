@@ -1,12 +1,14 @@
 /* 介面改版第二階段的共用樣式：舊畫面只在最外層加 .screen。
  *
  * **順序規則（改這個檔案前先讀）：** 這裡所有 :where() 規則的權重都是 0，
- * 同一個元素被兩條規則選到時，誰贏完全看原始碼的先後。所以：
- *   1. 通用的元素重設與基本樣式（fieldset、ul、li、p、label……）放最前面；
- *   2. 卡片規則（`.screen > section, > form, > fieldset, > div, > ul`）跟在後面；
- *   3. 只有「刻意要蓋過卡片或通用規則」的特例才放在卡片規則之後，並且寫註解。
- * 在卡片規則之後寫 margin、padding、border、background 的通用重設，
- * 會把卡片的內距悄悄清掉（第二階段已經踩過兩次：fieldset 與 ul）。
+ * 同一個元素被兩條規則選到時，誰贏完全看原始碼的先後。不變式是：
+ * 任何會設定盒模型屬性（margin / padding / border / background）、
+ * 而且選得到「可能是卡片的元素」（section、form、fieldset、div、ul）的規則，
+ * 一律放在卡片規則（`.screen > section, > form, > fieldset, > div, > ul`）
+ * **之前**；其餘的規則（只選到 button、input、label、li、a、table 等
+ * 不會是卡片的元素，或不設盒模型屬性）放前放後都可以。
+ * 刻意要蓋過卡片的特例放在卡片規則之後，並且寫註解說明為什麼。
+ * 違反的話，卡片的內距會被悄悄清掉（第二階段已經踩過兩次：fieldset 與 ul）。
  *
  * **通用規則全部包在 :where() 裡（權重 0）**——畫面裡已經有自己樣式的元件
  * （例如新增食物裡的 AI 估算面板）任何一個 class 都贏過這裡，不會被蓋掉。
@@ -246,4 +248,13 @@
    刻意不用 :where()：要有真的權重（0,2,0）才贏得過 index.css。 */
 .screen > :global(.food-results) {
 	padding: var(--space-3) var(--space-4);
+}
+
+/* 食物庫的結果連結（FoodResultList 的 li > a）：規格要求整列都是 ≥ 44px 的點擊目標。
+   同樣刻意不用 :where()，也只在 .screen 底下，所以記一餐不受影響。 */
+.screen > :global(.food-results) a {
+	display: flex;
+	align-items: center;
+	flex: 1;
+	min-height: 44px;
 }

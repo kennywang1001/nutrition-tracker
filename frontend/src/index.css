@@ -137,7 +137,8 @@ a {
 }
 
 /* 最後一列不畫底線。要寫在這裡：.food-results li 的權重 (0,1,1) 贏過
-   ui.module.css 裡零權重的 li:last-child。 */
+   ui.module.css 裡零權重的 li:last-child。記一餐也用這個清單，
+   那裡同樣是對的。 */
 .food-results li:last-child {
 	border-bottom: none;
 }

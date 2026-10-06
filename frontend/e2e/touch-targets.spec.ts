@@ -4,9 +4,24 @@ import { expectTouchTargets, login } from "./touch-targets.ts";
 // 介面改版第二階段：舊畫面在手機上的點擊目標都 ≥ 44px。
 test.use({ viewport: { width: 390, height: 844 } });
 
-test("食物庫：「新增食物」連結與範圍選項都 ≥ 44px", async ({ page }) => {
+test("食物庫：「新增食物」連結、搜尋結果與範圍選項都 ≥ 44px", async ({
+	page,
+}) => {
 	await login(page);
+	// 建一個唯一名稱的私人食物，讓搜尋一定有結果可以量。
+	const name = `E2E 搜尋 ${Date.now()}`;
+	await page.goto("/foods/new");
+	await page.getByLabel("名稱", { exact: true }).fill(name);
+	await page.getByLabel("熱量（每 100 單位 kcal）").fill("100");
+	await page.getByLabel("蛋白質（g）", { exact: true }).fill("1");
+	await page.getByLabel("脂肪（g）", { exact: true }).fill("1");
+	await page.getByLabel("碳水化合物（g）", { exact: true }).fill("1");
+	await page.getByRole("button", { name: "建立食物" }).click();
+	await expect(page.getByRole("heading", { name })).toBeVisible();
+
 	await page.goto("/foods");
+	await page.getByLabel("搜尋食物").fill(name);
+	await expect(page.getByRole("link", { name, exact: true })).toBeVisible();
 	await expectTouchTargets(
 		page.locator("main a:visible, main label:has(input[type=radio]):visible"),
 		"食物庫",
