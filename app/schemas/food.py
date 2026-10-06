@@ -3,7 +3,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.food import BaseUnit, RevisionStatus
 
@@ -134,6 +134,28 @@ class PortionCreateRequest(BaseModel):
     is_default: bool = False
     # 只有管理員能建立全域份量
     is_global: bool = False
+
+
+class PortionUpdateRequest(BaseModel):
+    """`PATCH /api/foods/{food_id}/portions/{portion_id}`（小項目包規格 §3.1）。
+
+    `exclude_unset`：不帶＝不動。限制同 `PortionCreateRequest`。三個欄位都是
+    NOT NULL——顯式 `null` 擋在這裡（不擋會一路流到 asyncpg 變成 500，
+    跟 `MealUpdateRequest` 同一個坑）。
+    """
+
+    label: str | None = Field(default=None, min_length=1, max_length=50)
+    grams: Decimal | None = Field(
+        default=None, gt=0, le=10000, max_digits=8, decimal_places=2
+    )
+    is_default: bool | None = None
+
+    @model_validator(mode="after")
+    def _reject_explicit_null(self) -> "PortionUpdateRequest":
+        for name in ("label", "grams", "is_default"):
+            if name in self.model_fields_set and getattr(self, name) is None:
+                raise ValueError(f"{name} 可以省略，但不接受 null")
+        return self
 
 
 class PortionResponse(BaseModel):

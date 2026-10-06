@@ -10,7 +10,7 @@ from sqlalchemy.orm import aliased
 from app.api.deps import get_current_user
 from app.api.params import ResourceId
 from app.db import get_db
-from app.errors import ConflictError, ForbiddenError
+from app.errors import ConflictError, ForbiddenError, NotFoundError
 from app.food_visibility import assert_food_visible, load_visible_food
 from app.models.food import Food, FoodPortion, FoodRevision, RevisionStatus
 from app.models.meal import Meal, MealItem
@@ -22,6 +22,7 @@ from app.schemas.food import (
     NutritionResponse,
     PortionCreateRequest,
     PortionResponse,
+    PortionUpdateRequest,
     RevisionCreateRequest,
     RevisionResponse,
 )
@@ -352,6 +353,41 @@ async def propose_revision(
     return result
 
 
+def _portion_response(portion: FoodPortion) -> PortionResponse:
+    return PortionResponse(
+        id=portion.id,
+        label=portion.label,
+        grams=portion.grams,
+        is_default=portion.is_default,
+        is_global=portion.owner_id is None,
+    )
+
+
+async def _load_manageable_portion(
+    db: AsyncSession, food_id: int, portion_id: int, user: User
+) -> FoodPortion:
+    """修改、刪除份量的權限（小項目包規格 §3.1）：
+
+    - 食物要看得到（`load_visible_food`，看不到 → 404）
+    - 份量要屬於路徑上的食物、而且是自己的或公開的——別人的私人份量 → 404
+      （不透露存在，handover §4.7）
+    - 公開份量只有管理員能動 → 一般使用者 403（同「新增公開份量」：看得到但不能動）
+    """
+    food, _ = await load_visible_food(db, food_id, user)
+    portion = await db.scalar(
+        select(FoodPortion).where(
+            FoodPortion.id == portion_id,
+            FoodPortion.food_id == food.id,
+            or_(FoodPortion.owner_id.is_(None), FoodPortion.owner_id == user.id),
+        )
+    )
+    if portion is None:
+        raise NotFoundError("PORTION_NOT_FOUND", "找不到該份量")
+    if portion.owner_id is None and user.role is not UserRole.ADMIN:
+        raise ForbiddenError("FORBIDDEN", "只有管理員能修改或刪除全域份量")
+    return portion
+
+
 @router.get("/{food_id}/portions", response_model=list[PortionResponse])
 async def list_portions(
     food_id: ResourceId,
@@ -370,13 +406,7 @@ async def list_portions(
             .order_by(FoodPortion.label)
         )
     ).all()
-    return [
-        PortionResponse(
-            id=p.id, label=p.label, grams=p.grams,
-            is_default=p.is_default, is_global=p.owner_id is None,
-        )
-        for p in portions
-    ]
+    return [_portion_response(p) for p in portions]
 
 
 @router.post(
@@ -397,9 +427,8 @@ async def create_portion(
 
     owner_id = None if payload.is_global else user.id
     if payload.is_default:
-        # 同一個人、同一個食物只會有一個預設份量。沒有刪除／編輯份量的端點，
-        # 一旦出現兩個預設就無法修正，而前端 pickDefaultPortion 只能依標籤
-        # 順序挑——所以新增預設時，在同一個交易裡取消舊的。
+        # 同一個人、同一個食物只會有一個預設份量——新增預設時在同一個交易裡取消舊的
+        # （`update_portion` 同一條規則）。
         # （create_food 的 default_portion 是全新食物，不會有其他份量，
         # 不需要這一步。）
         await db.execute(
@@ -427,7 +456,59 @@ async def create_portion(
         raise ConflictError("PORTION_EXISTS", "你已經為這個食物建過同名的份量了") from exc
 
     await db.refresh(portion)
-    return PortionResponse(
-        id=portion.id, label=portion.label, grams=portion.grams,
-        is_default=portion.is_default, is_global=portion.owner_id is None,
-    )
+    return _portion_response(portion)
+
+
+@router.patch("/{food_id}/portions/{portion_id}", response_model=PortionResponse)
+async def update_portion(
+    food_id: ResourceId,
+    portion_id: ResourceId,
+    payload: PortionUpdateRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> PortionResponse:
+    """改份量的名稱、重量或是否預設。
+
+    **已經記下的餐不受影響**——`meal_items.quantity_g` 在寫入時算好、讀取不重算
+    （handover §4.3）。改重量只影響之後新記的餐。
+    """
+    portion = await _load_manageable_portion(db, food_id, portion_id, user)
+    changes = payload.model_dump(exclude_unset=True)
+
+    if changes.get("is_default") is True:
+        # 同一個擁有者、同一個食物只有一個預設（同 create_portion），同一個交易。
+        await db.execute(
+            update(FoodPortion)
+            .where(
+                FoodPortion.food_id == portion.food_id,
+                FoodPortion.owner_id.is_not_distinct_from(portion.owner_id),
+                FoodPortion.is_default.is_(True),
+                FoodPortion.id != portion.id,
+            )
+            .values(is_default=False)
+        )
+
+    for field, value in changes.items():
+        setattr(portion, field, value)
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise ConflictError("PORTION_EXISTS", "你已經為這個食物建過同名的份量了") from exc
+
+    await db.refresh(portion)
+    return _portion_response(portion)
+
+
+@router.delete("/{food_id}/portions/{portion_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_portion(
+    food_id: ResourceId,
+    portion_id: ResourceId,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """刪除份量。用過它的餐點那一項 `portion_id` 由資料庫 `SET NULL`，
+    `quantity_g` 不變——舊紀錄變成「直接輸入的公克數」，數字照舊。"""
+    portion = await _load_manageable_portion(db, food_id, portion_id, user)
+    await db.delete(portion)
+    await db.commit()

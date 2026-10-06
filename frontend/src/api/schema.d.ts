@@ -291,6 +291,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/foods/{food_id}/portions/{portion_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Portion
+         * @description 刪除份量。用過它的餐點那一項 `portion_id` 由資料庫 `SET NULL`，
+         *     `quantity_g` 不變——舊紀錄變成「直接輸入的公克數」，數字照舊。
+         */
+        delete: operations["delete_portion_api_foods__food_id__portions__portion_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Portion
+         * @description 改份量的名稱、重量或是否預設。
+         *
+         *     **已經記下的餐不受影響**——`meal_items.quantity_g` 在寫入時算好、讀取不重算
+         *     （handover §4.3）。改重量只影響之後新記的餐。
+         */
+        patch: operations["update_portion_api_foods__food_id__portions__portion_id__patch"];
+        trace?: never;
+    };
     "/api/admin/food-revisions": {
         parameters: {
             query?: never;
@@ -1517,6 +1545,22 @@ export interface components {
             is_global: boolean;
         };
         /**
+         * PortionUpdateRequest
+         * @description `PATCH /api/foods/{food_id}/portions/{portion_id}`（小項目包規格 §3.1）。
+         *
+         *     `exclude_unset`：不帶＝不動。限制同 `PortionCreateRequest`。三個欄位都是
+         *     NOT NULL——顯式 `null` 擋在這裡（不擋會一路流到 asyncpg 變成 500，
+         *     跟 `MealUpdateRequest` 同一個坑）。
+         */
+        PortionUpdateRequest: {
+            /** Label */
+            label?: string | null;
+            /** Grams */
+            grams?: number | string | null;
+            /** Is Default */
+            is_default?: boolean | null;
+        };
+        /**
          * RangeStatsResponse
          * @description `GET /api/stats/range?from=&to=` 的回應（Task 8）。
          *
@@ -2480,6 +2524,72 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PortionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_portion_api_foods__food_id__portions__portion_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                food_id: number;
+                portion_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_portion_api_foods__food_id__portions__portion_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                food_id: number;
+                portion_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PortionUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
