@@ -124,7 +124,10 @@ export function App() {
 				</BrowserRouter>
 			) : window.location.pathname === "/join" ? (
 				// 邀請連結（邀請規格 §4.1）。其他網址照舊一律登入畫面。
-				<Join onSuccess={() => setLoggedIn(true)} />
+				// 包在 .app-main 裡：頁面的左右留白來自它，少了它卡片會貼著螢幕邊緣。
+				<main className="app-main">
+					<Join onSuccess={() => setLoggedIn(true)} />
+				</main>
 			) : (
 				<Login onSuccess={() => setLoggedIn(true)} />
 			)}
