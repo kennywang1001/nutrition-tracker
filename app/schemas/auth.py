@@ -16,6 +16,9 @@ class RegisterRequest(BaseModel):
     # PATCH /api/me（計畫 3 Task 3）重用同一套邏輯，不重寫。
     display_name: Annotated[DisplayName, Field(min_length=1, max_length=50)]
     timezone: IanaTimezone = "Asia/Taipei"
+    # 註冊一定要有邀請（邀請規格 §3.3）：少了這個欄位就是 422——開放註冊就此關閉。
+    # 上限是請求體衛生（真的邀請碼是 43 字）。
+    invite_token: str = Field(min_length=1, max_length=100)
 
     @field_validator("email")
     @classmethod

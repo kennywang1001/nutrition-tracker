@@ -14,7 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_e
 from app.config import settings
 from app.db import get_db
 from app.main import app
+from app.models.user import UserRole
 from app.ratelimit import login_rate_limiter
+from tests.factories import create_invite, create_user
 
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
@@ -182,3 +184,13 @@ def _photo_dir_in_tmp_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     **文件（或「記得加 fixture」的慣例）擋不住重蹈覆轍，程式碼可以。**
     """
     monkeypatch.setattr(settings, "photo_dir", str(tmp_path))
+
+
+@pytest_asyncio.fixture
+async def invite_token(db_session: AsyncSession) -> str:
+    """一張可用的邀請碼。註冊一定要有邀請（邀請規格 §3.3）——註冊的測試都要帶它，
+    **包括那些斷言 422 的**：少了邀請本身就是 422，不帶的話那些測試對它們要測的
+    欄位就沒有鑑別力了。"""
+    admin = await create_user(db_session, role=UserRole.ADMIN)
+    _, token = await create_invite(db_session, created_by=admin)
+    return token

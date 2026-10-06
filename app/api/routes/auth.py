@@ -2,12 +2,14 @@ import logging
 
 from fastapi import APIRouter, Depends, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import get_current_user
 from app.db import get_db
-from app.errors import ConflictError, UnauthorizedError
+from app.errors import ConflictError, ForbiddenError, UnauthorizedError
+from app.invites import INVITE_INVALID_MESSAGE, find_usable_invite, redeem_invite
 from app.models.user import User
 from app.ratelimit import login_rate_limiter
 from app.schemas.auth import (
@@ -18,6 +20,7 @@ from app.schemas.auth import (
     TokenResponse,
     UserResponse,
 )
+from app.schemas.invite import InviteStatusRequest, InviteStatusResponse
 from app.security.password import DUMMY_PASSWORD_HASH, hash_password, verify_password
 from app.security.sessions import (
     ReuseDetectedError,
@@ -35,16 +38,26 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.post("/register", status_code=status.HTTP_201_CREATED, response_model=UserResponse)
 async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)) -> User:
+    # 1. 先查邀請，**在 Argon2 之前**：拿亂碼或用過的連結打這個端點，花的只是一次
+    #    SHA-256 與一次索引查詢，打不出 70ms 的 CPU（規格 §3.4）。四種失效（不存在、
+    #    用過、過期、撤銷）回同一個錯誤——對方能做的事都一樣：要一個新的。
+    invite = await find_usable_invite(db, payload.invite_token)
+    if invite is None:
+        raise ForbiddenError("INVITE_INVALID", INVITE_INVALID_MESSAGE)
+
+    # 2. email 撞名同樣在 Argon2 之前，而且**邀請不被用掉**——改個 email 再送就好。
     existing = await db.scalar(select(User).where(User.email == payload.email))
     if existing is not None:
         raise ConflictError("EMAIL_TAKEN", "這個 email 已經註冊過了")
 
-    # hash_password 是跟 verify_password 一樣同步、CPU 密集的 Argon2 呼叫，寫在
-    # async def 裡一樣會把 event loop 卡住（P4 Task 3 陷阱 1）——用
-    # run_in_threadpool 搬進執行緒池，理由跟下面 login 的 verify_password 相同，
-    # 見那邊的註解。
+    # 3. hash_password 是跟 verify_password 一樣同步、CPU 密集的 Argon2 呼叫，寫在
+    #    async def 裡一樣會把 event loop 卡住（P4 Task 3 陷阱 1）——用
+    #    run_in_threadpool 搬進執行緒池，理由跟下面 login 的 verify_password 相同，
+    #    見那邊的註解。
     password_hash = await run_in_threadpool(hash_password, payload.password)
 
+    # 4. 建立使用者與兌換邀請在同一個交易：兌換落空（被別人搶先、或剛被撤銷）
+    #    就整個 rollback，不會留下一個沒有邀請的帳號。
     user = User(
         email=payload.email,
         password_hash=password_hash,
@@ -52,9 +65,29 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
         timezone=payload.timezone,
     )
     db.add(user)
+    try:
+        await db.flush()
+    except IntegrityError:
+        # 兩個請求同時用同一個 email：步驟 2 都沒看到對方。
+        await db.rollback()
+        raise ConflictError("EMAIL_TAKEN", "這個 email 已經註冊過了") from None
+
+    if not await redeem_invite(db, invite.id, user.id):
+        await db.rollback()
+        raise ForbiddenError("INVITE_INVALID", INVITE_INVALID_MESSAGE)
+
     await db.commit()
     await db.refresh(user)
     return user
+
+
+@router.post("/invite-status", response_model=InviteStatusResponse)
+async def invite_status(
+    payload: InviteStatusRequest, db: AsyncSession = Depends(get_db)
+) -> InviteStatusResponse:
+    """註冊畫面一打開就先問（規格 §4.1），失效的連結不用填完表單才知道。
+    邀請碼放在 body，不放網址——不進存取紀錄。"""
+    return InviteStatusResponse(valid=await find_usable_invite(db, payload.token) is not None)
 
 
 @router.post("/login", response_model=TokenResponse)

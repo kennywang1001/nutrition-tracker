@@ -71,6 +71,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/invite-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Invite Status
+         * @description 註冊畫面一打開就先問（規格 §4.1），失效的連結不用填完表單才知道。
+         *     邀請碼放在 body，不放網址——不進存取紀錄。
+         */
+        post: operations["invite_status_api_auth_invite_status_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/login": {
         parameters: {
             query?: never;
@@ -365,6 +386,41 @@ export interface paths {
         /** Reject Revision */
         post: operations["reject_revision_api_admin_food_revisions__revision_id__reject_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Invites */
+        get: operations["list_invites_api_admin_invites_get"];
+        put?: never;
+        /** Create Invite */
+        post: operations["create_invite_api_admin_invites_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/invites/{invite_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke Invite */
+        delete: operations["revoke_invite_api_admin_invites__invite_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1272,6 +1328,67 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** InviteCreateRequest */
+        InviteCreateRequest: {
+            /** Note */
+            note?: string | null;
+        };
+        /** InviteCreatedResponse */
+        InviteCreatedResponse: {
+            /** Id */
+            id: number;
+            /** Token */
+            token: string;
+            /** Note */
+            note: string | null;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+        };
+        /** InviteListItem */
+        InviteListItem: {
+            /** Id */
+            id: number;
+            /** Note */
+            note: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "used";
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Used At */
+            used_at: string | null;
+            used_by: components["schemas"]["InviteUser"] | null;
+        };
+        /** InviteStatusRequest */
+        InviteStatusRequest: {
+            /** Token */
+            token: string;
+        };
+        /** InviteStatusResponse */
+        InviteStatusResponse: {
+            /** Valid */
+            valid: boolean;
+        };
+        /** InviteUser */
+        InviteUser: {
+            /** Display Name */
+            display_name: string;
+            /** Email */
+            email: string;
+        };
         /** LoginRequest */
         LoginRequest: {
             /**
@@ -1613,6 +1730,8 @@ export interface components {
              * @default Asia/Taipei
              */
             timezone: string;
+            /** Invite Token */
+            invite_token: string;
         };
         /** RevisionCreateRequest */
         RevisionCreateRequest: {
@@ -2070,6 +2189,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    invite_status_api_auth_invite_status_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InviteStatusRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InviteStatusResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2682,6 +2834,88 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["RevisionResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_invites_api_admin_invites_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InviteListItem"][];
+                };
+            };
+        };
+    };
+    create_invite_api_admin_invites_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InviteCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InviteCreatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_invite_api_admin_invites__invite_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                invite_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

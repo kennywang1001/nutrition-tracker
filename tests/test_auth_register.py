@@ -4,10 +4,15 @@ from app.models.user import User, UserRole
 from tests.factories import create_user
 
 
-async def test_register_creates_a_user(client, db_session):
+async def test_register_creates_a_user(client, db_session, invite_token):
     response = await client.post(
         "/api/auth/register",
-        json={"email": "new@example.com", "password": "a-good-password", "display_name": "阿明"},
+        json={
+            "email": "new@example.com",
+            "password": "a-good-password",
+            "display_name": "阿明",
+            "invite_token": invite_token,
+        },
     )
 
     assert response.status_code == 201
@@ -21,20 +26,30 @@ async def test_register_creates_a_user(client, db_session):
     assert user.role is UserRole.USER
 
 
-async def test_register_never_returns_the_password(client):
+async def test_register_never_returns_the_password(client, invite_token):
     response = await client.post(
         "/api/auth/register",
-        json={"email": "new@example.com", "password": "a-good-password", "display_name": "阿明"},
+        json={
+            "email": "new@example.com",
+            "password": "a-good-password",
+            "display_name": "阿明",
+            "invite_token": invite_token,
+        },
     )
 
     assert "password" not in response.text
     assert "password_hash" not in response.json()
 
 
-async def test_register_stores_a_hash_not_the_plain_password(client, db_session):
+async def test_register_stores_a_hash_not_the_plain_password(client, db_session, invite_token):
     await client.post(
         "/api/auth/register",
-        json={"email": "new@example.com", "password": "a-good-password", "display_name": "阿明"},
+        json={
+            "email": "new@example.com",
+            "password": "a-good-password",
+            "display_name": "阿明",
+            "invite_token": invite_token,
+        },
     )
 
     user = await db_session.scalar(select(User).where(User.email == "new@example.com"))
@@ -42,34 +57,49 @@ async def test_register_stores_a_hash_not_the_plain_password(client, db_session)
     assert user.password_hash != "a-good-password"
 
 
-async def test_register_rejects_a_duplicate_email(client, db_session):
+async def test_register_rejects_a_duplicate_email(client, db_session, invite_token):
     await create_user(db_session, email="taken@example.com")
 
     response = await client.post(
         "/api/auth/register",
-        json={"email": "taken@example.com", "password": "a-good-password", "display_name": "阿明"},
+        json={
+            "email": "taken@example.com",
+            "password": "a-good-password",
+            "display_name": "阿明",
+            "invite_token": invite_token,
+        },
     )
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "EMAIL_TAKEN"
 
 
-async def test_register_treats_email_case_insensitively(client, db_session):
+async def test_register_treats_email_case_insensitively(client, db_session, invite_token):
     """citext 讓 Taken@example.com 與 taken@example.com 視為同一個帳號。"""
     await create_user(db_session, email="taken@example.com")
 
     response = await client.post(
         "/api/auth/register",
-        json={"email": "TAKEN@example.com", "password": "a-good-password", "display_name": "阿明"},
+        json={
+            "email": "TAKEN@example.com",
+            "password": "a-good-password",
+            "display_name": "阿明",
+            "invite_token": invite_token,
+        },
     )
 
     assert response.status_code == 409
 
 
-async def test_register_rejects_a_short_password(client):
+async def test_register_rejects_a_short_password(client, invite_token):
     response = await client.post(
         "/api/auth/register",
-        json={"email": "new@example.com", "password": "zqxjv", "display_name": "阿明"},
+        json={
+            "email": "new@example.com",
+            "password": "zqxjv",
+            "display_name": "阿明",
+            "invite_token": invite_token,
+        },
     )
 
     assert response.status_code == 422
@@ -79,42 +109,58 @@ async def test_register_rejects_a_short_password(client):
     assert "zqxjv" not in response.text
 
 
-async def test_register_rejects_an_invalid_email(client):
+async def test_register_rejects_an_invalid_email(client, invite_token):
     response = await client.post(
         "/api/auth/register",
-        json={"email": "not-an-email", "password": "a-good-password", "display_name": "阿明"},
+        json={
+            "email": "not-an-email",
+            "password": "a-good-password",
+            "display_name": "阿明",
+            "invite_token": invite_token,
+        },
     )
 
     assert response.status_code == 422
 
 
-async def test_register_rejects_a_nul_byte_in_display_name(client):
+async def test_register_rejects_a_nul_byte_in_display_name(client, invite_token):
     response = await client.post(
         "/api/auth/register",
-        json={"email": "new@example.com", "password": "a-good-password", "display_name": "A\x00B"},
+        json={
+            "email": "new@example.com",
+            "password": "a-good-password",
+            "display_name": "A\x00B",
+            "invite_token": invite_token,
+        },
     )
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
-async def test_register_rejects_a_whitespace_only_display_name(client):
+async def test_register_rejects_a_whitespace_only_display_name(client, invite_token):
     response = await client.post(
         "/api/auth/register",
-        json={"email": "new@example.com", "password": "a-good-password", "display_name": "   "},
+        json={
+            "email": "new@example.com",
+            "password": "a-good-password",
+            "display_name": "   ",
+            "invite_token": invite_token,
+        },
     )
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
-async def test_register_strips_surrounding_whitespace_from_display_name(client):
+async def test_register_strips_surrounding_whitespace_from_display_name(client, invite_token):
     response = await client.post(
         "/api/auth/register",
         json={
             "email": "new@example.com",
             "password": "a-good-password",
             "display_name": "  阿明  ",
+            "invite_token": invite_token,
         },
     )
 
@@ -122,10 +168,15 @@ async def test_register_strips_surrounding_whitespace_from_display_name(client):
     assert response.json()["display_name"] == "阿明"
 
 
-async def test_register_normalises_email_to_lowercase(client, db_session):
+async def test_register_normalises_email_to_lowercase(client, db_session, invite_token):
     response = await client.post(
         "/api/auth/register",
-        json={"email": "NEW@Example.com", "password": "a-good-password", "display_name": "阿明"},
+        json={
+            "email": "NEW@Example.com",
+            "password": "a-good-password",
+            "display_name": "阿明",
+            "invite_token": invite_token,
+        },
     )
 
     assert response.status_code == 201
@@ -136,10 +187,15 @@ async def test_register_normalises_email_to_lowercase(client, db_session):
     assert user.email == "new@example.com"
 
 
-async def test_register_defaults_timezone_to_asia_taipei(client, db_session):
+async def test_register_defaults_timezone_to_asia_taipei(client, db_session, invite_token):
     response = await client.post(
         "/api/auth/register",
-        json={"email": "new@example.com", "password": "a-good-password", "display_name": "阿明"},
+        json={
+            "email": "new@example.com",
+            "password": "a-good-password",
+            "display_name": "阿明",
+            "invite_token": invite_token,
+        },
     )
 
     assert response.status_code == 201
@@ -148,13 +204,14 @@ async def test_register_defaults_timezone_to_asia_taipei(client, db_session):
     assert user.timezone == "Asia/Taipei"
 
 
-async def test_register_accepts_an_explicit_timezone(client, db_session):
+async def test_register_accepts_an_explicit_timezone(client, db_session, invite_token):
     response = await client.post(
         "/api/auth/register",
         json={
             "email": "new@example.com",
             "password": "a-good-password",
             "display_name": "阿明",
+            "invite_token": invite_token,
             "timezone": "America/New_York",
         },
     )
@@ -165,13 +222,14 @@ async def test_register_accepts_an_explicit_timezone(client, db_session):
     assert user.timezone == "America/New_York"
 
 
-async def test_register_rejects_an_unknown_timezone(client):
+async def test_register_rejects_an_unknown_timezone(client, invite_token):
     response = await client.post(
         "/api/auth/register",
         json={
             "email": "new@example.com",
             "password": "a-good-password",
             "display_name": "阿明",
+            "invite_token": invite_token,
             "timezone": "Mars/Olympus",
         },
     )
@@ -180,7 +238,7 @@ async def test_register_rejects_an_unknown_timezone(client):
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
-async def test_register_rejects_a_path_traversal_shaped_timezone(client):
+async def test_register_rejects_a_path_traversal_shaped_timezone(client, invite_token):
     """ZoneInfo("../../etc/passwd") 走的是 ValueError，不是 ZoneInfoNotFoundError ——
     只接後者的話，這個輸入會變成未處理的 500 而不是乾淨的 422。"""
     response = await client.post(
@@ -189,6 +247,7 @@ async def test_register_rejects_a_path_traversal_shaped_timezone(client):
             "email": "new@example.com",
             "password": "a-good-password",
             "display_name": "阿明",
+            "invite_token": invite_token,
             "timezone": "../../etc/passwd",
         },
     )

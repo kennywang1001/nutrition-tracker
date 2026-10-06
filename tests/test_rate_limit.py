@@ -243,7 +243,7 @@ async def test_login_runs_verify_password_in_a_thread(client, db_session, monkey
     assert seen_thread_ids[0] != main_thread_id
 
 
-async def test_register_runs_hash_password_in_a_thread(client, monkeypatch):
+async def test_register_runs_hash_password_in_a_thread(client, monkeypatch, invite_token):
     main_thread_id = threading.get_ident()
     seen_thread_ids: list[int] = []
 
@@ -259,6 +259,7 @@ async def test_register_runs_hash_password_in_a_thread(client, monkeypatch):
             "email": "thready-register@example.com",
             "password": "a-good-password",
             "display_name": "阿明",
+            "invite_token": invite_token,
         },
     )
 
@@ -267,7 +268,9 @@ async def test_register_runs_hash_password_in_a_thread(client, monkeypatch):
     assert seen_thread_ids[0] != main_thread_id
 
 
-async def test_registered_password_still_verifies_correctly_after_threadpool_hash(client):
+async def test_registered_password_still_verifies_correctly_after_threadpool_hash(
+    client, invite_token
+):
     """搬進執行緒池不能把雜湊結果搞壞——註冊完馬上用同樣的密碼登入，
     確認整條路徑（hash 在執行緒池跑、結果存進 DB、下次 verify 在執行緒池跑）
     銜接起來還是對的，不是只看回傳型別對不對。
@@ -278,6 +281,7 @@ async def test_registered_password_still_verifies_correctly_after_threadpool_has
             "email": "roundtrip@example.com",
             "password": "a-good-password",
             "display_name": "阿明",
+            "invite_token": invite_token,
         },
     )
     assert register_response.status_code == 201
@@ -372,7 +376,7 @@ async def test_concurrent_login_does_not_block_other_requests(client, db_session
     )
 
 
-async def test_concurrent_register_does_not_block_other_requests(client, monkeypatch):
+async def test_concurrent_register_does_not_block_other_requests(client, monkeypatch, invite_token):
     """跟上一個測試同一個道理與同一個修法，換成 register 的 hash_password。"""
 
     def _slow_hash(password: str) -> str:
@@ -388,6 +392,7 @@ async def test_concurrent_register_does_not_block_other_requests(client, monkeyp
                 "email": "slow-register@example.com",
                 "password": "a-good-password",
                 "display_name": "阿明",
+                "invite_token": invite_token,
             },
         )
     )
