@@ -1,6 +1,9 @@
+from decimal import Decimal
+
 from sqlalchemy import select
 
 from app.models.food import FoodPortion
+from app.models.meal import MealItem
 from app.models.user import UserRole
 from app.security.tokens import create_access_token
 from tests.factories import create_food, create_portion, create_user
@@ -290,19 +293,34 @@ async def test_making_a_portion_default_unsets_only_the_same_owners_default(clie
 
 
 async def test_deleting_a_portion_keeps_recorded_grams(client, db_session):
+    """`client` 跟測試共用 `db_session`（create_savepoint），`commit()` 只是
+    RELEASE SAVEPOINT：之後再打一次 GET 會 autoflush 那筆還沒 commit 的
+    DELETE，所以把 `delete_portion` 的 `await db.commit()` 拿掉，原本「再 GET
+    一次餐點」的寫法照樣全綠。
+
+    比照 test_sessions.py 的補法：DELETE 之後先 `rollback()` 再斷言。沒
+    commit 的話份量還在 savepoint 裡，rollback 會讓它復活、餐點那一項的
+    `portion_id` 也跟著回來；commit 過的不會。id 要在 rollback 之前取出來
+    —— rollback 之後 ORM 物件全部過期，再讀屬性會在 async 環境炸
+    MissingGreenlet。
+    """
     user = await create_user(db_session)
     food = await create_food(db_session, created_by=user, owner=user)
     portion = await create_portion(db_session, food=food, label="碗", grams=200, owner=user)
     meal_id = await _meal_with_portion(client, user, food, portion)
+    food_id, portion_id = food.id, portion.id
 
     response = await client.delete(
-        f"/api/foods/{food.id}/portions/{portion.id}", headers=auth(user)
+        f"/api/foods/{food_id}/portions/{portion_id}", headers=auth(user)
     )
 
     assert response.status_code == 204
-    item = (await client.get(f"/api/meals/{meal_id}", headers=auth(user))).json()["items"][0]
-    assert item["portion_id"] is None
-    assert item["quantity_g"] == "200.00"
+    await db_session.rollback()
+    assert await db_session.scalar(select(FoodPortion).where(FoodPortion.id == portion_id)) is None
+    item = await db_session.scalar(select(MealItem).where(MealItem.meal_id == meal_id))
+    assert item is not None
+    assert item.portion_id is None
+    assert item.quantity_g == Decimal("200.00")
 
 
 async def test_someone_elses_private_portion_is_404_and_unchanged(client, db_session):
@@ -334,15 +352,26 @@ async def test_a_normal_user_cannot_change_or_delete_a_global_portion(client, db
     food = await create_food(db_session, created_by=admin)
     portion = await create_portion(db_session, food=food, label="碗", grams=200, owner=None)
 
+    food_id, portion_id = food.id, portion.id
+
     patched = await client.patch(
-        f"/api/foods/{food.id}/portions/{portion.id}", headers=auth(user), json={"grams": "1"}
+        f"/api/foods/{food_id}/portions/{portion_id}", headers=auth(user), json={"grams": "1"}
     )
     deleted = await client.delete(
-        f"/api/foods/{food.id}/portions/{portion.id}", headers=auth(user)
+        f"/api/foods/{food_id}/portions/{portion_id}", headers=auth(user)
     )
 
     assert patched.status_code == 403
+    assert patched.json()["error"]["code"] == "FORBIDDEN"
     assert deleted.status_code == 403
+    assert deleted.json()["error"]["code"] == "FORBIDDEN"
+    # rollback 之後再查：只有真的 commit 進去的改動才看得到，
+    # 「被擋下來」要等於資料庫裡什麼都沒變。
+    await db_session.rollback()
+    still_there = await db_session.scalar(select(FoodPortion).where(FoodPortion.id == portion_id))
+    assert still_there is not None
+    assert still_there.grams == Decimal("200.00")
+    assert still_there.label == "碗"
 
 
 async def test_an_admin_can_change_and_delete_a_global_portion(client, db_session):
@@ -350,15 +379,21 @@ async def test_an_admin_can_change_and_delete_a_global_portion(client, db_sessio
     food = await create_food(db_session, created_by=admin)
     portion = await create_portion(db_session, food=food, label="碗", grams=200, owner=None)
 
+    food_id, portion_id = food.id, portion.id
+
     patched = await client.patch(
-        f"/api/foods/{food.id}/portions/{portion.id}", headers=auth(admin), json={"grams": "250"}
+        f"/api/foods/{food_id}/portions/{portion_id}", headers=auth(admin), json={"grams": "250"}
     )
     deleted = await client.delete(
-        f"/api/foods/{food.id}/portions/{portion.id}", headers=auth(admin)
+        f"/api/foods/{food_id}/portions/{portion_id}", headers=auth(admin)
     )
 
     assert patched.status_code == 200
     assert deleted.status_code == 204
+    # 同 test_deleting_a_portion_keeps_recorded_grams：rollback 之後還查不到，
+    # 才證明 DELETE 真的 commit 了。
+    await db_session.rollback()
+    assert await db_session.scalar(select(FoodPortion).where(FoodPortion.id == portion_id)) is None
 
 
 async def test_a_portion_of_another_food_in_the_path_is_404(client, db_session):
