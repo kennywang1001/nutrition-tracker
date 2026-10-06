@@ -1,0 +1,201 @@
+/* 介面改版第二階段的共用樣式：舊畫面只在最外層加 .screen。
+ *
+ * **通用規則全部包在 :where() 裡（權重 0）**——畫面裡已經有自己樣式的元件
+ * （例如新增食物裡的 AI 估算面板）任何一個 class 都贏過這裡，不會被蓋掉。
+ * 寫成 `:where(.screen button)`，不是 `.screen button`：後者的權重 (0,1,1)
+ * 跟元件的 `.actions button` 一樣，誰贏要看 CSS 載入順序，那是不穩的。
+ *
+ * 字級不在這裡設 input——index.css 的全域規則保證 input/select/textarea ≥ 16px。 */
+
+.screen {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+}
+
+:where(.screen h1) {
+	margin: var(--space-3) 0 0;
+	font-size: 22px;
+}
+
+:where(.screen h2) {
+	margin: 0 0 var(--space-2);
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--color-text-muted);
+}
+
+/* 畫面直接底下的每一個區塊是一張卡片。 */
+:where(
+	.screen > section,
+	.screen > form,
+	.screen > fieldset,
+	.screen > div,
+	.screen > ul
+) {
+	margin: 0;
+	padding: var(--space-3) var(--space-4);
+	border: none;
+	border-radius: var(--radius-card);
+	background: var(--color-surface);
+}
+
+:where(.screen form) {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+
+:where(.screen label) {
+	display: block;
+	font-size: 13px;
+	color: var(--color-text-muted);
+}
+
+/* 單選、勾選的標籤本身就是點擊目標。 */
+:where(
+	.screen label:has(> input[type="radio"]),
+	.screen label:has(> input[type="checkbox"])
+) {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	min-height: 44px;
+	font-size: 15px;
+	color: var(--color-text);
+}
+
+:where(
+	.screen input:not([type="radio"]):not([type="checkbox"]):not([type="file"]),
+	.screen select,
+	.screen textarea
+) {
+	box-sizing: border-box;
+	width: 100%;
+	min-height: 44px;
+	padding: var(--space-2) var(--space-3);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-button);
+	background: var(--color-bg);
+	color: var(--color-text);
+}
+
+:where(.screen fieldset) {
+	margin: 0;
+	padding: 0;
+	border: none;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+}
+
+:where(.screen legend) {
+	padding: 0;
+	margin-bottom: var(--space-1);
+	font-size: 13px;
+	color: var(--color-text-muted);
+}
+
+:where(.screen button) {
+	min-height: 44px;
+	padding: 0 var(--space-4);
+	border: 1px solid var(--color-action);
+	border-radius: var(--radius-button);
+	background: transparent;
+	color: var(--color-action);
+	font-size: 15px;
+	font-weight: 600;
+}
+
+/* 送出按鈕是主要按鈕。寫在通用 button 之後：兩者權重都是 0，靠順序。 */
+:where(.screen button[type="submit"]) {
+	border: none;
+	background: var(--color-action);
+	color: var(--color-on-action);
+}
+
+:where(.screen button:disabled) {
+	opacity: 0.4;
+}
+
+/* 畫面直接底下、長得像按鈕的連結（食物庫的「新增食物」）。 */
+:where(.screen > a) {
+	display: inline-flex;
+	align-items: center;
+	align-self: flex-start;
+	min-height: 44px;
+	font-weight: 600;
+}
+
+:where(.screen ul) {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+:where(.screen li) {
+	padding: var(--space-2) 0;
+	border-bottom: 1px solid var(--color-border);
+}
+
+:where(.screen li:last-child, .screen ul[role="alert"] li) {
+	border-bottom: none;
+}
+
+:where(.screen [role="alert"]) {
+	color: var(--color-danger);
+}
+
+:where(.screen p) {
+	margin: 0;
+}
+
+:where(.screen table) {
+	width: 100%;
+	border-collapse: collapse;
+	font-variant-numeric: tabular-nums;
+}
+
+:where(.screen th, .screen td) {
+	padding: var(--space-1) var(--space-2);
+	border-bottom: 1px solid var(--color-border);
+	text-align: left;
+}
+
+/* 營養素的 2×2 小方格（食物詳情）。 */
+.stats {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: var(--space-2);
+	margin: 0;
+}
+
+.stat {
+	padding: var(--space-2) var(--space-3);
+	border-radius: var(--radius-button);
+	background: var(--color-bg);
+}
+
+.stat dt {
+	font-size: 12px;
+	color: var(--color-text-muted);
+}
+
+.stat dd {
+	margin: 0;
+	font-size: 16px;
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+}
+
+/* 狀態標籤（預設、已通過、待審、已駁回）。 */
+.tag {
+	display: inline-block;
+	margin-left: var(--space-1);
+	padding: 0 var(--space-2);
+	border-radius: 999px;
+	background: var(--color-accent-soft);
+	color: var(--color-action);
+	font-size: 12px;
+	font-weight: 700;
+}

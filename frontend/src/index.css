@@ -31,6 +31,9 @@
 	--color-text-muted: #6b6b6b;
 	--color-border: #e5e5e5;
 	--color-danger: #c0392b;
+	/* 「公開」標籤之類的正面狀態。淺色 #2e7d32 在白底約 5.1:1、在畫面底色
+	   約 4.7:1（css-tokens.test.ts 守著）。 */
+	--color-success: #2e7d32;
 	/* 彩色圓形徽章上的白色圖示（IconBadge）。兩種模式都是白色，但深色
 	   區塊仍然要寫一次——「深色覆寫了每一個顏色變數」那條測試要求的。
 	   徽章旁邊一定有文字標籤，圖示是裝飾，不列入對比度的組合。 */
@@ -64,6 +67,7 @@
 		--color-text-muted: #a0a0a0;
 		--color-border: #333333;
 		--color-danger: #ff7675;
+		--color-success: #66bb6a;
 		--color-on-badge: #ffffff;
 	}
 }
@@ -102,11 +106,17 @@ a {
 }
 
 .trend-bar {
-	fill: #4a7;
+	fill: var(--color-accent);
+}
+
+/* 今天還沒結束：同一個顏色、淡一點（介面改版第二階段 §5.2）。
+   用透明度不用另一個色票——深色模式下 accent-soft 太暗，在卡片上幾乎看不見。 */
+.trend-bar-today {
+	fill-opacity: 0.45;
 }
 
 .trend-target {
-	stroke: #c33;
+	stroke: var(--color-danger);
 	stroke-width: 2;
 	stroke-dasharray: 4 3;
 }
@@ -123,24 +133,24 @@ a {
 	align-items: center;
 	gap: 8px;
 	padding: 8px 0;
-	border-bottom: 1px solid #eee;
+	border-bottom: 1px solid var(--color-border);
 }
 
 .food-brand {
-	color: #777;
+	color: var(--color-text-muted);
 	font-size: 13px;
 }
 
 .food-tag {
 	font-size: 12px;
-	color: #2a6;
-	border: 1px solid #2a6;
+	color: var(--color-success);
+	border: 1px solid var(--color-success);
 	border-radius: 4px;
 	padding: 1px 6px;
 }
 
 .food-no-nutrition {
-	color: #b33;
+	color: var(--color-danger);
 	font-size: 13px;
 }
 

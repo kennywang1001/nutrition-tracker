@@ -63,6 +63,9 @@ const PAIRS: ReadonlyArray<readonly [string, string]> = [
 	["--color-text", "--color-accent-soft"],
 	["--color-text-muted", "--color-accent-soft"],
 	["--color-action", "--color-accent-soft"],
+	// 「公開」標籤（食物清單的 .food-tag）的綠字，壓在畫面底色與卡片上。
+	["--color-success", "--color-bg"],
+	["--color-success", "--color-surface"],
 ];
 
 function collectModuleCss(dir: string): string[] {
@@ -120,5 +123,24 @@ describe("設計變數", () => {
 			.map((file) => file.replace(/\\/g, "/"));
 
 		expect(offenders).toEqual([]);
+	});
+
+	it("index.css 除了設計變數的定義之外沒有色碼", () => {
+		// 規格（介面改版第二階段 §3.4）：舊畫面的顏色全部換成變數之後，
+		// 色碼只該出現在 :root 與深色模式那兩個區塊裡。
+		const outsideTokenBlocks = css
+			.replace(/:root\s*\{[^}]*\}/, "")
+			.replace(
+				/@media\s*\(prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{[^}]*\}\s*\}/,
+				"",
+			);
+		// 先證明兩個區塊真的被拿掉了——正規表示式沒對上的話，下面的斷言會
+		// 把變數定義也算進去而紅，或（更糟）兩個 replace 都沒作用卻剛好沒有
+		// 色碼而綠。
+		expect(outsideTokenBlocks).not.toContain("--color-text:");
+
+		expect(
+			outsideTokenBlocks.match(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/g) ?? [],
+		).toEqual([]);
 	});
 });
