@@ -4,6 +4,29 @@ import { formatMacro, maxOf, ratioOf } from "../lib/decimal";
 
 export type TrendDay = components["schemas"]["DayTrendResponse"];
 
+/** 趨勢圖可以畫的四項（介面改版第二階段 §5）。跟 `MacrosResponse` 的欄位同名。 */
+export type TrendMetric = "kcal" | "protein_g" | "fat_g" | "carb_g";
+
+/** 每一項的名稱與單位。`spokenUnit` 是 aria-label 用的（螢幕閱讀器念「大卡」
+ *  「克」比念「kcal」「g」自然）；熱量的 label 刻意維持原本的格式
+ *  （「9/15，1800 大卡，…」，既有測試釘著）。 */
+export const TREND_METRICS: Record<
+	TrendMetric,
+	{ label: string; unit: string; spokenUnit: string }
+> = {
+	kcal: { label: "熱量", unit: "kcal", spokenUnit: "大卡" },
+	protein_g: { label: "蛋白質", unit: "g", spokenUnit: "克" },
+	fat_g: { label: "脂肪", unit: "g", spokenUnit: "克" },
+	carb_g: { label: "碳水", unit: "g", spokenUnit: "克" },
+};
+
+export const TREND_METRIC_ORDER: readonly TrendMetric[] = [
+	"kcal",
+	"protein_g",
+	"fat_g",
+	"carb_g",
+];
+
 /** SVG 的座標系。**固定值，不量容器** —— jsdom 不做版面計算，
  *  任何依賴實際寬度的東西在測試裡都會讀到 0。用 viewBox + preserveAspectRatio
  *  讓瀏覽器自己縮放，程式碼裡的座標永遠是這組數字。 */
@@ -11,7 +34,7 @@ const VIEW_WIDTH = 280;
 const VIEW_HEIGHT = 160;
 const BAR_WIDTH_RATIO = 0.6;
 
-/** 最近幾天的熱量長條圖（規格 §4.4–§4.6）。
+/** 最近幾天的營養素長條圖（規格 §4.4–§4.6）。
  *
  *  **純渲染，不取資料。** 呼叫端負責查詢、載入中、錯誤。
  *
@@ -23,9 +46,9 @@ const BAR_WIDTH_RATIO = 0.6;
  *
  *  ## 兩層 null
  *
- *  `target` 整個是 `null`（那天沒有生效目標）與 `target.kcal` 是 `null`
+ *  `target` 整個是 `null`（那天沒有生效目標）與 `target[metric]` 是 `null`
  *  （有目標但這一項沒設）是**兩個不同的事實**，雖然畫面結果都是不畫目標線。
- *  **不要寫成 `day.target?.kcal ?? 0`** —— 那會把兩層壓成一層，然後畫出
+ *  **不要寫成 `day.target?.[metric] ?? 0`** —— 那會把兩層壓成一層，然後畫出
  *  一條貼地的線，讀起來是「今天的目標是 0 大卡」。
  *
  *  ## `role="img"` 是必要的，Biome 那兩條規則在這裡是誤判
@@ -55,14 +78,23 @@ const BAR_WIDTH_RATIO = 0.6;
  *  **測試查得到的那個東西，跟使用者（或螢幕閱讀器）拿得到的那個東西，
  *  必須真的是同一個。** 所以現在有一條測試專門斷言 `role`。
  */
-export function TrendChart({ days }: { days: readonly TrendDay[] }) {
+type Props = {
+	days: readonly TrendDay[];
+	/** 要畫哪一項。預設熱量——既有的呼叫端與測試都是熱量。 */
+	metric?: TrendMetric;
+	/** 今天的日期（`stats/daily` 回的 `date`）。那一根畫淡色——今天還沒結束。
+	 *  **圖表不自己算今天**（前端不算日界線），由畫面傳進來。 */
+	today?: string | null;
+};
+
+export function TrendChart({ days, metric = "kcal", today = null }: Props) {
 	// y 軸上限：期間內實際值與目標值的最大值。目標可能整組是 null，
-	// 也可能 kcal 那一項是 null——兩種都不參與比較。
+	// 也可能這一項是 null——兩種都不參與比較。
 	const targetValues = days
-		.map((day) => day.target?.kcal ?? null)
+		.map((day) => day.target?.[metric] ?? null)
 		.filter((value): value is string => value !== null);
 	const ceiling = maxOf([
-		...days.map((day) => day.actual.kcal),
+		...days.map((day) => day.actual[metric]),
 		...targetValues,
 	]);
 
@@ -87,19 +119,24 @@ export function TrendChart({ days }: { days: readonly TrendDay[] }) {
 			className="trend-chart"
 			data-testid="trend-chart"
 			role="group"
-			aria-label="最近幾天的熱量"
+			aria-label={`最近幾天的${TREND_METRICS[metric].label}`}
 		>
 			{days.map((day, index) => {
-				const height = heightOf(day.actual.kcal);
+				const height = heightOf(day.actual[metric]);
 				const x = index * slot + inset;
 				// 第一層 null（整天沒目標）與第二層 null（這一項沒設）在這裡
 				// 一起被收斂成「沒有可畫的目標值」——但收斂發生在讀完兩層之後，
 				// 不是用 ?? 0 把它們壓成同一個數字。
-				const targetKcal = day.target === null ? null : day.target.kcal;
+				const targetValue = day.target === null ? null : day.target[metric];
+				const { spokenUnit } = TREND_METRICS[metric];
+				// 熱量維持原本的格式（「9/15，1800 大卡，…」）；其他項目前面多寫
+				// 項目名稱——「50 克」單獨念出來聽不出是哪一項。
+				const what = metric === "kcal" ? "" : `${TREND_METRICS[metric].label} `;
+				const value = `${what}${formatMacro(day.actual[metric])} ${spokenUnit}`;
 				const label =
-					targetKcal === null
-						? `${formatCivilDate(day.date)}，${formatMacro(day.actual.kcal)} 大卡，沒有目標`
-						: `${formatCivilDate(day.date)}，${formatMacro(day.actual.kcal)} 大卡，目標 ${formatMacro(targetKcal)} 大卡`;
+					targetValue === null
+						? `${formatCivilDate(day.date)}，${value}，沒有目標`
+						: `${formatCivilDate(day.date)}，${value}，目標 ${formatMacro(targetValue)} ${spokenUnit}`;
 
 				return (
 					<g key={day.date}>
@@ -112,15 +149,18 @@ export function TrendChart({ days }: { days: readonly TrendDay[] }) {
 							y={VIEW_HEIGHT - height}
 							width={barWidth}
 							height={height}
-							className="trend-bar"
+							rx={3}
+							className={
+								day.date === today ? "trend-bar trend-bar-today" : "trend-bar"
+							}
 						/>
-						{targetKcal !== null && (
+						{targetValue !== null && (
 							<line
 								data-testid={`trend-target-${day.date}`}
 								x1={index * slot}
 								x2={(index + 1) * slot}
-								y1={VIEW_HEIGHT - heightOf(targetKcal)}
-								y2={VIEW_HEIGHT - heightOf(targetKcal)}
+								y1={VIEW_HEIGHT - heightOf(targetValue)}
+								y2={VIEW_HEIGHT - heightOf(targetValue)}
 								className="trend-target"
 							/>
 						)}

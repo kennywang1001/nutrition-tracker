@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
@@ -154,5 +155,76 @@ describe("趨勢畫面", () => {
 		const adherence = await screen.findByTestId("adherence");
 		expect(adherence).toHaveTextContent("沒有補劑計畫");
 		expect(adherence).not.toHaveTextContent("0%");
+	});
+});
+
+/** 今天（最後一天）有熱量與蛋白質的目標、脂肪與碳水沒設。整個換掉最後一天，
+ *  不去改 rangeBody 回傳的物件（它的 target 型別是 null）。 */
+function rangeWithTodayTargets() {
+	const body = rangeBody(null);
+	return {
+		...body,
+		trend: [
+			...body.trend.slice(0, -1),
+			{
+				date: "2019-07-04",
+				actual: {
+					kcal: "1240.00",
+					protein_g: "60.00",
+					fat_g: "0.00",
+					carb_g: "0.00",
+				},
+				target: {
+					kcal: "2000.00",
+					protein_g: "80.00",
+					fat_g: null,
+					carb_g: null,
+				},
+				ratio: null,
+			},
+		],
+	};
+}
+
+function mockTrend() {
+	return mockApi([
+		{ path: "/api/stats/daily", handler: () => json(DAILY) },
+		{ path: "/api/stats/range", handler: () => json(rangeWithTodayTargets()) },
+	]);
+}
+
+describe("趨勢：營養素切換", () => {
+	it("預設是熱量，今天的摘要寫實際 / 目標", async () => {
+		mockTrend();
+		render(wrap(<Trend />));
+
+		expect(await screen.findByRole("radio", { name: "熱量" })).toBeChecked();
+		expect(screen.getByTestId("today-summary")).toHaveTextContent(
+			"今天 1240 / 2000 kcal",
+		);
+	});
+
+	it("切到蛋白質：圖與今天的摘要都換成蛋白質", async () => {
+		mockTrend();
+		render(wrap(<Trend />));
+
+		await userEvent.click(await screen.findByRole("radio", { name: "蛋白質" }));
+
+		expect(
+			screen.getByRole("group", { name: "最近幾天的蛋白質" }),
+		).toBeInTheDocument();
+		expect(screen.getByTestId("today-summary")).toHaveTextContent(
+			"今天 60 / 80 g",
+		);
+	});
+
+	it("那一項沒有目標：摘要只寫實際值", async () => {
+		mockTrend();
+		render(wrap(<Trend />));
+
+		await userEvent.click(await screen.findByRole("radio", { name: "脂肪" }));
+
+		expect(screen.getByTestId("today-summary")).toHaveTextContent("今天 0 g");
+		expect(screen.getByTestId("today-summary")).not.toHaveTextContent("/");
 	});
 });

@@ -188,3 +188,114 @@ describe("TrendChart", () => {
 		);
 	});
 });
+
+type Macros = {
+	kcal: string;
+	protein_g: string;
+	fat_g: string;
+	carb_g: string;
+};
+type Target = {
+	kcal: string | null;
+	protein_g: string | null;
+	fat_g: string | null;
+	carb_g: string | null;
+};
+
+function fullDay(
+	date: string,
+	actual: Partial<Macros>,
+	target: Partial<Target> | null,
+): TrendDay {
+	return {
+		date,
+		actual: {
+			kcal: "0.00",
+			protein_g: "0.00",
+			fat_g: "0.00",
+			carb_g: "0.00",
+			...actual,
+		},
+		target:
+			target === null
+				? null
+				: { kcal: null, protein_g: null, fat_g: null, carb_g: null, ...target },
+		ratio: null,
+	};
+}
+
+describe("TrendChart：營養素", () => {
+	it("切到蛋白質：柱子高度比例是蛋白質的比例，不是熱量的", () => {
+		// 熱量的比例是 2:1，蛋白質是 1:2——畫錯哪一項一定看得出來。
+		render(
+			<TrendChart
+				metric="protein_g"
+				days={[
+					fullDay("2026-09-15", { kcal: "2000.00", protein_g: "50.00" }, null),
+					fullDay("2026-09-16", { kcal: "1000.00", protein_g: "100.00" }, null),
+				]}
+			/>,
+		);
+
+		expect(heightOf(0) / heightOf(1)).toBeCloseTo(0.5, 5);
+	});
+
+	it("蛋白質的 label 說蛋白質與克", () => {
+		render(
+			<TrendChart
+				metric="protein_g"
+				days={[
+					fullDay(
+						"2026-09-15",
+						{ protein_g: "50.00" },
+						{ kcal: "2000.00", protein_g: "80.00" },
+					),
+				]}
+			/>,
+		);
+
+		expect(screen.getByTestId("trend-bar-2026-09-15")).toHaveAttribute(
+			"aria-label",
+			"9/15，蛋白質 50 克，目標 80 克",
+		);
+		expect(
+			screen.getByRole("group", { name: "最近幾天的蛋白質" }),
+		).toBeInTheDocument();
+	});
+
+	it("蛋白質沒設目標、熱量有：畫蛋白質時不畫目標線，畫熱量時畫", () => {
+		const days = [
+			fullDay(
+				"2026-09-15",
+				{ kcal: "1800.00", protein_g: "50.00" },
+				{ kcal: "2000.00", protein_g: null },
+			),
+		];
+		const { rerender } = render(<TrendChart metric="protein_g" days={days} />);
+		expect(
+			screen.queryByTestId("trend-target-2026-09-15"),
+		).not.toBeInTheDocument();
+
+		rerender(<TrendChart metric="kcal" days={days} />);
+		expect(screen.getByTestId("trend-target-2026-09-15")).toBeInTheDocument();
+	});
+
+	it("今天那一根是淡色，其他天不是", () => {
+		render(
+			<TrendChart
+				today="2026-09-16"
+				days={[
+					fullDay("2026-09-15", { kcal: "1800.00" }, null),
+					fullDay("2026-09-16", { kcal: "900.00" }, null),
+				]}
+			/>,
+		);
+
+		expect(screen.getByTestId("trend-bar-2026-09-16")).toHaveClass(
+			"trend-bar-today",
+		);
+		expect(screen.getByTestId("trend-bar-2026-09-15")).not.toHaveClass(
+			"trend-bar-today",
+		);
+	});
+});

@@ -53,3 +53,17 @@ test("補劑：按鈕都 ≥ 44px", async ({ page }) => {
 	).toBeVisible();
 	await expectTouchTargets(page.locator("main button:visible"), "補劑");
 });
+
+test("趨勢：營養素切換的選項都 ≥ 44px", async ({ page }) => {
+	await login(page);
+	await page.goto("/trend");
+	await expect(
+		page.getByRole("heading", { name: "趨勢", exact: true }),
+	).toBeVisible();
+	// 標題在載入中就有了，選項要等資料回來才出現。
+	await expect(page.getByRole("radio", { name: "熱量" })).toBeAttached();
+	await expectTouchTargets(
+		page.locator("main label:has(input[type=radio]):visible"),
+		"趨勢",
+	);
+});
