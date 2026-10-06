@@ -147,6 +147,7 @@ function ExpenseRow({ expense, onChanged }: RowProps) {
 					    顯示出一個會誤導使用者的錯誤。 */}
 					<button
 						type="button"
+						className={styles.danger}
 						disabled={remove.isPending}
 						onClick={() => {
 							setRowError(null);
@@ -168,6 +169,7 @@ function ExpenseRow({ expense, onChanged }: RowProps) {
 			) : (
 				<button
 					type="button"
+					className={styles.danger}
 					onClick={() => {
 						setConfirmingDelete(true);
 						setRowError(null);

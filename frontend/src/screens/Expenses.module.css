@@ -42,3 +42,61 @@
 	font-weight: 700;
 	font-variant-numeric: tabular-nums;
 }
+
+/* 清單一列裡的按鈕（小項目包規格 §6）：至少 44px；儲存是實心，刪除類是危險色的框。 */
+.row button {
+	min-height: 44px;
+	padding: 0 var(--space-3);
+	border: 1px solid var(--color-action);
+	border-radius: var(--radius-button);
+	background: transparent;
+	color: var(--color-action);
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.row button[type="submit"] {
+	border: none;
+	background: var(--color-action);
+	color: var(--color-on-action);
+}
+
+/* (0,2,0) 贏過上面的 .row button (0,1,1)。 */
+.row .danger {
+	border-color: var(--color-danger);
+	color: var(--color-danger);
+}
+
+.row button:disabled {
+	opacity: 0.4;
+}
+
+/* 修改表單與刪除確認佔滿一整行，換到金額下面。 */
+.row form,
+.row [role="alertdialog"] {
+	flex-basis: 100%;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2);
+}
+
+.row form input {
+	flex: 1;
+	min-height: 44px;
+	padding: var(--space-2) var(--space-3);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-button);
+	background: var(--color-bg);
+	color: var(--color-text);
+}
+
+.row [role="alertdialog"] p,
+.row [role="alert"] {
+	flex-basis: 100%;
+	margin: 0;
+}
+
+.row [role="alert"] {
+	color: var(--color-danger);
+}

@@ -82,3 +82,38 @@ test("趨勢：營養素切換的選項都 ≥ 44px", async ({ page }) => {
 		"趨勢",
 	);
 });
+
+test("報表：支出清單的按鈕都 ≥ 44px", async ({ page }) => {
+	await login(page);
+	// 先記一筆，清單才一定有東西（同 money-loop.spec.ts 的步驟）。
+	await page.getByRole("button", { name: "新增紀錄" }).click();
+	await page.getByRole("link", { name: "記帳" }).click();
+	await expect(
+		page.getByRole("heading", { name: "記帳", exact: true }),
+	).toBeVisible();
+	for (const key of ["4", "2"]) {
+		await page.getByRole("button", { name: key, exact: true }).click();
+	}
+	await page.getByRole("button", { name: "交通" }).click();
+	const note = `e2e-touch-${Date.now()}`;
+	await page.getByLabel("備註").fill(note);
+	await page.getByRole("button", { name: "記一筆" }).click();
+	await expect(page.getByRole("heading", { name: "總覽" })).toBeVisible();
+
+	await page.goto("/reports");
+	const row = page
+		.locator('main li[data-testid^="expense-"]')
+		.filter({ hasText: note });
+	await expect(row).toHaveCount(1);
+	await expectTouchTargets(row.locator("button:visible"), "報表清單");
+
+	// 打開修改與刪除確認，裡面的按鈕也量。
+	await row.getByRole("button", { name: "修改", exact: true }).click();
+	await expectTouchTargets(row.locator("button:visible"), "報表清單（修改中）");
+	await row.getByRole("button", { name: "放棄", exact: true }).click();
+	await row.getByRole("button", { name: "刪除", exact: true }).click();
+	await expectTouchTargets(
+		row.locator("button:visible"),
+		"報表清單（確認刪除）",
+	);
+});
