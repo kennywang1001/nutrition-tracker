@@ -1,8 +1,9 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 import { useNavigate } from "react-router";
 import { apiFetch } from "../api/client";
 import { ApiError, describeFieldErrors } from "../api/errors";
+import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
 import { AiEstimatePanel } from "../components/AiEstimatePanel";
 import { isPlainPositiveDecimal, perServingToPer100 } from "../lib/decimal";
@@ -59,6 +60,7 @@ type NutritionBasis = "per100" | "perServing";
  *  `onSaved` 那樣「導回一個固定路徑」。 */
 export function NewFood() {
 	const navigate = useNavigate();
+	const queryClient = useQueryClient();
 
 	const [aiText, setAiText] = useState("");
 	const [name, setName] = useState("");
@@ -135,6 +137,8 @@ export function NewFood() {
 				}),
 			}),
 		onSuccess: (created) => {
+			// 新食物要搜得到（queryKeys.foodSearchAll 的註解就是這麼說的）。
+			queryClient.invalidateQueries({ queryKey: queryKeys.foodSearchAll });
 			// apiFetch<T> 回的是 T | null（204 → null），201 不會是 null，
 			// 但型別上仍要 narrow——truthy 判斷，不是 === undefined。
 			if (created) {

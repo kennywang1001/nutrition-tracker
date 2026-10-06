@@ -132,8 +132,9 @@ class LLMEstimateSchema(BaseModel):
     不是營養學上的斷言。
     """
 
-    name: str = Field(min_length=1, max_length=200)
-    brand: str | None
+    # 100 跟 `FoodCreateRequest`（app/schemas/food.py）一致：更長的「確認」會 422。
+    name: str = Field(min_length=1, max_length=100)
+    brand: str | None = Field(max_length=100)
     serving_grams: Decimal = Field(gt=0, le=10000, max_digits=8, decimal_places=2)
     serving_kcal: Decimal = Field(ge=0, le=100000, max_digits=8, decimal_places=2)
     serving_protein_g: Decimal = Field(ge=0, le=10000, max_digits=8, decimal_places=2)

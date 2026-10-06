@@ -87,6 +87,7 @@ export function editedFoodRequest(
 ): EditedResult {
 	const name = draft.name.trim();
 	if (name === "") return { ok: false, error: "請輸入名稱" };
+	if (name.length > 100) return { ok: false, error: "名稱不能超過 100 個字" };
 
 	const grams = draft.servingGrams.trim();
 	if (!isPlainPositiveDecimal(grams)) {

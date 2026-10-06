@@ -563,8 +563,12 @@ describe("AI 估算面板：錯誤", () => {
 		);
 	});
 
-	it("AI 沒設定：說未設定，估算按鈕停用", async () => {
-		mockApi(routes(apiError(503, "AI_NOT_CONFIGURED", "AI 分析未設定")));
+	it("AI 沒設定：說缺什麼，只停用拍照，文字估算按鈕還能按", async () => {
+		mockApi(
+			routes(
+				apiError(503, "AI_NOT_CONFIGURED", "AI 分析未設定：缺 GEMINI_API_KEY"),
+			),
+		);
 		renderPanel();
 
 		const button = screen.getByRole("button", {
@@ -572,8 +576,11 @@ describe("AI 估算面板：錯誤", () => {
 		});
 		await userEvent.click(button);
 
-		expect(await screen.findByRole("alert")).toHaveTextContent("AI 分析未設定");
-		expect(button).toBeDisabled();
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"AI 分析未設定：缺 GEMINI_API_KEY",
+		);
+		// 文字估算可能直接命中食物庫、不用 AI，所以不停用。
+		expect(button).toBeEnabled();
 		expect(screen.getByLabelText("拍照估算")).toBeDisabled();
 	});
 

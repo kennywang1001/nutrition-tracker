@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { MemoryRouter, Route, Routes, useParams } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { queryKeys } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { NewFood } from "../src/screens/NewFood";
@@ -19,10 +20,12 @@ function FakeFoodDetail() {
 	return <p>food-detail:{id}</p>;
 }
 
-function wrap(children: ReactNode) {
-	const client = new QueryClient({
+function wrap(
+	children: ReactNode,
+	client = new QueryClient({
 		defaultOptions: { queries: { retry: false } },
-	});
+	}),
+) {
 	return (
 		<QueryClientProvider client={client}>
 			<MemoryRouter initialEntries={["/foods/new"]}>
@@ -145,6 +148,24 @@ describe("新增食物 /foods/new", () => {
 		expect(typeof body.nutrition.protein_g).toBe("string");
 		expect(typeof body.nutrition.fat_g).toBe("string");
 		expect(typeof body.nutrition.carb_g).toBe("string");
+	});
+
+	it("建立成功：讓所有食物搜尋結果失效（新食物搜得到）", async () => {
+		mockCreate();
+		const client = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const invalidate = vi.spyOn(client, "invalidateQueries");
+
+		render(wrap(<NewFood />, client));
+		await userEvent.type(screen.getByLabelText("名稱"), "滷肉飯");
+		await fillNutrition();
+		await userEvent.click(screen.getByRole("button", { name: "建立食物" }));
+
+		await screen.findByText("food-detail:42");
+		expect(invalidate).toHaveBeenCalledWith({
+			queryKey: queryKeys.foodSearchAll,
+		});
 	});
 
 	it("brand 留空時送的是 null，不是空字串", async () => {

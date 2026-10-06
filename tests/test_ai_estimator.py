@@ -75,6 +75,31 @@ def test_brand_can_be_a_string():
     assert result.brand == "麥當勞"
 
 
+def test_name_over_100_chars_is_rejected():
+    """`FoodCreateRequest` 的 name 上限是 100——AI 給更長的，「確認」會 422。"""
+    raw_text = _VALID_JSON.replace('"name": "滷肉飯"', '"name": "' + "飯" * 101 + '"')
+
+    with pytest.raises(BadGatewayError) as exc_info:
+        parse_raw_estimate(raw_text)
+
+    assert exc_info.value.code == "AI_BAD_RESPONSE"
+
+
+def test_brand_over_100_chars_is_rejected():
+    raw_text = _VALID_JSON.replace('"brand": null', '"brand": "' + "牌" * 101 + '"')
+
+    with pytest.raises(BadGatewayError) as exc_info:
+        parse_raw_estimate(raw_text)
+
+    assert exc_info.value.code == "AI_BAD_RESPONSE"
+
+
+def test_name_of_exactly_100_chars_is_accepted():
+    raw_text = _VALID_JSON.replace('"name": "滷肉飯"', '"name": "' + "飯" * 100 + '"')
+
+    assert len(parse_raw_estimate(raw_text).name) == 100
+
+
 def test_not_json_is_rejected():
     with pytest.raises(BadGatewayError) as exc_info:
         parse_raw_estimate("這不是 JSON，只是模型跑題說的一段話。")

@@ -44,7 +44,9 @@ function describeAnalyzeError(error: unknown): string {
 				// 後端的訊息含「今天用了 N/20」。
 				return error.message;
 			case "AI_NOT_CONFIGURED":
-				return "AI 分析未設定";
+				// 後端的訊息說缺什麼（「AI 分析未設定：缺 GEMINI_API_KEY」），
+				// 部署手冊叫操作者照著它補。
+				return error.message;
 			case "AI_BAD_RESPONSE":
 				return "AI 這次的回答看不懂，可以再試一次";
 			case "PHOTO_TOO_LARGE":
@@ -88,7 +90,8 @@ export function AiEstimatePanel({
 	const [formError, setFormError] = useState<string | null>(null);
 	// 存的時候撞名（409 FOOD_EXISTS 附的 food_id）。
 	const [existingFoodId, setExistingFoodId] = useState<number | null>(null);
-	// 這一次畫面上已經知道 AI 沒設定：估算按鈕停用，不讓人一直按。
+	// 這一次畫面上已經知道 AI 沒設定：只停用拍照（一定要 AI）。文字估算仍可按——
+	// 後端先查食物庫，命中就不用 AI。
 	const [aiUnavailable, setAiUnavailable] = useState(false);
 
 	function clearResult() {
@@ -216,7 +219,7 @@ export function AiEstimatePanel({
 					<button
 						type="button"
 						className={styles.aiButton}
-						disabled={busy || aiUnavailable}
+						disabled={busy}
 						onClick={() => analyze.mutate({ kind: "text", text: trimmed })}
 					>
 						{textButtonLabel(trimmed)}

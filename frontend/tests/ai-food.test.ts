@@ -114,6 +114,21 @@ describe("editedFoodRequest：改過才確認", () => {
 		).toEqual({ ok: false, error: "換算後超過上限，請確認一份的重量" });
 	});
 
+	it("名稱超過 100 個字：擋下（後端的上限）", () => {
+		expect(
+			editedFoodRequest(ESTIMATE, {
+				...draftFromEstimate(ESTIMATE),
+				name: ` ${"飯".repeat(101)} `,
+			}),
+		).toEqual({ ok: false, error: "名稱不能超過 100 個字" });
+
+		const ok = editedFoodRequest(ESTIMATE, {
+			...draftFromEstimate(ESTIMATE),
+			name: "飯".repeat(100),
+		});
+		expect(ok.ok).toBe(true);
+	});
+
 	it("一份重量前後空白會去掉", () => {
 		const result = editedFoodRequest(ESTIMATE, {
 			...draftFromEstimate(ESTIMATE),
