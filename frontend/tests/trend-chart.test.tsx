@@ -299,3 +299,53 @@ describe("TrendChart：營養素", () => {
 		);
 	});
 });
+
+describe("TrendChart：日期軸", () => {
+	it("每根柱子下面有那天的日期，今天那根寫「今天」", () => {
+		render(
+			<TrendChart
+				today="2026-09-16"
+				days={[
+					fullDay("2026-09-15", { kcal: "1800.00" }, null),
+					fullDay("2026-09-16", { kcal: "900.00" }, null),
+				]}
+			/>,
+		);
+
+		expect(screen.getByTestId("trend-date-2026-09-15")).toHaveTextContent(
+			"9/15",
+		);
+		expect(screen.getByTestId("trend-date-2026-09-16")).toHaveTextContent(
+			"今天",
+		);
+	});
+
+	it("日期在柱子正下方（同一個水平中心）", () => {
+		render(
+			<TrendChart
+				days={[
+					fullDay("2026-09-15", { kcal: "1800.00" }, null),
+					fullDay("2026-09-16", { kcal: "900.00" }, null),
+				]}
+			/>,
+		);
+
+		const bar = screen.getByTestId("trend-bar-2026-09-16");
+		const center =
+			Number(bar.getAttribute("x")) + Number(bar.getAttribute("width")) / 2;
+		expect(
+			Number(screen.getByTestId("trend-date-2026-09-16").getAttribute("x")),
+		).toBeCloseTo(center, 5);
+	});
+
+	it("日期是裝飾：柱子的 aria-label 已經有日期", () => {
+		render(
+			<TrendChart days={[fullDay("2026-09-15", { kcal: "1800.00" }, null)]} />,
+		);
+
+		expect(screen.getByTestId("trend-date-2026-09-15")).toHaveAttribute(
+			"aria-hidden",
+			"true",
+		);
+	});
+});

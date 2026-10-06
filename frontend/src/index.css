@@ -121,6 +121,12 @@ a {
 	stroke-dasharray: 4 3;
 }
 
+/* 趨勢圖柱子下方的日期。 */
+.trend-date {
+	fill: var(--color-text-muted);
+	font-size: 10px;
+}
+
 /* 食物庫（P3-B 計畫二 Task 3）。 */
 .food-results {
 	list-style: none;

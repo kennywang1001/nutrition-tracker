@@ -32,6 +32,9 @@ export const TREND_METRIC_ORDER: readonly TrendMetric[] = [
  *  讓瀏覽器自己縮放，程式碼裡的座標永遠是這組數字。 */
 const VIEW_WIDTH = 280;
 const VIEW_HEIGHT = 160;
+/** 柱子下方給日期用的一條。柱子的計算範圍仍然是 VIEW_HEIGHT——
+ *  既有的高度比例與位置測試不受影響。 */
+const DATE_BAND = 16;
 const BAR_WIDTH_RATIO = 0.6;
 
 /** 最近幾天的營養素長條圖（規格 §4.4–§4.6）。
@@ -115,7 +118,7 @@ export function TrendChart({ days, metric = "kcal", today = null }: Props) {
 	return (
 		// biome-ignore lint/a11y/useSemanticElements: 它建議的替代品是 <fieldset>，對一張 SVG 圖表沒有意義
 		<svg
-			viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
+			viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT + DATE_BAND}`}
 			className="trend-chart"
 			data-testid="trend-chart"
 			role="group"
@@ -154,6 +157,17 @@ export function TrendChart({ days, metric = "kcal", today = null }: Props) {
 								day.date === today ? "trend-bar trend-bar-today" : "trend-bar"
 							}
 						/>
+						{/* biome-ignore lint/a11y/noAriaHiddenOnFocusable: SVG <text> 不能聚焦，這是規則的誤判；日期是裝飾，柱子的 aria-label 已經有 */}
+						<text
+							data-testid={`trend-date-${day.date}`}
+							x={x + barWidth / 2}
+							y={VIEW_HEIGHT + DATE_BAND - 4}
+							textAnchor="middle"
+							className="trend-date"
+							aria-hidden="true"
+						>
+							{day.date === today ? "今天" : formatCivilDate(day.date)}
+						</text>
 						{targetValue !== null && (
 							<line
 								data-testid={`trend-target-${day.date}`}
