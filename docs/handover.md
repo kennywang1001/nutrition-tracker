@@ -2,7 +2,7 @@
 
 **專案：** nutrition-tracker —— 飲食紀錄系統
 **Repo：** https://github.com/kennywang1001/nutrition-tracker（公開）
-**狀態：** 後端完成並可部署、session 撤銷已完成；介面改版第一階段、食物的一份、修改與刪除已記錄的餐點已上線；AI 估算的前端已實作於 `feat/ai-estimate`
+**狀態：** 後端完成並可部署、session 撤銷已完成；介面改版第一階段、食物的一份、修改與刪除已記錄的餐點、AI 估算的前端已合併；介面改版第二階段已實作於 `feat/ui-phase2`
 **文件產出日：** 2026-09-11（session 撤銷完成後更新於 2026-09-12）
 
 ---
@@ -47,7 +47,7 @@
 | P4 上線 | NAS 部署 + Tailscale | ✅ |
 | **UI 改版 第一階段** | tab bar 總覽｜報表｜＋｜飲食｜我的；MOZE 風格外觀（設計變數 + 深色模式，跟隨系統）；自訂數字鍵盤記帳；記一餐可選填照片；總覽時間線（規格 `docs/superpowers/specs/2026-10-02-ui-redesign-phase1-design.md`、計畫 `docs/superpowers/plans/2026-10-02-ui-redesign-phase1.md`） | ✅ 已實作於 `feat/ui-redesign-phase1`，待合併 |
 | 修改與刪除已記錄的餐點 | 編輯畫面 `/meals/:id/edit`：改份量或數量、加刪項目、改餐別、改金額（改、補、拿掉）、換或刪照片、刪整餐（連餐費）。入口：飲食頁卡片的「編輯」、總覽時間線的餐點列（規格 `docs/superpowers/specs/2026-10-04-edit-meals-design.md`、計畫 `docs/superpowers/plans/2026-10-04-edit-meals.md`） | ✅ 已實作於 `feat/edit-meals` |
-| UI 改版 第二階段 | 圖表與其餘畫面換新外觀 | ⬜ |
+| UI 改版 第二階段 | 六個舊畫面（食物庫、食物詳情、新增食物、補劑、趨勢、管理員審核）換新外觀；報表的分類甜甜圈圖；趨勢的營養素切換（規格 `docs/superpowers/specs/2026-10-06-ui-redesign-phase2-design.md`、計畫 `docs/superpowers/plans/2026-10-06-ui-redesign-phase2.md`） | ✅ 已實作於 `feat/ui-phase2` |
 | UI 改版 第三階段 | 社群（P7），草稿在分支 `docs/p7-social-decisions` | ⬜ |
 
 > **P4 早於 P2/P3 完成是刻意的，但當初的理由有瑕疵。**
@@ -225,7 +225,7 @@ userland proxy 對發佈的埠做 SNAT）。按 IP 限速會把 tailnet 上所�
 
 ---
 
-## 6. 這個專案最有價值的產出：五十二種「綠燈說謊」
+## 6. 這個專案最有價值的產出：五十三種「綠燈說謊」
 
 **每一種的機制都不同，而且都是實測踩到的，不是理論。**
 新加的任何測試都應該對照這份清單檢查一次。
@@ -760,6 +760,16 @@ File 沒有自己的可列舉屬性，Vitest 的深比較把兩個內容、名�
 可及名稱包含既有元件的名稱時，舊測試會被新元件「搶走」；點食物一律 `exact: true`
 （d7e2c0e）。
 
+### 第 53 種是「介面改版第二階段」長出來的
+
+**第 53 種：斷言在換頁之前就對舊畫面成立了。** `supplements.spec.ts` 點了「新增補劑」
+連結之後馬上 `expect(getByRole("heading", { name: "補劑" })).toBeVisible()`——
+Playwright 的名稱是子字串比對，而**還沒換頁的飲食頁**剛好有一個「今日補劑」標題，
+於是斷言對上一頁就成立了，驗的根本不是補劑頁。換頁比較快的時候，補劑頁有「補劑」
+「新增補劑」「找補劑…」三個標題都含「補劑」，嚴格模式報錯——這正是那條 e2e
+偶發紅燈的原因（一直被當成「不穩」略過）。`exact: true` 同時修掉兩件事。
+**換頁之後的第一個斷言，要選一個只有新頁面才有的東西。**
+
 ---
 
 ## 7. 踩過的技術坑（節錄，完整版在各計畫文件）
@@ -779,6 +789,8 @@ File 沒有自己的可列舉屬性，Vitest 的深比較把兩個內容、名�
 | asyncpg `contype` | `"char"` 回傳成 **bytes**（`b'c'`），比對要加 `::text` |
 | asyncpg 日期參數 | 要傳真的 `date` 物件，`$1::date` 配字串會拋 `DataError` |
 | testing-library 的文字正規化 | `getByText` 把 DOM 文字裡的空白（含全形空白 U+3000）壓成一個半形空白，但**傳進去的字串不會**——寫了全形空白的斷言永遠對不上（AI 估算 Task 4） |
+| **零權重（`:where()`）樣式的順序** | 介面改版第二階段的 `.screen` 規則全部包在 `:where()` 裡（權重 0，讓元件自己的 class 一定贏）——代價是**它們之間誰贏完全看順序**：通用的 `fieldset`／`ul` 重設寫在「卡片」規則後面，就把卡片的內距蓋掉了（踩了兩次）。`ui.module.css` 檔頭寫明順序：通用重設 → 卡片 → 明確的覆寫。另外，`index.css` 裡權重 (0,1,0) 的全域 class 會贏過任何 `:where()` 規則 |
+| e2e 量版面 | jsdom 不做版面計算，「按鈕 ≥ 44px」只能在 Playwright 量（`e2e/touch-targets.ts`）。但**量高度證明不了排列**：趨勢的切換鈕被排成直的一列時，44px 照樣過——是看截圖才發現的 |
 | TanStack v5 mutation 的 callback | `useMutation({ onSuccess })` 在元件卸載之後**仍然會跑**；`mutate(vars, { onSuccess })` 不會。會導頁或改父層狀態的事放在後者（編輯餐點 Task 6、AI 估算 Task 4） |
 | `docker ps` 顯示 `Up` | **不代表活著**。uvicorn reloader 父行程在子行程崩潰時仍活著 |
 | 改環境變數後 `restart` | **不夠**，要 `up -d`（會重建容器） |
@@ -1000,14 +1012,14 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
 
 ### 介面改版：下一步與已知待辦
 
-介面改版第一階段（見上方階段進度）已實作於 `feat/ui-redesign-phase1`。
+介面改版第一、第二階段都已完成（見上方階段進度）。
 
 **下一步：**
 
-- **第二階段**：圖表（支出圓餅圖、營養趨勢）；其餘畫面（食物庫、補劑、
-  管理員、趨勢）換新外觀，包括把 `index.css` 裡寫死的舊顏色換成設計變數
-  （例如 `.food-no-nutrition` 的 `#b33`，在深色表面上對比只有約 3:1），
-  以及舊按鈕補到 44px 點擊範圍
+- **第二階段：已完成**（見階段進度）。順手發現、還沒做的：
+  - 報表頁的支出清單（第一階段的畫面）「修改」「刪除」仍是瀏覽器預設的小按鈕。
+  - 食物詳情的編輯歷史日期仍是原始的 ISO 字串（`2026-10-06T07:32:01…`）。
+  - 趨勢圖沒有日期軸標籤（每根柱子的日期只在 aria-label 裡）。
 - **第三階段**：社群（P7），從分支 `docs/p7-social-decisions` 的草稿開始
 
 **已知待辦：**

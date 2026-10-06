@@ -21,7 +21,12 @@ test("新增補劑 → 今天吃了 → 飲食頁看得到它", async ({ page })
 
 	// 入口是「今日補劑」區塊的連結，不是 tab（tab bar 固定是 總覽／報表／＋／飲食／我的）。
 	await page.getByRole("link", { name: "新增補劑" }).click();
-	await expect(page.getByRole("heading", { name: "補劑" })).toBeVisible();
+	// exact：Playwright 的名稱是子字串比對。不加的話，點完連結的當下畫面還停在
+	// 飲食頁時，「今日補劑」這個標題就讓斷言成立了（驗到的是上一頁）；換頁
+	// 比較快時，補劑頁的「新增補劑」「找補劑…」又讓它對到三個而偶發失敗。
+	await expect(
+		page.getByRole("heading", { name: "補劑", exact: true }),
+	).toBeVisible();
 
 	// 名稱帶 Date.now()——POST /api/supplements 有唯一約束
 	// （uq_supplements_owner_id_name_brand，app/models/supplement.py），
