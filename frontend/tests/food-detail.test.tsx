@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { queryKeys } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
+import { formatDateTime } from "../src/lib/dates";
 import { FoodDetail } from "../src/screens/FoodDetail";
 import { json, type Route as MockRoute, mockApi } from "./helpers/mock-api";
 
@@ -393,11 +394,17 @@ describe("食物詳情 /foods/:id", () => {
 
 		expect(await screen.findByText("已通過")).toBeInTheDocument();
 		expect(screen.getByText("初版")).toBeInTheDocument();
-		expect(screen.getByText("2026-09-01T00:00:00Z")).toBeInTheDocument();
+		expect(
+			screen.getByText(formatDateTime("2026-09-01T00:00:00Z")),
+		).toBeInTheDocument();
+		expect(screen.queryByText("2026-09-01T00:00:00Z")).not.toBeInTheDocument();
 
 		expect(screen.getByText("已駁回")).toBeInTheDocument();
 		expect(screen.getByText("改熱量")).toBeInTheDocument();
-		expect(screen.getByText("2026-08-20T00:00:00Z")).toBeInTheDocument();
+		expect(
+			screen.getByText(formatDateTime("2026-08-20T00:00:00Z")),
+		).toBeInTheDocument();
+		expect(screen.queryByText("2026-08-20T00:00:00Z")).not.toBeInTheDocument();
 		expect(
 			screen.getByText("駁回原因：數值跟包裝標示不符"),
 		).toBeInTheDocument();

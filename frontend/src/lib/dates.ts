@@ -26,3 +26,17 @@ export function formatTime(timestamp: string | number): string {
 		minute: "2-digit",
 	});
 }
+
+/** 日期加時間（例如「2026/9/1 08:00」），用瀏覽器的時區與語系。
+ *
+ *  **只做顯示格式化**，跟 `formatTime` 一樣，不算日界線（見檔頭）。
+ *  給「這件事是什麼時候發生的」用——例如食物詳情的編輯歷史。 */
+export function formatDateTime(timestamp: string | number): string {
+	return new Date(timestamp).toLocaleString(undefined, {
+		year: "numeric",
+		month: "numeric",
+		day: "numeric",
+		hour: "2-digit",
+		minute: "2-digit",
+	});
+}

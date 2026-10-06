@@ -9,6 +9,7 @@ import type { components } from "../api/schema";
 import { AddPortionForm } from "../components/AddPortionForm";
 import { PortionRow } from "../components/PortionRow";
 import ui from "../components/ui.module.css";
+import { formatDateTime } from "../lib/dates";
 import { formatMacro } from "../lib/decimal";
 import { BASE_UNITS, NUMERIC_FIELDS, type NumericField } from "./NewFood";
 
@@ -254,7 +255,7 @@ export function FoodDetail() {
 										{revision.change_note !== null && (
 											<p>{revision.change_note}</p>
 										)}
-										<p>{revision.created_at}</p>
+										<p>{formatDateTime(revision.created_at)}</p>
 										{/* reject_reason 不是裝飾：沒有它，送審就是一個回了 201
 											之後永遠沒有下文的黑洞——使用者不知道提案被駁回了，
 											更不知道為什麼（規格 §5.3）。 */}
