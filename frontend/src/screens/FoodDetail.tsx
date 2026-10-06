@@ -7,6 +7,7 @@ import { useFood, useFoodRevisions } from "../api/foods";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
 import { AddPortionForm } from "../components/AddPortionForm";
+import ui from "../components/ui.module.css";
 import { formatMacro } from "../lib/decimal";
 import { BASE_UNITS, NUMERIC_FIELDS, type NumericField } from "./NewFood";
 
@@ -159,7 +160,7 @@ export function FoodDetail() {
 	const unit: BaseUnit = food?.nutrition?.base_unit ?? "g";
 
 	return (
-		<section>
+		<section className={ui.screen}>
 			{foodQuery.isLoading && <p>載入中…</p>}
 
 			{food !== null && (
@@ -174,18 +175,26 @@ export function FoodDetail() {
 							// 空白一片或 NaN 會讓人以為畫面壞了，所以明講。
 							<p>這個食物還沒有生效的營養素資料</p>
 						) : (
-							<dl>
-								<dt>熱量</dt>
-								<dd>
-									{formatMacro(food.nutrition.kcal)} kcal / 100
-									{food.nutrition.base_unit}
-								</dd>
-								<dt>蛋白質</dt>
-								<dd>{formatMacro(food.nutrition.protein_g)} g</dd>
-								<dt>脂肪</dt>
-								<dd>{formatMacro(food.nutrition.fat_g)} g</dd>
-								<dt>碳水化合物</dt>
-								<dd>{formatMacro(food.nutrition.carb_g)} g</dd>
+							<dl className={ui.stats}>
+								<div className={ui.stat}>
+									<dt>熱量</dt>
+									<dd>
+										{formatMacro(food.nutrition.kcal)} kcal / 100
+										{food.nutrition.base_unit}
+									</dd>
+								</div>
+								<div className={ui.stat}>
+									<dt>蛋白質</dt>
+									<dd>{formatMacro(food.nutrition.protein_g)} g</dd>
+								</div>
+								<div className={ui.stat}>
+									<dt>脂肪</dt>
+									<dd>{formatMacro(food.nutrition.fat_g)} g</dd>
+								</div>
+								<div className={ui.stat}>
+									<dt>碳水化合物</dt>
+									<dd>{formatMacro(food.nutrition.carb_g)} g</dd>
+								</div>
 							</dl>
 						)}
 					</section>
@@ -199,7 +208,11 @@ export function FoodDetail() {
 								{portions.map((portion) => (
 									<li key={portion.id}>
 										{portion.label}（{formatMacro(portion.grams)} {unit}）
-										{portion.is_default && "・預設"}
+										{portion.is_default && (
+											<>
+												・<span className={ui.tag}>預設</span>
+											</>
+										)}
 									</li>
 								))}
 							</ul>
@@ -228,7 +241,9 @@ export function FoodDetail() {
 											   `getByText("已通過")` 找不到東西：is_current 的那一筆組出來的
 											   文字是「已通過・目前生效」，不是「已通過」本身（RTL 預設是精確
 											   比對整個節點的 textContent，實測踩過）。 */}
-											<span>{STATUS_LABEL[revision.status]}</span>
+											<span className={ui.tag}>
+												{STATUS_LABEL[revision.status]}
+											</span>
 											{revision.is_current && <span>・目前生效</span>}
 										</p>
 										{revision.change_note !== null && (

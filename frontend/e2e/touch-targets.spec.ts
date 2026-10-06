@@ -1,4 +1,4 @@
-import { test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { expectTouchTargets, login } from "./touch-targets.ts";
 
 // 介面改版第二階段：舊畫面在手機上的點擊目標都 ≥ 44px。
@@ -21,5 +21,26 @@ test("新增食物：按鈕與「營養標示是」的選項都 ≥ 44px", async
 			"main button:visible, main label:has(input[type=radio]):visible",
 		),
 		"新增食物",
+	);
+});
+
+test("食物詳情：按鈕與「預設」勾選框都 ≥ 44px", async ({ page }) => {
+	await login(page);
+	// 建一個唯一名稱的私人食物，建好會導到它的詳情頁。
+	const name = `E2E 觸控 ${Date.now()}`;
+	await page.goto("/foods/new");
+	await page.getByLabel("名稱", { exact: true }).fill(name);
+	await page.getByLabel("熱量（每 100 單位 kcal）").fill("100");
+	await page.getByLabel("蛋白質（g）", { exact: true }).fill("1");
+	await page.getByLabel("脂肪（g）", { exact: true }).fill("1");
+	await page.getByLabel("碳水化合物（g）", { exact: true }).fill("1");
+	await page.getByRole("button", { name: "建立食物" }).click();
+	await expect(page.getByRole("heading", { name })).toBeVisible();
+
+	await expectTouchTargets(
+		page.locator(
+			"main button:visible, main label:has(input[type=checkbox]):visible",
+		),
+		"食物詳情",
 	);
 });
