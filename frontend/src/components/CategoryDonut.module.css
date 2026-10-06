@@ -1,0 +1,12 @@
+.donut {
+	display: block;
+	width: 160px;
+	height: 160px;
+	margin: var(--space-2) auto;
+}
+
+/* 底圈：分類的弧畫在它上面。只有一個分類時被整圈蓋住。 */
+.track {
+	fill: none;
+	stroke: var(--color-border);
+}

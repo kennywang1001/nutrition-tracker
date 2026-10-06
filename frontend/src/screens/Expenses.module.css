@@ -35,3 +35,10 @@
 	font-weight: 600;
 	font-variant-numeric: tabular-nums;
 }
+
+.monthTotal {
+	margin: 0;
+	font-size: var(--font-size-total);
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+}

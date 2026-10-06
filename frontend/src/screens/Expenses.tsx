@@ -13,8 +13,9 @@ import {
 import { queryKeys } from "../api/queries";
 import { Card } from "../components/Card";
 import { CategoryBar } from "../components/CategoryBar";
+import { CategoryDonut } from "../components/CategoryDonut";
 import { CategoryIcon } from "../components/IconBadge";
-import { formatMoney } from "../lib/decimal";
+import { formatMoney, isPositiveAmount } from "../lib/decimal";
 import styles from "./Expenses.module.css";
 
 type RowProps = {
@@ -198,12 +199,25 @@ function MonthSummary({ query }: MonthSummaryProps) {
 	if (query.isError || summary == null) return <p>無法載入本月報表</p>;
 	return (
 		<div>
-			<p>
+			<p className={styles.monthTotal}>
 				總計 <span>{formatMoney(summary.total)}</span>
 			</p>
-			{summary.by_category.map((row) => (
-				<CategoryBar key={row.category} row={row} monthTotal={summary.total} />
-			))}
+			{/* 沒有支出（總額是 0 或沒有任何分類）時不畫甜甜圈——一個空的圈
+			    讀起來像「載入失敗」。總計那一行照樣顯示 0.00。 */}
+			{isPositiveAmount(summary.total) && summary.by_category.length > 0 ? (
+				<>
+					<CategoryDonut rows={summary.by_category} total={summary.total} />
+					{summary.by_category.map((row) => (
+						<CategoryBar
+							key={row.category}
+							row={row}
+							monthTotal={summary.total}
+						/>
+					))}
+				</>
+			) : (
+				<p>這個月還沒有支出</p>
+			)}
 		</div>
 	);
 }

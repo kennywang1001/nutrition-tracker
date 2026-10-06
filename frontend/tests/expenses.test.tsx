@@ -462,6 +462,49 @@ describe("記帳 /expenses", () => {
 		expect(await screen.findByText("0.00")).toBeInTheDocument();
 	});
 
+	it("這個月有支出：畫甜甜圈，每個分類一段", async () => {
+		mockApi([
+			{
+				method: "GET",
+				path: "/api/expenses/summary",
+				handler: () =>
+					json({
+						month: "2026-12",
+						total: "400.00",
+						by_category: [
+							{ category: "food", total: "350.00", count: 2 },
+							{ category: "transport", total: "50.00", count: 1 },
+						],
+					}),
+			},
+			{ method: "GET", path: "/api/expenses", handler: () => json([]) },
+		]);
+
+		render(wrap(<Expenses />));
+
+		expect(await screen.findByTestId("category-donut")).toBeInTheDocument();
+		expect(screen.getByTestId("donut-food")).toBeInTheDocument();
+		expect(screen.getByTestId("donut-transport")).toBeInTheDocument();
+	});
+
+	it("這個月沒有支出：不畫甜甜圈，說還沒有支出（總額仍然是 0.00）", async () => {
+		mockApi([
+			{
+				method: "GET",
+				path: "/api/expenses/summary",
+				handler: () =>
+					json({ month: "2026-12", total: "0.00", by_category: [] }),
+			},
+			{ method: "GET", path: "/api/expenses", handler: () => json([]) },
+		]);
+
+		render(wrap(<Expenses />));
+
+		expect(await screen.findByText("這個月還沒有支出")).toBeInTheDocument();
+		expect(screen.getByText("0.00")).toBeInTheDocument();
+		expect(screen.queryByTestId("category-donut")).not.toBeInTheDocument();
+	});
+
 	it("本月報表讀取失敗時講清楚，不是卡在載入中", async () => {
 		// 錯誤信封形狀跟「清單讀取失敗」那條測試一樣：
 		// { error: { code, message, details } }。清單本身成功（回傳 []），
