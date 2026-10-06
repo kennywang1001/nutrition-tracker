@@ -44,3 +44,12 @@ test("食物詳情：按鈕與「預設」勾選框都 ≥ 44px", async ({ page 
 		"食物詳情",
 	);
 });
+
+test("補劑：按鈕都 ≥ 44px", async ({ page }) => {
+	await login(page);
+	await page.goto("/supplements");
+	await expect(
+		page.getByRole("heading", { name: "補劑", exact: true }),
+	).toBeVisible();
+	await expectTouchTargets(page.locator("main button:visible"), "補劑");
+});

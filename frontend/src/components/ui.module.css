@@ -215,3 +215,17 @@
 	font-size: 12px;
 	font-weight: 700;
 }
+
+/* 明確指定的按鈕樣式：管理員審核的「通過」是主要動作、「駁回」是危險動作，
+   不能照「type=submit 就是主要」的通用規則（駁回的按鈕剛好是 submit）。 */
+.primary {
+	border: none;
+	background: var(--color-action);
+	color: var(--color-on-action);
+}
+
+.danger {
+	border: 1px solid var(--color-danger);
+	background: transparent;
+	color: var(--color-danger);
+}

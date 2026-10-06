@@ -8,6 +8,7 @@ import {
 	useSupplementSearch,
 	useTodaySupplements,
 } from "../api/supplements";
+import ui from "../components/ui.module.css";
 import { useDebounced } from "../lib/use-debounced";
 
 type NumericField = "kcal" | "protein_g" | "fat_g" | "carb_g";
@@ -215,129 +216,139 @@ export function Supplements() {
 	}
 
 	return (
-		<section>
+		<section className={ui.screen}>
 			<h1>補劑</h1>
 
-			<h2>今日狀態</h2>
-			{todayItems.length === 0 ? (
-				<p>今天還沒有任何補劑記錄</p>
-			) : (
-				<ul>
-					{todayItems.map((item) => (
-						<li
-							key={`${item.plan_id ?? "adhoc"}-${item.supplement_id}-${item.intake_id ?? "none"}`}
-						>
-							<span>{item.supplement_name}</span>
-							<span>{statusLabel(item)}</span>
-						</li>
-					))}
-				</ul>
-			)}
-
-			<h2>新增補劑</h2>
-			<form onSubmit={handleSubmit}>
-				<label htmlFor="supplement-name">名稱</label>
-				<input
-					id="supplement-name"
-					type="text"
-					maxLength={100}
-					value={name}
-					onChange={(event) => setName(event.target.value)}
-					required
-				/>
-
-				<label htmlFor="supplement-brand">品牌（選填）</label>
-				<input
-					id="supplement-brand"
-					type="text"
-					maxLength={100}
-					value={brand}
-					onChange={(event) => setBrand(event.target.value)}
-				/>
-
-				<label htmlFor="supplement-serving-unit">單位（例如：顆、粒、g）</label>
-				<input
-					id="supplement-serving-unit"
-					type="text"
-					maxLength={50}
-					value={servingUnit}
-					onChange={(event) => setServingUnit(event.target.value)}
-					required
-				/>
-
-				<label htmlFor="supplement-serving-size">每份份量</label>
-				<input
-					id="supplement-serving-size"
-					type="text"
-					inputMode="decimal"
-					value={servingSize}
-					onChange={(event) => setServingSize(event.target.value)}
-					required
-				/>
-
-				{NUMERIC_FIELDS.map(({ field, label }) => (
-					<div key={field}>
-						<label htmlFor={`supplement-${field}`}>{label}</label>
-						<input
-							id={`supplement-${field}`}
-							type="text"
-							inputMode="decimal"
-							value={values[field]}
-							onChange={(event) =>
-								setValues((prev) => ({ ...prev, [field]: event.target.value }))
-							}
-						/>
-					</div>
-				))}
-
-				{clientError !== null && <p role="alert">{clientError}</p>}
-				{conflictError !== null && <p role="alert">{conflictError}</p>}
-				{fieldErrors.length > 0 && (
-					<ul role="alert">
-						{fieldErrors.map((message, index) => (
-							// biome-ignore lint/suspicious/noArrayIndexKey: 後端的欄位錯誤陣列沒有天然的唯一鍵，且同一次送出裡不會重排序。
-							<li key={`${message}-${index}`}>{message}</li>
-						))}
-					</ul>
-				)}
-
-				<button type="submit" disabled={createSupplement.isPending}>
-					新增補劑
-				</button>
-			</form>
-
-			<h2>找補劑，今天吃了就點一份</h2>
-			<label htmlFor="supplement-search-input">搜尋補劑</label>
-			<input
-				id="supplement-search-input"
-				type="text"
-				value={input}
-				onChange={(event) => setInput(event.target.value)}
-			/>
-
-			{hasQuery && (
-				<>
-					{searchQuery.isLoading && <p>搜尋中…</p>}
-					{!searchQuery.isLoading && (searchQuery.data ?? []).length === 0 && (
-						<p>找不到符合的補劑</p>
-					)}
+			<section>
+				<h2>今日狀態</h2>
+				{todayItems.length === 0 ? (
+					<p>今天還沒有任何補劑記錄</p>
+				) : (
 					<ul>
-						{(searchQuery.data ?? []).map((supplement) => (
-							<li key={supplement.id}>
-								<span>{supplement.name}</span>
-								{supplement.brand !== null && <span>{supplement.brand}</span>}
-								<button
-									type="button"
-									disabled={checkIn.isPending}
-									onClick={() => checkIn.mutate(supplement.id)}
-								>
-									今天吃了
-								</button>
+						{todayItems.map((item) => (
+							<li
+								key={`${item.plan_id ?? "adhoc"}-${item.supplement_id}-${item.intake_id ?? "none"}`}
+							>
+								<span>{item.supplement_name}</span>
+								<span className={ui.tag}>{statusLabel(item)}</span>
 							</li>
 						))}
 					</ul>
-				</>
-			)}
+				)}
+			</section>
+
+			<section>
+				<h2>新增補劑</h2>
+				<form onSubmit={handleSubmit}>
+					<label htmlFor="supplement-name">名稱</label>
+					<input
+						id="supplement-name"
+						type="text"
+						maxLength={100}
+						value={name}
+						onChange={(event) => setName(event.target.value)}
+						required
+					/>
+
+					<label htmlFor="supplement-brand">品牌（選填）</label>
+					<input
+						id="supplement-brand"
+						type="text"
+						maxLength={100}
+						value={brand}
+						onChange={(event) => setBrand(event.target.value)}
+					/>
+
+					<label htmlFor="supplement-serving-unit">
+						單位（例如：顆、粒、g）
+					</label>
+					<input
+						id="supplement-serving-unit"
+						type="text"
+						maxLength={50}
+						value={servingUnit}
+						onChange={(event) => setServingUnit(event.target.value)}
+						required
+					/>
+
+					<label htmlFor="supplement-serving-size">每份份量</label>
+					<input
+						id="supplement-serving-size"
+						type="text"
+						inputMode="decimal"
+						value={servingSize}
+						onChange={(event) => setServingSize(event.target.value)}
+						required
+					/>
+
+					{NUMERIC_FIELDS.map(({ field, label }) => (
+						<div key={field}>
+							<label htmlFor={`supplement-${field}`}>{label}</label>
+							<input
+								id={`supplement-${field}`}
+								type="text"
+								inputMode="decimal"
+								value={values[field]}
+								onChange={(event) =>
+									setValues((prev) => ({
+										...prev,
+										[field]: event.target.value,
+									}))
+								}
+							/>
+						</div>
+					))}
+
+					{clientError !== null && <p role="alert">{clientError}</p>}
+					{conflictError !== null && <p role="alert">{conflictError}</p>}
+					{fieldErrors.length > 0 && (
+						<ul role="alert">
+							{fieldErrors.map((message, index) => (
+								// biome-ignore lint/suspicious/noArrayIndexKey: 後端的欄位錯誤陣列沒有天然的唯一鍵，且同一次送出裡不會重排序。
+								<li key={`${message}-${index}`}>{message}</li>
+							))}
+						</ul>
+					)}
+
+					<button type="submit" disabled={createSupplement.isPending}>
+						新增補劑
+					</button>
+				</form>
+			</section>
+
+			<section>
+				<h2>找補劑，今天吃了就點一份</h2>
+				<label htmlFor="supplement-search-input">搜尋補劑</label>
+				<input
+					id="supplement-search-input"
+					type="text"
+					value={input}
+					onChange={(event) => setInput(event.target.value)}
+				/>
+
+				{hasQuery && (
+					<>
+						{searchQuery.isLoading && <p>搜尋中…</p>}
+						{!searchQuery.isLoading &&
+							(searchQuery.data ?? []).length === 0 && <p>找不到符合的補劑</p>}
+						<ul>
+							{(searchQuery.data ?? []).map((supplement) => (
+								<li key={supplement.id}>
+									<span>{supplement.name}</span>
+									{supplement.brand !== null && <span>{supplement.brand}</span>}
+									<button
+										type="button"
+										disabled={checkIn.isPending}
+										onClick={() => checkIn.mutate(supplement.id)}
+									>
+										今天吃了
+									</button>
+								</li>
+							))}
+						</ul>
+					</>
+				)}
+			</section>
 		</section>
 	);
 }

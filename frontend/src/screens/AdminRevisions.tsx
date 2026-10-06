@@ -4,6 +4,7 @@ import { apiFetch } from "../api/client";
 import { ApiError } from "../api/errors";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
+import ui from "../components/ui.module.css";
 import { formatMacro } from "../lib/decimal";
 
 type PendingRevision = components["schemas"]["PendingRevisionResponse"];
@@ -173,7 +174,12 @@ function RevisionRow({ revision }: RevisionRowProps) {
 				</tbody>
 			</table>
 
-			<button type="button" onClick={() => approve.mutate()} disabled={isBusy}>
+			<button
+				type="button"
+				className={ui.primary}
+				onClick={() => approve.mutate()}
+				disabled={isBusy}
+			>
 				通過
 			</button>
 
@@ -189,7 +195,7 @@ function RevisionRow({ revision }: RevisionRowProps) {
 					onChange={(event) => setReason(event.target.value)}
 				/>
 				{reasonError !== null && <p role="alert">{reasonError}</p>}
-				<button type="submit" disabled={isBusy}>
+				<button type="submit" className={ui.danger} disabled={isBusy}>
 					駁回
 				</button>
 			</form>
@@ -228,7 +234,7 @@ export function AdminRevisions() {
 				? revisionsQuery.error.message
 				: "載入失敗，請再試一次";
 		return (
-			<section>
+			<section className={ui.screen}>
 				<h1>審核佇列</h1>
 				<p role="alert">{message}</p>
 			</section>
@@ -237,7 +243,7 @@ export function AdminRevisions() {
 
 	if (revisionsQuery.isLoading) {
 		return (
-			<section>
+			<section className={ui.screen}>
 				<h1>審核佇列</h1>
 				<p>載入中…</p>
 			</section>
@@ -247,7 +253,7 @@ export function AdminRevisions() {
 	const revisions = revisionsQuery.data ?? [];
 
 	return (
-		<section>
+		<section className={ui.screen}>
 			<h1>審核佇列</h1>
 			{revisions.length === 0 ? (
 				<p>目前沒有待審的提案</p>
