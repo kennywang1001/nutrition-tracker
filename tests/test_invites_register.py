@@ -138,8 +138,35 @@ async def test_losing_the_redeem_race_is_403_and_creates_nobody(client, db_sessi
 
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "INVITE_INVALID"
+    # rollback 之前先看：測試與端點共用一個 session，端點若沒有 rollback，它 flush
+    # 出去的使用者在這裡看得到（下面那行 rollback 會把它一起收掉，證明不了什麼）。
+    assert await db_session.scalar(select(User).where(User.email == "friend@example.com")) is None
     await db_session.rollback()
     assert await _user_count(db_session) == before
+
+
+async def test_losing_the_email_race_is_409_and_does_not_use_up_the_invite(
+    client, db_session, monkeypatch
+):
+    """兩個請求同時用同一個 email：步驟 2 都沒看到對方，另一個先 commit。不靠真的並發——
+    在步驟 2 之後、flush 之前（Argon2 那一步）讓「另一個請求」把同一個 email 寫進去。"""
+    admin = await create_user(db_session, role=UserRole.ADMIN)
+    invite, token = await create_invite(db_session, created_by=admin)
+
+    async def _someone_else_registers_first(func, *args):
+        await create_user(db_session, email="friend@example.com")
+        return func(*args)
+
+    monkeypatch.setattr("app.api.routes.auth.run_in_threadpool", _someone_else_registers_first)
+
+    response = await client.post("/api/auth/register", json=_body(token))
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "EMAIL_TAKEN"
+    await db_session.rollback()
+    await db_session.refresh(invite)
+    assert invite.used_at is None
+    assert invite.used_by is None
 
 
 async def test_invite_status_is_true_for_a_usable_invite_and_does_not_use_it(client, db_session):

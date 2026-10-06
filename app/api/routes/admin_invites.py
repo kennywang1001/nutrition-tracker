@@ -89,9 +89,14 @@ async def revoke_invite(
     _: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    # FOR UPDATE：跟註冊的條件式 UPDATE 搶同一列時排隊。對方先用掉 → 這裡看到
-    # used_at（409）；這裡先撤銷 → 對方的條件不成立（INVITE_INVALID）。
-    # 資料庫的 CHECK（不會同時用掉又撤銷）是最後一道。
+    # 撤銷跟註冊的條件式 UPDATE 搶同一列時，**最後一道是資料庫的 CHECK
+    # `not_both_used_and_revoked`**：不管誰先誰後，都不會留下「用掉又撤銷」的列
+    # （`test_the_database_refuses_an_invite_both_used_and_revoked` 守著）。
+    #
+    # FOR UPDATE 只是讓這場競爭輸得乾淨：對方先用掉 → 這裡排隊等到它 commit，
+    # 看到 used_at，回 409 INVITE_USED，而不是撞上 CHECK 變成 IntegrityError / 500；
+    # 這裡先撤銷 → 對方的條件不成立（INVITE_INVALID）。**這一段沒有測試**——要測得
+    # 開兩條真的連線搶鎖，沒有寫；拿掉 with_for_update() 測試照樣全綠。
     invite = await db.scalar(
         select(Invite)
         .where(Invite.id == invite_id, Invite.revoked_at.is_(None))
@@ -101,5 +106,6 @@ async def revoke_invite(
         raise NotFoundError("INVITE_NOT_FOUND", "找不到這個邀請")
     if invite.used_at is not None:
         raise ConflictError("INVITE_USED", "這個邀請已經有人用過了，不能撤銷")
-    invite.revoked_at = datetime.now(UTC)
+    # 用資料庫的 now()，跟 `_still_usable` 判斷過期用的是同一個時鐘。
+    invite.revoked_at = func.now()
     await db.commit()

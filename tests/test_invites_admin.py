@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.invites import INVITE_LIFETIME, hash_invite_token
 from app.models.invite import Invite
@@ -181,3 +182,18 @@ async def test_revoking_an_unknown_or_already_revoked_invite_is_404(client, db_s
     for response in (again, unknown):
         assert response.status_code == 404
         assert response.json()["error"]["code"] == "INVITE_NOT_FOUND"
+
+
+async def test_the_database_refuses_an_invite_both_used_and_revoked(db_session):
+    """撤銷與兌換搶同一列的最後一道是資料庫的 CHECK，不是端點的 FOR UPDATE——
+    這裡繞過端點直接寫，證明那道 CHECK 真的在。"""
+    admin = await create_user(db_session, role=UserRole.ADMIN)
+    friend = await create_user(db_session)
+    invite, _ = await create_invite(db_session, created_by=admin, used_by=friend)
+
+    invite.revoked_at = func.now()
+    with pytest.raises(IntegrityError) as exc:
+        await db_session.commit()
+    assert "not_both_used_and_revoked" in str(exc.value)
+    # conftest 開頭列的已知邊界 4：接住 commit 丟出的例外之後一定要 rollback。
+    await db_session.rollback()
