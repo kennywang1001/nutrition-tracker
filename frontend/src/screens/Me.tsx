@@ -4,6 +4,7 @@ import { apiFetch } from "../api/client";
 import { useMe } from "../api/me";
 import { logout } from "../auth/session";
 import { Card } from "../components/Card";
+import { InviteFriends } from "../components/InviteFriends";
 import styles from "./Me.module.css";
 
 type Props = { onLoggedOut: () => void };
@@ -48,6 +49,8 @@ export function Me({ onLoggedOut }: Props) {
 					</Link>
 				</Card>
 			)}
+
+			{isAdmin && <InviteFriends />}
 
 			<Card>
 				<button

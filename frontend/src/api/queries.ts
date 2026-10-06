@@ -93,6 +93,8 @@ export const queryKeys = {
 	foodSearchAll: ["food-search"] as const,
 	/** 待審提案清單（管理員）。 */
 	pendingRevisions: ["admin", "food-revisions"] as const,
+	/** 管理員的邀請清單（邀請規格 §4.2）。產生或撤銷之後失效它。 */
+	invites: ["admin", "invites"] as const,
 	/** 某個月的花費清單。`month` 是 `"YYYY-MM"`，或 `null` 代表
 	 *  「讓後端決定這個月」（後端省略 `?month=` 時走
 	 *  `this_month_in_timezone(user.timezone)`）——跟 `dailyStats` 不帶日期
