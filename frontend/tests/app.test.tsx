@@ -200,3 +200,75 @@ describe("App", () => {
 		expect(window.location.pathname).toBe("/");
 	});
 });
+
+describe("App 的 /join（邀請規格 §4.1）", () => {
+	it("沒登入時打開 /join 顯示建立帳號，不是登入", async () => {
+		window.history.replaceState(null, "", "/join#tok-1");
+		mockBackend((url) =>
+			url.includes("/api/auth/invite-status")
+				? jsonResponse({ valid: true })
+				: undefined,
+		);
+
+		render(<App />);
+
+		expect(await screen.findByLabelText("再輸入一次密碼")).toBeInTheDocument();
+		expect(
+			screen.queryByRole("heading", { name: "登入" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("用邀請建立帳號之後直接進總覽，網址換成 /", async () => {
+		window.history.replaceState(null, "", "/join#tok-1");
+		mockBackend((url, method) => {
+			if (url.includes("/api/auth/invite-status"))
+				return jsonResponse({ valid: true });
+			if (method === "POST" && url.includes("/api/auth/register"))
+				return new Response(JSON.stringify(ME), {
+					status: 201,
+					headers: { "content-type": "application/json" },
+				});
+			if (method === "POST" && url.includes("/api/auth/login"))
+				return jsonResponse({
+					access_token: "a",
+					refresh_token: "r",
+					token_type: "bearer",
+				});
+			return undefined;
+		});
+
+		render(<App />);
+		await userEvent.type(
+			await screen.findByLabelText("Email"),
+			"friend@example.com",
+		);
+		await userEvent.type(screen.getByLabelText("名字"), "小明");
+		await userEvent.type(screen.getByLabelText("密碼"), "a-good-password");
+		await userEvent.type(
+			screen.getByLabelText("再輸入一次密碼"),
+			"a-good-password",
+		);
+		await userEvent.click(screen.getByRole("button", { name: "建立帳號" }));
+
+		expect(
+			await screen.findByRole("heading", { name: "總覽" }),
+		).toBeInTheDocument();
+		expect(window.location.pathname).toBe("/");
+		expect(window.location.hash).toBe("");
+	});
+
+	it("已登入打開 /join：說明文字，不打任何邀請端點", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		const spy = mockBackend();
+		window.history.replaceState(null, "", "/join#tok-1");
+
+		render(<App />);
+
+		expect(
+			await screen.findByText("你已經登入了。這個連結是給新朋友開帳號用的。"),
+		).toBeInTheDocument();
+		expect(
+			spy.mock.calls.some(([url]) => String(url).includes("/api/auth/")),
+		).toBe(false);
+	});
+});

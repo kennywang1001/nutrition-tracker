@@ -25,6 +25,7 @@ import { EditMeal } from "./screens/EditMeal";
 import { Expenses } from "./screens/Expenses";
 import { FoodDetail } from "./screens/FoodDetail";
 import { FoodLibrary } from "./screens/FoodLibrary";
+import { Join, JoinWhileLoggedIn } from "./screens/Join";
 import { Login } from "./screens/Login";
 import { LogMeal, PHOTO_UPLOAD_FAILED_NOTICE } from "./screens/LogMeal";
 import { Me } from "./screens/Me";
@@ -62,7 +63,7 @@ function AddExpenseRoute() {
 }
 
 export function App() {
-	// 未登入 → 一律顯示 <Login>，不管網址是什麼（不掛 BrowserRouter，
+	// 未登入 → `/join` 是建立帳號，其他一律 <Login>（不掛 BrowserRouter，
 	// 沒有路由可以比對）。
 	const [loggedIn, setLoggedIn] = useState(getRefreshToken() !== null);
 
@@ -116,10 +117,14 @@ export function App() {
 								require_admin 回 403（見 AdminRevisions.tsx 的說明、
 								規格 §3.3）。 */}
 							<Route path="/admin/revisions" element={<AdminRevisions />} />
+							<Route path="/join" element={<JoinWhileLoggedIn />} />
 						</Routes>
 					</main>
 					<TabBar />
 				</BrowserRouter>
+			) : window.location.pathname === "/join" ? (
+				// 邀請連結（邀請規格 §4.1）。其他網址照舊一律登入畫面。
+				<Join onSuccess={() => setLoggedIn(true)} />
 			) : (
 				<Login onSuccess={() => setLoggedIn(true)} />
 			)}
