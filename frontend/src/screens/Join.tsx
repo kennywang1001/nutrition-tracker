@@ -1,5 +1,5 @@
 import { type FormEvent, useEffect, useState } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { ApiError, describeFieldErrors } from "../api/errors";
 import { checkInvite, registerWithInvite } from "../api/invites";
 import { login } from "../auth/session";
@@ -10,9 +10,13 @@ export const INVITE_INVALID_TEXT =
 
 const FALLBACK_TIMEZONE = "Asia/Taipei";
 
-/** `#tok` → `tok`。邀請碼在 `#` 後面（規格 §4.1）。 */
+/** `#tok` → `tok`。邀請碼在 `#` 後面（規格 §4.1）。
+ *
+ *  只取 `#` 後面開頭那一段 `[A-Za-z0-9_-]`——邀請碼是 `token_urlsafe`，只會有這些
+ *  字元。聊天軟體常在連結後面黏上句號、空白或自己的 `?參數`，整段送去後端只會
+ *  得到「失效」。 */
 export function readInviteToken(hash: string): string {
-	return hash.startsWith("#") ? hash.slice(1) : hash;
+	return /^#([A-Za-z0-9_-]*)/.exec(hash)?.[1] ?? "";
 }
 
 function browserTimezone(): string {
@@ -205,6 +209,14 @@ export function Join({ onSuccess }: Props) {
 
 /** 已登入的人打開邀請連結：不打任何邀請端點，邀請不被用掉（規格 §4.1）。 */
 export function JoinWhileLoggedIn() {
+	// 邀請沒被用掉、還能開帳號：不留在網址列（歷史紀錄、截圖、分享目前頁面）。
+	// 走 navigate 而不是直接 history.replaceState：這裡在 BrowserRouter 裡面，
+	// 直接改會蓋掉 react-router 記在 history.state 的 key/idx，路由的 location 也還帶著舊的 hash。
+	const navigate = useNavigate();
+	useEffect(() => {
+		navigate("/join", { replace: true });
+	}, [navigate]);
+
 	return (
 		<section className={ui.screen}>
 			<h1>邀請連結</h1>

@@ -14,8 +14,10 @@ import { formatDateTime } from "../lib/dates";
 import { Card } from "./Card";
 import styles from "./InviteFriends.module.css";
 
+/** 列上顯示的名字，也是撤銷按鈕的無障礙名稱——沒有備註的用編號，兩張都沒備註時
+ *  按鈕才分得出來。 */
 function inviteLabel(invite: InviteListItem): string {
-	return invite.note ?? "沒有備註的邀請";
+	return invite.note ?? `邀請 #${invite.id}`;
 }
 
 /** 「我的」裡的「邀請朋友」（邀請規格 §4.2，管理員限定——藏起來只是可用性，
@@ -27,6 +29,9 @@ export function InviteFriends() {
 	const [created, setCreated] = useState<InviteCreated | null>(null);
 	const [createError, setCreateError] = useState<string | null>(null);
 	const [copyStatus, setCopyStatus] = useState<string | null>(null);
+	// 撤銷時才發現清單是舊的（已經被用掉、已經不在）：重新載入會把那一列拿掉，
+	// 訊息掛在列上就跟著消失，所以放在清單這一層。
+	const [staleNotice, setStaleNotice] = useState<string | null>(null);
 
 	const create = useMutation({
 		mutationFn: (trimmed: string | null) => createInvite(trimmed),
@@ -48,6 +53,7 @@ export function InviteFriends() {
 	function handleCreate(event: FormEvent) {
 		event.preventDefault();
 		setCreateError(null);
+		setStaleNotice(null);
 		const trimmed = note.trim();
 		create.mutate(trimmed === "" ? null : trimmed);
 	}
@@ -126,6 +132,11 @@ export function InviteFriends() {
 			)}
 
 			<h3 className={styles.subtitle}>還沒用的</h3>
+			{staleNotice !== null && (
+				<p role="alert" className={styles.error}>
+					{staleNotice}
+				</p>
+			)}
 			{invites.isPending ? (
 				<p>載入中…</p>
 			) : invites.isError ? (
@@ -137,7 +148,16 @@ export function InviteFriends() {
 			) : (
 				<ul className={styles.list}>
 					{pending.map((invite) => (
-						<PendingInviteRow key={invite.id} invite={invite} />
+						<PendingInviteRow
+							key={invite.id}
+							invite={invite}
+							onStale={setStaleNotice}
+							onRevoked={(id) => {
+								setStaleNotice(null);
+								// 剛產生的那張被撤銷了：上面那條連結已經不能用，不要留著讓人複製。
+								setCreated((current) => (current?.id === id ? null : current));
+							}}
+						/>
 					))}
 				</ul>
 			)}
@@ -168,7 +188,18 @@ export function InviteFriends() {
 	);
 }
 
-function PendingInviteRow({ invite }: { invite: InviteListItem }) {
+type PendingInviteRowProps = {
+	invite: InviteListItem;
+	/** 清單是舊的（這一列重新載入之後多半會消失）：訊息交給清單那一層顯示。 */
+	onStale: (message: string) => void;
+	onRevoked: (id: number) => void;
+};
+
+function PendingInviteRow({
+	invite,
+	onStale,
+	onRevoked,
+}: PendingInviteRowProps) {
 	const queryClient = useQueryClient();
 	const [confirming, setConfirming] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -177,6 +208,7 @@ function PendingInviteRow({ invite }: { invite: InviteListItem }) {
 	const revoke = useMutation({
 		mutationFn: () => revokeInvite(invite.id),
 		onSuccess: () => {
+			onRevoked(invite.id);
 			queryClient.invalidateQueries({ queryKey: queryKeys.invites });
 		},
 		onError: (caught: unknown) => {
@@ -185,9 +217,10 @@ function PendingInviteRow({ invite }: { invite: InviteListItem }) {
 				caught instanceof ApiError &&
 				(caught.code === "INVITE_USED" || caught.code === "INVITE_NOT_FOUND")
 			) {
-				setError(caught.message);
+				onStale(caught.message);
 				queryClient.invalidateQueries({ queryKey: queryKeys.invites });
 			} else {
+				// 其他失敗（網路、500）：這一列還在，訊息留在列上。
 				setError("撤銷失敗，請再試一次");
 			}
 		},

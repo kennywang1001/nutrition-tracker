@@ -62,6 +62,10 @@ function AddExpenseRoute() {
 	return <AddExpense onDone={() => navigate("/")} />;
 }
 
+/** 未登入時顯示建立帳號的網址。`/join/`：有人手打或轉貼時多一個斜線；登入後的
+ *  react-router 本來就把它當 `/join`。 */
+const JOIN_PATHS = new Set(["/join", "/join/"]);
+
 export function App() {
 	// 未登入 → `/join` 是建立帳號，其他一律 <Login>（不掛 BrowserRouter，
 	// 沒有路由可以比對）。
@@ -122,7 +126,7 @@ export function App() {
 					</main>
 					<TabBar />
 				</BrowserRouter>
-			) : window.location.pathname === "/join" ? (
+			) : JOIN_PATHS.has(window.location.pathname) ? (
 				// 邀請連結（邀請規格 §4.1）。其他網址照舊一律登入畫面。
 				// 包在 .app-main 裡：頁面的左右留白來自它，少了它卡片會貼著螢幕邊緣。
 				<main className="app-main">

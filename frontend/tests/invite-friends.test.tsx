@@ -57,8 +57,12 @@ function wrap(children: ReactNode) {
 }
 
 /** 管理員的後端。`counts` 記每個端點被打了幾次——「成功之後清單重新載入」
- *  要看到第二次 GET，不是看 invalidateQueries 有沒有被呼叫（第 50 種）。 */
-function adminBackend(extra: Route[] = []) {
+ *  要看到第二次 GET，不是看 invalidateQueries 有沒有被呼叫（第 50 種）。
+ *  `list(n)` 是第 n 次 GET 清單的內容（從 1 數），預設每次都一樣。 */
+function adminBackend(
+	extra: Route[] = [],
+	list: (n: number) => unknown[] = () => [PENDING, USED],
+) {
 	const counts = { list: 0 };
 	const spy = mockApi([
 		...extra,
@@ -67,7 +71,7 @@ function adminBackend(extra: Route[] = []) {
 			path: "/api/admin/invites",
 			handler: () => {
 				counts.list += 1;
-				return json([PENDING, USED]);
+				return json(list(counts.list));
 			},
 		},
 		{ method: "GET", path: "/api/me", handler: () => json(me("admin")) },
@@ -225,24 +229,40 @@ describe("邀請朋友", () => {
 		await waitFor(() => expect(counts.list).toBe(2));
 	});
 
-	it("撤銷時已經被用掉：顯示後端訊息並重新載入清單", async () => {
-		const { counts } = adminBackend([
-			{
-				method: "DELETE",
-				path: "/api/admin/invites/7",
-				handler: () =>
-					json(
-						{
-							error: {
-								code: "INVITE_USED",
-								message: "這個邀請已經有人用過了，不能撤銷",
-								details: {},
+	it("撤銷時已經被用掉：顯示後端訊息並重新載入清單，訊息不隨著那一列消失", async () => {
+		// 重新載入之後那張邀請是「已經用掉的」，不在「還沒用的」裡——那一列會被
+		// 拿掉，訊息若掛在列上就跟著不見了，管理員只看到邀請憑空移走。
+		const { counts } = adminBackend(
+			[
+				{
+					method: "DELETE",
+					path: "/api/admin/invites/7",
+					handler: () =>
+						json(
+							{
+								error: {
+									code: "INVITE_USED",
+									message: "這個邀請已經有人用過了，不能撤銷",
+									details: {},
+								},
 							},
-						},
-						409,
-					),
-			},
-		]);
+							409,
+						),
+				},
+			],
+			(n) =>
+				n === 1
+					? [PENDING, USED]
+					: [
+							{
+								...PENDING,
+								status: "used",
+								used_at: "2026-10-06T02:00:00Z",
+								used_by: { display_name: "阿華", email: "hua@example.com" },
+							},
+							USED,
+						],
+		);
 		render(wrap(<Me onLoggedOut={vi.fn()} />));
 
 		await userEvent.click(
@@ -250,10 +270,72 @@ describe("邀請朋友", () => {
 		);
 		await userEvent.click(screen.getByRole("button", { name: "確定撤銷" }));
 
-		expect(
-			await screen.findByText("這個邀請已經有人用過了，不能撤銷"),
-		).toBeInTheDocument();
 		await waitFor(() => expect(counts.list).toBe(2));
+		expect(
+			await screen.findByText("阿華（hua@example.com）"),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "撤銷給阿華" }),
+		).not.toBeInTheDocument();
+		expect(
+			screen.getByText("這個邀請已經有人用過了，不能撤銷"),
+		).toBeInTheDocument();
+	});
+
+	it("撤銷剛產生的那張邀請：上面那條連結一起收掉", async () => {
+		const justCreated = {
+			...PENDING,
+			id: 8,
+			note: "給小華",
+			created_at: "2026-10-06T02:00:00Z",
+			expires_at: "2026-10-13T02:00:00Z",
+		};
+		adminBackend(
+			[
+				{
+					method: "POST",
+					path: "/api/admin/invites",
+					handler: () => json(CREATED, 201),
+				},
+				{
+					method: "DELETE",
+					path: "/api/admin/invites/8",
+					handler: () => new Response(null, { status: 204 }),
+				},
+			],
+			() => [justCreated, PENDING, USED],
+		);
+		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		await screen.findByText("給阿華");
+
+		await userEvent.click(screen.getByRole("button", { name: "產生邀請連結" }));
+		expect(await screen.findByLabelText("邀請連結")).toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "撤銷給小華" }));
+		await userEvent.click(
+			within(
+				screen.getByRole("alertdialog", { name: "確認撤銷給小華" }),
+			).getByRole("button", { name: "確定撤銷" }),
+		);
+
+		await waitFor(() =>
+			expect(screen.queryByLabelText("邀請連結")).not.toBeInTheDocument(),
+		);
+	});
+
+	it("沒有備註的邀請各有各的名字，撤銷按鈕分得出來", async () => {
+		adminBackend([], () => [
+			{ ...PENDING, id: 4, note: null },
+			{ ...PENDING, id: 3, note: null },
+		]);
+		render(wrap(<Me onLoggedOut={vi.fn()} />));
+
+		expect(
+			await screen.findByRole("button", { name: "撤銷邀請 #3" }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: "撤銷邀請 #4" }),
+		).toBeInTheDocument();
 	});
 
 	it("每次打開都重抓清單，即使快取裡的還算新鮮", async () => {

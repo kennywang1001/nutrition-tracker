@@ -218,6 +218,19 @@ describe("App 的 /join（邀請規格 §4.1）", () => {
 		).not.toBeInTheDocument();
 	});
 
+	it("沒登入時打開 /join/（多一個斜線）也是建立帳號", async () => {
+		window.history.replaceState(null, "", "/join/#tok-1");
+		mockBackend((url) =>
+			url.includes("/api/auth/invite-status")
+				? jsonResponse({ valid: true })
+				: undefined,
+		);
+
+		render(<App />);
+
+		expect(await screen.findByLabelText("再輸入一次密碼")).toBeInTheDocument();
+	});
+
 	it("用邀請建立帳號之後直接進總覽，網址換成 /", async () => {
 		window.history.replaceState(null, "", "/join#tok-1");
 		mockBackend((url, method) => {
@@ -257,7 +270,7 @@ describe("App 的 /join（邀請規格 §4.1）", () => {
 		expect(window.location.hash).toBe("");
 	});
 
-	it("已登入打開 /join：說明文字，不打任何邀請端點", async () => {
+	it("已登入打開 /join：說明文字，不打任何邀請端點，邀請碼從網址列拿掉", async () => {
 		setTokens({ access_token: "a", refresh_token: "r" });
 		const spy = mockBackend();
 		window.history.replaceState(null, "", "/join#tok-1");
@@ -270,5 +283,8 @@ describe("App 的 /join（邀請規格 §4.1）", () => {
 		expect(
 			spy.mock.calls.some(([url]) => String(url).includes("/api/auth/")),
 		).toBe(false);
+		// 邀請還能用：留在網址列（歷史紀錄、螢幕截圖）就是一條能開帳號的連結。
+		expect(window.location.pathname).toBe("/join");
+		expect(window.location.hash).toBe("");
 	});
 });

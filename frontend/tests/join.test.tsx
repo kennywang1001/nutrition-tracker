@@ -3,7 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, getRefreshToken } from "../src/auth/store";
-import { INVITE_INVALID_TEXT, Join } from "../src/screens/Join";
+import {
+	INVITE_INVALID_TEXT,
+	Join,
+	readInviteToken,
+} from "../src/screens/Join";
 
 function jsonResponse(status: number, body: unknown) {
 	return new Response(JSON.stringify(body), {
@@ -84,6 +88,20 @@ beforeEach(() => {
 
 afterEach(() => {
 	window.history.replaceState(null, "", "/");
+});
+
+describe("readInviteToken", () => {
+	// 邀請碼是 token_urlsafe：只有 [A-Za-z0-9_-]。聊天軟體會在連結後面黏上句號、
+	// 空白或自己的 ?參數——只取 # 後面那一段合法字元。
+	it.each([
+		["#abc_-1。", "abc_-1"],
+		["#abc?openExternalBrowser=1", "abc"],
+		["#abc def", "abc"],
+		["#", ""],
+		["", ""],
+	])("%j → %j", (hash, token) => {
+		expect(readInviteToken(hash)).toBe(token);
+	});
 });
 
 describe("建立帳號（/join）", () => {
