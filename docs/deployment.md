@@ -259,6 +259,11 @@ docker compose --env-file .env.production \
 > 上面的 `--build` 會裝進去；沒有 migration。要打開 AI，先照「4. 產生密鑰並
 > 填設定」在 `.env.production` 填好 AI 變數再 `up -d --build`。
 
+> **2026-10 開帳號的路（邀請連結）有 migration：`0011_create_invites`**——
+> `up -d --build` 之後一定要跑下面那行。這一版之後**註冊一定要有邀請**：
+> 用管理員帳號登入，「我的」→「邀請朋友」產生連結傳給朋友。你的帳號必須是
+> 管理員（`create-admin`）。
+
 如果這次的更新有 migration：
 
 ```bash

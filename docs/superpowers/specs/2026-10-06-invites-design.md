@@ -1,6 +1,6 @@
 # 開帳號的路：一次性邀請連結
 
-**狀態：** 設計定稿，待寫實作計畫
+**狀態：** 已實作
 **日期：** 2026-10-06
 **前置：** 小項目包已合併（master `fbe5e9d`）；社群草稿 `docs/p7-social-decisions` 分支的
 `docs/superpowers/specs/2026-10-01-p7-social-decisions-draft.md` §3.1
