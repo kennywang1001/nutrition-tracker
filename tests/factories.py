@@ -5,8 +5,10 @@ from itertools import count
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.invites import INVITE_LIFETIME, hash_invite_token, new_invite_token
 from app.models.expense import Expense, ExpenseCategory
 from app.models.food import BaseUnit, Food, FoodPortion, FoodRevision, RevisionStatus
+from app.models.invite import Invite
 from app.models.meal import Meal, MealItem, MealType
 from app.models.supplement import Supplement, SupplementIntake, SupplementPlan, TimeOfDay
 from app.models.target import UserTarget
@@ -374,3 +376,36 @@ async def create_expense(
     await db_session.commit()
     await db_session.refresh(expense)
     return expense
+
+
+async def create_invite(
+    db_session: AsyncSession,
+    *,
+    created_by: User,
+    note: str | None = None,
+    created_at: datetime | None = None,
+    expires_at: datetime | None = None,
+    used_by: User | None = None,
+    revoked: bool = False,
+) -> tuple[Invite, str]:
+    """建立一張邀請，回傳（邀請, 明碼邀請碼）——跟正式流程一樣，明碼只存在回傳值裡。
+
+    過期的邀請要連 `created_at` 一起往前推：`CHECK (expires_at > created_at)`
+    不讓「剛建立就已經過期」成立。
+    """
+    token = new_invite_token()
+    created = created_at or datetime.now(UTC)
+    invite = Invite(
+        token_hash=hash_invite_token(token),
+        note=note,
+        created_by=created_by.id,
+        created_at=created,
+        expires_at=expires_at or created + INVITE_LIFETIME,
+        used_at=created if used_by is not None else None,
+        used_by=used_by.id if used_by is not None else None,
+        revoked_at=created if revoked else None,
+    )
+    db_session.add(invite)
+    await db_session.commit()
+    await db_session.refresh(invite)
+    return invite, token

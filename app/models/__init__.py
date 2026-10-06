@@ -2,6 +2,7 @@ from app.models.ai_analysis import AiAnalysis, AnalysisKind
 from app.models.base import Base
 from app.models.expense import Expense, ExpenseCategory
 from app.models.food import BaseUnit, Food, FoodPortion, FoodRevision, RevisionStatus
+from app.models.invite import Invite
 from app.models.meal import Meal, MealItem, MealType
 from app.models.session import RefreshSession
 from app.models.supplement import Supplement, SupplementIntake, SupplementPlan, TimeOfDay
@@ -18,6 +19,7 @@ __all__ = [
     "Food",
     "FoodPortion",
     "FoodRevision",
+    "Invite",
     "Meal",
     "MealItem",
     "MealType",

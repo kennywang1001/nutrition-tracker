@@ -2,6 +2,7 @@ from fastapi import FastAPI
 
 from app.api.routes import (
     admin_foods,
+    admin_invites,
     ai,
     auth,
     expenses,
@@ -24,6 +25,7 @@ app.include_router(auth.router, prefix="/api")
 app.include_router(me.router, prefix="/api")
 app.include_router(foods.router, prefix="/api")
 app.include_router(admin_foods.router, prefix="/api")
+app.include_router(admin_invites.router, prefix="/api")
 app.include_router(meals.router, prefix="/api")
 app.include_router(supplements.router, prefix="/api")
 app.include_router(supplement_plans.router, prefix="/api")
