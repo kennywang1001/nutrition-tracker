@@ -42,11 +42,11 @@
 |---|---|---|
 | P0 骨架 | Docker Compose + CI + repo 結構 | ✅ 隨 P1 長出來 |
 | P1 核心 | 資料模型 + CRUD API + 測試框架 | ✅ |
-| P2 AI 分析 | 拍照 → 辨識 → 估算 → **驗證** → 落庫。後端（Anthropic 與 Gemini 擇一，`AI_PROVIDER`）與前端（記一餐、新增食物的估算面板；規格 `docs/superpowers/specs/2026-10-05-ai-estimate-frontend-design.md`、計畫 `docs/superpowers/plans/2026-10-05-ai-estimate-frontend.md`） | ✅ 已實作於 `feat/ai-estimate` |
+| P2 AI 分析 | 拍照 → 辨識 → 估算 → **驗證** → 落庫。後端（Anthropic 與 Gemini 擇一，`AI_PROVIDER`）與前端（記一餐、新增食物的估算面板；規格 `docs/superpowers/specs/2026-10-05-ai-estimate-frontend-design.md`、計畫 `docs/superpowers/plans/2026-10-05-ai-estimate-frontend.md`） | ✅ |
 | **P3 介面** | **PWA（TypeScript + React）** | 🟡 **P3-A ✅、P3-B 計畫一 ✅、計畫二待 PR** |
 | P4 上線 | NAS 部署 + Tailscale | ✅ |
-| **UI 改版 第一階段** | tab bar 總覽｜報表｜＋｜飲食｜我的；MOZE 風格外觀（設計變數 + 深色模式，跟隨系統）；自訂數字鍵盤記帳；記一餐可選填照片；總覽時間線（規格 `docs/superpowers/specs/2026-10-02-ui-redesign-phase1-design.md`、計畫 `docs/superpowers/plans/2026-10-02-ui-redesign-phase1.md`） | ✅ 已實作於 `feat/ui-redesign-phase1`，待合併 |
-| 修改與刪除已記錄的餐點 | 編輯畫面 `/meals/:id/edit`：改份量或數量、加刪項目、改餐別、改金額（改、補、拿掉）、換或刪照片、刪整餐（連餐費）。入口：飲食頁卡片的「編輯」、總覽時間線的餐點列（規格 `docs/superpowers/specs/2026-10-04-edit-meals-design.md`、計畫 `docs/superpowers/plans/2026-10-04-edit-meals.md`） | ✅ 已實作於 `feat/edit-meals` |
+| **UI 改版 第一階段** | tab bar 總覽｜報表｜＋｜飲食｜我的；MOZE 風格外觀（設計變數 + 深色模式，跟隨系統）；自訂數字鍵盤記帳；記一餐可選填照片；總覽時間線（規格 `docs/superpowers/specs/2026-10-02-ui-redesign-phase1-design.md`、計畫 `docs/superpowers/plans/2026-10-02-ui-redesign-phase1.md`） | ✅ |
+| 修改與刪除已記錄的餐點 | 編輯畫面 `/meals/:id/edit`：改份量或數量、加刪項目、改餐別、改金額（改、補、拿掉）、換或刪照片、刪整餐（連餐費）。入口：飲食頁卡片的「編輯」、總覽時間線的餐點列（規格 `docs/superpowers/specs/2026-10-04-edit-meals-design.md`、計畫 `docs/superpowers/plans/2026-10-04-edit-meals.md`） | ✅ |
 | UI 改版 第二階段 | 六個舊畫面（食物庫、食物詳情、新增食物、補劑、趨勢、管理員審核）換新外觀；報表的分類甜甜圈圖；趨勢的營養素切換（規格 `docs/superpowers/specs/2026-10-06-ui-redesign-phase2-design.md`、計畫 `docs/superpowers/plans/2026-10-06-ui-redesign-phase2.md`） | ✅ 已實作於 `feat/ui-phase2` |
 | UI 改版 第三階段 | 社群（P7），草稿在分支 `docs/p7-social-decisions` | ⬜ |
 
