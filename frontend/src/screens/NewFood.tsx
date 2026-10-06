@@ -6,6 +6,7 @@ import { ApiError, describeFieldErrors } from "../api/errors";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
 import { AiEstimatePanel } from "../components/AiEstimatePanel";
+import ui from "../components/ui.module.css";
 import { isPlainPositiveDecimal, perServingToPer100 } from "../lib/decimal";
 
 type Food = components["schemas"]["FoodResponse"];
@@ -209,7 +210,7 @@ export function NewFood() {
 	}
 
 	return (
-		<section>
+		<section className={ui.screen}>
 			<h1>新增食物</h1>
 			{/* 用 AI 填（AI 估算前端規格 §5.2）：跟記一餐同一個面板。存好之後跟
 			    手動建立成功一樣導到詳情頁。放在表單外面——面板自己的修改模式

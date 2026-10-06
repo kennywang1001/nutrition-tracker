@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { type Food, type FoodScope, useFoodSearch } from "../api/foods";
 import { FoodResultList } from "../components/FoodResultList";
+import ui from "../components/ui.module.css";
 import { useDebounced } from "../lib/use-debounced";
 
 const SCOPES: ReadonlyArray<{ value: FoodScope; label: string }> = [
@@ -23,7 +24,7 @@ export function FoodLibrary() {
 	const hasQuery = debouncedQuery.trim() !== "";
 
 	return (
-		<section>
+		<section className={ui.screen}>
 			<h1>食物庫</h1>
 			<Link to="/foods/new">新增食物</Link>
 
