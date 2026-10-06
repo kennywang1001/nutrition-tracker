@@ -74,15 +74,18 @@
 **`POST /api/admin/invites`** `{ note? }` → `201 { id, token, note, expires_at }`。
 **`token` 只在這個回應裡出現**，之後任何端點都不回。
 
-**`GET /api/admin/invites`** → 兩種狀態的邀請，新的在前：
+**`GET /api/admin/invites`** → 兩種狀態的邀請，新的在前。每一項同一個形狀
+`{ id, note, status, created_at, expires_at, used_at, used_by: { display_name, email } | null }`：
 
-- 未使用（沒用、沒撤銷、沒過期）：`{ id, note, created_at, expires_at, status: "pending" }`
-- 已使用：`{ id, note, created_at, used_at, used_by: { display_name, email } | null, status: "used" }`
+- `status: "pending"`（沒用、沒撤銷、沒過期）：`used_at`、`used_by` 是 null。
+- `status: "used"`：`used_at` 有值；`used_by` 在那個帳號被刪掉時是 null。
 
 過期、撤銷的不列。
 
 **`DELETE /api/admin/invites/{id}`** → 撤銷，`204`。已使用 → `409 INVITE_USED`；
 不存在、已撤銷 → `404 INVITE_NOT_FOUND`；已過期但沒用 → 照樣撤銷（`204`）。
+`revoked_at` 用資料庫的 `now()`（跟「還能用」的判斷同一個時鐘）。撤銷與兌換搶同一列時，
+撤銷端的 `FOR UPDATE` 讓結果是乾淨的 409；真正的最後一道是 CHECK（不會同時用掉又撤銷）。
 
 > 單一管理員的系統，列出與撤銷不限「自己產生的」——任何管理員都能管所有邀請。
 
@@ -134,12 +137,15 @@ token 放在 body，不放網址（不進存取紀錄）。
 ### 4.1 註冊畫面 `/join#<邀請碼>`
 
 - 邀請碼放在 `#` 後面：**不會送到伺服器**，不進 Caddy 或 Tailscale 的存取紀錄。
-- `App.tsx` 現在「未登入 → 一律 `<Login>`」。改成：未登入且 `location.pathname === "/join"` →
-  `<Join>`；其他照舊。
+- `App.tsx` 現在「未登入 → 一律 `<Login>`」。改成：未登入且 `location.pathname` 是 `/join` 或
+  `/join/` → `<Join>`（包在 `.app-main` 裡，跟登入後的頁面一樣有左右留白）；其他照舊。
+- 邀請碼取 `#` 之後連續的 `[A-Za-z0-9_-]`（`token_urlsafe` 的字元）：聊天軟體常把後面的
+  「。」、空白或 `?openExternalBrowser=1` 一起併進連結。
 - 打開時用 `invite-status` 查：
   - 查詢中：「確認邀請中…」。
-  - **失效**（或 `#` 後面是空的）：只顯示「這個邀請連結已經失效，請跟邀請你的人要一個新的」＋
-    「去登入」（`location.assign("/")`）。不顯示表單。
+  - **失效**（或 `#` 後面是空的，或 `invite-status` 回 422）：只顯示「這個邀請連結已經失效，
+    請跟邀請你的人要一個新的」＋「去登入」（連到 `/` 的連結）。不顯示表單。
+  - **連不上**（其他錯誤）：「無法確認邀請連結，請檢查網路後重新整理」——不說它失效。
   - **有效**：表單——email、名字、密碼（至少 8 字）、再輸入一次密碼。
 - 時區：`Intl.DateTimeFormat().resolvedOptions().timeZone`，拿不到就 `Asia/Taipei`；
   後端拒絕這個時區（`422` 指到 `timezone`）時改用 `Asia/Taipei` 重送一次。
@@ -149,10 +155,10 @@ token 放在 body，不放網址（不進存取紀錄）。
 - 錯誤：`409 EMAIL_TAKEN` → 後端訊息（邀請還能用，改 email 再送）；`403 INVITE_INVALID` → 切到失效畫面；
   `422` → 欄位錯誤（`describeFieldErrors`）；其他 → 「建立失敗，請再試一次」。
   註冊成功但自動登入失敗 → 「帳號建好了，請用剛剛的 email 登入」＋「去登入」。
-- 外觀同登入畫面。
+- 外觀用第二階段的 `.screen`（登入畫面沒有任何樣式，照抄會是不到 44px 的瀏覽器預設）。
 
 **已登入的人打開邀請連結**：路由 `/join` → 「你已經登入了。這個連結是給新朋友開帳號用的。」＋
-回總覽的連結。邀請不被用掉（不打任何邀請端點）。
+回總覽的連結。邀請不被用掉（不打任何邀請端點）；網址換成 `/join`，還能用的邀請碼不留在瀏覽紀錄裡。
 
 ### 4.2 「我的」頁：「邀請朋友」（管理員限定，`/api/me` 的 `role`）
 
@@ -161,10 +167,13 @@ token 放在 body，不放網址（不進存取紀錄）。
   「複製」（`navigator.clipboard.writeText`；成功寫「已複製」），以及
   「**這個連結只會顯示這一次**，7 天內有效、只能用一次」。再產生一個就換成新的。
 - 清單：
-  - **還沒用的**：備註（沒有就寫「沒有備註」）、到期日（`formatDateTime`）、「撤銷」→
-    確認（`role="alertdialog"`）→ `DELETE`。
+  - **還沒用的**：備註（沒有就寫「邀請 #{id}」——撤銷按鈕的可及名稱才不會重複）、到期日
+    （`formatDateTime`）、「撤銷」→ 確認（`role="alertdialog"`）→ `DELETE`。撤銷時已經被用掉
+    或已經不在（`409`／`404`）→ 後端訊息顯示在**清單層**（重新載入之後那一列會消失，訊息不能跟著它走）。
+    撤銷的正好是剛產生的那張 → 上面的連結一起收掉。
   - **已經用掉的**：備註、名字與 email、使用時間。
-- 成功產生或撤銷 → 失效邀請清單的 query。
+- 成功產生或撤銷 → 失效邀請清單的 query。清單**每次打開都重抓**（`staleTime: 0`）：app 預設 60 秒、
+  快取又會持久化，朋友剛用掉邀請時重新整理會看到舊清單——而「誰用掉了」正是回來看的理由。
 
 ### 4.3 一般使用者
 
@@ -182,8 +191,9 @@ token 放在 body，不放網址（不進存取紀錄）。
   拿掉 `expires_at > now()` 的條件要變紅）。
 - 成功：使用者建立、邀請的 `used_at`／`used_by` 寫入；**斷言前先 `rollback()`**（第 11 種）。
 - email 撞名 → 409，**邀請沒被用掉**：同一個邀請換個 email 還能成功。
-- 並行：兩個請求同時用同一個邀請 → 一個 201、一個 403，使用者只多一個（各自的 session，
-  同 `test_sessions.py` 的並行測試寫法）。
+- 並行：兩條真的連線同時兌換同一個邀請（`redeem_invite`）→ 只有一條成功（同
+  `test_sessions_concurrency.py` 的寫法）；端點層另外證明兌換落空時 rollback、回 403、沒有建使用者。
+  email 撞名的競爭（`IntegrityError`）→ 409，邀請沒被用掉。
 - 無效邀請不呼叫 `hash_password`（spy）。
 - 資料庫裡沒有明碼：`token_hash != token`、等於 `sha256(token)`。
 - `invite-status`：有效 → true；四種失效 → false。
