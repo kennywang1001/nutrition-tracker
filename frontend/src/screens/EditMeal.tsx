@@ -18,7 +18,7 @@ import {
 	useUploadMealPhoto,
 } from "../api/photos";
 import { queryKeys } from "../api/queries";
-import { localDateTime } from "../lib/dates";
+import { fromLocalDateTime, localDateTime } from "../lib/dates";
 import { formatMoney } from "../lib/decimal";
 import styles from "./EditMeal.module.css";
 import { EditMealItems } from "./EditMealItems";
@@ -30,6 +30,10 @@ type MealChanges = {
 	is_private?: boolean;
 	eaten_at?: string;
 };
+
+/** 日期最早能選到哪一天（`<input type="date" min>` 與 `dateTimeProblem` 共用）。
+ *  更早的多半是手滑——例如年份只打了「2」。 */
+const MIN_DATE = "2000-01-01";
 
 function initialCost(meal: Meal): string {
 	return meal.cost === null ? "" : formatMoney(meal.cost);
@@ -56,14 +60,12 @@ function mealChanges(
 		const original = localDateTime(meal.eaten_at);
 		const date = draft.date ?? original.date;
 		const time = draft.time ?? original.time;
-		// 到分鐘比較：原本的秒數不會讓它被當成「有改」。
-		const chosen = new Date(`${date}T${time}`);
+		const chosen = fromLocalDateTime(date, time);
 		// 清空到一半（日期或時間是空的）不是有效的時刻：這裡不算改動，
 		// 擋的是 dateTimeProblem。
-		if (
-			!Number.isNaN(chosen.getTime()) &&
-			(date !== original.date || time !== original.time)
-		) {
+		// 比的是到分鐘的日期與時間字串，不是時刻：原本的秒數不會讓「改了又改
+		// 回來」被當成有改（比時刻的話 12:30:00 ≠ 12:30:45）。
+		if (chosen !== null && (date !== original.date || time !== original.time)) {
 			changes.eaten_at = chosen.toISOString();
 		}
 	}
@@ -88,7 +90,8 @@ function mealChanges(
 	return Object.keys(changes).length === 0 ? null : changes;
 }
 
-/** 日期與時間的草稿有問題就回訊息：空的、或比現在晚（改時間規格 §4）。 */
+/** 日期與時間的草稿有問題就回訊息：空的、早於 `MIN_DATE`、或比現在晚（到分鐘，
+ *  依這台裝置的時鐘；改時間規格 §4）。 */
 function dateTimeProblem(
 	meal: Meal,
 	date?: string,
@@ -98,9 +101,10 @@ function dateTimeProblem(
 	const original = localDateTime(meal.eaten_at);
 	const chosenDate = date ?? original.date;
 	const chosenTime = time ?? original.time;
-	if (chosenDate === "" || chosenTime === "") return "請選日期與時間";
-	const chosen = new Date(`${chosenDate}T${chosenTime}`);
-	if (Number.isNaN(chosen.getTime())) return "請選日期與時間";
+	const chosen = fromLocalDateTime(chosenDate, chosenTime);
+	if (chosen === null) return "請選日期與時間";
+	// 格式驗過了（四位數年份的 YYYY-MM-DD）：字串比較就是日期比較。
+	if (chosenDate < MIN_DATE) return "日期太早了";
 	if (chosen.getTime() > Date.now()) return "不能選未來的時間";
 	return null;
 }
@@ -121,13 +125,17 @@ function describeSaveError(error: unknown): string {
 	return "儲存失敗，請再試一次";
 }
 
-/** 餐別、金額、備註（編輯餐點規格 §4.2 第 2 點）。一顆「儲存」，只送有改的欄位。
+const DATE_TIME_PROBLEM_ID = "edit-meal-date-time-problem";
+
+/** 日期、時間、餐別、金額、備註、隱私（編輯餐點規格 §4.2 第 2 點、改時間規格）。
+ *  一顆「儲存」，只送有改的欄位。
  *
  *  每個欄位的草稿是 `undefined`＝沒動過，顯示的是伺服器現在的值
  *  （`draft ?? 伺服器值`）；使用者動過才有草稿。這樣背景重抓帶來另一台
  *  裝置的新值時，沒動過的欄位跟著更新，不會被誤算成「有改動」而在儲存時
- *  蓋回去。只送動過、且跟伺服器不同的欄位。存好之後三個草稿都清掉，表單
- *  顯示伺服器的值，「儲存」回到 disabled。 */
+ *  蓋回去。只送動過、且跟伺服器不同的欄位。存好之後六個草稿（餐別、金額、
+ *  備註、隱私、日期、時間）都清掉，表單顯示伺服器的值，「儲存」回到
+ *  disabled。 */
 function MealDetailsForm({ meal }: { meal: Meal }) {
 	const queryClient = useQueryClient();
 	const [mealType, setMealType] = useState<MealType | undefined>(undefined);
@@ -146,6 +154,14 @@ function MealDetailsForm({ meal }: { meal: Meal }) {
 		time,
 	});
 	const problem = dateTimeProblem(meal, date, time);
+	// 有問題時兩個欄位都標成無效，並指到那則訊息（讀屏念欄位時一起念）。
+	const dateTimeInvalid =
+		problem === null
+			? {}
+			: {
+					"aria-invalid": true,
+					"aria-describedby": DATE_TIME_PROBLEM_ID,
+				};
 
 	const save = useMutation({
 		mutationFn: (body: MealChanges) =>
@@ -179,12 +195,13 @@ function MealDetailsForm({ meal }: { meal: Meal }) {
 			setDate(undefined);
 			setTime(undefined);
 			queryClient.invalidateQueries({ queryKey: queryKeys.meals });
-			// 改了時間：那一天的營養素、趨勢、餐費日期都變了。
+			// 改了時間：那一天的營養素、趨勢、餐費日期、「最近吃」的順序都變了。
 			if ("eaten_at" in body) {
 				for (const queryKey of [
 					queryKeys.dailyStats,
 					queryKeys.rangeStatsAll,
 					queryKeys.expensesAll,
+					queryKeys.recentFoods,
 				]) {
 					queryClient.invalidateQueries({ queryKey });
 				}
@@ -223,9 +240,11 @@ function MealDetailsForm({ meal }: { meal: Meal }) {
 			<input
 				id="edit-meal-date"
 				type="date"
+				min={MIN_DATE}
 				max={localDateTime(new Date().toISOString()).date}
 				value={date ?? localDateTime(meal.eaten_at).date}
 				onChange={(event) => edit(setDate)(event.target.value)}
+				{...dateTimeInvalid}
 			/>
 			<label htmlFor="edit-meal-time">時間</label>
 			<input
@@ -233,8 +252,13 @@ function MealDetailsForm({ meal }: { meal: Meal }) {
 				type="time"
 				value={time ?? localDateTime(meal.eaten_at).time}
 				onChange={(event) => edit(setTime)(event.target.value)}
+				{...dateTimeInvalid}
 			/>
-			{problem !== null && <p role="alert">{problem}</p>}
+			{problem !== null && (
+				<p id={DATE_TIME_PROBLEM_ID} role="alert">
+					{problem}
+				</p>
+			)}
 
 			<label htmlFor="edit-meal-type">餐別</label>
 			<select
@@ -471,7 +495,7 @@ function DeleteMeal({
 /** `/meals/:id/edit`：修改或刪除一筆已經記下的餐（編輯餐點規格 §4.2）。
  *
  *  **每個區塊各自立即送出**，沒有「全部儲存」——每個動作在後端是一個交易，
- *  畫面不會有「改了一半」的狀態。錯誤也顯示在各自的區塊裡。 *
+ *  畫面不會有「改了一半」的狀態。錯誤也顯示在各自的區塊裡。
  *  日期與時間在「這一餐」表單裡改（改時間規格）。 */
 export function EditMeal() {
 	const params = useParams<{ id: string }>();

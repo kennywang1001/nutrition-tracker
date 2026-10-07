@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { formatDateTime, localDateTime } from "../src/lib/dates";
+import {
+	formatDateTime,
+	fromLocalDateTime,
+	localDateTime,
+} from "../src/lib/dates";
 
 /** 釘住 formatDateTime 的格式：瀏覽器語系與時區、年月日加時分。
  *  原本只驗「有 2026、有 HH:MM、不是 ISO 原文」——`new Date(ts).toString()`
@@ -68,5 +72,50 @@ describe("localDateTime", () => {
 			date: "2026-01-05",
 			time: "07:03",
 		});
+	});
+});
+
+// 同樣只在台北時區對（見上）。
+describe("fromLocalDateTime", () => {
+	it("裝置時區的日期與時間組成一個時刻", () => {
+		expect(fromLocalDateTime("2026-10-04", "12:30")?.toISOString()).toBe(
+			"2026-10-04T04:30:00.000Z",
+		);
+	});
+
+	it("台北的凌晨是 UTC 的前一天", () => {
+		expect(fromLocalDateTime("2026-10-04", "00:05")?.toISOString()).toBe(
+			"2026-10-03T16:05:00.000Z",
+		);
+	});
+
+	it("跟 localDateTime 互為反函數（到分鐘）", () => {
+		const back = fromLocalDateTime("2026-01-05", "07:03");
+		expect(back).not.toBeNull();
+		expect(localDateTime(back?.toISOString() ?? "")).toEqual({
+			date: "2026-01-05",
+			time: "07:03",
+		});
+	});
+
+	it("兩位數以下的年份照字面，不被當成 19xx", () => {
+		// new Date(2, 9, 4) 會是 1902 年。
+		expect(fromLocalDateTime("0002-10-04", "12:30")?.getFullYear()).toBe(2);
+	});
+
+	it.each([
+		["", "12:30"],
+		["2026-10-04", ""],
+		["2026-02-30", "12:30"],
+		["2026-13-01", "12:30"],
+		["2026-00-10", "12:30"],
+		["2026-10-04", "24:00"],
+		["2026-10-04", "12:60"],
+		["2026/10/04", "12:30"],
+		["2026-10-04", "12:30:00"],
+		["2026-10-4", "12:30"],
+		["2026-10-04", "1230"],
+	])("不是有效的日期與時間（%j %j）回 null", (date, time) => {
+		expect(fromLocalDateTime(date, time)).toBeNull();
 	});
 });

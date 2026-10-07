@@ -52,11 +52,15 @@ test("記一餐（有金額）→ 從總覽進編輯 → 改數量 → 刪掉這
 	await expect(page.getByRole("heading", { name: "編輯這一餐" })).toBeVisible();
 	await expect(page.getByLabel("金額（選填）")).toHaveValue(cost);
 	// 「這一餐」表單的輸入框（含改時間的日期、時間）也是點擊目標：≥ 44px。
+	// 勾選框除外——它的點擊目標是包著它的整個標籤，量標籤。
+	const detailsForm = page.getByRole("form", { name: "這一餐" });
 	await expectTouchTargets(
-		page
-			.getByRole("form", { name: "這一餐" })
-			.locator("input:visible, select:visible"),
+		detailsForm.locator("input:not([type=checkbox]):visible, select:visible"),
 		"編輯這一餐：輸入框",
+	);
+	await expectTouchTargets(
+		detailsForm.locator("label", { has: page.getByRole("checkbox") }),
+		"編輯這一餐：只有我看得到",
 	);
 
 	// 改數量：100 → 250。

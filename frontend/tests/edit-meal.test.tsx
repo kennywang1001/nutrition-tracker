@@ -1,5 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+	act,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+	within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -451,6 +458,8 @@ describe("編輯這一餐：餐別、金額、備註", () => {
 			expect(keys).toContainEqual(queryKeys.dailyStats);
 			expect(keys).toContainEqual(queryKeys.rangeStatsAll);
 			expect(keys).toContainEqual(queryKeys.expensesAll);
+			// 「最近吃」依吃的時間排。
+			expect(keys).toContainEqual(queryKeys.recentFoods);
 		});
 	});
 
@@ -471,7 +480,7 @@ describe("編輯這一餐：餐別、金額、備註", () => {
 		);
 	});
 
-	it("未來的時間：顯示訊息、不能儲存", async () => {
+	it("未來的時間：顯示訊息、不能儲存，硬送出（Enter）也不送", async () => {
 		const fetchMock = mockApi(routes());
 		renderEditMeal();
 
@@ -481,7 +490,99 @@ describe("編輯這一餐：餐別、金額、備註", () => {
 
 		expect(await screen.findByText("不能選未來的時間")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "儲存" })).toBeDisabled();
+		// disabled 的按鈕按不下去；表單本身還是能被送出（例如在欄位裡按 Enter）。
+		fireEvent.submit(screen.getByRole("form", { name: "這一餐" }));
+		await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
 		expect(calls(fetchMock, "PATCH", "/api/meals/5")).toHaveLength(0);
+	});
+
+	it("今天稍晚的時間也是未來：比到分鐘，不是只比日期", async () => {
+		// 只假 Date：userEvent 與 TanStack 的計時器照常跑。
+		vi.useFakeTimers({ toFake: ["Date"] });
+		// 台北 2026-10-04 14:00——這一餐是同一天的 12:30。
+		vi.setSystemTime(new Date("2026-10-04T06:00:00Z"));
+		try {
+			const fetchMock = mockApi(routes());
+			renderEditMeal();
+
+			const timeInput = await screen.findByLabelText("時間");
+			await userEvent.clear(timeInput);
+			await userEvent.type(timeInput, "13:59");
+			// 稍早一點的時間可以存：這支測試不是什麼都擋。
+			expect(screen.queryByText("不能選未來的時間")).not.toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "儲存" })).toBeEnabled();
+
+			await userEvent.clear(timeInput);
+			await userEvent.type(timeInput, "14:01");
+
+			expect(await screen.findByText("不能選未來的時間")).toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "儲存" })).toBeDisabled();
+			fireEvent.submit(screen.getByRole("form", { name: "這一餐" }));
+			await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+			expect(calls(fetchMock, "PATCH", "/api/meals/5")).toHaveLength(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("2000 年以前：日期太早了，不能儲存", async () => {
+		const fetchMock = mockApi(routes());
+		renderEditMeal();
+
+		const dateInput = await screen.findByLabelText("日期");
+		expect(dateInput).toHaveAttribute("min", "2000-01-01");
+		await userEvent.clear(dateInput);
+		await userEvent.type(dateInput, "0002-10-04");
+
+		expect(await screen.findByText("日期太早了")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "儲存" })).toBeDisabled();
+		fireEvent.submit(screen.getByRole("form", { name: "這一餐" }));
+		await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+		expect(calls(fetchMock, "PATCH", "/api/meals/5")).toHaveLength(0);
+	});
+
+	it("日期時間有問題：兩個欄位都標成無效，並指到那則訊息", async () => {
+		mockApi(routes());
+		renderEditMeal();
+
+		const dateInput = await screen.findByLabelText("日期");
+		const timeInput = screen.getByLabelText("時間");
+		for (const input of [dateInput, timeInput]) {
+			expect(input).not.toHaveAttribute("aria-invalid");
+			expect(input).not.toHaveAttribute("aria-describedby");
+		}
+
+		await userEvent.clear(dateInput);
+		await userEvent.type(dateInput, "2099-01-01");
+
+		await screen.findByText("不能選未來的時間");
+		for (const input of [dateInput, timeInput]) {
+			expect(input).toHaveAttribute("aria-invalid", "true");
+			expect(input).toHaveAccessibleDescription("不能選未來的時間");
+		}
+	});
+
+	it("原本的時刻有秒數：日期改了又改回來，不算改了時間", async () => {
+		// 台北 2026-10-04 12:30:45。比的是到分鐘的日期與時間，不是時刻——
+		// 時刻比的話 12:30:00 ≠ 12:30:45，會多送一個 eaten_at 把秒數抹掉。
+		const fetchMock = mockApi(
+			routes({ ...MEAL, eaten_at: "2026-10-04T04:30:45Z" }),
+		);
+		renderEditMeal();
+
+		const dateInput = await screen.findByLabelText("日期");
+		await userEvent.clear(dateInput);
+		await userEvent.type(dateInput, "2026-10-02");
+		await userEvent.clear(dateInput);
+		await userEvent.type(dateInput, "2026-10-04");
+		await userEvent.selectOptions(screen.getByLabelText("餐別"), "dinner");
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		await waitFor(() =>
+			expect(bodyOf(fetchMock, "PATCH", "/api/meals/5")).toEqual({
+				meal_type: "dinner",
+			}),
+		);
 	});
 });
 
@@ -708,6 +809,46 @@ describe("編輯這一餐：刪除這一餐", () => {
 });
 
 describe("編輯這一餐：草稿只記動過的欄位", () => {
+	it("改了日期與時間、存好之後：兩個欄位跟著伺服器，之後的重抓也跟", async () => {
+		let current: typeof MEAL = MEAL;
+		mockApi(
+			routes(
+				() => current,
+				[
+					{
+						method: "PATCH",
+						path: "/api/meals/5",
+						handler: () => {
+							// 台北 10/2 13:45。
+							current = { ...MEAL, eaten_at: "2026-10-02T05:45:00Z" };
+							return json(current);
+						},
+					},
+				],
+			),
+		);
+		const client = renderEditMeal();
+
+		const dateInput = await screen.findByLabelText("日期");
+		const timeInput = screen.getByLabelText("時間");
+		await userEvent.clear(dateInput);
+		await userEvent.type(dateInput, "2026-10-02");
+		await userEvent.clear(timeInput);
+		await userEvent.type(timeInput, "13:45");
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		expect(await screen.findByText("已儲存")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "儲存" })).toBeDisabled();
+
+		// 另一台裝置又改了時間（台北 10/1 09:15）：草稿清掉了才會跟。
+		current = { ...MEAL, eaten_at: "2026-10-01T01:15:00Z" };
+		await client.invalidateQueries({ queryKey: queryKeys.meal(5) });
+
+		await waitFor(() => expect(dateInput).toHaveValue("2026-10-01"));
+		expect(timeInput).toHaveValue("09:15");
+		expect(screen.getByRole("button", { name: "儲存" })).toBeDisabled();
+	});
+
 	it("存好之後表單顯示伺服器的值、儲存回到 disabled", async () => {
 		let current: typeof MEAL = MEAL;
 		mockApi(

@@ -59,3 +59,38 @@ export function localDateTime(timestamp: string): {
 		time: `${pad(moment.getHours())}:${pad(moment.getMinutes())}`,
 	};
 }
+
+const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+const TIME_PATTERN = /^(\d{2}):(\d{2})$/;
+
+/** `localDateTime` 的反方向：`<input type="date">` 的 `YYYY-MM-DD` 加
+ *  `<input type="time">` 的 `HH:mm`，在**這台裝置時區**組成一個時刻。不是有效的
+ *  日期與時間（空的、格式不對、2 月 30 日、24:00）回 `null`。
+ *
+ *  **用數字組，不交給字串解析器。** `new Date("YYYY-MM-DDTHH:mm")` 算本地還是
+ *  UTC 取決於字串長什麼樣子（只有日期的形式是 UTC）——差一個字就差八小時。
+ *  年份另外用 `setFullYear` 設：`new Date(y, …)` 會把 0–99 年當成 19xx 年。
+ *
+ *  夏令時間跳過或重複的那一段由 `Date` 默默決定（台北沒有夏令時間）。 */
+export function fromLocalDateTime(date: string, time: string): Date | null {
+	const dateMatch = DATE_PATTERN.exec(date);
+	const timeMatch = TIME_PATTERN.exec(time);
+	if (dateMatch === null || timeMatch === null) return null;
+	const year = Number(dateMatch[1]);
+	const month = Number(dateMatch[2]);
+	const day = Number(dateMatch[3]);
+	const hours = Number(timeMatch[1]);
+	const minutes = Number(timeMatch[2]);
+	if (hours > 23 || minutes > 59) return null;
+	const moment = new Date(year, month - 1, day, hours, minutes);
+	moment.setFullYear(year, month - 1, day);
+	// 2 月 30 日、13 月之類會被 Date 進位成別的日子：對不回去就不是有效日期。
+	if (
+		moment.getFullYear() !== year ||
+		moment.getMonth() !== month - 1 ||
+		moment.getDate() !== day
+	) {
+		return null;
+	}
+	return moment;
+}
