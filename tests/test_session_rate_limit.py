@@ -46,6 +46,27 @@ def test_reset_clears_every_key():
     limiter.hit("alice")
 
 
+def test_expired_windows_are_pruned_so_memory_does_not_grow_forever():
+    """鍵是 jti：每一次正常換票都是新的鍵。不清掉過期的視窗，記憶體會隨著換票次數
+    一直長，直到容器重啟。"""
+    clock = _FakeClock()
+    limiter = KeyedRateLimiter(
+        limit=3,
+        window_seconds=60,
+        code="SLOW_DOWN",
+        message="慢一點",
+        clock=clock,
+        prune_above=5,
+    )
+    for index in range(5):
+        limiter.hit(f"old-{index}")
+    clock.now = 61.0
+
+    limiter.hit("fresh")
+
+    assert limiter.tracked_keys() == 1
+
+
 async def _tokens(db_session):
     user = await create_user(db_session)
     issued = await start_session(db_session, user.id)

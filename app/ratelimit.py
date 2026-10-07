@@ -176,16 +176,26 @@ class KeyedRateLimiter:
         code: str,
         message: str,
         clock: Callable[[], float] = time.monotonic,
+        prune_above: int = 1000,
     ) -> None:
         self._limit = limit
         self._window_seconds = window_seconds
         self._code = code
         self._message = message
         self._clock = clock
+        self._prune_above = prune_above
         self._windows: dict[str, _Window] = {}
 
     def hit(self, key: str) -> None:
         now = self._clock()
+        # 鍵是 jti 時，每一次正常換票都是新的鍵——不清掉過期的視窗，記憶體會隨換票
+        # 次數一直長到容器重啟。超過門檻才掃一次，平常的 hit 不付這個成本。
+        if len(self._windows) >= self._prune_above:
+            self._windows = {
+                k: w
+                for k, w in self._windows.items()
+                if now - w.started_at < self._window_seconds
+            }
         window = self._windows.get(key)
         if window is None or now - window.started_at >= self._window_seconds:
             self._windows[key] = _Window(count=1, started_at=now)
@@ -197,6 +207,10 @@ class KeyedRateLimiter:
                 retry_after_seconds=window.started_at + self._window_seconds - now,
             )
         window.count += 1
+
+    def tracked_keys(self) -> int:
+        """目前記著幾個鍵（測試用：確認過期的視窗會被清掉）。"""
+        return len(self._windows)
 
     def reset(self) -> None:
         self._windows.clear()
