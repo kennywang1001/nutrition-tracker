@@ -122,7 +122,14 @@ export interface paths {
          * Logout
          * @description 登出這一台裝置：這張 refresh token 所屬的整條鏈立刻失效，不能再換發新票。
          *
-         *     對無效、過期、已經登出過的 token 一律回 204——這個端點本來就是冪等的。
+         *     對無效、過期、已經登出過的 token 回 204——這個端點本來就是冪等的。**例外是 429**：
+         *     簽章對的票（包括早就撤銷的）同一張一分鐘內超過 `SESSION_LIMIT` 次，回
+         *     `429 TOO_MANY_SESSION_REQUESTS`；簽章不對的票不計數，永遠是 204。
+         *
+         *     **先驗簽、再限速、最後才碰資料庫**（安全補強規格 §3.1）：簽章不對的票不計數
+         *     （驗簽不碰資料庫、不取鎖，本來就便宜）；簽章對的票每張（鍵是它的 `jti`）每分鐘
+         *     最多 `SESSION_LIMIT` 次走到 `revoke_session` 的 advisory lock。為什麼鍵是 `jti`
+         *     不是 `sub`，見 `app/ratelimit.py` 的 `session_rate_limiter`。
          */
         post: operations["logout_api_auth_logout_post"];
         delete?: never;
@@ -508,6 +515,8 @@ export interface paths {
          * Friend Meal Photo
          * @description 好友的照片。好友 id 與餐點 id 兩個都要對上：餐要屬於那個好友、而且不是
          *     「只有我看得到」——任何一項不成立都是同一個 MEAL_NOT_FOUND，不透露是哪一項。
+         *
+         *     `size=thumb` 是縮圖（第一次可能要補做，所以在執行緒池裡跑）；授權規則不變。
          */
         get: operations["friend_meal_photo_api_friends__friend_id__meals__meal_id__photo_get"];
         put?: never;
@@ -770,6 +779,8 @@ export interface paths {
          *     DB 有 `photo_path` 但檔案不在磁碟上是正常操作下可達的狀態（`delete_photo()`
          *     是 best-effort 設計），一律用實際讀檔的結果判斷 —— 讀不到就是 404，
          *     不能讓 `FileNotFoundError` 逃逸成未處理的 500。
+         *
+         *     `size=thumb` 是縮圖（第一次可能要補做，所以在執行緒池裡跑）；授權規則不變。
          */
         get: operations["read_meal_photo_api_meals__meal_id__photo_get"];
         put?: never;
@@ -3331,7 +3342,9 @@ export interface operations {
     };
     friend_meal_photo_api_friends__friend_id__meals__meal_id__photo_get: {
         parameters: {
-            query?: never;
+            query?: {
+                size?: "full" | "thumb";
+            };
             header?: never;
             path: {
                 friend_id: number;
@@ -3791,7 +3804,9 @@ export interface operations {
     };
     read_meal_photo_api_meals__meal_id__photo_get: {
         parameters: {
-            query?: never;
+            query?: {
+                size?: "full" | "thumb";
+            };
             header?: never;
             path: {
                 meal_id: number;
