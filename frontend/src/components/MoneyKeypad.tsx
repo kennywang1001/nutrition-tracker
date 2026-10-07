@@ -1,4 +1,5 @@
 import { Check, Delete } from "lucide-react";
+import { useEffect, useRef } from "react";
 import { applyKey, type KeypadKey } from "../lib/keypad";
 import styles from "./MoneyKeypad.module.css";
 
@@ -15,6 +16,28 @@ const DIGIT_ROWS: ReadonlyArray<ReadonlyArray<KeypadKey>> = [
 	["1", "2", "3"],
 ];
 
+const DIGITS: ReadonlySet<string> = new Set("0123456789");
+
+/** 實體鍵盤的一個按鍵對應到鍵盤上的哪一顆；`null` 表示不是鍵盤要的鍵。
+ *  `,`：有些語系的數字鍵台小數點送出的是逗號。 */
+function keyFromEvent(key: string): KeypadKey | "submit" | null {
+	if (DIGITS.has(key)) return key as KeypadKey;
+	if (key === "." || key === ",") return ".";
+	if (key === "Backspace") return "backspace";
+	if (key === "Enter") return "submit";
+	return null;
+}
+
+/** 焦點在可以打字的地方（備註欄）時，按鍵屬於那個欄位，不是金額。 */
+function isTextEntry(target: EventTarget | null): boolean {
+	return (
+		target instanceof HTMLInputElement ||
+		target instanceof HTMLTextAreaElement ||
+		target instanceof HTMLSelectElement ||
+		(target instanceof HTMLElement && target.isContentEditable)
+	);
+}
+
 /** 記帳的數字鍵盤（規格 §5.1）。**規則全在 `lib/keypad.ts` 的 `applyKey`**，
  *  這裡只畫按鈕。DOM 順序（也就是 Tab 順序）是 7 8 9 4 5 6 1 2 3 . 0 ⌫ ✓，
  *  跟畫面由上到下、由左到右一致；⌫ 與 ✓ 用 grid-column／grid-row 明確擺在第 4 欄。
@@ -24,6 +47,32 @@ const DIGIT_ROWS: ReadonlyArray<ReadonlyArray<KeypadKey>> = [
  *  一律 `type="button"`，不然每按一個數字表單就送出一次。 */
 export function MoneyKeypad({ value, onChange, submitDisabled }: Props) {
 	const press = (key: KeypadKey) => onChange(applyKey(value, key));
+	const submitRef = useRef<HTMLButtonElement>(null);
+
+	// 實體鍵盤（記帳與離線規格 §2 (c)）：桌機打字直接進金額。掛在 window，
+	// 焦點在 body 或任何一顆按鈕上都收得到。
+	//
+	// - 焦點在文字欄（備註）時不攔：那是在打備註。
+	// - 有 Ctrl／Meta／Alt 的組合鍵不攔：那是瀏覽器或系統的快捷鍵（Ctrl+1 換分頁）。
+	// - 處理了的鍵一律 preventDefault：滑鼠點過「5」之後焦點留在那顆按鈕上，
+	//   Enter 的預設動作是再按一次「5」，不是送出。
+	// - Enter 等於按 ✓：點那顆 submit 按鈕，跟 ✓ 受同一個 disabled 限制。
+	useEffect(() => {
+		function onKeyDown(event: KeyboardEvent) {
+			if (event.ctrlKey || event.metaKey || event.altKey) return;
+			if (isTextEntry(event.target)) return;
+			const key = keyFromEvent(event.key);
+			if (key === null) return;
+			event.preventDefault();
+			if (key === "submit") {
+				if (!submitDisabled) submitRef.current?.click();
+				return;
+			}
+			onChange(applyKey(value, key));
+		}
+		window.addEventListener("keydown", onKeyDown);
+		return () => window.removeEventListener("keydown", onKeyDown);
+	}, [value, onChange, submitDisabled]);
 
 	return (
 		// biome-ignore lint/a11y/useSemanticElements: role=group 與 fieldset 語意相同；fieldset 要另外重設 border、padding、min-inline-size，換過去沒有無障礙上的好處
@@ -62,6 +111,7 @@ export function MoneyKeypad({ value, onChange, submitDisabled }: Props) {
 				<Delete aria-hidden="true" />
 			</button>
 			<button
+				ref={submitRef}
 				type="submit"
 				aria-label="記一筆"
 				className={`${styles.key} ${styles.submit}`}

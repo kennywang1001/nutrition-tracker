@@ -240,6 +240,89 @@ describe("記帳 /expenses/new", () => {
 		);
 	});
 
+	it("實體鍵盤：數字、小數點與 Backspace 輸入到金額", async () => {
+		// 桌機（記帳與離線規格 §2 (c)）。焦點在 body，不在任何欄位。
+		renderScreen();
+
+		await userEvent.keyboard("12.5{Backspace}");
+
+		// 完整比對：「12.」，不是「12.5」（Backspace 沒作用）也不是「125」（小數點沒作用）。
+		expect(screen.getByLabelText("金額")).toHaveTextContent(/^\$12\.$/);
+	});
+
+	it("實體鍵盤：逗號也是小數點", async () => {
+		renderScreen();
+
+		await userEvent.keyboard("3,5");
+
+		expect(screen.getByLabelText("金額")).toHaveTextContent(/^\$3\.5$/);
+	});
+
+	it("實體鍵盤：Enter 送出", async () => {
+		const fetchMock = mockApi([
+			{
+				method: "POST",
+				path: "/api/expenses",
+				handler: () => json(SAVED, 201),
+			},
+		]);
+		const { onDone } = renderScreen();
+
+		await userEvent.keyboard("7{Enter}");
+
+		await waitFor(() => expect(postBody(fetchMock)?.amount).toBe("7"));
+		await waitFor(() => expect(onDone).toHaveBeenCalled());
+	});
+
+	it("實體鍵盤：滑鼠點過數字鍵之後按 Enter 是送出，不是再按一次那個數字", async () => {
+		// 點過「5」之後焦點留在那顆按鈕上，Enter 的預設動作是再點一次它。
+		const fetchMock = mockApi([
+			{
+				method: "POST",
+				path: "/api/expenses",
+				handler: () => json(SAVED, 201),
+			},
+		]);
+		renderScreen();
+
+		await pressKeys("5");
+		await userEvent.keyboard("{Enter}");
+
+		await waitFor(() => expect(postBody(fetchMock)?.amount).toBe("5"));
+		expect(screen.getByLabelText("金額")).toHaveTextContent(/^\$5$/);
+	});
+
+	it("實體鍵盤：金額是空的時 Enter 不送出", async () => {
+		const fetchMock = mockApi([]);
+		renderScreen();
+
+		await userEvent.keyboard("{Enter}");
+
+		// 第 41 種：mutate 是非同步的，讓出一輪，守門被拿掉時請求才來得及出現。
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("實體鍵盤：焦點在備註欄時數字打進備註，不進金額", async () => {
+		renderScreen();
+
+		await userEvent.click(screen.getByLabelText("備註"));
+		await userEvent.keyboard("34.5{Backspace}");
+
+		expect(screen.getByLabelText("備註")).toHaveValue("34.");
+		expect(screen.getByLabelText("金額")).toHaveTextContent(/^\$0$/);
+	});
+
+	it("實體鍵盤：Ctrl＋數字不輸入（其他鍵照常）", async () => {
+		renderScreen();
+
+		// 後面接一個普通的 2：證明監聽器確實在，Ctrl+1 沒進來不是因為整個沒接上
+		// （第 41 種：負向斷言要先證明它有機會看到正向結果）。
+		await userEvent.keyboard("{Control>}1{/Control}2");
+
+		expect(screen.getByLabelText("金額")).toHaveTextContent(/^\$2$/);
+	});
+
 	it("關閉不送任何請求", async () => {
 		const fetchMock = mockApi([]);
 		const { onDone } = renderScreen();
