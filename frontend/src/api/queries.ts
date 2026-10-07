@@ -95,6 +95,19 @@ export const queryKeys = {
 	pendingRevisions: ["admin", "food-revisions"] as const,
 	/** 管理員的邀請清單（邀請規格 §4.2）。產生或撤銷之後失效它。 */
 	invites: ["admin", "invites"] as const,
+	/** 好友（好友規格 §5）。全部在 `["friends", …]` 底下；解除好友時
+	 *  `removeQueries` 那個人的動態、某一天、照片（不只是失效）。 */
+	friendCode: ["friends", "code"] as const,
+	friendRequests: ["friends", "requests"] as const,
+	friends: ["friends", "list"] as const,
+	friendFeed: ["friends", "feed"] as const,
+	friendDay: (friendId: number, day: string | null) =>
+		["friends", "day", friendId, day] as const,
+	friendDayAll: (friendId: number) => ["friends", "day", friendId] as const,
+	/** 好友的照片：跟 `mealPhoto` 一樣不持久化（`persist.ts` 的 `NOT_PERSISTED`）。 */
+	friendPhoto: (friendId: number, mealId: number) =>
+		["friend-photo", friendId, mealId] as const,
+	friendPhotos: (friendId: number) => ["friend-photo", friendId] as const,
 	/** 某個月的花費清單。`month` 是 `"YYYY-MM"`，或 `null` 代表
 	 *  「讓後端決定這個月」（後端省略 `?month=` 時走
 	 *  `this_month_in_timezone(user.timezone)`）——跟 `dailyStats` 不帶日期

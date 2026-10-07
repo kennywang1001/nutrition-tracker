@@ -4,6 +4,7 @@ import { apiFetch } from "../api/client";
 import { useMe } from "../api/me";
 import { logout } from "../auth/session";
 import { Card } from "../components/Card";
+import { FriendsCard } from "../components/FriendsCard";
 import { InviteFriends } from "../components/InviteFriends";
 import styles from "./Me.module.css";
 
@@ -41,6 +42,8 @@ export function Me({ onLoggedOut }: Props) {
 					<p className={styles.email}>{me.email}</p>
 				)}
 			</Card>
+
+			<FriendsCard />
 
 			{isAdmin && (
 				<Card>

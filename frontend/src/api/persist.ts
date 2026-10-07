@@ -76,6 +76,8 @@ type OfflinePersistOptions = PersistQueryClientProviderProps["persistOptions"];
  *  `"supplements"` 底下，見 `api/queries.ts`），所以這裡直接認 `queryKey[0]`。 */
 const NOT_PERSISTED: ReadonlySet<unknown> = new Set([
 	"meal-photo",
+	// 同 `meal-photo` 的理由；而且解除好友之後不該還留在 localStorage。
+	"friend-photo",
 	"food-search",
 	"supplement-search",
 ]);
