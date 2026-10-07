@@ -41,3 +41,21 @@ export function formatDateTime(timestamp: string | number): string {
 		minute: "2-digit",
 	});
 }
+
+function pad(value: number): string {
+	return String(value).padStart(2, "0");
+}
+
+/** 一個時刻在**這台裝置時區**的日期（`YYYY-MM-DD`）與時間（`HH:mm`）——給
+ *  `<input type="date">`／`<input type="time">` 用（改時間規格 §2）。只是格式轉換，
+ *  不決定「算哪一天」——那照舊是後端依帳號時區的事。 */
+export function localDateTime(timestamp: string): {
+	date: string;
+	time: string;
+} {
+	const moment = new Date(timestamp);
+	return {
+		date: `${moment.getFullYear()}-${pad(moment.getMonth() + 1)}-${pad(moment.getDate())}`,
+		time: `${pad(moment.getHours())}:${pad(moment.getMinutes())}`,
+	};
+}

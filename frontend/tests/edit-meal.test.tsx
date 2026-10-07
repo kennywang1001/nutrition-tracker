@@ -7,6 +7,7 @@ import { AMOUNT_FORMAT_ERROR } from "../src/api/expenses";
 import { queryKeys } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
+import { localDateTime } from "../src/lib/dates";
 import { EditMeal } from "../src/screens/EditMeal";
 import { json, type Route as MockRoute, mockApi } from "./helpers/mock-api";
 
@@ -417,6 +418,69 @@ describe("編輯這一餐：餐別、金額、備註", () => {
 		// 總覽的今日清單與報表的支出也要拿到另一台的金額。
 		expect(keysOf(invalidate)).toContainEqual(queryKeys.meals);
 		expect(keysOf(invalidate)).toContainEqual(queryKeys.expensesAll);
+	});
+
+	it("日期與時間預填這一餐在裝置時區的時刻", async () => {
+		mockApi(routes());
+		renderEditMeal();
+
+		const expected = localDateTime(MEAL.eaten_at);
+		expect(await screen.findByLabelText("日期")).toHaveValue(expected.date);
+		expect(screen.getByLabelText("時間")).toHaveValue(expected.time);
+	});
+
+	it("只改日期：送出的 eaten_at 換成新日期、時間不變；之後失效統計、趨勢、支出", async () => {
+		const fetchMock = mockApi(routes());
+		const client = renderEditMeal();
+		const invalidate = vi.spyOn(client, "invalidateQueries");
+		const { time } = localDateTime(MEAL.eaten_at);
+
+		const dateInput = await screen.findByLabelText("日期");
+		await userEvent.clear(dateInput);
+		await userEvent.type(dateInput, "2026-10-02");
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		await waitFor(() =>
+			expect(bodyOf(fetchMock, "PATCH", "/api/meals/5")).toEqual({
+				eaten_at: new Date(`2026-10-02T${time}`).toISOString(),
+			}),
+		);
+		await waitFor(() => {
+			const keys = keysOf(invalidate);
+			expect(keys).toContainEqual(queryKeys.dailyStats);
+			expect(keys).toContainEqual(queryKeys.rangeStatsAll);
+			expect(keys).toContainEqual(queryKeys.expensesAll);
+		});
+	});
+
+	it("沒動日期與時間：PATCH 不帶 eaten_at", async () => {
+		const fetchMock = mockApi(routes());
+		renderEditMeal();
+
+		await userEvent.selectOptions(
+			await screen.findByLabelText("餐別"),
+			"dinner",
+		);
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		await waitFor(() =>
+			expect(bodyOf(fetchMock, "PATCH", "/api/meals/5")).toEqual({
+				meal_type: "dinner",
+			}),
+		);
+	});
+
+	it("未來的時間：顯示訊息、不能儲存", async () => {
+		const fetchMock = mockApi(routes());
+		renderEditMeal();
+
+		const dateInput = await screen.findByLabelText("日期");
+		await userEvent.clear(dateInput);
+		await userEvent.type(dateInput, "2099-01-01");
+
+		expect(await screen.findByText("不能選未來的時間")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "儲存" })).toBeDisabled();
+		expect(calls(fetchMock, "PATCH", "/api/meals/5")).toHaveLength(0);
 	});
 });
 

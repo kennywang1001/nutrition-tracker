@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDateTime } from "../src/lib/dates";
+import { formatDateTime, localDateTime } from "../src/lib/dates";
 
 /** 釘住 formatDateTime 的格式：瀏覽器語系與時區、年月日加時分。
  *  原本只驗「有 2026、有 HH:MM、不是 ISO 原文」——`new Date(ts).toString()`
@@ -42,5 +42,26 @@ describe("formatDateTime", () => {
 		expect(text).not.toMatch(/\d{1,2}:\d{2}:\d{2}/);
 		expect(text).not.toMatch(/37/);
 		expect(text).not.toMatch(/GMT/);
+	});
+});
+
+describe("localDateTime", () => {
+	it("一個時刻在這台裝置時區的日期與時間（到分鐘）", () => {
+		// 用本地時區建構，結果跟測試機的時區無關。
+		const instant = new Date(2026, 9, 4, 12, 30, 45).toISOString();
+
+		expect(localDateTime(instant)).toEqual({
+			date: "2026-10-04",
+			time: "12:30",
+		});
+	});
+
+	it("個位數補零", () => {
+		const instant = new Date(2026, 0, 5, 7, 3).toISOString();
+
+		expect(localDateTime(instant)).toEqual({
+			date: "2026-01-05",
+			time: "07:03",
+		});
 	});
 });

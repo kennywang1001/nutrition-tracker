@@ -18,6 +18,7 @@ import {
 	useUploadMealPhoto,
 } from "../api/photos";
 import { queryKeys } from "../api/queries";
+import { localDateTime } from "../lib/dates";
 import { formatMoney } from "../lib/decimal";
 import styles from "./EditMeal.module.css";
 import { EditMealItems } from "./EditMealItems";
@@ -27,6 +28,7 @@ type MealChanges = {
 	cost?: string | null;
 	note?: string | null;
 	is_private?: boolean;
+	eaten_at?: string;
 };
 
 function initialCost(meal: Meal): string {
@@ -45,9 +47,26 @@ function mealChanges(
 		cost: string | undefined;
 		note: string | undefined;
 		isPrivate: boolean | undefined;
+		date: string | undefined;
+		time: string | undefined;
 	},
 ): MealChanges | null {
 	const changes: MealChanges = {};
+	if (draft.date !== undefined || draft.time !== undefined) {
+		const original = localDateTime(meal.eaten_at);
+		const date = draft.date ?? original.date;
+		const time = draft.time ?? original.time;
+		// 到分鐘比較：原本的秒數不會讓它被當成「有改」。
+		const chosen = new Date(`${date}T${time}`);
+		// 清空到一半（日期或時間是空的）不是有效的時刻：這裡不算改動，
+		// 擋的是 dateTimeProblem。
+		if (
+			!Number.isNaN(chosen.getTime()) &&
+			(date !== original.date || time !== original.time)
+		) {
+			changes.eaten_at = chosen.toISOString();
+		}
+	}
 	if (draft.mealType !== undefined && draft.mealType !== meal.meal_type) {
 		changes.meal_type = draft.mealType;
 	}
@@ -67,6 +86,23 @@ function mealChanges(
 		changes.is_private = draft.isPrivate;
 	}
 	return Object.keys(changes).length === 0 ? null : changes;
+}
+
+/** 日期與時間的草稿有問題就回訊息：空的、或比現在晚（改時間規格 §4）。 */
+function dateTimeProblem(
+	meal: Meal,
+	date?: string,
+	time?: string,
+): string | null {
+	if (date === undefined && time === undefined) return null;
+	const original = localDateTime(meal.eaten_at);
+	const chosenDate = date ?? original.date;
+	const chosenTime = time ?? original.time;
+	if (chosenDate === "" || chosenTime === "") return "請選日期與時間";
+	const chosen = new Date(`${chosenDate}T${chosenTime}`);
+	if (Number.isNaN(chosen.getTime())) return "請選日期與時間";
+	if (chosen.getTime() > Date.now()) return "不能選未來的時間";
+	return null;
 }
 
 function describeSaveError(error: unknown): string {
@@ -98,8 +134,18 @@ function MealDetailsForm({ meal }: { meal: Meal }) {
 	const [cost, setCost] = useState<string | undefined>(undefined);
 	const [note, setNote] = useState<string | undefined>(undefined);
 	const [isPrivate, setIsPrivate] = useState<boolean | undefined>(undefined);
+	const [date, setDate] = useState<string | undefined>(undefined);
+	const [time, setTime] = useState<string | undefined>(undefined);
 
-	const changes = mealChanges(meal, { mealType, cost, note, isPrivate });
+	const changes = mealChanges(meal, {
+		mealType,
+		cost,
+		note,
+		isPrivate,
+		date,
+		time,
+	});
+	const problem = dateTimeProblem(meal, date, time);
 
 	const save = useMutation({
 		mutationFn: (body: MealChanges) =>
@@ -130,7 +176,19 @@ function MealDetailsForm({ meal }: { meal: Meal }) {
 			setCost(undefined);
 			setNote(undefined);
 			setIsPrivate(undefined);
+			setDate(undefined);
+			setTime(undefined);
 			queryClient.invalidateQueries({ queryKey: queryKeys.meals });
+			// 改了時間：那一天的營養素、趨勢、餐費日期都變了。
+			if ("eaten_at" in body) {
+				for (const queryKey of [
+					queryKeys.dailyStats,
+					queryKeys.rangeStatsAll,
+					queryKeys.expensesAll,
+				]) {
+					queryClient.invalidateQueries({ queryKey });
+				}
+			}
 			// 餐費改了（改、補、拿掉）——報表與總覽的支出都要重取。
 			if ("cost" in body) {
 				queryClient.invalidateQueries({ queryKey: queryKeys.expensesAll });
@@ -154,10 +212,29 @@ function MealDetailsForm({ meal }: { meal: Meal }) {
 			className={styles.section}
 			onSubmit={(event) => {
 				event.preventDefault();
-				if (changes !== null && !save.isPending) save.mutate(changes);
+				if (changes !== null && problem === null && !save.isPending) {
+					save.mutate(changes);
+				}
 			}}
 		>
 			<h2 id="edit-meal-details">這一餐</h2>
+
+			<label htmlFor="edit-meal-date">日期</label>
+			<input
+				id="edit-meal-date"
+				type="date"
+				max={localDateTime(new Date().toISOString()).date}
+				value={date ?? localDateTime(meal.eaten_at).date}
+				onChange={(event) => edit(setDate)(event.target.value)}
+			/>
+			<label htmlFor="edit-meal-time">時間</label>
+			<input
+				id="edit-meal-time"
+				type="time"
+				value={time ?? localDateTime(meal.eaten_at).time}
+				onChange={(event) => edit(setTime)(event.target.value)}
+			/>
+			{problem !== null && <p role="alert">{problem}</p>}
 
 			<label htmlFor="edit-meal-type">餐別</label>
 			<select
@@ -203,7 +280,7 @@ function MealDetailsForm({ meal }: { meal: Meal }) {
 			<button
 				type="submit"
 				className={styles.primary}
-				disabled={changes === null || save.isPending}
+				disabled={changes === null || problem !== null || save.isPending}
 			>
 				{save.isPending ? "儲存中…" : "儲存"}
 			</button>
@@ -394,9 +471,8 @@ function DeleteMeal({
 /** `/meals/:id/edit`：修改或刪除一筆已經記下的餐（編輯餐點規格 §4.2）。
  *
  *  **每個區塊各自立即送出**，沒有「全部儲存」——每個動作在後端是一個交易，
- *  畫面不會有「改了一半」的狀態。錯誤也顯示在各自的區塊裡。
- *
- *  不能改時間（規格 §1.3）。 */
+ *  畫面不會有「改了一半」的狀態。錯誤也顯示在各自的區塊裡。 *
+ *  日期與時間在「這一餐」表單裡改（改時間規格）。 */
 export function EditMeal() {
 	const params = useParams<{ id: string }>();
 	const mealId = params.id !== undefined ? Number(params.id) : Number.NaN;
