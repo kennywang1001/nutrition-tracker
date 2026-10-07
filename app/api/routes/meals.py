@@ -720,7 +720,8 @@ async def upload_meal_photo(
     content = await _read_upload_within_limit(file, MAX_PHOTO_BYTES)
 
     try:
-        new_path = save_photo(content, user_id=user.id)
+        # 解碼＋編兩張 JPEG（原圖與縮圖）是 CPU 工作，不能卡住 event loop。
+        new_path = await run_in_threadpool(save_photo, content, user_id=user.id)
     except InvalidImageError as exc:
         raise UnprocessableEntityError("INVALID_PHOTO", "無法識別的圖片內容") from exc
 

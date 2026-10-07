@@ -1,5 +1,6 @@
 import io
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -85,6 +86,59 @@ def test_an_old_photo_gets_its_thumbnail_made_once(monkeypatch):
 def test_a_missing_original_is_file_not_found():
     with pytest.raises(FileNotFoundError):
         read_thumbnail("1/nothing-here.jpg")
+
+
+def _write_original(rel_path: str, content: bytes) -> Path:
+    target = _root() / rel_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(content)
+    return target
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"definitely not a jpeg",
+        _jpeg_bytes(800, 600)[:400],  # 檔頭完整、像素資料被截斷
+    ],
+    ids=["garbage", "truncated"],
+)
+def test_an_undecodable_original_is_served_as_is(content):
+    """補做縮圖時原圖壞了：給原圖的 bytes（使用者至少看得到原本的東西），
+    不 500、也不留下縮圖。"""
+    rel_path = "1/broken.jpg"
+    _write_original(rel_path, content)
+
+    assert read_thumbnail(rel_path) == content
+    assert not (_root() / thumbnail_path(rel_path)).exists()
+
+
+def test_an_oversized_original_is_served_as_is(monkeypatch):
+    """補做的路徑也要在 load() 之前自己比尺寸（跟 save_photo 一樣不靠 Pillow 的警告）。"""
+    rel_path = save_photo(_jpeg_bytes(800, 600), user_id=1)
+    (_root() / thumbnail_path(rel_path)).unlink()
+    original = (_root() / rel_path).read_bytes()
+    monkeypatch.setattr(photos, "MAX_IMAGE_PIXELS", 100)
+
+    assert read_thumbnail(rel_path) == original
+    assert not (_root() / thumbnail_path(rel_path)).exists()
+
+
+def test_a_failed_thumbnail_write_leaves_no_temp_file_and_still_serves(monkeypatch):
+    """Windows 上別的請求正開著目的檔時 os.replace 會 PermissionError；磁碟滿也類似。"""
+    rel_path = save_photo(_jpeg_bytes(2000, 1000), user_id=1)
+    (_root() / thumbnail_path(rel_path)).unlink()
+
+    def refuse(src, dst):
+        raise PermissionError("目的檔正被別人開著")
+
+    monkeypatch.setattr(photos.os, "replace", refuse)
+
+    content = read_thumbnail(rel_path)
+
+    assert _size_of(content)[0] > 0  # 是一張圖
+    assert list((_root() / rel_path).parent.glob("*.tmp")) == []
+    assert not (_root() / thumbnail_path(rel_path)).exists()
 
 
 # ---------- 刪除 ----------
@@ -223,3 +277,56 @@ async def test_a_friends_thumbnail_and_a_private_one(client, db_session):
     assert ok.status_code == 200
     assert _size_of(ok.content) == (THUMBNAIL_DIMENSION, 480)
     assert private.status_code == 404
+
+
+async def test_a_non_friend_cannot_get_a_thumbnail(client, db_session):
+    alice = await create_user(db_session)
+    stranger = await create_user(db_session)
+    meal = await _meal_with_photo(client, db_session, alice)
+
+    response = await client.get(
+        f"/api/friends/{alice.id}/meals/{meal.id}/photo",
+        headers=auth(stranger),
+        params={"size": "thumb"},
+    )
+
+    assert response.status_code == 404
+
+
+async def test_a_broken_original_still_comes_back_as_a_thumbnail_request(client, db_session):
+    user = await create_user(db_session)
+    rel_path = f"{user.id}/broken.jpg"
+    _write_original(rel_path, b"definitely not a jpeg")
+    meal = await create_meal(db_session, user=user, photo_path=rel_path)
+
+    response = await client.get(
+        f"/api/meals/{meal.id}/photo", headers=auth(user), params={"size": "thumb"}
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"definitely not a jpeg"
+
+
+async def test_upload_encodes_off_the_event_loop(client, db_session, monkeypatch):
+    """上傳時要編兩張 JPEG（原圖＋縮圖），不能卡住 event loop（同 test_rate_limit 的
+    「verify_password 在執行緒裡跑」）。"""
+    user = await create_user(db_session)
+    meal = await create_meal(db_session, user=user)
+    main_thread_id = threading.get_ident()
+    seen_thread_ids: list[int] = []
+
+    def recording_save(content, *, user_id):
+        seen_thread_ids.append(threading.get_ident())
+        return save_photo(content, user_id=user_id)
+
+    monkeypatch.setattr("app.api.routes.meals.save_photo", recording_save)
+
+    response = await client.post(
+        f"/api/meals/{meal.id}/photo",
+        headers=auth(user),
+        files={"file": ("a.jpg", _jpeg_bytes(900, 600), "image/jpeg")},
+    )
+
+    assert response.status_code == 200
+    assert seen_thread_ids, "save_photo 應該有被呼叫到"
+    assert seen_thread_ids[0] != main_thread_id

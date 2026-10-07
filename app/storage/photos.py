@@ -21,7 +21,7 @@ import uuid
 from pathlib import Path
 from typing import Literal
 
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 from app.config import settings
 
@@ -101,16 +101,22 @@ def _write_thumbnail(image: Image.Image, rel_path: str) -> None:
     """把 `image`（已經是 RGB、不帶 EXIF）縮到 640 存成縮圖。
 
     先寫到暫存檔再 `os.replace`：兩個請求同時替同一張舊照片補做縮圖時，
-    讀的那一邊不會讀到寫到一半的檔案。"""
+    讀的那一邊不會讀到寫到一半的檔案。存檔或 replace 失敗（磁碟滿；Windows 上
+    目的檔正被另一個讀取開著時 replace 會 `PermissionError`）時暫存檔一定刪掉、
+    例外照樣往外丟——要不要吞由呼叫端決定。"""
     root = _photo_root()
     dest = root / thumbnail_path(rel_path)
     _assert_within_photo_root(dest, root)
     dest.parent.mkdir(parents=True, exist_ok=True)
     temporary = dest.with_name(f"{dest.name}.{uuid.uuid4().hex}.tmp")
-    _resized(image, THUMBNAIL_DIMENSION).save(
-        temporary, format="JPEG", quality=THUMBNAIL_QUALITY
-    )
-    os.replace(temporary, dest)
+    try:
+        _resized(image, THUMBNAIL_DIMENSION).save(
+            temporary, format="JPEG", quality=THUMBNAIL_QUALITY
+        )
+        os.replace(temporary, dest)
+    finally:
+        # 成功時暫存檔已經被 replace 走了，missing_ok 讓這一行在兩種情況都成立。
+        temporary.unlink(missing_ok=True)
 
 
 def save_photo(content: bytes, *, user_id: int) -> str:
@@ -185,15 +191,44 @@ def read_photo(rel_path: str) -> bytes:
 
 def read_thumbnail(rel_path: str) -> bytes:
     """讀縮圖；這個功能之前上傳的照片沒有縮圖，第一次被要時從原圖補做、存起來。
-    原圖也不在 → `FileNotFoundError`（呼叫端照 `read_photo` 的規矩轉 404）。"""
+    原圖也不在 → `FileNotFoundError`（呼叫端照 `read_photo` 的規矩轉 404）。
+
+    補做不成就**給原圖的 bytes**（縮圖規格 §3.1）——清單裡多傳幾百 KB，總比整張
+    照片變成 500「照片無法顯示」好。三種「補做不成」：
+
+    1. 原圖解不開（壞檔、被截斷、`DecompressionBombError`）；
+    2. 原圖的宣告尺寸超過 `MAX_IMAGE_PIXELS`——跟 `save_photo` 一樣在 `load()`
+       之前自己比，不靠 Pillow 只在正式環境發警告的那一段；
+    3. 縮圖寫不進磁碟（`OSError`：磁碟滿、Windows 上目的檔正被另一個讀取開著）。
+
+    前兩種不存縮圖，下次再要會再試一次（只讀檔頭，便宜）。第三種本來也可以回
+    記憶體裡已經編好的縮圖，但那要讓 `_write_thumbnail` 回傳 bytes、多一條路徑；
+    給原圖跟前兩種走同一條退路，比較簡單。"""
     root = _photo_root()
     try:
         return (root / thumbnail_path(rel_path)).read_bytes()
     except FileNotFoundError:
         pass
-    with Image.open(root / rel_path) as original:
-        original.load()
-        _write_thumbnail(original.convert("RGB"), rel_path)
+    image: Image.Image | None = None
+    try:
+        with Image.open(root / rel_path) as original:
+            width, height = original.size
+            if width * height <= MAX_IMAGE_PIXELS:
+                original.load()
+                image = original.convert("RGB")
+    except FileNotFoundError:
+        raise  # 原圖不在：照 read_photo 的規矩讓呼叫端轉 404（它也是 OSError，要先接）
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError):
+        logger.warning("原圖解不開，不補做縮圖：%s", rel_path, exc_info=True)
+        return read_photo(rel_path)
+    if image is None:
+        logger.warning("原圖尺寸超過上限，不補做縮圖：%s", rel_path)
+        return read_photo(rel_path)
+    try:
+        _write_thumbnail(image, rel_path)
+    except OSError:
+        logger.warning("縮圖寫不進磁碟，這次先給原圖：%s", rel_path, exc_info=True)
+        return read_photo(rel_path)
     return (root / thumbnail_path(rel_path)).read_bytes()
 
 
