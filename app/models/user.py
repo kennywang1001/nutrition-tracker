@@ -5,6 +5,7 @@ from sqlalchemy import BigInteger, DateTime, Enum, Identity, Text, func
 from sqlalchemy.dialects.postgresql import CITEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.friend_codes import new_friend_code
 from app.models.base import Base
 
 
@@ -29,6 +30,12 @@ class User(Base):
     # 而不是 SQLAlchemy 的 default=：既有資料列要能就地補值，直接下 SQL 的
     # insert 也拿得到預設值 —— default= 只在經過 ORM 的 INSERT 才會生效。
     timezone: Mapped[str] = mapped_column(Text, nullable=False, server_default="Asia/Taipei")
+    # 好友碼（好友規格 §3.1）。用 ORM 的 default= 而不是在每個建立使用者的地方
+    # 各自產生：註冊、CLI、測試工廠、並行測試裡直接 User(...)——全部自動有碼
+    # （計畫「與規格的差異」第 2 點：碰撞機率可忽略，不做重試）。
+    friend_code: Mapped[str] = mapped_column(
+        Text, unique=True, nullable=False, default=new_friend_code
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

@@ -7,6 +7,7 @@ from app.api.routes import (
     auth,
     expenses,
     foods,
+    friends,
     health,
     me,
     meals,
@@ -24,6 +25,7 @@ app.include_router(health.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
 app.include_router(me.router, prefix="/api")
 app.include_router(foods.router, prefix="/api")
+app.include_router(friends.router, prefix="/api")
 app.include_router(admin_foods.router, prefix="/api")
 app.include_router(admin_invites.router, prefix="/api")
 app.include_router(meals.router, prefix="/api")
