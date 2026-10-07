@@ -87,8 +87,10 @@ async def test_changing_an_item_is_422_and_keeps_the_old_grams(
 
 
 async def test_the_largest_and_smallest_valid_grams_still_work(client, db_session):
-    """範圍的兩端都要能存：9999.99 g × 100 = 999,999 g；1 g × 0.01 = 0.01 g。"""
-    user, food, big = await _setup(db_session, "9999.99")
+    """範圍的兩端都要能存，而且剛好落在端點上：
+    399.96 g × 2500.25 = 999,999.9900（四捨五入到分仍是 999,999.99 g，正好是上限）；
+    1 g × 0.01 = 0.01 g（正好是下限）。"""
+    user, food, big = await _setup(db_session, "399.96")
     small = await create_portion(db_session, food=food, label="匙", grams="1", owner=user)
 
     responses = [
@@ -101,8 +103,8 @@ async def test_the_largest_and_smallest_valid_grams_still_work(client, db_sessio
                 "items": [{"food_id": food.id, "portion_id": portion.id, "quantity": quantity}],
             },
         )
-        for portion, quantity in ((big, "100"), (small, "0.01"))
+        for portion, quantity in ((big, "2500.25"), (small, "0.01"))
     ]
 
     assert [r.status_code for r in responses] == [201, 201]
-    assert [r.json()["items"][0]["quantity_g"] for r in responses] == ["999999.00", "0.01"]
+    assert [r.json()["items"][0]["quantity_g"] for r in responses] == ["999999.99", "0.01"]

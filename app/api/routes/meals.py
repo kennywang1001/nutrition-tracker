@@ -264,6 +264,25 @@ async def _existing_meal_expense(db: AsyncSession, meal_id: int) -> Expense | No
     return expense
 
 
+# Postgres 的 SQLSTATE：唯一約束違反、外鍵違反。
+_UNIQUE_VIOLATION = "23505"
+_FOREIGN_KEY_VIOLATION = "23503"
+
+
+def _violation(exc: IntegrityError) -> tuple[str | None, str | None]:
+    """撞到的是哪一種違反、哪一個約束：`(sqlstate, constraint_name)`。
+
+    SQLAlchemy 的 asyncpg 方言把 asyncpg 的例外包成 DB-API 的 `IntegrityError`
+    （`exc.orig`），只把 `sqlstate` 抄過來（`exc.orig.sqlstate`）；約束名稱
+    只在原本的 asyncpg 例外上（`raise ... from error`，所以是 `exc.orig.__cause__`
+    的 `constraint_name`）。不解析訊息字串——訊息是給人看的，格式不保證。
+    拿不到就回 None，呼叫端當成「不認得」往上丟。
+    """
+    sqlstate = getattr(exc.orig, "sqlstate", None)
+    constraint = getattr(getattr(exc.orig, "__cause__", None), "constraint_name", None)
+    return sqlstate, constraint
+
+
 async def _costs_by_meal(db: AsyncSession, meal_ids: Sequence[int]) -> dict[int, Decimal]:
     """這幾餐各自的餐費（`expenses.meal_id` 指過來的那一筆）。
 
@@ -411,13 +430,20 @@ async def update_meal(
 
     try:
         await db.commit()
-    except IntegrityError:
-        # 補金額時另一個請求剛補了一筆（uq_expenses_meal_id）：整個請求 rollback，
-        # 同一次送出的餐別、備註也不存——請使用者重新整理看另一台存的值。
+    except IntegrityError as exc:
         await db.rollback()
-        raise ConflictError(
-            "MEAL_COST_CONFLICT", "這一餐的金額剛被另一台裝置改過，請重新整理再試"
-        ) from None
+        violation = _violation(exc)
+        if violation == (_UNIQUE_VIOLATION, "uq_expenses_meal_id"):
+            # 補金額時另一個請求剛補了一筆：整個請求 rollback，同一次送出的
+            # 餐別、備註也不存——請使用者重新整理看另一台存的值。
+            raise ConflictError(
+                "MEAL_COST_CONFLICT", "這一餐的金額剛被另一台裝置改過，請重新整理再試"
+            ) from None
+        if violation == (_FOREIGN_KEY_VIOLATION, "fk_expenses_meal_id_meals"):
+            # 讀到這一餐之後、補的餐費寫進去之前，另一台裝置把這一餐刪了。
+            raise NotFoundError("MEAL_NOT_FOUND", "找不到該餐點") from None
+        # 其他約束違反不是「別台裝置剛好也在改」，是 bug——不要包裝成 409 藏起來。
+        raise
     await db.refresh(meal)
 
     rows = (

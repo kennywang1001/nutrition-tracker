@@ -371,28 +371,35 @@ describe("編輯這一餐：餐別、金額、備註", () => {
 		expect(await screen.findByText(AMOUNT_FORMAT_ERROR)).toBeInTheDocument();
 	});
 
-	it("金額被別的裝置改過（409）：顯示後端訊息並重新抓這一餐", async () => {
+	it("金額被別的裝置改過（409）：顯示後端訊息、換成另一台存的金額、失效清單與花費", async () => {
 		const message = "這一餐的金額剛被另一台裝置改過，請重新整理再試";
+		let conflicted = false;
 		const fetchMock = mockApi(
-			routes(MEAL, [
-				{
-					method: "PATCH",
-					path: "/api/meals/5",
-					handler: () =>
-						json(
-							{
-								error: {
-									code: "MEAL_COST_CONFLICT",
-									message,
-									details: {},
+			routes(
+				() => (conflicted ? { ...MEAL, cost: "220.00" } : MEAL),
+				[
+					{
+						method: "PATCH",
+						path: "/api/meals/5",
+						handler: () => {
+							conflicted = true;
+							return json(
+								{
+									error: {
+										code: "MEAL_COST_CONFLICT",
+										message,
+										details: {},
+									},
 								},
-							},
-							409,
-						),
-				},
-			]),
+								409,
+							);
+						},
+					},
+				],
+			),
 		);
-		renderEditMeal();
+		const client = renderEditMeal();
+		const invalidate = vi.spyOn(client, "invalidateQueries");
 
 		const cost = await screen.findByLabelText("金額（選填）");
 		await userEvent.clear(cost);
@@ -403,6 +410,13 @@ describe("編輯這一餐：餐別、金額、備註", () => {
 		await waitFor(() =>
 			expect(calls(fetchMock, "GET", "/api/meals/5")).toHaveLength(2),
 		);
+		// 草稿「200」清掉，欄位顯示另一台存的值——不是使用者剛剛打的。
+		await waitFor(() =>
+			expect(screen.getByLabelText("金額（選填）")).toHaveValue("220.00"),
+		);
+		// 總覽的今日清單與報表的支出也要拿到另一台的金額。
+		expect(keysOf(invalidate)).toContainEqual(queryKeys.meals);
+		expect(keysOf(invalidate)).toContainEqual(queryKeys.expensesAll);
 	});
 });
 

@@ -110,9 +110,12 @@ function MealDetailsForm({ meal }: { meal: Meal }) {
 			}),
 		onError: (caught: unknown) => {
 			if (caught instanceof ApiError && caught.code === "MEAL_COST_CONFLICT") {
-				// 重抓這一餐、清掉金額草稿：欄位換成另一台存的值。
+				// 清掉金額草稿、重抓：欄位換成另一台存的值。`meals` 是前綴，
+				// 這一餐（`meal(id)`）也一起重抓；總覽的清單與報表的支出同樣要
+				// 拿到另一台存的金額。
 				setCost(undefined);
-				queryClient.invalidateQueries({ queryKey: queryKeys.meal(meal.id) });
+				queryClient.invalidateQueries({ queryKey: queryKeys.meals });
+				queryClient.invalidateQueries({ queryKey: queryKeys.expensesAll });
 			}
 		},
 		onSuccess: (updated, body) => {
