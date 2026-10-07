@@ -15,6 +15,7 @@ from app.models.meal import Meal
 from app.models.session import RefreshSession
 from app.models.user import User, UserRole
 from app.security.password import hash_password
+from app.storage.photos import thumbnail_path
 
 MIN_PASSWORD_LENGTH = 8
 
@@ -203,6 +204,9 @@ async def cleanup_orphan_photos(
     referenced_paths = set(
         (await db.scalars(select(Meal.photo_path).where(Meal.photo_path.is_not(None)))).all()
     )
+    # 縮圖不在資料庫裡，但被引用的原圖的縮圖也是被引用的——不算進來的話，
+    # 每一張縮圖都會被當成孤兒刪掉（縮圖規格 §3.3）。
+    referenced_paths |= {thumbnail_path(path) for path in referenced_paths if path is not None}
 
     cutoff = datetime.now(UTC).timestamp() - min_age_hours * 3600
 

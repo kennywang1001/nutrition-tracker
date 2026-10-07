@@ -16,8 +16,10 @@
 
 import io
 import logging
+import os
 import uuid
 from pathlib import Path
+from typing import Literal
 
 from PIL import Image
 
@@ -29,6 +31,13 @@ logger = logging.getLogger(__name__)
 # 控制儲存空間與之後讀取的頻寬；已經比較小的圖不該被放大到失真（計畫刻意
 # 不做縮圖，這個尺寸就是清單與詳情共用的唯一一份）。
 MAX_DIMENSION = 1280
+
+# 縮圖（縮圖規格 §3.1）：清單與好友動態用。手機上卡片寬度約 360 CSS px，640 在
+# 兩倍密度的螢幕上剛好清楚。品質比原圖低一點——它只在清單裡出現。
+THUMBNAIL_DIMENSION = 640
+THUMBNAIL_QUALITY = 80
+
+PhotoSize = Literal["full", "thumb"]
 
 # Pillow 對「宣告尺寸」的預設行為分兩段：超過 MAX_IMAGE_PIXELS 只發
 # DecompressionBombWarning（警告，不是例外）；只有超過兩倍才會無條件硬拋
@@ -72,14 +81,36 @@ def _assert_within_photo_root(path: Path, root: Path) -> None:
         raise RuntimeError(f"拒絕寫入 photo_dir 之外的路徑：{resolved}")
 
 
-def _resized(image: Image.Image) -> Image.Image:
+def _resized(image: Image.Image, longest_edge: int = MAX_DIMENSION) -> Image.Image:
     width, height = image.size
     longest = max(width, height)
-    if longest <= MAX_DIMENSION:
+    if longest <= longest_edge:
         return image
-    scale = MAX_DIMENSION / longest
+    scale = longest_edge / longest
     new_size = (round(width * scale), round(height * scale))
     return image.resize(new_size, Image.Resampling.LANCZOS)
+
+
+def thumbnail_path(rel_path: str) -> str:
+    """`"7/ab12.jpg"` → `"7/ab12_thumb.jpg"`。**全系統唯一一份規則**——資料庫只存
+    原圖的路徑，縮圖的路徑永遠從它推出來（存、讀、刪、清孤兒都用這個函式）。"""
+    return f"{rel_path.removesuffix('.jpg')}_thumb.jpg"
+
+
+def _write_thumbnail(image: Image.Image, rel_path: str) -> None:
+    """把 `image`（已經是 RGB、不帶 EXIF）縮到 640 存成縮圖。
+
+    先寫到暫存檔再 `os.replace`：兩個請求同時替同一張舊照片補做縮圖時，
+    讀的那一邊不會讀到寫到一半的檔案。"""
+    root = _photo_root()
+    dest = root / thumbnail_path(rel_path)
+    _assert_within_photo_root(dest, root)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    temporary = dest.with_name(f"{dest.name}.{uuid.uuid4().hex}.tmp")
+    _resized(image, THUMBNAIL_DIMENSION).save(
+        temporary, format="JPEG", quality=THUMBNAIL_QUALITY
+    )
+    os.replace(temporary, dest)
 
 
 def save_photo(content: bytes, *, user_id: int) -> str:
@@ -132,6 +163,8 @@ def save_photo(content: bytes, *, user_id: int) -> str:
     # 刻意不傳 exif 參數：Pillow 重新編碼時預設就不會帶 EXIF，GPS 座標
     # （手機預設會寫入）因此不會被存下來，也不會透過 API 洩漏出去。
     image.save(dest, format="JPEG", quality=85)
+    # 用同一張已縮到 1280、已去 EXIF 的圖再縮一次——不從上傳內容重新解碼。
+    _write_thumbnail(image, rel_path)
 
     return rel_path
 
@@ -150,17 +183,36 @@ def read_photo(rel_path: str) -> bytes:
     return target.read_bytes()
 
 
+def read_thumbnail(rel_path: str) -> bytes:
+    """讀縮圖；這個功能之前上傳的照片沒有縮圖，第一次被要時從原圖補做、存起來。
+    原圖也不在 → `FileNotFoundError`（呼叫端照 `read_photo` 的規矩轉 404）。"""
+    root = _photo_root()
+    try:
+        return (root / thumbnail_path(rel_path)).read_bytes()
+    except FileNotFoundError:
+        pass
+    with Image.open(root / rel_path) as original:
+        original.load()
+        _write_thumbnail(original.convert("RGB"), rel_path)
+    return (root / thumbnail_path(rel_path)).read_bytes()
+
+
+def read_photo_as(rel_path: str, size: PhotoSize) -> bytes:
+    """照片端點用：原圖或縮圖。同步、可能要縮圖（CPU）——呼叫端用 run_in_threadpool。"""
+    return read_thumbnail(rel_path) if size == "thumb" else read_photo(rel_path)
+
+
 def delete_photo(rel_path: str) -> None:
-    """盡力刪除一張照片；檔案本來就不存在就當作成功（best-effort）。
+    """盡力刪除一張照片（縮圖一起刪）；檔案本來就不存在就當作成功（best-effort）。
 
     規格第 8 節：兩種孤兒檔案的嚴重性不對稱 —— 多一個沒人引用的檔案只是
     浪費磁碟，少一個被引用的檔案是壞掉的功能。所以刪除永遠是「盡力」，
     失敗只記一筆警告，不讓呼叫端的請求因此失敗。
     """
-    target = _photo_root() / rel_path
-    try:
-        target.unlink()
-    except FileNotFoundError:
-        pass
-    except OSError:
-        logger.warning("刪除照片檔案失敗：%s", target, exc_info=True)
+    for target in (_photo_root() / rel_path, _photo_root() / thumbnail_path(rel_path)):
+        try:
+            target.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            logger.warning("刪除照片檔案失敗：%s", target, exc_info=True)

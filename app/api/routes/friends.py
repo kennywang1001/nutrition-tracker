@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy import delete, func, literal, select, tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import get_current_user
 from app.api.params import ResourceId
@@ -52,7 +53,7 @@ from app.schemas.friend import (
     FriendResponse,
     PersonResponse,
 )
-from app.storage.photos import read_photo
+from app.storage.photos import PhotoSize, read_photo_as
 
 router = APIRouter(prefix="/friends", tags=["friends"])
 
@@ -427,11 +428,14 @@ async def friend_day(
 async def friend_meal_photo(
     friend_id: ResourceId,
     meal_id: ResourceId,
+    size: PhotoSize = Query(default="full"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     """好友的照片。好友 id 與餐點 id 兩個都要對上：餐要屬於那個好友、而且不是
-    「只有我看得到」——任何一項不成立都是同一個 MEAL_NOT_FOUND，不透露是哪一項。"""
+    「只有我看得到」——任何一項不成立都是同一個 MEAL_NOT_FOUND，不透露是哪一項。
+
+    `size=thumb` 是縮圖（第一次可能要補做，所以在執行緒池裡跑）；授權規則不變。"""
     friend = await load_visible_friend(db, user, friend_id)
     meal = await db.scalar(shared_meals([friend.id]).where(Meal.id == meal_id))
     if meal is None:
@@ -439,7 +443,7 @@ async def friend_meal_photo(
     if meal.photo_path is None:
         raise NotFoundError("MEAL_PHOTO_NOT_FOUND", "這一餐沒有照片")
     try:
-        content = read_photo(meal.photo_path)
+        content = await run_in_threadpool(read_photo_as, meal.photo_path, size)
     except FileNotFoundError as exc:
         raise NotFoundError("MEAL_PHOTO_NOT_FOUND", "這一餐沒有照片") from exc
     return Response(content=content, media_type="image/jpeg")

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, File, Query, Response, UploadFile, statu
 from sqlalchemy import Row, delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import get_current_user
 from app.api.params import ResourceId
@@ -37,8 +38,9 @@ from app.schemas.meal import (
 from app.storage.photos import (
     UPLOAD_CHUNK_SIZE,
     InvalidImageError,
+    PhotoSize,
     delete_photo,
-    read_photo,
+    read_photo_as,
     save_photo,
 )
 
@@ -742,6 +744,7 @@ async def upload_meal_photo(
 @router.get("/{meal_id}/photo")
 async def read_meal_photo(
     meal_id: ResourceId,
+    size: PhotoSize = Query(default="full"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
@@ -755,13 +758,15 @@ async def read_meal_photo(
     DB 有 `photo_path` 但檔案不在磁碟上是正常操作下可達的狀態（`delete_photo()`
     是 best-effort 設計），一律用實際讀檔的結果判斷 —— 讀不到就是 404，
     不能讓 `FileNotFoundError` 逃逸成未處理的 500。
+
+    `size=thumb` 是縮圖（第一次可能要補做，所以在執行緒池裡跑）；授權規則不變。
     """
     meal = await _load_owned_meal(db, meal_id, user)
     if meal.photo_path is None:
         raise NotFoundError("MEAL_PHOTO_NOT_FOUND", "這一餐沒有照片")
 
     try:
-        content = read_photo(meal.photo_path)
+        content = await run_in_threadpool(read_photo_as, meal.photo_path, size)
     except FileNotFoundError as exc:
         raise NotFoundError("MEAL_PHOTO_NOT_FOUND", "這一餐沒有照片") from exc
 
