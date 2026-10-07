@@ -864,6 +864,7 @@ app 的 `queryClient` 預設 `staleTime` 60 秒、快取會持久化，reload �
 | render 期例外的錯誤訊息 | `Failed Tests` 第一層顯示的是 `TestingLibraryElementError`（找不到元素），**真正的 `TypeError` 在要往下翻的 `Unhandled Errors` 區塊** —— 元件樹整個沒畫出來，沒有 error boundary 接住 |
 | biome `noAriaHiddenOnFocusable` 對 SVG `<text>` | **誤判**。SVG 的 `<text>` 不能聚焦，但規則把它當成可聚焦元素；趨勢圖日期軸的文字是裝飾（柱子的 aria-label 已經有日期），用 `biome-ignore` 加理由（`TrendChart.tsx`） |
 | 份量的「預設」沒有部分唯一索引 | 「同一個擁有者、同一個食物只有一個預設」靠的是同一個交易裡先取消其他預設，**兩個同時送出的請求可能各自成功**、留下兩個預設。單人使用不會發生；要擋就加 `WHERE is_default` 的部分唯一索引（要 migration） |
+| 限速的上限只在單元測試裡驗 | **單元測試每個測試都重置計數器、各用一個新帳號，永遠碰不到「同一個帳號在真實使用裡一分鐘打幾次」**。換票限速一開始定 10 次，單元測試全綠，完整 e2e（同一個帳號一直開新頁，每次整頁載入都換票）才紅。定上限之前先量真實的頻率（`docker compose logs api` 數 `POST /api/auth/refresh`） |
 | `// biome-ignore` 在 JSX children 位置 | **會被當成文字**，裡面的 `<rect>` 之類會被解析成開始標籤 → parse error。那個位置要用 `{/* biome-ignore … */}`；`return (` 之後屬於運算式位置，`//` 形式合法 |
 | Windows Python 改 markdown | 文字模式寫入會把**整份檔案**轉成 CRLF，跟 `.gitattributes`（`* text=auto eol=lf`）衝突，整個 diff 變成雜訊。用 `newline="
 "` |
@@ -909,15 +910,20 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
 
 **做完這四件、真的用兩週之後，回頭看趨勢圖那一節。**
 
-### 8.1b 仍需優先處理
+### 8.1b 已完成：`/refresh` 與 `/logout` 限速（安全補強，2026-10-07）
 
-**`/api/auth/refresh` 與 `/api/auth/logout` 都沒有限速。** 兩者都是未認證、
-可無限重放的寫入路徑，而且都會取每使用者的 advisory lock。實測：12 條並行
-連線拿同一張**早就死掉的** refresh token 重放 `/logout`，可維持 302 次/秒，
-把同一個使用者的合法換發從中位數 7.2ms 拉到 34.2ms。
+原本兩者都是未認證、可無限重放的寫入路徑，而且都會取每使用者的 advisory lock
+（實測：12 條並行連線重放一張早就死掉的票，每秒 302 次，把合法換發的中位數從
+7.2ms 拉到 34.2ms）。現在（規格 `docs/superpowers/specs/2026-10-07-hardening-design.md`）：
 
-是劣化不是阻斷，而且 `/refresh` 從 P1 就是這樣了，不是 session 撤銷引入的。
-但要做就兩個一起做，鍵用 token 解出來的 `sub`。
+- `app/ratelimit.py` 的 `KeyedRateLimiter`（每一次都算，跟只算失敗的登入限速分開）；
+  `session_rate_limiter` **每個使用者每分鐘 60 次**，兩個端點共用。
+- 順序：**先驗簽取 `sub` → 計數 → 才碰資料庫與鎖**。簽章不對的票不計數（驗簽不碰資料庫）。
+- **60 不是一開始的 10**：每次整頁載入都會換一次票（access token 只在記憶體），10 次時
+  一次完整 e2e 同一個帳號換了 23 次、7 次被擋——連續重新整理、多個分頁的真實使用也會碰到。
+  60 次仍把重放壓低 300 倍。
+- **前端只有 401 才登出**（`auth/refresh.ts`）：429、5xx、網路斷線都保留登入。以前任何非成功
+  都會清 token——NAS 部署重啟那幾秒，正在換票的人全被踢出去。
 
 ### 8.2 其他延後項目
 
@@ -941,18 +947,19 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
 - **修改與刪除已記錄的餐點：已完成**（見階段進度）。已知的缺口：
   - 不能改時間（規格 §1.3）。後端的 `PATCH /api/meals/{id}` 可以改 `eaten_at`，
     但**既有餐費的 `spent_at` 不跟著動**。
-  - 兩個請求同時替同一餐補金額（原本沒有餐費），可能建出兩筆支出——
-    `expenses.meal_id` 沒有唯一約束。可加 partial unique index
-    `expenses(meal_id) WHERE meal_id IS NOT NULL`。
-  - 份量重量（≤10000）× 數量（≤10000）可能超過 `meal_items.quantity_g` 的
-    `Numeric(8,2)`（999,999.99），asyncpg `DataError` 變成 500——POST 與 PATCH
-    項目都有（P1 就存在）。
+  - ~~兩個請求同時替同一餐補金額可能建出兩筆支出~~——**已修**（安全補強）：部分唯一索引
+    `uq_expenses_meal_id`（migration `0015`，升級前查重複、有就失敗不自動刪）；撞上時
+    `PATCH /api/meals/{id}` 整個 rollback、回 `409 MEAL_COST_CONFLICT`，前端顯示並重抓這一餐。
+  - ~~份量重量 × 數量可能超過 `quantity_g` 的 `Numeric(8,2)` 變成 500~~——**已修**（安全補強）：
+    `_quantity_g` 換算後不在 0.01～999,999.99 → `422 QUANTITY_OUT_OF_RANGE`；也包含
+    「四捨五入成 0」撞上 `CHECK (quantity_g > 0)` 的那一端。新增一餐、加一項、改一項都經過它。
   - 編輯畫面：`useMeal`／`useFood` 遇到 404 仍然重試 3 次（約 7 秒才顯示
     「找不到這一餐」）；確認框沒有移動焦點（跟報表頁一樣）；從清單點進來仍會先
     看到「載入中」（可用清單快取當 `placeholderData`）；改項目後要等五個 query
     重抓完編輯器才收起。
 - **照片縮圖**：清單頁載入多張 1280px 圖會慢，等前端量到再說。
-- **速率限制的計數器不持久**：單容器記憶體，重啟歸零。這個規模可接受。
+- **速率限制的計數器不持久**（`login_rate_limiter` 與 `session_rate_limiter`）：單容器記憶體，
+  重啟歸零。這個規模可接受。
 - **`GET /api/foods/frequent` 的可見性過濾今天是空轉的** ——
   `POST /api/meals` 已經擋住記錄看不到的食物。保留它是為了日後的
   「刪除食物 / 取消分享」，**但今天抓不到任何突變**（已在計畫裡誠實記錄）。

@@ -1,6 +1,6 @@
 # 上線前的安全補強：換票與登出限速、只有 401 才登出、一餐一筆餐費、公克數範圍
 
-**狀態：** 設計定稿，待寫實作計畫
+**狀態：** 已實作
 **日期：** 2026-10-07
 **前置：** 好友關係已合併（master `f751007`）
 
@@ -55,7 +55,7 @@ class KeyedRateLimiter:
     def reset(self) -> None: ...
 ```
 
-實例 `session_rate_limiter`：**每個使用者每 60 秒 10 次**，`code="TOO_MANY_SESSION_REQUESTS"`、
+實例 `session_rate_limiter`：**每個使用者每 60 秒 60 次**（原本定 10 次——實作時 e2e 證明太緊：每次整頁載入都會換票，一次完整 e2e 同一個帳號 31 秒內換了 23 次；60 次仍把實測的重放壓低 300 倍），`code="TOO_MANY_SESSION_REQUESTS"`、
 `message="操作太頻繁，請稍後再試"`。`/refresh` 與 `/logout` 共用（鍵是 `str(user_id)`）。
 
 兩個端點的順序：
@@ -79,6 +79,8 @@ class KeyedRateLimiter:
    在報表裡刪掉多的那筆再升級」。
 2. 刪 `ix_expenses_meal_id`，建**部分唯一索引** `uq_expenses_meal_id ON expenses (meal_id) WHERE meal_id IS NOT NULL`
    （它同時服務 `ON DELETE SET NULL` 的查找）。模型同步（`Index(..., unique=True, postgresql_where=...)`）。
+
+查這一餐的餐費抽成 `_existing_meal_expense(db, meal_id)`（行為不變；它是「同時補金額」測試的接縫）。
 
 **`PATCH /api/meals/{id}`**：補金額（原本沒有餐費）撞上唯一約束 → `IntegrityError` → `rollback` →
 `409 MEAL_COST_CONFLICT`「這一餐的金額剛被另一台裝置改過，請重新整理再試」。同一個請求裡的其他改動

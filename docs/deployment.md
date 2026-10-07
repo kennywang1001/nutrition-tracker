@@ -259,6 +259,15 @@ docker compose --env-file .env.production \
 > 上面的 `--build` 會裝進去；沒有 migration。要打開 AI，先照「4. 產生密鑰並
 > 填設定」在 `.env.production` 填好 AI 變數再 `up -d --build`。
 
+> **2026-10 安全補強有 migration `0015`（一餐最多一筆餐費）。升級前先查有沒有重複的餐費：**
+>
+> ```bash
+> sudo docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml >   exec -T db psql -U wallet -d wallet -c >   "SELECT meal_id, count(*) FROM expenses WHERE meal_id IS NOT NULL GROUP BY meal_id HAVING count(*) > 1;"
+> ```
+>
+> 顯示 `(0 rows)` 才升級。有結果的話 migration 會失敗（不會自動刪錢的紀錄）——先到報表刪掉
+> 那幾餐多的那筆，再跑 `alembic upgrade head`。
+
 > **2026-10 好友關係有三支 migration：`0012`（好友碼，會替既有使用者補碼）、
 > `0013`（好友關係）、`0014`（每一餐的「只有我看得到」）**——一樣是 `up -d --build`
 > 之後跑一次下面那行就全部套用。
