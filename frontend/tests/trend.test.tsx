@@ -6,7 +6,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { Trend } from "../src/screens/Trend";
+import trendStyles from "../src/screens/Trend.module.css";
 import { json, mockApi } from "./helpers/mock-api";
+
+/** 換期間時調淡卡片的 class。CSS module 的型別是 `string | undefined`；
+ *  真的不見了會變成 "undefined"，斷言一樣紅，不會空字串假綠。 */
+const STALE_CLASS = String(trendStyles.stale);
 
 function wrap(children: ReactNode) {
 	const client = new QueryClient({
@@ -198,8 +203,9 @@ describe("趨勢：營養素切換", () => {
 		mockTrend();
 		render(wrap(<Trend />));
 
+		// 切換鈕在知道今天之後就出現了，不等 range——要等的是摘要本身。
 		expect(await screen.findByRole("radio", { name: "熱量" })).toBeChecked();
-		expect(screen.getByTestId("today-summary")).toHaveTextContent(
+		expect(await screen.findByTestId("today-summary")).toHaveTextContent(
 			"今天 1240 / 2000 kcal",
 		);
 	});
@@ -207,8 +213,9 @@ describe("趨勢：營養素切換", () => {
 	it("切到蛋白質：圖與今天的摘要都換成蛋白質", async () => {
 		mockTrend();
 		render(wrap(<Trend />));
+		await screen.findByTestId("trend-chart");
 
-		await userEvent.click(await screen.findByRole("radio", { name: "蛋白質" }));
+		await userEvent.click(screen.getByRole("radio", { name: "蛋白質" }));
 
 		expect(
 			screen.getByRole("group", { name: "最近幾天的蛋白質" }),
@@ -221,8 +228,9 @@ describe("趨勢：營養素切換", () => {
 	it("那一項沒有目標：摘要只寫實際值", async () => {
 		mockTrend();
 		render(wrap(<Trend />));
+		await screen.findByTestId("trend-chart");
 
-		await userEvent.click(await screen.findByRole("radio", { name: "脂肪" }));
+		await userEvent.click(screen.getByRole("radio", { name: "脂肪" }));
 
 		expect(screen.getByTestId("today-summary")).toHaveTextContent("今天 0 g");
 		expect(screen.getByTestId("today-summary")).not.toHaveTextContent("/");
@@ -370,6 +378,94 @@ describe("趨勢：期間切換", () => {
 		expect(screen.getAllByTestId(/^trend-bar-/)).toHaveLength(7);
 		expect(rangeCalls(fetchMock)).toContain(
 			"/api/stats/range?from=2019-06-28&to=2019-07-04",
+		);
+	});
+
+	it("30 天還在載入：留著 7 天的圖但標成載入中，剛按的單選鈕還在、焦點沒跑掉", async () => {
+		// 換期間時 `keepPreviousData` 讓 7 天的資料先留著——不然整個畫面退回
+		// 「載入中…」，兩組切換鈕一起被拆掉，剛按下去的「30 天」就失去焦點。
+		// 但留著的是**上一段**的資料：圖與摘要要標成過時（aria-busy），
+		// 摘要不能在「30 天」底下寫「有記錄的 7 天」。
+		let resolveThirty: (response: Response) => void = () => {};
+		const thirty = new Promise<Response>((resolve) => {
+			resolveThirty = resolve;
+		});
+		mockApi([
+			{
+				path: "/api/stats/range?from=2019-06-05&to=2019-07-04",
+				handler: () => thirty,
+			},
+			{ path: "/api/stats/range", handler: () => json(rangeBody(null)) },
+			{ path: "/api/stats/daily", handler: () => json(DAILY) },
+		]);
+		render(wrap(<Trend />));
+		expect(await summaryText()).toBe("有記錄的 7 天，平均 1800 kcal");
+		expect(screen.getByTestId("trend-period-card")).not.toHaveAttribute(
+			"aria-busy",
+		);
+
+		const thirtyRadio = screen.getByRole("radio", { name: "30 天" });
+		await userEvent.click(thirtyRadio);
+
+		// 30 天的回應還掛著。
+		expect(thirtyRadio).toBeInTheDocument();
+		expect(thirtyRadio).toBeChecked();
+		expect(document.activeElement).toBe(thirtyRadio);
+		expect(screen.getByTestId("trend-period-card")).toHaveAttribute(
+			"aria-busy",
+			"true",
+		);
+		expect(screen.getByTestId("trend-period-card")).toHaveClass(STALE_CLASS);
+		expect(screen.getByTestId("adherence").parentElement).toHaveAttribute(
+			"aria-busy",
+			"true",
+		);
+		expect(screen.getByTestId("period-summary").textContent).toBe("載入中…");
+
+		resolveThirty(json(rangeOf(THIRTY_DAYS)));
+		await screen.findByTestId("trend-bar-2019-06-05");
+
+		expect(screen.getByTestId("trend-period-card")).not.toHaveAttribute(
+			"aria-busy",
+		);
+		expect(screen.getByTestId("trend-period-card")).not.toHaveClass(
+			STALE_CLASS,
+		);
+		expect(screen.getByTestId("adherence").parentElement).not.toHaveAttribute(
+			"aria-busy",
+		);
+		expect(await summaryText()).toBe("有記錄的 30 天，平均 1800 kcal");
+	});
+
+	it("30 天載入失敗：說無法載入，切換鈕還在，切回 7 天看得到快取的圖", async () => {
+		// 失敗時沒有資料可畫（keepPreviousData 只在載入中留著上一段）。
+		// 切換鈕要留著：使用者唯一能做的事就是切回已經有快取的那一段。
+		mockApi([
+			{
+				path: "/api/stats/range?from=2019-06-05&to=2019-07-04",
+				handler: () =>
+					json({ error: { code: "X", message: "x", details: {} } }, 500),
+			},
+			{ path: "/api/stats/range", handler: () => json(rangeBody(null)) },
+			{ path: "/api/stats/daily", handler: () => json(DAILY) },
+		]);
+		render(wrap(<Trend />));
+		await screen.findByTestId("trend-chart");
+
+		await userEvent.click(screen.getByRole("radio", { name: "30 天" }));
+
+		expect(await screen.findByText("無法載入趨勢")).toBeInTheDocument();
+		expect(screen.queryByText("載入中…")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("trend-chart")).not.toBeInTheDocument();
+		expect(screen.getByRole("radio", { name: "30 天" })).toBeChecked();
+		expect(screen.getByRole("radio", { name: "熱量" })).toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("radio", { name: "7 天" }));
+
+		expect(screen.getAllByTestId(/^trend-bar-/)).toHaveLength(7);
+		expect(screen.queryByText("無法載入趨勢")).not.toBeInTheDocument();
+		expect(screen.getByTestId("period-summary").textContent).toBe(
+			"有記錄的 7 天，平均 1800 kcal",
 		);
 	});
 });

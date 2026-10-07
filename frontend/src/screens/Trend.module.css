@@ -57,3 +57,9 @@
 	font-size: 13px;
 	color: var(--color-text-muted);
 }
+
+/* 換期間時留著的是上一段的資料（keepPreviousData），新的還沒回來：調淡。
+   螢幕閱讀器那邊由 aria-busy 說。 */
+.stale {
+	opacity: var(--opacity-stale);
+}

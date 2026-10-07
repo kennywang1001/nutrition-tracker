@@ -103,6 +103,13 @@ export function Trend() {
 	});
 
 	const range = rangeQuery.data;
+	// 換期間後、新的那段還沒回來時，`range` 是上一段的資料（keepPreviousData）。
+	// 它還畫在畫面上，但要標成過時：卡片調淡、aria-busy，摘要改說「載入中…」
+	// ——不然「30 天」底下會寫著「有記錄的 7 天」。
+	const stale = rangeQuery.isPlaceholderData;
+	const staleProps = stale
+		? { "aria-busy": true, className: styles.stale }
+		: {};
 	const [metric, setMetric] = useState<TrendMetric>("kcal");
 	const todayDay = range?.trend.find((day) => day.date === today) ?? null;
 
@@ -110,10 +117,13 @@ export function Trend() {
 		<section className={ui.screen}>
 			<h1>趨勢</h1>
 
-			{anchorQuery.isError && <p>無法載入趨勢</p>}
-			{!range && !anchorQuery.isError && <p>載入中…</p>}
+			{/* 還不知道今天是哪一天：什麼都畫不出來，連期間都沒得選。 */}
+			{today === null &&
+				(anchorQuery.isError ? <p>無法載入趨勢</p> : <p>載入中…</p>)}
 
-			{range && (
+			{/* 知道今天之後切換鈕就一直在，不等 range：某一段載入失敗時，
+			    使用者還要能切回已經有快取的那一段。 */}
+			{today !== null && (
 				<>
 					<fieldset className={styles.metrics}>
 						<legend className={styles.legend}>營養素</legend>
@@ -149,34 +159,41 @@ export function Trend() {
 						))}
 					</fieldset>
 
-					<div>
-						<TrendChart days={range.trend} metric={metric} today={today} />
-						{todayDay !== null && (
-							<p data-testid="today-summary" className={styles.summary}>
-								{todaySummary(todayDay, metric)}
-							</p>
-						)}
-						<p data-testid="period-summary" className={styles.summary}>
-							{periodSummary(range.trend, metric)}
-						</p>
-					</div>
+					{!range && rangeQuery.isError && <p>無法載入趨勢</p>}
+					{!range && !rangeQuery.isError && <p>載入中…</p>}
 
-					<div>
-						{/* 規格 §4.7：null 不能顯示成 0%。
-						    0 讀起來是「一次都沒吃」，而 null 的意思是「沒有計畫，
-						    這個比率沒有定義」——把「沒有標準」講成「做得很差」。 */}
-						<p data-testid="adherence">
-							{range.adherence === null
-								? "這段期間沒有補劑計畫"
-								: `補劑依從率 ${Number(range.adherence).toLocaleString(
-										undefined,
-										{
-											style: "percent",
-											maximumFractionDigits: 0,
-										},
-									)}`}
-						</p>
-					</div>
+					{range && (
+						<>
+							<div data-testid="trend-period-card" {...staleProps}>
+								<TrendChart days={range.trend} metric={metric} today={today} />
+								{todayDay !== null && (
+									<p data-testid="today-summary" className={styles.summary}>
+										{todaySummary(todayDay, metric)}
+									</p>
+								)}
+								<p data-testid="period-summary" className={styles.summary}>
+									{stale ? "載入中…" : periodSummary(range.trend, metric)}
+								</p>
+							</div>
+
+							<div {...staleProps}>
+								{/* 規格 §4.7：null 不能顯示成 0%。
+								    0 讀起來是「一次都沒吃」，而 null 的意思是「沒有計畫，
+								    這個比率沒有定義」——把「沒有標準」講成「做得很差」。 */}
+								<p data-testid="adherence">
+									{range.adherence === null
+										? "這段期間沒有補劑計畫"
+										: `補劑依從率 ${Number(range.adherence).toLocaleString(
+												undefined,
+												{
+													style: "percent",
+													maximumFractionDigits: 0,
+												},
+											)}`}
+								</p>
+							</div>
+						</>
+					)}
 				</>
 			)}
 		</section>

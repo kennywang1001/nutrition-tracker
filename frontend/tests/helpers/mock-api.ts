@@ -5,7 +5,8 @@ import { vi } from "vitest";
 export type Route = {
 	method?: string;
 	path: string;
-	handler: () => Response;
+	/** 回 Promise 的話，請求會一直掛著直到它 resolve——用來測「載入中」。 */
+	handler: () => Response | Promise<Response>;
 };
 
 /** 依 (method, path) 分派的 fetch mock。**一律先驗 Authorization** ——

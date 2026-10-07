@@ -40,7 +40,9 @@ export function formatMoney(value: Numeric): string {
  *
  *  放在這裡而不是 `lib/keypad.ts`：判斷「是不是 0」要經過 `Decimal`
  *  （`"0.00"`、`"0."` 用字串比對很容易漏），而只有這個檔案可以 import
- *  decimal.js（`tests/decimal-containment.test.ts`）。 */
+ *  decimal.js（`tests/decimal-containment.test.ts`）。
+ *
+ *  趨勢的期間摘要也用它當「這一天有記錄」的規則（實際值 > 0，`screens/Trend.tsx`）。 */
 export function isPositiveAmount(value: string): boolean {
 	if (value.trim() === "") return false;
 	try {
