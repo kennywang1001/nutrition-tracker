@@ -1,6 +1,6 @@
 # 好友關係：好友碼、好友動態、只有我看得到
 
-**狀態：** 設計定稿，待寫實作計畫
+**狀態：** 已實作
 **日期：** 2026-10-07
 **前置：** 開帳號的路已合併（master `8091301`）；社群草稿（分支 `docs/p7-social-decisions` 的
 `docs/superpowers/specs/2026-10-01-p7-social-decisions-draft.md`）
@@ -64,12 +64,12 @@
 
 - 8 個字元，字母表 `ABCDEFGHJKMNPQRSTUVWXYZ23456789`（去掉容易看錯的 0/O、1/I/L），`secrets.choice` 產生。
 - `Text NOT NULL UNIQUE`。顯示成 `XXXX-XXXX`；輸入時**不分大小寫、去掉連字號與空白**再比對。
-- migration（`0012`）：先加可為 null 的欄位、替既有使用者逐一產生、再設 NOT NULL 與唯一約束。
-- 新帳號（`/register`、`app/cli.py` 的 `create-admin`／`create-user`、測試工廠）建立時產生。產生碰撞
-  （唯一約束）→ 重試，最多 5 次。
+- migration `0012`：先加可為 null 的欄位、替既有使用者逐一產生、再設 NOT NULL 與唯一約束。
+- 新帳號由 ORM 的 `default=` 產生——所有建立使用者的路徑（`/register`、CLI、測試工廠、直接
+  `User(...)`）自動有碼。**不重試**：31⁸ 種組合，碰撞機率可忽略，碰到就是一次 500、再試一次。
 - 重設：換一個新碼，舊碼立刻失效（`users` 只有一個欄位，沒有舊碼可查）。
 
-### 3.2 `friendships`（migration `0012` 同一支）
+### 3.2 `friendships`（migration `0013`）
 
 | 欄位 | 說明 |
 |---|---|
@@ -91,7 +91,7 @@
 
 拒絕、收回、解除 → **刪掉那一列**（不留 `rejected` 狀態：草稿 §3.2 的「拒絕之後可以再邀請」就是自然結果）。
 
-### 3.3 `meals.is_private`（migration `0012` 同一支）
+### 3.3 `meals.is_private`（migration `0014`）
 
 `Boolean NOT NULL server_default false`。既有的餐都是 false（預設給好友看）。
 
@@ -113,13 +113,13 @@
 | 碼不存在、或是自己的碼 | `404 FRIEND_CODE_NOT_FOUND`「找不到這個好友碼」（兩者同一個錯誤） |
 | 已經是好友 | `409 ALREADY_FRIENDS`「你們已經是好友了」 |
 | 我已經送過、還在等 | `409 REQUEST_PENDING`「已經送出邀請，等對方回應」 |
-| **對方已經送邀請給我** | 直接成為好友 → `200 { status: "accepted", friend: {…} }` |
-| 新邀請 | `201 { status: "pending", request: {…} }` |
+| **對方已經送邀請給我** | 直接成為好友 → `200 { status: "accepted", person: { id, display_name } }` |
+| 新邀請 | `201 { status: "pending", person: { id, display_name } }` |
 
 同一對同時互送：唯一約束擋住第二個 INSERT → `IntegrityError` → rollback → 重新讀那一列，依上表回應
 （通常是「對方已經送給我」→ 接受）。
 
-**`GET /requests`** → `{ incoming: [{ id, from: { id, display_name }, created_at }], outgoing: [{ id, to: { id, display_name }, created_at }] }`。
+**`GET /requests`** → `{ incoming: [{ id, person: { id, display_name }, created_at }], outgoing: [同形狀] }`。
 
 **`POST /requests/{id}/accept`** → 只有**收到**的那一方能接受；`status = accepted`、`accepted_at = now()`。
 不是收到的人、不存在、已經是好友 → `404 FRIEND_REQUEST_NOT_FOUND`。
@@ -155,12 +155,13 @@ def visible_meals_of(friend_ids) -> Select           # Meal.user_id IN (...) AND
 
 - 先 `load_visible_friend`（不是好友 → 404）。
 - 「一天」用**那個好友的時區**：`day_bounds(date, friend.timezone)`；省略 `date` → `today_in_timezone(friend.timezone)`。
-- 回 `{ friend: { id, display_name }, date, meals: [FriendMeal] }`，時間順序。
+- 回 `{ friend: { id, display_name }, day, meals: [FriendMeal] }`，時間順序（欄位叫 `day`：Pydantic 的欄位名 `date` 會遮住型別）。
 
 **`GET /api/friends/{user_id}/meals/{meal_id}/photo`**：
 
-- 好友＋那一餐屬於他＋不是私人＋有照片 → `image/jpeg`；**任何一項不成立 → 404**（同一個
-  `MEAL_NOT_FOUND`／`MEAL_PHOTO_NOT_FOUND`，不透露是哪一項）。
+- 好友＋那一餐屬於他＋不是私人＋有照片 → `image/jpeg`；任何一項不成立 → 404。不是好友 →
+  `FRIEND_NOT_FOUND`（同某一天；是不是好友是呼叫者自己知道的事）；餐不屬於他、私人、不存在 →
+  同一個 `MEAL_NOT_FOUND`；沒有照片 → `MEAL_PHOTO_NOT_FOUND`。
 
 **`FriendMeal`**（**白名單**，不是從 `MealResponse` 刪欄位）：
 
@@ -218,8 +219,8 @@ def visible_meals_of(friend_ids) -> Select           # Meal.user_id IN (...) AND
 - **好友名單**：名字＋「解除」→ 確認（`alertdialog`）：「解除之後雙方都看不到對方的餐點。
   已經看過的照片可能還留在對方手機的快取裡。」
 - 每次打開都重抓邀請與名單（`staleTime: 0`）。
-- **解除、拒絕或收回之後**：`removeQueries` 這個人的所有好友快取（動態、某一天、照片）——
-  不只是失效，是拿掉，不留在 localStorage。
+- **解除之後**：`removeQueries` 這個人的所有好友快取（動態、某一天、照片）——不只是失效，
+  是拿掉，不留在 localStorage。拒絕與收回時那個人還不是好友，本來就沒有好友資料，只重新載入邀請。
 
 ### 5.4 記一餐、編輯這一餐
 
@@ -291,4 +292,4 @@ def visible_meals_of(friend_ids) -> Select           # Meal.user_id IN (...) AND
 8. e2e
 9. 交接文件、部署手冊
 
-**部署：又有 migration（`0012`）。** `up -d --build` 之後跑 `alembic upgrade head`。
+**部署：三支 migration（`0012` 好友碼、`0013` 好友關係、`0014` `is_private`）。** `up -d --build` 之後跑一次 `alembic upgrade head`。
