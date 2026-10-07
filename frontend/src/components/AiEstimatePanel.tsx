@@ -142,6 +142,14 @@ export function AiEstimatePanel({
 		}
 	});
 
+	// 問同名的時候，「確認」那顆按鈕被換成提問（卡片），或「存成食物」剛按下去、
+	// 停用過（表單）——焦點會掉到 body。移到提問的第一顆按鈕「用食物庫的」，鍵盤
+	// 與讀屏的使用者才知道畫面在等他回答。依 `sameName` 這個物件：每問一次移一次。
+	const useLibraryButtonRef = useRef<HTMLButtonElement>(null);
+	useEffect(() => {
+		if (sameName !== null) useLibraryButtonRef.current?.focus();
+	}, [sameName]);
+
 	function clearResult() {
 		setEstimate(null);
 		setImage(null);
@@ -295,6 +303,7 @@ export function AiEstimatePanel({
 			<p role="alert">食物庫裡已經有「{sameName.food.name}」</p>
 			<div className={styles.actions}>
 				<button
+					ref={useLibraryButtonRef}
 					type="button"
 					className={styles.primary}
 					disabled={busy}

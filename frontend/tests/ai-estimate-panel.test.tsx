@@ -78,11 +78,19 @@ function library(foods: unknown[]): Route {
 	return { method: "GET", path: "/api/foods?", handler: () => json(foods) };
 }
 
+/** 存之前的同名檢查查了哪些名稱。**每一次都斷言 `scope=all`、`limit=200`**：
+ *  只查自己的（`mine`）會漏掉公開的同名食物；少了 `limit`，短的名稱會被後端
+ *  預設的 50 筆截掉、排不到完全同名的那一筆。 */
 function searchedFor(fetchMock: ReturnType<typeof mockApi>): string[] {
 	return fetchMock.mock.calls
 		.map(([input]) => String(input))
 		.filter((url) => url.includes("/api/foods?"))
-		.map((url) => new URL(url, "http://x").searchParams.get("q") ?? "");
+		.map((url) => {
+			const params = new URL(url, "http://x").searchParams;
+			expect(params.get("scope")).toBe("all");
+			expect(params.get("limit")).toBe("200");
+			return params.get("q") ?? "";
+		});
 }
 
 function renderPanel(text = "一碗牛肉麵") {
@@ -771,6 +779,7 @@ describe("AI 估算面板：存之前先看食物庫有沒有同名的", () => {
 		await waitFor(() =>
 			expect(onFoodReady).toHaveBeenCalledWith(CREATED, { image: null }),
 		);
+		expect(searchedFor(fetchMock)).toEqual(["牛肉麵"]);
 		expect(posted(fetchMock, "/api/foods")).toBe(1);
 		expect(bodyOf(fetchMock, "POST", "/api/foods")).toMatchObject({
 			name: "牛肉麵",
@@ -793,6 +802,7 @@ describe("AI 估算面板：存之前先看食物庫有沒有同名的", () => {
 		expect(
 			await within(card).findByRole("button", { name: "用食物庫的" }),
 		).toBeInTheDocument();
+		expect(searchedFor(fetchMock)).toEqual(["Big Mac"]);
 		expect(posted(fetchMock, "/api/foods")).toBe(0);
 	});
 
@@ -825,6 +835,7 @@ describe("AI 估算面板：存之前先看食物庫有沒有同名的", () => {
 		await waitFor(() =>
 			expect(onFoodReady).toHaveBeenCalledWith(CREATED, { image: null }),
 		);
+		expect(searchedFor(fetchMock)).toEqual(["牛肉麵"]);
 		expect(posted(fetchMock, "/api/foods")).toBe(1);
 	});
 
@@ -904,6 +915,39 @@ describe("AI 估算面板：存之前先看食物庫有沒有同名的", () => {
 		await waitFor(() =>
 			expect(onFoodReady).toHaveBeenCalledWith(RED, { image: null }),
 		);
+		expect(searchedFor(fetchMock)).toEqual(["紅燒牛肉麵"]);
 		expect(posted(fetchMock, "/api/foods")).toBe(0);
+	});
+
+	// 問的時候「確認」／「存成食物」那顆按鈕被換掉（卡片）或停用過，焦點會掉到
+	// body——鍵盤與讀屏的使用者不知道畫面多了一個問題要回答。
+	it("問同名的時候：焦點移到「用食物庫的」（結果卡片）", async () => {
+		mockApi(routes(undefined, [library([LIBRARY])]));
+		renderPanel();
+
+		const card = await estimateByText();
+		await userEvent.click(within(card).getByRole("button", { name: "確認" }));
+
+		expect(
+			await within(card).findByRole("button", { name: "用食物庫的" }),
+		).toHaveFocus();
+	});
+
+	it("問同名的時候：焦點移到「用食物庫的」（修改表單）", async () => {
+		mockApi(routes(undefined, [library([LIBRARY])]));
+		renderPanel();
+
+		const card = await estimateByText();
+		await userEvent.click(
+			within(card).getByRole("button", { name: "需要修改" }),
+		);
+		const form = screen.getByRole("form", { name: "修改 AI 估算" });
+		await userEvent.click(
+			within(form).getByRole("button", { name: "存成食物" }),
+		);
+
+		expect(
+			await within(form).findByRole("button", { name: "用食物庫的" }),
+		).toHaveFocus();
 	});
 });
