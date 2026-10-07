@@ -1,5 +1,6 @@
 import re
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -335,23 +336,79 @@ async def test_being_friends_does_not_open_any_existing_endpoint(client, db_sess
     assert [r.status_code for r in responses] == [404] * len(responses)
 
 
+async def test_being_friends_does_not_widen_any_existing_list(client, db_session, pals):
+    """列表端點最容易被「我或我的好友」放寬（一行 `user_id IN (...)`）。愛麗絲的
+    資料都落在查詢的那一天／那個月裡——先用愛麗絲自己的帳號證明這件事，否則
+    鮑伯那邊的「沒有」是空轉。"""
+    alice, bob, _food, revision = pals
+    at = "2026-10-06T04:00:00+00:00"  # 台北 10/6 中午（兩人都是預設時區）
+    meal = await _meal(db_session, alice, revision, at=at)
+    expense = await create_expense(
+        db_session, user=alice, amount=99, spent_at=datetime.fromisoformat(at)
+    )
+    supplement = await create_supplement(db_session, created_by=alice, owner=alice)
+    await create_plan(db_session, user=alice, supplement=supplement)
+    meal_id, expense_id, supplement_id = meal.id, expense.id, supplement.id
+
+    async def lists(user):
+        headers = auth(user)
+        day = {"date": "2026-10-06"}
+        month = {"month": "2026-10"}
+        responses = [
+            await client.get("/api/meals", headers=headers, params=day),
+            await client.get("/api/expenses", headers=headers, params=month),
+            await client.get("/api/expenses/summary", headers=headers, params=month),
+            await client.get("/api/stats/daily", headers=headers, params=day),
+            await client.get("/api/supplements/today", headers=headers),
+        ]
+        assert [r.status_code for r in responses] == [200] * len(responses)
+        meals, expenses, summary, daily, today = (r.json() for r in responses)
+        return (
+            [m["id"] for m in meals],
+            [e["id"] for e in expenses],
+            Decimal(summary["total"]),
+            Decimal(daily["actual"]["kcal"]),
+            [s["supplement_id"] for s in today],
+        )
+
+    assert await lists(alice) == (
+        [meal_id],
+        [expense_id],
+        Decimal(99),
+        Decimal(150),
+        [supplement_id],
+    )
+    assert await lists(bob) == ([], [], Decimal(0), Decimal(0), [])
+
+
 # ---------- 掃描 ----------
 
 
 def test_only_the_friend_modules_touch_the_friendship_table():
     """規格 §1.2：好友的讀取只有一個入口。其他模組碰到 Friendship，就是有人把
-    「我或我的好友」塞進了既有端點——那正是 38 條隔離測試抓不到的失敗模式。"""
+    「我或我的好友」塞進了既有端點——那正是 38 條隔離測試抓不到的失敗模式。
+
+    只掃 `Friendship` 不夠：最順手的放寬是在既有端點裡 import `friend_visibility`
+    的函式（`friend_ids`、`shared_meals`…），一個字都不用碰 `Friendship`。所以
+    可見性模組與它的函式名也一起掃；模型檔只准出現表名與類別名。"""
     root = Path(__file__).resolve().parent.parent / "app"
-    allowed = {
-        root / "models" / "friendship.py",
-        root / "models" / "__init__.py",
+    friend_modules = {
         root / "friend_visibility.py",
         root / "api" / "routes" / "friends.py",
     }
-    pattern = re.compile(r"\bFriendship\b|\bfriendships\b")
-    offenders = [
-        str(path.relative_to(root))
-        for path in root.rglob("*.py")
-        if path not in allowed and pattern.search(path.read_text(encoding="utf-8"))
-    ]
+    models = {
+        root / "models" / "friendship.py",
+        root / "models" / "__init__.py",
+    }
+    table_words = re.compile(r"\bFriendship\b|\bfriendships\b")
+    visibility_words = re.compile(
+        r"\bfriend_visibility\b|\bfriend_ids\b|\bshared_meals\b|\bload_visible_friend\b"
+    )
+    offenders = []
+    for path in root.rglob("*.py"):
+        if path in friend_modules:
+            continue
+        text = path.read_text(encoding="utf-8")
+        if (path not in models and table_words.search(text)) or visibility_words.search(text):
+            offenders.append(str(path.relative_to(root)))
     assert offenders == []
