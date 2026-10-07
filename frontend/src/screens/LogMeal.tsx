@@ -40,6 +40,7 @@ export function LogMeal({ onSaved }: Props) {
 	// 選填的餐費（P5 規格 §4.1）。有值時 POST /api/meals 會在同一個交易裡
 	// 建一筆 category=food、meal_id 指過來的支出。
 	const [cost, setCost] = useState("");
+	const [isPrivate, setIsPrivate] = useState(false);
 	// 選填的照片（介面改版 §5.4）。選的當下就檢查大小，不要等到存檔才發現。
 	const [photo, setPhoto] = useState<File | null>(null);
 	const [photoError, setPhotoError] = useState<string | null>(null);
@@ -113,6 +114,8 @@ export function LogMeal({ onSaved }: Props) {
 					// 送 "" 會被 Pydantic 擋成 422；送 null 雖然合法但語意繞了
 					// 一圈；不帶讓後端的 default=None 生效，最乾淨。
 					...(cost.trim() === "" ? {} : { cost: cost.trim() }),
+					// 不勾就不帶，後端預設 false＝給好友看（同 cost 的「留空不帶」）。
+					...(isPrivate ? { is_private: true } : {}),
 				}),
 			});
 			if (photo === null) return { photoFailed: false };
@@ -263,6 +266,15 @@ export function LogMeal({ onSaved }: Props) {
 						value={cost}
 						onChange={(event) => setCost(event.target.value)}
 					/>
+
+					<label className={styles.privateToggle}>
+						<input
+							type="checkbox"
+							checked={isPrivate}
+							onChange={(event) => setIsPrivate(event.target.checked)}
+						/>
+						只有我看得到（好友看不到這一餐）
+					</label>
 
 					<label htmlFor="meal-photo" className={styles.photoButton}>
 						<Camera aria-hidden="true" size={18} />

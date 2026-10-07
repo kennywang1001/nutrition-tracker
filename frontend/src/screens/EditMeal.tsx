@@ -26,6 +26,7 @@ type MealChanges = {
 	meal_type?: MealType;
 	cost?: string | null;
 	note?: string | null;
+	is_private?: boolean;
 };
 
 function initialCost(meal: Meal): string {
@@ -43,6 +44,7 @@ function mealChanges(
 		mealType: MealType | undefined;
 		cost: string | undefined;
 		note: string | undefined;
+		isPrivate: boolean | undefined;
 	},
 ): MealChanges | null {
 	const changes: MealChanges = {};
@@ -60,6 +62,9 @@ function mealChanges(
 		if (note !== (meal.note ?? "")) {
 			changes.note = note === "" ? null : note;
 		}
+	}
+	if (draft.isPrivate !== undefined && draft.isPrivate !== meal.is_private) {
+		changes.is_private = draft.isPrivate;
 	}
 	return Object.keys(changes).length === 0 ? null : changes;
 }
@@ -88,8 +93,9 @@ function MealDetailsForm({ meal }: { meal: Meal }) {
 	const [mealType, setMealType] = useState<MealType | undefined>(undefined);
 	const [cost, setCost] = useState<string | undefined>(undefined);
 	const [note, setNote] = useState<string | undefined>(undefined);
+	const [isPrivate, setIsPrivate] = useState<boolean | undefined>(undefined);
 
-	const changes = mealChanges(meal, { mealType, cost, note });
+	const changes = mealChanges(meal, { mealType, cost, note, isPrivate });
 
 	const save = useMutation({
 		mutationFn: (body: MealChanges) =>
@@ -109,6 +115,7 @@ function MealDetailsForm({ meal }: { meal: Meal }) {
 			setMealType(undefined);
 			setCost(undefined);
 			setNote(undefined);
+			setIsPrivate(undefined);
 			queryClient.invalidateQueries({ queryKey: queryKeys.meals });
 			// 餐費改了（改、補、拿掉）——報表與總覽的支出都要重取。
 			if ("cost" in body) {
@@ -167,6 +174,15 @@ function MealDetailsForm({ meal }: { meal: Meal }) {
 				value={note ?? meal.note ?? ""}
 				onChange={(event) => edit(setNote)(event.target.value)}
 			/>
+
+			<label className={styles.privateToggle}>
+				<input
+					type="checkbox"
+					checked={isPrivate ?? meal.is_private}
+					onChange={(event) => edit(setIsPrivate)(event.target.checked)}
+				/>
+				只有我看得到（好友看不到這一餐）
+			</label>
 
 			{save.isError && <p role="alert">{describeSaveError(save.error)}</p>}
 			{save.isSuccess && <p role="status">已儲存</p>}

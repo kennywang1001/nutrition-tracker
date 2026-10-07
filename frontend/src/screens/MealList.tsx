@@ -77,6 +77,7 @@ function MealCard({ meal }: { meal: Meal }) {
 			<div className={styles.cardHeader}>
 				<h3>
 					{formatTime(meal.eaten_at)} · {MEAL_TYPE_LABELS[meal.meal_type]}
+					{meal.is_private && <span className={styles.privateTag}>只有我</span>}
 				</h3>
 				{/* 名稱帶時間與餐別：一頁有好幾張卡片，每張都寫「編輯」的話
 				    螢幕閱讀器分不出是哪一餐。 */}

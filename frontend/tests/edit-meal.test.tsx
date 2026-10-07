@@ -34,6 +34,7 @@ const MEAL = {
 	note: null,
 	photo_path: null,
 	cost: "180.00",
+	is_private: false,
 	items: [ITEM],
 	kcal: "360.00",
 	protein_g: "13.00",
@@ -255,6 +256,24 @@ describe("編輯這一餐：讀取", () => {
 });
 
 describe("編輯這一餐：餐別、金額、備註", () => {
+	it("改成只有我看得到：PATCH 只送 is_private", async () => {
+		const fetchMock = mockApi(routes());
+		renderEditMeal();
+
+		const toggle = await screen.findByLabelText(
+			"只有我看得到（好友看不到這一餐）",
+		);
+		expect(toggle).not.toBeChecked();
+		await userEvent.click(toggle);
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		await waitFor(() =>
+			expect(bodyOf(fetchMock, "PATCH", "/api/meals/5")).toEqual({
+				is_private: true,
+			}),
+		);
+	});
+
 	it("只改餐別：PATCH 的 body 只有 meal_type，不失效花費", async () => {
 		const fetchMock = mockApi(routes());
 		const client = renderEditMeal();

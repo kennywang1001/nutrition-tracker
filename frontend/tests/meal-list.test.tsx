@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -145,5 +145,34 @@ describe("今日餐點清單", () => {
 			"/meals/11/edit",
 			"/meals/12/edit",
 		]);
+	});
+
+	it("私人的餐有「只有我」標籤，公開的沒有", async () => {
+		const item = { ...MEALS[0]?.items[0], id: 2, food_name: "青菜" };
+		mockApi({
+			"/api/meals": () =>
+				json([
+					{ ...MEALS[0], is_private: true },
+					{
+						...MEALS[1],
+						is_private: false,
+						items: [item],
+					},
+				]),
+		});
+
+		render(wrap(<MealList />));
+		await screen.findByText("滷肉飯");
+		await screen.findByText("青菜");
+
+		const tags = screen.getAllByText("只有我");
+		expect(tags).toHaveLength(1);
+		// 卡片是 h3 往上的 <li>（項目清單裡也有 <li>，不能從食物名稱往上找）。
+		const [privateHeading] = screen.getAllByRole("heading", { level: 3 });
+		const privateCard = privateHeading?.closest("li");
+		expect(privateCard).not.toBeNull();
+		expect(
+			within(privateCard as HTMLElement).getByText("只有我"),
+		).toBeInTheDocument();
 	});
 });

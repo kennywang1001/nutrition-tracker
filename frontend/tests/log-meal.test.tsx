@@ -679,4 +679,40 @@ describe("記一餐", () => {
 
 		expect(screen.getByTestId("quantity-unit")).toHaveTextContent("g");
 	});
+
+	it("勾「只有我看得到」就送 is_private: true", async () => {
+		const fetchMock = mockApi({
+			"/api/foods/frequent": () => json(FREQUENT_FOODS),
+			"/api/foods/recent": () => json([]),
+			"/api/foods/1/portions": () => json([]),
+			"/api/meals": () => json({ id: 99 }, 201),
+		});
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+
+		await userEvent.click(
+			screen.getByLabelText("只有我看得到（好友看不到這一餐）"),
+		);
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() =>
+			expect(mealBody(fetchMock)).toMatchObject({ is_private: true }),
+		);
+	});
+
+	it("不勾就不送 is_private（後端預設給好友看）", async () => {
+		const fetchMock = mockApi({
+			"/api/foods/frequent": () => json(FREQUENT_FOODS),
+			"/api/foods/recent": () => json([]),
+			"/api/foods/1/portions": () => json([]),
+			"/api/meals": () => json({ id: 99 }, 201),
+		});
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() => expect(mealBody(fetchMock)).not.toBeNull());
+		expect(mealBody(fetchMock)).not.toHaveProperty("is_private");
+	});
 });
