@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.invites import INVITE_LIFETIME, hash_invite_token, new_invite_token
 from app.models.expense import Expense, ExpenseCategory
 from app.models.food import BaseUnit, Food, FoodPortion, FoodRevision, RevisionStatus
+from app.models.friendship import Friendship, FriendshipStatus
 from app.models.invite import Invite
 from app.models.meal import Meal, MealItem, MealType
 from app.models.supplement import Supplement, SupplementIntake, SupplementPlan, TimeOfDay
@@ -409,3 +410,26 @@ async def create_invite(
     await db_session.commit()
     await db_session.refresh(invite)
     return invite, token
+
+
+async def create_friendship(
+    db_session: AsyncSession,
+    first: User,
+    second: User,
+    *,
+    status: FriendshipStatus = FriendshipStatus.ACCEPTED,
+    requested_by: User | None = None,
+) -> Friendship:
+    """一對朋友（預設已接受）。`requested_by` 省略時是 `first`。"""
+    user_a, user_b = sorted((first.id, second.id))
+    friendship = Friendship(
+        user_a=user_a,
+        user_b=user_b,
+        requested_by=(requested_by or first).id,
+        status=status,
+        accepted_at=datetime.now(UTC) if status is FriendshipStatus.ACCEPTED else None,
+    )
+    db_session.add(friendship)
+    await db_session.commit()
+    await db_session.refresh(friendship)
+    return friendship

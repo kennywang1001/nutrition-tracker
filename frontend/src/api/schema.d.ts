@@ -374,6 +374,95 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/friends/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Requests */
+        get: operations["list_requests_api_friends_requests_get"];
+        put?: never;
+        /** Send Request */
+        post: operations["send_request_api_friends_requests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/friends/requests/{request_id}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Accept Request */
+        post: operations["accept_request_api_friends_requests__request_id__accept_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/friends/requests/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Request
+         * @description 收到的人＝拒絕、送出的人＝收回：同一個動作，刪掉那一列。
+         */
+        delete: operations["delete_request_api_friends_requests__request_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/friends": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Friends */
+        get: operations["list_friends_api_friends_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/friends/{friend_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Unfriend */
+        delete: operations["unfriend_api_friends__friend_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/food-revisions": {
         parameters: {
             query?: never;
@@ -1362,6 +1451,50 @@ export interface components {
             /** Code */
             code: string;
         };
+        /** FriendRequestCreate */
+        FriendRequestCreate: {
+            /** Code */
+            code: string;
+        };
+        /** FriendRequestItem */
+        FriendRequestItem: {
+            /** Id */
+            id: number;
+            person: components["schemas"]["PersonResponse"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** FriendRequestResult */
+        FriendRequestResult: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "accepted";
+            person: components["schemas"]["PersonResponse"];
+        };
+        /** FriendRequestsResponse */
+        FriendRequestsResponse: {
+            /** Incoming */
+            incoming: components["schemas"]["FriendRequestItem"][];
+            /** Outgoing */
+            outgoing: components["schemas"]["FriendRequestItem"][];
+        };
+        /** FriendResponse */
+        FriendResponse: {
+            /** Id */
+            id: number;
+            /** Display Name */
+            display_name: string;
+            /**
+             * Since
+             * Format: date-time
+             */
+            since: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -1669,6 +1802,16 @@ export interface components {
             current_fat_g: string | null;
             /** Current Carb G */
             current_carb_g: string | null;
+        };
+        /**
+         * PersonResponse
+         * @description 好友看到的身分：只有 id 與名字，**沒有 email**（規格 §2）。
+         */
+        PersonResponse: {
+            /** Id */
+            id: number;
+            /** Display Name */
+            display_name: string;
         };
         /** PortionCreateRequest */
         PortionCreateRequest: {
@@ -2835,6 +2978,168 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FriendCodeResponse"];
+                };
+            };
+        };
+    };
+    list_requests_api_friends_requests_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FriendRequestsResponse"];
+                };
+            };
+        };
+    };
+    send_request_api_friends_requests_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FriendRequestCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FriendRequestResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accept_request_api_friends_requests__request_id__accept_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FriendResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_request_api_friends_requests__request_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_friends_api_friends_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FriendResponse"][];
+                };
+            };
+        };
+    };
+    unfriend_api_friends__friend_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                friend_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
