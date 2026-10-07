@@ -3,6 +3,7 @@ import { type FormEvent, useState } from "react";
 import { useNavigate } from "react-router";
 import { apiFetch } from "../api/client";
 import { ApiError, describeFieldErrors } from "../api/errors";
+import { useMe } from "../api/me";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
 import { AiEstimatePanel } from "../components/AiEstimatePanel";
@@ -50,9 +51,14 @@ const MAX_PORTION_GRAMS = 10000;
 
 type NutritionBasis = "per100" | "perServing";
 
-/** 新增食物（規格 §5.2）。**私人食物**——`POST /api/foods` 建立的一律是
- *  `owner_id = user.id`，立刻生效，不用送審（送審是 §5.3 對「既有的全域
- *  食物」提議修改，Task 5 的事）。
+/** 新增食物（規格 §5.2）。預設是**私人食物**——`POST /api/foods` 不帶
+ *  `is_global` 時建立的是 `owner_id = user.id`，立刻生效，不用送審（送審是
+ *  §5.3 對「既有的全域食物」提議修改，Task 5 的事）。
+ *
+ *  管理員多一個「公開到共用食物庫」的勾選（最後幾件規格 §2），預設不勾；
+ *  勾了才送 `is_global: true`，不勾就不送這個欄位。一般使用者看不到它——
+ *  藏起來只是可用性，授權在後端（`is_global` 只有管理員能用）。AI 面板存出
+ *  的食物不受這個勾選影響（照舊私人）。
  *
  *  成功後直接導到新食物的詳情頁（`/foods/:id`，Task 5 才存在——導過去
  *  現在會是空白畫面，那是刻意的，不放佔位畫面）。用 `useNavigate` 自己做，
@@ -67,6 +73,8 @@ export function NewFood() {
 	const [name, setName] = useState("");
 	const [brand, setBrand] = useState("");
 	const [baseUnit, setBaseUnit] = useState<BaseUnit>("g");
+	const isAdmin = useMe().data?.role === "admin";
+	const [isGlobal, setIsGlobal] = useState(false);
 	const [values, setValues] = useState<Record<NumericField, string>>({
 		kcal: "",
 		protein_g: "",
@@ -127,6 +135,9 @@ export function NewFood() {
 						fat_g: per100.fat_g,
 						carb_g: per100.carb_g,
 					},
+					// 只有管理員勾了才帶；勾選在載入角色之前不存在，所以一般使用者
+					// 的 isGlobal 永遠是 false。
+					...(isAdmin && isGlobal ? { is_global: true } : {}),
 					...(hasPortion
 						? {
 								default_portion: {
@@ -335,6 +346,17 @@ export function NewFood() {
 						{per100.protein_g ?? "—"} g、脂肪 {per100.fat_g ?? "—"} g、碳水{" "}
 						{per100.carb_g ?? "—"} g
 					</p>
+				)}
+
+				{isAdmin && (
+					<label>
+						<input
+							type="checkbox"
+							checked={isGlobal}
+							onChange={(event) => setIsGlobal(event.target.checked)}
+						/>
+						公開到共用食物庫（所有人都看得到）
+					</label>
 				)}
 
 				{clientError !== null && <p role="alert">{clientError}</p>}

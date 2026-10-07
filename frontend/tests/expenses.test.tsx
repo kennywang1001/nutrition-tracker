@@ -416,6 +416,33 @@ describe("記帳 /expenses", () => {
 		).not.toBeInTheDocument();
 	});
 
+	it("確認框打開時焦點在「取消」；取消後回到這一筆的「刪除」", async () => {
+		// 兩筆：焦點要回到**打開它的那一筆**的「刪除」，不是任何一顆「刪除」。
+		mockApi([
+			{
+				method: "GET",
+				path: "/api/expenses/summary",
+				handler: () => json(EMPTY_SUMMARY),
+			},
+			{
+				method: "GET",
+				path: "/api/expenses",
+				handler: () => json([LUNCH, TRAIN]),
+			},
+		]);
+
+		render(wrap(<Expenses />));
+		const row = await screen.findByTestId("expense-2");
+
+		await userEvent.click(within(row).getByRole("button", { name: "刪除" }));
+		const dialog = within(row).getByRole("alertdialog", { name: "確認刪除" });
+		const cancel = within(dialog).getByRole("button", { name: "取消" });
+		expect(cancel).toHaveFocus();
+		await userEvent.click(cancel);
+
+		expect(within(row).getByRole("button", { name: "刪除" })).toHaveFocus();
+	});
+
 	it("月報表顯示總額與各分類佔比", async () => {
 		mockApi([
 			{

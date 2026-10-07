@@ -16,6 +16,7 @@ import { CategoryBar } from "../components/CategoryBar";
 import { CategoryDonut } from "../components/CategoryDonut";
 import { CategoryIcon } from "../components/IconBadge";
 import { formatMoney, isPositiveAmount } from "../lib/decimal";
+import { useConfirmFocus } from "../lib/use-confirm-focus";
 import styles from "./Expenses.module.css";
 
 type RowProps = {
@@ -29,6 +30,8 @@ type RowProps = {
  *  `window.confirm` 在 jsdom 裡是未實作的（會需要 stub），而且不能用
  *  螢幕閱讀器讀到的方式表達「這是一個需要決定的狀態」。這裡用一個
  *  `useState` 開關 + `role="alertdialog"`，測試與無障礙都直接可用。
+ *  焦點同編輯畫面的確認框（`useConfirmFocus`）：打開時到「取消」，按取消
+ *  收起之後回到這一筆的「刪除」；刪成功收起時不搶焦點。
  *
  *  **不能改日期。** `spent_at` 不在可改欄位裡——改日期需要一個
  *  `<input type="datetime-local">`，而它產出的是沒有時區 offset 的字串，
@@ -38,6 +41,7 @@ type RowProps = {
 function ExpenseRow({ expense, onChanged }: RowProps) {
 	const [editing, setEditing] = useState(false);
 	const [confirmingDelete, setConfirmingDelete] = useState(false);
+	const confirmFocus = useConfirmFocus(confirmingDelete);
 	const [draftAmount, setDraftAmount] = useState(expense.amount);
 	const [rowError, setRowError] = useState<string | null>(null);
 
@@ -157,8 +161,10 @@ function ExpenseRow({ expense, onChanged }: RowProps) {
 						確定刪除
 					</button>
 					<button
+						ref={confirmFocus.cancelRef}
 						type="button"
 						onClick={() => {
+							confirmFocus.cancelled();
 							setConfirmingDelete(false);
 							setRowError(null);
 						}}
@@ -168,6 +174,7 @@ function ExpenseRow({ expense, onChanged }: RowProps) {
 				</div>
 			) : (
 				<button
+					ref={confirmFocus.triggerRef}
 					type="button"
 					className={styles.danger}
 					onClick={() => {

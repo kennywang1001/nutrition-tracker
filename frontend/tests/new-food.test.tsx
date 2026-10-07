@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { MemoryRouter, Route, Routes, useParams } from "react-router";
@@ -394,7 +394,8 @@ describe("新增食物 /foods/new", () => {
 		expect(await screen.findByRole("alert")).toHaveTextContent(
 			"份量名稱與重量要一起填",
 		);
-		expect(fetchMock).not.toHaveBeenCalled();
+		// 頁面會打 GET /api/me 看角色（管理員的勾選），所以只看有沒有建立的 POST。
+		expect(postBody(fetchMock)).toBeNull();
 	});
 
 	it("沒填每份重量時「每一份」不能選；清掉重量會切回每 100", async () => {
@@ -435,7 +436,8 @@ describe("新增食物 /foods/new", () => {
 		expect(await screen.findByRole("alert")).toHaveTextContent(
 			"換算後超過上限，請確認每份重量",
 		);
-		expect(fetchMock).not.toHaveBeenCalled();
+		// 頁面會打 GET /api/me 看角色（管理員的勾選），所以只看有沒有建立的 POST。
+		expect(postBody(fetchMock)).toBeNull();
 	});
 
 	it("每一份模式下清掉重量再重打：回到每一份，送出的是照新重量換算的值", async () => {
@@ -476,7 +478,8 @@ describe("新增食物 /foods/new", () => {
 		await userEvent.click(screen.getByRole("button", { name: "建立食物" }));
 
 		expect(await screen.findByRole("alert")).toHaveTextContent(message);
-		expect(fetchMock).not.toHaveBeenCalled();
+		// 頁面會打 GET /api/me 看角色（管理員的勾選），所以只看有沒有建立的 POST。
+		expect(postBody(fetchMock)).toBeNull();
 	});
 
 	it("每份重量前後有空白也算合法，「每一份」可以選", async () => {
@@ -500,5 +503,77 @@ describe("新增食物 /foods/new", () => {
 		]) {
 			expect(screen.getByLabelText(label)).toBeInTheDocument();
 		}
+	});
+});
+
+describe("新增食物：管理員公開到共用食物庫", () => {
+	const GLOBAL_LABEL = "公開到共用食物庫（所有人都看得到）";
+
+	function me(role: "user" | "admin") {
+		return {
+			id: 1,
+			email: "kenny@example.com",
+			display_name: "Kenny",
+			role,
+			timezone: "Asia/Taipei",
+		};
+	}
+
+	function mockAs(role: "user" | "admin") {
+		return mockApi([
+			{ method: "GET", path: "/api/me", handler: () => json(me(role)) },
+			{ method: "POST", path: "/api/foods", handler: () => json(CREATED, 201) },
+		]);
+	}
+
+	async function fillAndSubmit() {
+		await userEvent.type(screen.getByLabelText("名稱"), "滷肉飯");
+		await fillNutrition();
+		await userEvent.click(screen.getByRole("button", { name: "建立食物" }));
+		expect(await screen.findByText("food-detail:42")).toBeInTheDocument();
+	}
+
+	it("管理員看得到勾選，預設不勾；勾了送 is_global: true", async () => {
+		const fetchMock = mockAs("admin");
+		render(wrap(<NewFood />));
+
+		const checkbox = await screen.findByRole("checkbox", {
+			name: GLOBAL_LABEL,
+		});
+		expect(checkbox).not.toBeChecked();
+		await userEvent.click(checkbox);
+		await fillAndSubmit();
+
+		expect(postBody(fetchMock)).toMatchObject({ is_global: true });
+	});
+
+	it("管理員不勾：body 不帶 is_global（照舊是私人食物）", async () => {
+		const fetchMock = mockAs("admin");
+		render(wrap(<NewFood />));
+
+		await screen.findByRole("checkbox", { name: GLOBAL_LABEL });
+		await fillAndSubmit();
+
+		expect(postBody(fetchMock)).not.toHaveProperty("is_global");
+	});
+
+	it("一般使用者：useMe 載入完之後也沒有勾選，body 不帶 is_global", async () => {
+		const fetchMock = mockAs("user");
+		const client = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		render(wrap(<NewFood />, client));
+
+		// 先證明 /api/me 已經回來、角色是 user——不然「沒有勾選」只是因為還在載入。
+		await waitFor(() =>
+			expect(client.getQueryData(queryKeys.me)).toMatchObject({ role: "user" }),
+		);
+		expect(
+			screen.queryByRole("checkbox", { name: GLOBAL_LABEL }),
+		).not.toBeInTheDocument();
+		expect(screen.queryByText(GLOBAL_LABEL)).not.toBeInTheDocument();
+
+		await fillAndSubmit();
+		expect(postBody(fetchMock)).not.toHaveProperty("is_global");
 	});
 });
