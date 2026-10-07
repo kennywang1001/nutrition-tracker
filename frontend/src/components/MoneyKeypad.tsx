@@ -1,5 +1,5 @@
 import { Check, Delete } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { type MouseEvent, useEffect, useRef } from "react";
 import { applyKey, type KeypadKey } from "../lib/keypad";
 import styles from "./MoneyKeypad.module.css";
 
@@ -29,13 +29,27 @@ function keyFromEvent(key: string): KeypadKey | "submit" | null {
 }
 
 /** 焦點在可以打字的地方（備註欄）時，按鍵屬於那個欄位，不是金額。 */
-function isTextEntry(target: EventTarget | null): boolean {
+function isTextEntry(target: EventTarget | null): target is HTMLElement {
 	return (
 		target instanceof HTMLInputElement ||
 		target instanceof HTMLTextAreaElement ||
 		target instanceof HTMLSelectElement ||
 		(target instanceof HTMLElement && target.isContentEditable)
 	);
+}
+
+/** 滑鼠／觸控按下鍵盤上的按鍵時不搶焦點：焦點留在原處（通常是 body），
+ *  實體鍵盤的 Enter 才會是送出，而不是「再按一次剛剛點的那顆」。只擋
+ *  mousedown 的預設動作（移動焦點），click 照常觸發——點、觸控都照樣按得到。
+ *  Tab 走到按鍵上仍然會有焦點，Enter／空白鍵就按那顆，跟任何按鈕一樣。
+ *
+ *  例外是焦點原本在文字欄（備註）：擋掉預設動作會讓焦點一直留在備註，手機
+ *  的螢幕鍵盤就一直開著蓋住數字鍵盤，實體鍵盤打的數字也繼續進備註。所以
+ *  這時把備註 blur 掉——焦點回到 body，跟其他情況一樣。 */
+function keepFocus(event: MouseEvent<HTMLButtonElement>) {
+	event.preventDefault();
+	const active = document.activeElement;
+	if (isTextEntry(active)) active.blur();
 }
 
 /** 記帳的數字鍵盤（規格 §5.1）。**規則全在 `lib/keypad.ts` 的 `applyKey`**，
@@ -48,38 +62,39 @@ function isTextEntry(target: EventTarget | null): boolean {
 export function MoneyKeypad({ value, onChange, submitDisabled }: Props) {
 	const press = (key: KeypadKey) => onChange(applyKey(value, key));
 	const submitRef = useRef<HTMLButtonElement>(null);
-	const keypadRef = useRef<HTMLDivElement>(null);
 
 	// 實體鍵盤（記帳與離線規格 §2 (c)）：桌機打字直接進金額。掛在 window，
 	// 焦點在 body 或任何一顆按鈕上都收得到。
 	//
 	// - 焦點在文字欄（備註）時不攔：那是在打備註。
 	// - 有 Ctrl／Meta／Alt 的組合鍵不攔：那是瀏覽器或系統的快捷鍵（Ctrl+1 換分頁）。
-	// - 處理了的鍵一律 preventDefault：滑鼠點過「5」之後焦點留在那顆按鈕上，
-	//   Enter 的預設動作是再按一次「5」，不是送出。
-	// - Enter 等於按 ✓：點那顆 submit 按鈕，跟 ✓ 受同一個 disabled 限制。
+	// - 輸入法組字中（`isComposing`）不攔：那些按鍵屬於輸入法。
+	// - Enter：焦點在**任何**按鈕或連結上（Tab 走到「2」、「關閉」、分類、✓）
+	//   時屬於那個控制項——瀏覽器的原生行為，Tab 到「2」按 Enter 就是按「2」。
+	//   焦點不在控制項上（body）時 Enter 等於按 ✓：點那顆 submit 按鈕，跟 ✓
+	//   受同一個 disabled 限制。滑鼠／觸控點鍵盤上的按鍵**不會**把焦點留在
+	//   按鍵上（見 `keepFocus`），所以點過數字之後按 Enter 是送出。
+	// - 按住 Enter 的自動重複（`repeat`）不算：只有第一下送出。
+	// - 處理了的鍵一律 preventDefault。
 	useEffect(() => {
 		function onKeyDown(event: KeyboardEvent) {
+			if (event.isComposing) return;
 			if (event.ctrlKey || event.metaKey || event.altKey) return;
 			if (isTextEntry(event.target)) return;
 			const key = keyFromEvent(event.key);
 			if (key === null) return;
-			// 焦點在鍵盤**以外**的按鈕或連結（「關閉」、分類）時，Enter 屬於那個
-			// 控制項——瀏覽器的標準行為。鍵盤上的按鈕例外：點過「5」之後按 Enter
-			// 是送出，不是再按一次「5」。
-			if (
-				key === "submit" &&
-				(event.target instanceof HTMLButtonElement ||
-					event.target instanceof HTMLAnchorElement) &&
-				!keypadRef.current?.contains(event.target)
-			) {
+			if (key === "submit") {
+				if (
+					event.target instanceof HTMLButtonElement ||
+					event.target instanceof HTMLAnchorElement
+				) {
+					return;
+				}
+				event.preventDefault();
+				if (!event.repeat && !submitDisabled) submitRef.current?.click();
 				return;
 			}
 			event.preventDefault();
-			if (key === "submit") {
-				if (!submitDisabled) submitRef.current?.click();
-				return;
-			}
 			onChange(applyKey(value, key));
 		}
 		window.addEventListener("keydown", onKeyDown);
@@ -88,17 +103,13 @@ export function MoneyKeypad({ value, onChange, submitDisabled }: Props) {
 
 	return (
 		// biome-ignore lint/a11y/useSemanticElements: role=group 與 fieldset 語意相同；fieldset 要另外重設 border、padding、min-inline-size，換過去沒有無障礙上的好處
-		<div
-			ref={keypadRef}
-			className={styles.keypad}
-			role="group"
-			aria-label="數字鍵盤"
-		>
+		<div className={styles.keypad} role="group" aria-label="數字鍵盤">
 			{DIGIT_ROWS.flat().map((digit) => (
 				<button
 					key={digit}
 					type="button"
 					className={styles.key}
+					onMouseDown={keepFocus}
 					onClick={() => press(digit)}
 				>
 					{digit}
@@ -108,6 +119,7 @@ export function MoneyKeypad({ value, onChange, submitDisabled }: Props) {
 				type="button"
 				aria-label="小數點"
 				className={styles.key}
+				onMouseDown={keepFocus}
 				onClick={() => press(".")}
 			>
 				.
@@ -115,6 +127,7 @@ export function MoneyKeypad({ value, onChange, submitDisabled }: Props) {
 			<button
 				type="button"
 				className={`${styles.key} ${styles.zero}`}
+				onMouseDown={keepFocus}
 				onClick={() => press("0")}
 			>
 				0
@@ -123,6 +136,7 @@ export function MoneyKeypad({ value, onChange, submitDisabled }: Props) {
 				type="button"
 				aria-label="刪除"
 				className={`${styles.key} ${styles.backspace}`}
+				onMouseDown={keepFocus}
 				onClick={() => press("backspace")}
 			>
 				<Delete aria-hidden="true" />
@@ -132,6 +146,7 @@ export function MoneyKeypad({ value, onChange, submitDisabled }: Props) {
 				type="submit"
 				aria-label="記一筆"
 				className={`${styles.key} ${styles.submit}`}
+				onMouseDown={keepFocus}
 				disabled={submitDisabled}
 			>
 				<Check aria-hidden="true" />

@@ -275,7 +275,9 @@ describe("記帳 /expenses/new", () => {
 	});
 
 	it("實體鍵盤：滑鼠點過數字鍵之後按 Enter 是送出，不是再按一次那個數字", async () => {
-		// 點過「5」之後焦點留在那顆按鈕上，Enter 的預設動作是再點一次它。
+		// 焦點若留在「5」上，Enter 的預設動作是再點一次它。鍵盤上的按鍵在
+		// mousedown 擋掉預設動作，點了也不拿焦點（userEvent.click 會送
+		// mousedown，jsdom 下這條規則一樣成立）。
 		const fetchMock = mockApi([
 			{
 				method: "POST",
@@ -286,6 +288,7 @@ describe("記帳 /expenses/new", () => {
 		renderScreen();
 
 		await pressKeys("5");
+		expect(screen.getByRole("button", { name: "5" })).not.toHaveFocus();
 		await userEvent.keyboard("{Enter}");
 
 		await waitFor(() => expect(postBody(fetchMock)?.amount).toBe("5"));
@@ -303,6 +306,55 @@ describe("記帳 /expenses/new", () => {
 		await waitFor(() => expect(onDone).toHaveBeenCalled());
 		await new Promise((resolve) => setTimeout(resolve, 50));
 		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("實體鍵盤：Tab 到數字鍵「2」按 Enter 是按「2」，不是送出", async () => {
+		// 鍵盤使用者用 Tab 走到一顆數字鍵，Enter 就是按它——跟任何按鈕一樣。
+		const fetchMock = mockApi([]);
+		renderScreen();
+
+		await userEvent.keyboard("1");
+		const two = screen.getByRole("button", { name: "2" });
+		for (let i = 0; i < 30 && document.activeElement !== two; i++) {
+			await userEvent.tab();
+		}
+		expect(two).toHaveFocus();
+		await userEvent.keyboard("{Enter}");
+
+		expect(screen.getByLabelText("金額")).toHaveTextContent(/^\$12$/);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("實體鍵盤：按住 Enter 的自動重複不會送出", async () => {
+		// 按住 Enter：第一下送出，之後的 keydown 都帶 repeat。送出中 ✓ 已經停用，
+		// 所以這裡直接測「只有 repeat 的那一下」——它本身就不該送出。
+		const fetchMock = mockApi([
+			{
+				method: "POST",
+				path: "/api/expenses",
+				handler: () => json(SAVED, 201),
+			},
+		]);
+		renderScreen();
+
+		await userEvent.keyboard("7");
+		fireEvent.keyDown(window, { key: "Enter", repeat: true });
+
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(fetchMock).not.toHaveBeenCalled();
+		// 負向斷言要先證明它有機會看到正向結果：不帶 repeat 的 Enter 會送出。
+		fireEvent.keyDown(window, { key: "Enter" });
+		await waitFor(() => expect(postBody(fetchMock)?.amount).toBe("7"));
+	});
+
+	it("實體鍵盤：輸入法組字中的按鍵不輸入", async () => {
+		renderScreen();
+
+		fireEvent.keyDown(window, { key: "1", isComposing: true });
+		fireEvent.keyDown(window, { key: "2" });
+
+		expect(screen.getByLabelText("金額")).toHaveTextContent(/^\$2$/);
 	});
 
 	it("實體鍵盤：金額是空的時 Enter 不送出", async () => {
@@ -326,12 +378,35 @@ describe("記帳 /expenses/new", () => {
 		expect(screen.getByLabelText("金額")).toHaveTextContent(/^\$0$/);
 	});
 
+	it("在備註欄打字之後點數字鍵，焦點離開備註，之後的數字進金額", async () => {
+		// 鍵盤上的按鍵按下時不拿焦點；但如果焦點原本在備註欄，就讓它離開——
+		// 不然手機的螢幕鍵盤一直開著蓋住數字鍵盤，實體鍵盤打的數字也還進備註。
+		renderScreen();
+
+		await userEvent.click(screen.getByLabelText("備註"));
+		await userEvent.keyboard("午餐");
+		await pressKeys("5");
+		await userEvent.keyboard("6");
+
+		expect(screen.getByLabelText("備註")).not.toHaveFocus();
+		expect(screen.getByLabelText("備註")).toHaveValue("午餐");
+		expect(screen.getByLabelText("金額")).toHaveTextContent(/^\$56$/);
+	});
+
 	it("實體鍵盤：Ctrl＋數字不輸入（其他鍵照常）", async () => {
 		renderScreen();
 
 		// 後面接一個普通的 2：證明監聽器確實在，Ctrl+1 沒進來不是因為整個沒接上
 		// （第 41 種：負向斷言要先證明它有機會看到正向結果）。
 		await userEvent.keyboard("{Control>}1{/Control}2");
+
+		expect(screen.getByLabelText("金額")).toHaveTextContent(/^\$2$/);
+	});
+
+	it("實體鍵盤：Alt＋數字、Meta＋數字也不輸入", async () => {
+		renderScreen();
+
+		await userEvent.keyboard("{Alt>}1{/Alt}{Meta>}1{/Meta}2");
 
 		expect(screen.getByLabelText("金額")).toHaveTextContent(/^\$2$/);
 	});
