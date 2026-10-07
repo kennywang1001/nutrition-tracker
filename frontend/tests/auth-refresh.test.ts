@@ -128,4 +128,37 @@ describe("single-flight refresh", () => {
 		expect(await refreshTokens()).toBe(true);
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
+
+	it.each([
+		[429, "TOO_MANY_SESSION_REQUESTS"],
+		[500, "INTERNAL_ERROR"],
+		[502, "BAD_GATEWAY"],
+	])("後端回 %i：保留登入（票沒有被判定無效）", async (status, code) => {
+		// 安全補強規格 §4.1：限速的 429、部署重啟的 502 都不代表票無效。
+		// 以前任何非成功都會登出——NAS 一重啟，正在換票的人全被踢出去。
+		setTokens({ access_token: "old", refresh_token: "r1" });
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(
+				JSON.stringify({ error: { code, message: "x", details: {} } }),
+				{ status, headers: { "content-type": "application/json" } },
+			),
+		);
+
+		expect(await refreshTokens()).toBe(false);
+
+		const { getRefreshToken } = await import("../src/auth/store");
+		expect(getRefreshToken()).toBe("r1");
+	});
+
+	it("網路斷線：保留登入", async () => {
+		setTokens({ access_token: "old", refresh_token: "r1" });
+		vi.spyOn(globalThis, "fetch").mockRejectedValue(
+			new TypeError("Failed to fetch"),
+		);
+
+		expect(await refreshTokens()).toBe(false);
+
+		const { getRefreshToken } = await import("../src/auth/store");
+		expect(getRefreshToken()).toBe("r1");
+	});
 });

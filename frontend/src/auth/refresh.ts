@@ -17,17 +17,29 @@ async function performRefresh(): Promise<boolean> {
 	const refreshToken = getRefreshToken();
 	if (refreshToken === null) return false;
 
-	const response = await fetch("/api/auth/refresh", {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ refresh_token: refreshToken }),
-	});
+	let response: Response;
+	try {
+		response = await fetch("/api/auth/refresh", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ refresh_token: refreshToken }),
+		});
+	} catch {
+		// 網路斷線：連不上不代表票無效。保留登入，這次請求就是失敗。
+		return false;
+	}
 
-	if (!response.ok) {
+	if (response.status === 401) {
 		// INVALID_TOKEN 可能是「票過期了」，也可能是「重用偵測撤銷了整條鏈」。
 		// 前端分不出來，而處理一律相同（規格 §6.5）：清 token、清 query 快取。
 		clearTokens();
 		clearQueryCacheOnForcedLogout(queryClient);
+		return false;
+	}
+
+	if (!response.ok) {
+		// 429（限速）、5xx（部署重啟、代理的錯誤頁）：票沒有被判定無效，
+		// **保留登入**（安全補強規格 §4.1）。下一次請求會再試換票。
 		return false;
 	}
 
@@ -39,7 +51,7 @@ async function performRefresh(): Promise<boolean> {
 	return true;
 }
 
-/** 換一組新的 token。成功回 `true`；失敗（沒有票、或後端拒絕）回 `false` 並清空本地狀態。
+/** 換一組新的 token。成功回 `true`；失敗回 `false`；只有 401 才清空本地狀態。
  *
  *  **同一時間只會有一個請求在飛**，兩層保證：
  *
