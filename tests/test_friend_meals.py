@@ -1,3 +1,4 @@
+import base64
 import re
 from datetime import datetime
 from decimal import Decimal
@@ -300,6 +301,29 @@ async def test_a_garbled_cursor_is_422(client, db_session, pals):
     response = await client.get(
         "/api/friends/feed", headers=auth(bob), params={"before": "not-a-cursor"}
     )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "INVALID_CURSOR"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        # json.loads 收 Infinity；int(inf) 是 OverflowError，不是 ValueError。
+        '{"t":"2026-10-06T04:00:00+00:00","id":Infinity}',
+        # 超過 bigint：資料庫那一層才會炸。
+        f'{{"t":"2026-10-06T04:00:00+00:00","id":{2**63}}}',
+        '{"t":"2026-10-06T04:00:00+00:00","id":0}',
+        # 沒有時區：跟 timestamptz 比會炸。
+        '{"t":"2026-10-06T04:00:00","id":1}',
+    ],
+    ids=["infinity", "huge-id", "zero-id", "naive-time"],
+)
+async def test_a_crafted_cursor_is_422(client, db_session, pals, raw):
+    _, bob, _, _ = pals
+    cursor = base64.urlsafe_b64encode(raw.encode()).decode()
+
+    response = await client.get("/api/friends/feed", headers=auth(bob), params={"before": cursor})
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "INVALID_CURSOR"

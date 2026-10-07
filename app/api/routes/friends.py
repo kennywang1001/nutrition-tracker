@@ -11,6 +11,7 @@ import binascii
 import json
 from collections import defaultdict
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, Query, Response, status
@@ -84,21 +85,36 @@ async def _load_pair(db: AsyncSession, user_a: int, user_b: int) -> Friendship |
     return row
 
 
-async def _accept(db: AsyncSession, friendship_id: int, receiver_id: int) -> bool:
+@dataclass(frozen=True)
+class _Accepted:
+    since: datetime
+    other_id: int
+
+
+async def _accept(db: AsyncSession, friendship_id: int, receiver_id: int) -> _Accepted | None:
     """把一個**別人送給 `receiver_id`** 的邀請改成好友。條件寫在 UPDATE 裡：
-    已經是好友、不是收件人、不存在 → 0 列（同 `redeem_invite` 的寫法）。"""
-    accepted = await db.scalar(
-        update(Friendship)
-        .where(
-            Friendship.id == friendship_id,
-            Friendship.status == FriendshipStatus.PENDING,
-            Friendship.requested_by != receiver_id,
-            involves(receiver_id),
+    已經是好友、不是收件人、不存在 → 0 列 → None（同 `redeem_invite` 的寫法）。
+
+    回應要用的值由 RETURNING 一起帶回：commit 之後再 join 回那一列，對方可能
+    已經解除或刪了帳號，查不到就是 500。"""
+    row = (
+        await db.execute(
+            update(Friendship)
+            .where(
+                Friendship.id == friendship_id,
+                Friendship.status == FriendshipStatus.PENDING,
+                Friendship.requested_by != receiver_id,
+                involves(receiver_id),
+            )
+            .values(status=FriendshipStatus.ACCEPTED, accepted_at=func.now())
+            .returning(Friendship.accepted_at, Friendship.user_a, Friendship.user_b)
         )
-        .values(status=FriendshipStatus.ACCEPTED, accepted_at=func.now())
-        .returning(Friendship.id)
-    )
-    return accepted is not None
+    ).one_or_none()
+    if row is None:
+        return None
+    accepted_at, user_a, user_b = row
+    assert accepted_at is not None
+    return _Accepted(since=accepted_at, other_id=user_b if user_a == receiver_id else user_a)
 
 
 @router.post("/requests", response_model=FriendRequestResult)
@@ -121,35 +137,60 @@ async def send_request(
     user_a, user_b = ordered_pair(user_id, target.id)
     existing = await _load_pair(db, user_a, user_b)
     if existing is None:
-        db.add(
-            Friendship(
-                user_a=user_a,
-                user_b=user_b,
-                requested_by=user_id,
-                status=FriendshipStatus.PENDING,
-            )
-        )
-        try:
-            await db.commit()
-        except IntegrityError:
-            # 對方剛好同時送了邀請給我：唯一約束擋住這一列，改走下面的「既有那一列」。
-            await db.rollback()
-            existing = await _load_pair(db, user_a, user_b)
-            if existing is None:
-                raise
-        else:
+        existing = await _insert_request(db, user_a, user_b, user_id)
+        if existing is None:
             response.status_code = status.HTTP_201_CREATED
             return FriendRequestResult(status="pending", person=person)
 
+    _refuse_if_settled(existing, user_id)
+    # 對方已經邀過我：直接成為好友。
+    if await _accept(db, existing.id, user_id) is not None:
+        await db.commit()
+        return FriendRequestResult(status="accepted", person=person)
+
+    # 接受落空：對方剛好收回了邀請。重看那一對——沒有了就照新邀請建立；
+    # 不能直接說「已經是好友」。
+    await db.rollback()
+    existing = await _load_pair(db, user_a, user_b)
+    if existing is None:
+        existing = await _insert_request(db, user_a, user_b, user_id)
+        if existing is None:
+            response.status_code = status.HTTP_201_CREATED
+            return FriendRequestResult(status="pending", person=person)
+    _refuse_if_settled(existing, user_id)
+    # 對方收回之後又立刻重送：兩邊來回搶，請使用者再按一次。
+    raise ConflictError("FRIEND_REQUEST_CHANGED", "對方剛好也在操作，請再試一次")
+
+
+async def _insert_request(
+    db: AsyncSession, user_a: int, user_b: int, requested_by: int
+) -> Friendship | None:
+    """新增一筆邀請並 commit → None。對方剛好同時送了邀請給我：唯一約束擋住
+    這一列 → 回那一列（改走「既有那一列」）。"""
+    db.add(
+        Friendship(
+            user_a=user_a,
+            user_b=user_b,
+            requested_by=requested_by,
+            status=FriendshipStatus.PENDING,
+        )
+    )
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        existing = await _load_pair(db, user_a, user_b)
+        if existing is None:
+            raise
+        return existing
+    return None
+
+
+def _refuse_if_settled(existing: Friendship, user_id: int) -> None:
     if existing.status is FriendshipStatus.ACCEPTED:
         raise ConflictError("ALREADY_FRIENDS", "你們已經是好友了")
     if existing.requested_by == user_id:
         raise ConflictError("REQUEST_PENDING", "已經送出邀請，等對方回應")
-    # 對方已經邀過我：直接成為好友。
-    if not await _accept(db, existing.id, user_id):
-        raise ConflictError("ALREADY_FRIENDS", "你們已經是好友了")
-    await db.commit()
-    return FriendRequestResult(status="accepted", person=person)
 
 
 @router.get("/requests", response_model=FriendRequestsResponse)
@@ -181,21 +222,16 @@ async def accept_request(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> FriendResponse:
-    if not await _accept(db, request_id, user.id):
+    accepted = await _accept(db, request_id, user.id)
+    if accepted is None:
         raise NotFoundError("FRIEND_REQUEST_NOT_FOUND", "找不到這個邀請")
     await db.commit()
-    row = (
-        await db.execute(
-            select(Friendship, User)
-            .join(User, User.id == other_side(user.id))
-            .where(Friendship.id == request_id)
-        )
-    ).one()
-    friendship, other = row
-    assert friendship.accepted_at is not None
-    return FriendResponse(
-        id=other.id, display_name=other.display_name, since=friendship.accepted_at
-    )
+    # 不 join 回 friendships：commit 之後對方可能已經解除（那一列沒了）。
+    # 對方的帳號剛好刪掉 → 跟邀請不存在同一個 404。
+    other = await db.get(User, accepted.other_id)
+    if other is None:
+        raise NotFoundError("FRIEND_REQUEST_NOT_FOUND", "找不到這個邀請")
+    return FriendResponse(id=other.id, display_name=other.display_name, since=accepted.since)
 
 
 @router.delete("/requests/{request_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -265,12 +301,22 @@ def _encode_cursor(meal: Meal) -> str:
     return base64.urlsafe_b64encode(raw).decode()
 
 
+_MAX_BIGINT = 2**63 - 1
+
+
 def _decode_cursor(cursor: str) -> tuple[datetime, int]:
+    """分頁位置是用戶端送回來的：任何看不懂的形狀都是 422，不能變成 500。
+    `json.loads` 收 `Infinity`（`int()` 會 OverflowError）、id 可能超出 bigint、
+    時間可能沒有時區（跟 timestamptz 比會被當成別的時區）。"""
+    invalid = UnprocessableEntityError("INVALID_CURSOR", "分頁位置看不懂，請重新整理")
     try:
         data = json.loads(base64.urlsafe_b64decode(cursor.encode()))
-        return datetime.fromisoformat(data["t"]), int(data["id"])
-    except (binascii.Error, ValueError, KeyError, TypeError) as exc:
-        raise UnprocessableEntityError("INVALID_CURSOR", "分頁位置看不懂，請重新整理") from exc
+        eaten_at, meal_id = datetime.fromisoformat(data["t"]), int(data["id"])
+    except (binascii.Error, ValueError, KeyError, TypeError, OverflowError) as exc:
+        raise invalid from exc
+    if eaten_at.tzinfo is None or not 0 < meal_id <= _MAX_BIGINT:
+        raise invalid
+    return eaten_at, meal_id
 
 
 async def _friend_meals(

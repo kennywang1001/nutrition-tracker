@@ -1,8 +1,9 @@
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from app.friend_codes import format_friend_code
 from app.models.friendship import Friendship, FriendshipStatus
+from app.models.user import User
 from app.security.tokens import create_access_token
 from tests.factories import create_friendship, create_user
 
@@ -132,6 +133,88 @@ async def test_a_simultaneous_send_from_the_other_side_turns_into_acceptance(
     row = await db_session.scalar(select(Friendship))
     assert row is not None
     assert row.status is FriendshipStatus.ACCEPTED
+
+
+async def test_if_the_other_side_withdraws_while_i_send_my_request_is_created(
+    client, db_session, monkeypatch
+):
+    """對方邀過我，我送出的同時對方收回了：接受那一步落空。那不是「已經是好友」
+    ——重看那一對，沒有了就照新邀請建立。"""
+    alice = await create_user(db_session)
+    bob = await create_user(db_session, display_name="鮑伯")
+    await create_friendship(
+        db_session, alice, bob, status=FriendshipStatus.PENDING, requested_by=bob
+    )
+    alice_id, bob_id = alice.id, bob.id
+    from app.api.routes import friends as friends_routes
+
+    async def withdrawn_meanwhile(db, friendship_id, receiver_id):
+        await db.execute(delete(Friendship).where(Friendship.id == friendship_id))
+        await db.commit()
+        return None
+
+    monkeypatch.setattr(friends_routes, "_accept", withdrawn_meanwhile)
+
+    response = await _send(client, alice, bob.friend_code)
+
+    assert response.status_code == 201
+    assert response.json() == {
+        "status": "pending",
+        "person": {"id": bob_id, "display_name": "鮑伯"},
+    }
+    await db_session.rollback()
+    row = await db_session.scalar(select(Friendship))
+    assert row is not None
+    assert (row.status, row.requested_by) == (FriendshipStatus.PENDING, alice_id)
+
+
+async def _accept_while(client, db_session, monkeypatch, meanwhile):
+    """鮑伯接受愛麗絲的邀請；`meanwhile` 在 UPDATE 之後、回應組好之前跑。"""
+    alice = await create_user(db_session, display_name="愛麗絲")
+    bob = await create_user(db_session)
+    request = await create_friendship(
+        db_session, alice, bob, status=FriendshipStatus.PENDING, requested_by=alice
+    )
+    request_id, alice_id = request.id, alice.id
+    from app.api.routes import friends as friends_routes
+
+    real_accept = friends_routes._accept
+
+    async def accept_then(db, friendship_id, receiver_id):
+        accepted = await real_accept(db, friendship_id, receiver_id)
+        await meanwhile(db, alice_id)
+        return accepted
+
+    monkeypatch.setattr(friends_routes, "_accept", accept_then)
+    response = await client.post(f"/api/friends/requests/{request_id}/accept", headers=auth(bob))
+    return response, alice_id
+
+
+async def test_accepting_when_the_sender_just_deleted_their_account_is_404(
+    client, db_session, monkeypatch
+):
+    async def delete_account(db, alice_id):
+        await db.execute(delete(User).where(User.id == alice_id))
+
+    response, _ = await _accept_while(client, db_session, monkeypatch, delete_account)
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "FRIEND_REQUEST_NOT_FOUND"
+
+
+async def test_accepting_when_the_sender_unfriends_right_away_still_answers(
+    client, db_session, monkeypatch
+):
+    """接受成立了，對方馬上解除：回應照樣是剛成立的那個好友，不是 500。"""
+
+    async def unfriend(db, alice_id):
+        await db.execute(delete(Friendship))
+
+    response, alice_id = await _accept_while(client, db_session, monkeypatch, unfriend)
+
+    assert response.status_code == 200
+    assert response.json()["id"] == alice_id
+    assert response.json()["since"] is not None
 
 
 async def test_listing_requests_splits_incoming_and_outgoing_without_emails(client, db_session):
