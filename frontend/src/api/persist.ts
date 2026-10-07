@@ -1,5 +1,8 @@
 import { createAsyncStoragePersister } from "@tanstack/query-async-storage-persister";
-import type { PersistQueryClientProviderProps } from "@tanstack/react-query-persist-client";
+import type {
+	PersistedClient,
+	PersistQueryClientProviderProps,
+} from "@tanstack/react-query-persist-client";
 
 /** 離線 L2：把 TanStack Query 的 query 狀態（含 `dataUpdatedAt`）存進
  *  `localStorage`，app 啟動時 hydrate 回來。
@@ -85,6 +88,48 @@ const NOT_PERSISTED: ReadonlySet<unknown> = new Set([
 	"supplement-search",
 ]);
 
+/** 寫進 localStorage 前，把「有資料的失敗查詢」改寫成「有資料、待重抓」。
+ *
+ *  `shouldDehydrateQuery` 讓有資料的 `status: "error"` 也寫進來（見下面）。
+ *  如果原樣寫，TanStack restore 回來的就是 error 狀態，而重抓開始時 query
+ *  的 `fetch` 只在**沒有資料**時把 status 改回 pending——有資料就一路維持
+ *  error，直到重抓回來。於是下一次**在線上**重新載入，重抓還在路上的那段
+ *  時間，畫面以為剛剛失敗了：今日總覽顯示「離線資料，最後更新於…」，報表
+ *  顯示「無法載入本月報表」／「無法載入花費清單」。上一次的失敗屬於上一次
+ *  載入，不屬於這一次。（而且 `error` 經過 JSON 只剩 `{}`——`ApiError` 的
+ *  `code`、`status` 都不在了，留著也沒有用。）
+ *
+ *  改成 success、清掉 error 與失敗次數，`isInvalidated` 留著（失敗時 query
+ *  已經把它設成 true）——restore 回來的 query 一律算 stale，掛載就重抓；
+ *  重抓再失敗（還是離線），才會重新變成 error、顯示離線標示。`data` 與
+ *  `dataUpdatedAt` 不動：那仍是上一次**真的成功**的資料與時間。
+ *
+ *  回傳新的物件，不改傳進來的那份（`dehydrate` 的 state 雖然是複本，仍不
+ *  依賴這件事）。之後跟預設一樣 `JSON.stringify`。 */
+function serializePersistedClient(client: PersistedClient): string {
+	return JSON.stringify({
+		...client,
+		clientState: {
+			...client.clientState,
+			queries: client.clientState.queries.map((query) =>
+				query.state.status === "error" && query.state.data !== undefined
+					? {
+							...query,
+							state: {
+								...query.state,
+								status: "success",
+								error: null,
+								fetchFailureCount: 0,
+								fetchFailureReason: null,
+								isInvalidated: true,
+							},
+						}
+					: query,
+			),
+		},
+	});
+}
+
 /** 每次呼叫回一組**獨立**的 persist 設定，包含一個新的 persister
  *  instance（有自己的節流狀態）。
  *
@@ -101,6 +146,7 @@ export function createOfflinePersistOptions(
 		persister: createAsyncStoragePersister({
 			storage,
 			key: OFFLINE_CACHE_STORAGE_KEY,
+			serialize: serializePersistedClient,
 		}),
 		maxAge: MAX_AGE_MS,
 		dehydrateOptions: {
@@ -110,6 +156,7 @@ export function createOfflinePersistOptions(
 			// 節流寫入把它從 localStorage 拿掉，第二次離線重新載入就什麼都沒有了
 			// （實測過，`tests/offline.test.tsx`「離線重新載入兩次」）。有資料的失敗
 			// 保留最後一份成功的資料與它的 `dataUpdatedAt`；沒有資料的失敗照舊不寫。
+			// 寫進去之前會先被 `serializePersistedClient` 改回 success（見那裡）。
 			shouldDehydrateQuery: (query) =>
 				(query.state.status === "success" ||
 					(query.state.status === "error" && query.state.data !== undefined)) &&

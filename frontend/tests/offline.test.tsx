@@ -12,6 +12,7 @@ import { queryKeys } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { formatTime } from "../src/lib/dates";
+import { Expenses } from "../src/screens/Expenses";
 import { Today } from "../src/screens/Today";
 import { json, mockApiByPath as mockApi } from "./helpers/mock-api";
 
@@ -104,7 +105,12 @@ function agePersistedCacheBy(ms: number) {
 
 type PersistedQuerySnapshot = {
 	queryKey: unknown[];
-	state: { status: string; dataUpdatedAt: number; data?: unknown };
+	state: {
+		status: string;
+		dataUpdatedAt: number;
+		data?: unknown;
+		isInvalidated?: boolean;
+	};
 };
 
 function readPersistedQueries(): PersistedQuerySnapshot[] {
@@ -222,14 +228,17 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 		expect(await screen.findByTestId("offline-banner")).toBeInTheDocument();
 		expect(screen.getByText(/1800/)).toBeInTheDocument();
 		// 等失敗**之後**的那次寫入：只看「stats 有資料」會被第一階段留下的快照
-		// 騙過（那份一直都在，直到下一次寫入蓋掉它），所以要認 status 是 error。
+		// 騙過（那份一直都在，直到下一次寫入蓋掉它），所以要認失敗留下的
+		// `isInvalidated: true`——第一階段的快照是 false。不認 status：寫進去
+		// 之前 `persist.ts` 會把有資料的 error 改寫成 success（見下一條測試）。
 		await waitFor(
 			() => {
 				const stats = readPersistedQueries().find(
 					(query) =>
 						query.queryKey[0] === "stats" && query.queryKey[1] === "daily",
 				);
-				expect(stats?.state.status).toBe("error");
+				expect(stats?.state.isInvalidated).toBe(true);
+				expect(stats?.state.status).toBe("success");
 				expect(stats?.state.data).toEqual(STATS_WITH_TARGET);
 			},
 			{ timeout: 3000 },
@@ -241,6 +250,112 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 		render(wrap(clientC, <Today />));
 		expect(await screen.findByText(/1800/)).toBeInTheDocument();
 		expect(await screen.findByTestId("offline-banner")).toBeInTheDocument();
+	});
+
+	it("上一次離線失敗的查詢，重新上線載入、重抓還在路上時不顯示離線或錯誤", async () => {
+		// 審查 I-1。上一條讓「有資料的 error」也寫進 localStorage；如果原樣
+		// 寫進去，TanStack restore 回來就是 `status: "error"`——下一次**在線上**
+		// 重新載入，背景重抓還沒回來的那段時間，畫面以為剛剛失敗了：今日總覽
+		// 冒出「離線資料，最後更新於…」，報表顯示「無法載入本月報表」／
+		// 「無法載入花費清單」，即使數字都在。（而且那個 error 經過 JSON 只剩
+		// `{}`，ApiError 早就不見了。）
+		const routes = {
+			"/api/stats/daily": () => json(STATS_WITH_TARGET),
+			"/api/supplements/today": () => json([]),
+			"/api/meals": () => json([]),
+			// 具體的路徑排前面：`/api/expenses` 也「包含」在 summary 的 URL 裡。
+			"/api/expenses/summary": () =>
+				json({
+					month: "2026-09",
+					total: "430.50",
+					by_category: [
+						{ category: "food", total: "180.00", count: 1 },
+						{ category: "transport", total: "250.50", count: 1 },
+					],
+				}),
+			"/api/expenses": () =>
+				json([
+					{
+						id: 1,
+						amount: "180.00",
+						category: "food",
+						spent_at: "2026-09-15T04:00:00+00:00",
+						note: "便當",
+						meal_id: null,
+					},
+				]),
+		};
+		const screens = (
+			<>
+				<Today />
+				<Expenses />
+			</>
+		);
+		const persistedFor = (first: string, second?: string) =>
+			readPersistedQueries().find(
+				(query) =>
+					query.queryKey[0] === first &&
+					(second === undefined || query.queryKey[1] === second),
+			);
+
+		// 第一階段：線上成功。
+		mockApi(routes);
+		const first = render(wrap(newTestClient(), screens));
+		await screen.findByText(/1800/);
+		await screen.findByText("430.50");
+		await screen.findByText(/便當/);
+		await waitFor(
+			() => {
+				expect(findPersistedStatsSuccess()).not.toBeUndefined();
+				expect(persistedFor("expenses", "summary")?.state.data).toBeDefined();
+				expect(persistedFor("expenses", "list")?.state.data).toBeDefined();
+			},
+			{ timeout: 3000 },
+		);
+		first.unmount();
+		agePersistedCacheBy(5 * 60 * 1000);
+
+		// 第二階段：離線重新載入，三個查詢的背景重抓都失敗；等失敗**之後**的
+		// 那次寫入（失敗把 `isInvalidated` 設成 true，第一階段的快照是 false）。
+		vi.restoreAllMocks();
+		goOffline();
+		const second = render(wrap(newTestClient(), screens));
+		expect(await screen.findByTestId("offline-banner")).toBeInTheDocument();
+		await waitFor(
+			() => {
+				for (const query of [
+					persistedFor("stats", "daily"),
+					persistedFor("expenses", "summary"),
+					persistedFor("expenses", "list"),
+				]) {
+					expect(query?.state.isInvalidated).toBe(true);
+					expect(query?.state.data).toBeDefined();
+				}
+			},
+			{ timeout: 3000 },
+		);
+		second.unmount();
+
+		// 第三階段：重新上線載入，但重抓還沒回來（fetch 永遠 pending）。
+		vi.restoreAllMocks();
+		const pendingFetch = vi
+			.spyOn(globalThis, "fetch")
+			.mockImplementation(() => new Promise<Response>(() => {}));
+		render(wrap(newTestClient(), screens));
+		// 快取的數字可以顯示。
+		expect(await screen.findByText(/1800/)).toBeInTheDocument();
+		expect(await screen.findByText("430.50")).toBeInTheDocument();
+		expect(await screen.findByText(/便當/)).toBeInTheDocument();
+		// 重抓真的發出去了（不然「沒有錯誤」可能只是因為根本沒抓）。
+		await waitFor(() => {
+			const urls = pendingFetch.mock.calls.map(([input]) => String(input));
+			expect(urls.some((url) => url.includes("/api/stats/daily"))).toBe(true);
+			expect(urls.some((url) => url.includes("/api/expenses/summary"))).toBe(
+				true,
+			);
+		});
+		expect(screen.queryByTestId("offline-banner")).not.toBeInTheDocument();
+		expect(screen.queryByText(/無法載入/)).not.toBeInTheDocument();
 	});
 
 	it("沒有資料的失敗查詢不寫進 localStorage", async () => {
