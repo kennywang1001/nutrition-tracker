@@ -75,4 +75,15 @@ describe("可以放大的照片", () => {
 		await userEvent.click(screen.getByRole("button", { name: "關閉" }));
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 	});
+	it("大圖掛在 body 底下，不會被卡片或分頁列的疊放層級蓋住", async () => {
+		// 卡片的祖先只要有一個建立了疊放範圍（stacking context），大圖的 z-index
+		// 再大也贏不過底部的分頁列——實際畫面上「＋」就浮在大圖上面。
+		renderPhoto({ objectUrl: "blob:full", isError: false });
+
+		await userEvent.click(
+			screen.getByRole("button", { name: `看大圖：${ALT}` }),
+		);
+
+		expect(screen.getByRole("dialog").parentElement).toBe(document.body);
+	});
 });

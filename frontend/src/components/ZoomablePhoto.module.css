@@ -22,7 +22,7 @@
 	align-items: center;
 	justify-content: center;
 	padding: var(--space-4);
-	background: var(--scrim);
+	background: var(--viewer-scrim);
 }
 
 .full {

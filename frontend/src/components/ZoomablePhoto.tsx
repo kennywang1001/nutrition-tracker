@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import styles from "./ZoomablePhoto.module.css";
 
 type PhotoState = { objectUrl: string | null; isError: boolean };
@@ -31,14 +32,18 @@ export function ZoomablePhoto({ alt, thumbUrl, useFull }: Props) {
 			>
 				<img src={thumbUrl} alt={alt} />
 			</button>
-			{open && (
-				<Viewer
-					alt={alt}
-					thumbUrl={thumbUrl}
-					useFull={useFull}
-					onClose={close}
-				/>
-			)}
+			{/* 掛到 body 底下：卡片的祖先只要有一個建立了疊放範圍，大圖的 z-index
+			    再大也贏不過底部的分頁列（實際畫面上「＋」浮在大圖上面）。 */}
+			{open &&
+				createPortal(
+					<Viewer
+						alt={alt}
+						thumbUrl={thumbUrl}
+						useFull={useFull}
+						onClose={close}
+					/>,
+					document.body,
+				)}
 		</>
 	);
 }
