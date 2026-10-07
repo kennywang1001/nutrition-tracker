@@ -392,8 +392,7 @@ async def update_meal(
     項目不在這個端點的範圍內 —— 那是 `POST/DELETE .../items` 的事。
 
     **餐點的欄位與餐費在同一次 commit**——`test_update_meal_commits_exactly_once`
-    會掃。已知的落差：同時改 `eaten_at` 時，**既有**餐費的 `spent_at` 不跟著動
-    （前端這次不提供改時間，規格 §1.3）。
+    會掃。改 `eaten_at` 時餐費的 `spent_at` 跟著改。
 
     用 `exclude_unset` 決定要更新哪些欄位（沒帶的欄位維持原樣），
     `MealUpdateRequest` 自己的驗證器已經擋掉 `eaten_at` / `meal_type`
@@ -409,9 +408,18 @@ async def update_meal(
     for field, value in changes.items():
         setattr(meal, field, value)
 
-    if cost_was_sent:
-        # 資料庫保證一餐最多一筆餐費（`uq_expenses_meal_id`）。
+    # 資料庫保證一餐最多一筆餐費（`uq_expenses_meal_id`）。
+    existing = None
+    if cost_was_sent or "eaten_at" in changes:
         existing = await _existing_meal_expense(db, meal.id)
+
+    # 改了吃的時間：那一餐的餐費日期跟著改（改時間規格 §3）——報表不能單獨改
+    # 餐費的日期，錢屬於吃那一餐的時間。不跟著改的話，補記上個月的晚餐、
+    # 把時間改回上個月，錢還留在這個月的報表裡。
+    if "eaten_at" in changes and existing is not None:
+        existing.spent_at = meal.eaten_at
+
+    if cost_was_sent:
         if new_cost is None:
             if existing is not None:
                 await db.delete(existing)
