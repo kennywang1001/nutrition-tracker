@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	averageOf,
 	formatMacro,
 	formatMoney,
 	isPlainPositiveDecimal,
@@ -165,5 +166,22 @@ describe("isPlainPositiveDecimal", () => {
 		["+5", false],
 	])("%j → %s", (value, expected) => {
 		expect(isPlainPositiveDecimal(value)).toBe(expected);
+	});
+});
+
+describe("averageOf", () => {
+	it("小數的平均不經過浮點數", () => {
+		// 0.1 + 0.2 用浮點是 0.30000000000000004，除以 2 會變成
+		// 0.15000000000000002；Decimal 算出來是剛好的 0.15。
+		expect(averageOf(["0.1", "0.2"])).toBe("0.15");
+	});
+
+	it("兩組不同的資料算出各自的平均（寫死的數字過不了）", () => {
+		expect(averageOf(["1800.00", "2100.00", "1500.00"])).toBe("1800");
+		expect(averageOf(["60.5", "80"])).toBe("70.25");
+	});
+
+	it("空陣列回 null，不是 0——沒有資料就沒有平均", () => {
+		expect(averageOf([])).toBeNull();
 	});
 });

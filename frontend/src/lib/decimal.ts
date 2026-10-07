@@ -124,6 +124,19 @@ export function ratioOf(
 	return new Decimal(actual).dividedBy(targetValue).toNumber();
 }
 
+/** 一組數值的平均。**空陣列回 `null`，不是 `"0"`**——沒有資料就沒有平均，
+ *  「平均 0」讀起來是「每天都吃了 0」（跟 `ratioOf` 的 null 同一個道理）。
+ *
+ *  給趨勢畫面的期間摘要用（趨勢期間規格 §2）。哪些值該算進來（例如「沒記錄
+ *  的日子不算」）是呼叫端的事，這裡只負責把給它的值平均。 */
+export function averageOf(values: readonly Numeric[]): Numeric | null {
+	if (values.length === 0) return null;
+	return values
+		.reduce((total, value) => total.plus(value), new Decimal(0))
+		.dividedBy(values.length)
+		.toString();
+}
+
 /** 一組數值的最大值。空陣列回 `"0"`。
  *
  *  給 `TrendChart` 算 y 軸上限用。**放在這裡而不是圖表元件裡**，是因為
