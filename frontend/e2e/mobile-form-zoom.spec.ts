@@ -138,7 +138,9 @@ test("登入後的 /supplements 畫面，表單控制項字級 ≥16px（P3-C Ta
 	// 那個連結。
 	await page.getByRole("link", { name: "飲食" }).click();
 	await page.getByRole("link", { name: "新增補劑" }).click();
-	await expect(page.getByRole("heading", { name: "補劑" })).toBeVisible();
+	await expect(
+		page.getByRole("heading", { name: "補劑", exact: true }),
+	).toBeVisible();
 	// **只等「補劑」這個 h1 出現還不夠。** 實測踩到的坑：`Today.tsx` 的
 	// 「今日補劑」區塊是 `<h2>`，`getByRole` 的 name 比對預設是子字串——
 	// 「今日補劑」包含「補劑」，理論上會讓上面那行的 toBeVisible() 提早
