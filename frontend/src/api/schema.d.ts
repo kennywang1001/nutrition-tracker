@@ -1608,6 +1608,11 @@ export interface components {
             meal_type: components["schemas"]["MealType"];
             /** Note */
             note?: string | null;
+            /**
+             * Is Private
+             * @default false
+             */
+            is_private: boolean;
             /** Items */
             items?: components["schemas"]["MealItemCreateRequest"][];
             /** Cost */
@@ -1676,6 +1681,8 @@ export interface components {
             meal_type: components["schemas"]["MealType"];
             /** Note */
             note: string | null;
+            /** Is Private */
+            is_private: boolean;
             /** Photo Path */
             photo_path: string | null;
             /** Cost */
@@ -1718,6 +1725,8 @@ export interface components {
             meal_type?: components["schemas"]["MealType"] | null;
             /** Note */
             note?: string | null;
+            /** Is Private */
+            is_private?: boolean | null;
             /** Cost */
             cost?: number | string | null;
         };

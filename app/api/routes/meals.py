@@ -168,6 +168,7 @@ async def create_meal(
         eaten_at=payload.eaten_at,
         meal_type=payload.meal_type,
         note=payload.note,
+        is_private=payload.is_private,
     )
     db.add(meal)
     await db.flush()
@@ -227,6 +228,7 @@ async def create_meal(
         eaten_at=meal.eaten_at,
         meal_type=meal.meal_type,
         note=meal.note,
+        is_private=meal.is_private,
         photo_path=meal.photo_path,
         cost=expense.amount if expense is not None else None,
         items=items_response,
@@ -305,6 +307,7 @@ def _build_meal_response(
         eaten_at=meal.eaten_at,
         meal_type=meal.meal_type,
         note=meal.note,
+        is_private=meal.is_private,
         photo_path=meal.photo_path,
         cost=cost,
         items=items_response,

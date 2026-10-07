@@ -61,6 +61,8 @@ class MealCreateRequest(BaseModel):
     eaten_at: AwareInstant
     meal_type: MealType
     note: str | None = Field(default=None, max_length=500)
+    # 好友規格 §2：預設給好友看。
+    is_private: bool = False
     # 允許空清單是刻意的：P2 的流程是先拍照、之後才落項目（見計畫本文）。
     items: list[MealItemCreateRequest] = Field(default_factory=list)
     # 選填的餐費（P5 規格 §4.1）。有值時，POST /api/meals 會在**同一個交易裡**
@@ -94,6 +96,7 @@ class MealUpdateRequest(BaseModel):
     eaten_at: AwareInstant | None = None
     meal_type: MealType | None = None
     note: str | None = Field(default=None, max_length=500)
+    is_private: bool | None = None
     # 編輯餐點規格 §3.2：不帶＝不動；數字＝改那筆餐費或補一筆；null＝刪掉餐費。
     # null 是合法的（「拿掉金額」），所以不在下面驗證器的 non_nullable 集合裡。
     # 限制同 MealCreateRequest.cost。
@@ -103,7 +106,7 @@ class MealUpdateRequest(BaseModel):
     def _reject_explicit_nulls_on_non_nullable_fields(self) -> "MealUpdateRequest":
         # note 刻意不在這個集合裡：它在資料庫是 nullable，顯式 null 是
         # 合法的「清空備註」語意，不該被擋下來。
-        non_nullable = {"eaten_at", "meal_type"}
+        non_nullable = {"eaten_at", "meal_type", "is_private"}
         nulls = sorted(
             field
             for field in self.model_fields_set
@@ -139,6 +142,7 @@ class MealResponse(BaseModel):
     eaten_at: datetime
     meal_type: MealType
     note: str | None
+    is_private: bool
     # 相對於 photo_dir 的路徑；沒有照片是 None。計畫 3 Task 14：上傳成功後
     # 這個端點自己回的、以及之後 GET /api/meals/{id} 回的都要看得到同一個值。
     photo_path: str | None
