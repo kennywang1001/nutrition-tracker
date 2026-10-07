@@ -966,7 +966,13 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
     「找不到這一餐」）；確認框沒有移動焦點（跟報表頁一樣）；從清單點進來仍會先
     看到「載入中」（可用清單快取當 `placeholderData`）；改項目後要等五個 query
     重抓完編輯器才收起。
-- **照片縮圖**：清單頁載入多張 1280px 圖會慢，等前端量到再說。
+- **照片縮圖：已完成**（規格 `docs/superpowers/specs/2026-10-07-thumbnails-design.md`）。
+  上傳時同時存長邊 640 的 `<uuid>_thumb.jpg`（`thumbnail_path` 是唯一規則）；舊照片第一次被要
+  縮圖時補做（暫存檔＋`os.replace`，不用跑指令）；照片端點 `?size=thumb`、授權不變；刪照片
+  一起刪縮圖；**清孤兒指令把被引用原圖的縮圖算進被引用**（不改的話縮圖會全被當孤兒刪掉）。
+  前端：飲食頁與好友的卡片用縮圖，`ZoomablePhoto` 點了才抓原圖。
+  - 坑：看大圖的遮罩一開始被底部的「＋」蓋住——卡片的祖先建立了疊放範圍，z-index 再大也
+    出不去。改用 portal 掛到 `document.body`（單元測試只看得到 DOM，是截圖才發現的）。
 - **速率限制的計數器不持久**（`login_rate_limiter` 與 `session_rate_limiter`）：單容器記憶體，
   重啟歸零。這個規模可接受。`session_rate_limiter` 的鍵是 `jti`，每換一次票就多一個鍵——
   `KeyedRateLimiter.hit` 在記著的鍵超過 1000 個時順手清掉過期的視窗，記憶體不會一直長。
