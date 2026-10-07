@@ -27,7 +27,9 @@ test("access token 過期時會自動換票並重送，使用者不會被踢出�
 	// 登入後落在總覽；接著點到「我的」（那裡有「重新整理」按鈕）。
 	await expect(page.getByRole("heading", { name: "總覽" })).toBeVisible();
 	await page.getByRole("link", { name: "我的" }).click();
-	await expect(page.getByRole("heading", { name: "我的" })).toBeVisible();
+	await expect(
+		page.getByRole("heading", { name: "我的", exact: true }),
+	).toBeVisible();
 	// 「我的」掛載時 useMe() 自己會打一次 /api/me；等 email 出現代表那個
 	// 請求已經結束，再讓 token 失效，換票才只會由「重新整理」觸發。
 	await expect(page.getByText(ADMIN.email)).toBeVisible();
@@ -51,5 +53,7 @@ test("access token 過期時會自動換票並重送，使用者不會被踢出�
 	await page.getByRole("button", { name: "重新整理" }).click();
 	await meResponse;
 
-	await expect(page.getByRole("heading", { name: "我的" })).toBeVisible();
+	await expect(
+		page.getByRole("heading", { name: "我的", exact: true }),
+	).toBeVisible();
 });
