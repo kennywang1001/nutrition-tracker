@@ -33,12 +33,16 @@
 
 `EditMeal.tsx` 的 `MealDetailsForm`：
 
-- 「日期」（`type="date"`、`max`＝今天）與「時間」（`type="time"`），預填這一餐在裝置時區的日期與時間（分鐘）。
+- 「日期」（`type="date"`、`min`＝`2000-01-01`、`max`＝今天）與「時間」（`type="time"`），預填這一餐在裝置時區的日期與時間（分鐘）。
 - 草稿同其他欄位（`undefined`＝沒動）。**只有「日期 時間」字串（到分鐘）跟原本不同才送 `eaten_at`**——
-  不會因為原本的秒數就被當成有改。送的是 `new Date("YYYY-MM-DDTHH:mm")`（裝置時區）的 ISO 字串。
-- 組起來的時間比現在晚 →「不能選未來的時間」（`role="alert"`），「儲存」disabled。
-- 存好之後（有送 `eaten_at` 時）額外失效：`queryKeys.dailyStats`、`queryKeys.rangeStatsAll`、`queryKeys.expensesAll`
-  （一餐換了日子，今天的統計、趨勢、支出都會變；`meals` 原本就失效）。
+  不會因為原本的秒數就被當成有改。送的是 `fromLocalDateTime(date, time)`（`lib/dates.ts`：用年月日時分的數字
+  在裝置時區組，不交給字串解析器）的 ISO 字串。
+- 日期早於 `2000-01-01` →「日期太早了」；組起來的時間比現在晚（到分鐘，依裝置時鐘）→「不能選未來的時間」
+  （`role="alert"`），「儲存」disabled、表單硬送出也不送。有問題時日期與時間兩格 `aria-invalid="true"`、
+  `aria-describedby` 指到那則訊息。
+- 輸入框與下拉選單至少 44px 高（點擊目標）；勾選框除外——它的點擊目標是包著它的整個標籤（也是 44px）。
+- 存好之後（有送 `eaten_at` 時）額外失效：`queryKeys.dailyStats`、`queryKeys.rangeStatsAll`、`queryKeys.expensesAll`、
+  `queryKeys.recentFoods`（一餐換了日子，今天的統計、趨勢、支出、「最近吃」的順序都會變；`meals` 原本就失效）。
 
 ## 5. 測試
 

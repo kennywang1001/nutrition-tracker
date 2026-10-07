@@ -346,7 +346,9 @@ def _build_meal_response(
     )
 
 
-async def _load_owned_meal(db: AsyncSession, meal_id: int, user: User) -> Meal:
+async def _load_owned_meal(
+    db: AsyncSession, meal_id: int, user: User, *, for_update: bool = False
+) -> Meal:
     """依擁有權載入一筆餐點；不存在或不是自己的，一律回同一種 404
     （繼承規矩第 1 條：權限失敗不回 403，且跟「真的不存在」逐字相同）。
 
@@ -355,8 +357,15 @@ async def _load_owned_meal(db: AsyncSession, meal_id: int, user: User) -> Meal:
     就走不同的路徑，容易一邊改一邊漏。GET / PATCH / DELETE 這一餐、以及
     項目的增刪，全部共用這一個函式：擁有權規則只寫一次，日後要修只會
     改到一個地方。
+
+    `for_update=True` 用 `SELECT … FOR UPDATE` 鎖住這一餐的列到交易結束（見
+    `update_meal`）。鎖跟擁有權在同一個查詢裡：不是自己的那一餐查不到、也鎖不到，
+    404 照舊。
     """
-    meal = await db.scalar(select(Meal).where(Meal.id == meal_id, Meal.user_id == user.id))
+    query = select(Meal).where(Meal.id == meal_id, Meal.user_id == user.id)
+    if for_update:
+        query = query.with_for_update()
+    meal = await db.scalar(query)
     if meal is None:
         raise NotFoundError("MEAL_NOT_FOUND", "找不到該餐點")
     return meal
@@ -398,8 +407,17 @@ async def update_meal(
     `MealUpdateRequest` 自己的驗證器已經擋掉 `eaten_at` / `meal_type`
     的顯式 `null`；`cost: null` 在下面先被 pop 出來（代表「刪掉餐費」），
     所以流到 setattr 迴圈的 `None` 只可能是合法的 `note` 清空。
+
+    **這一餐的列用 `FOR UPDATE` 鎖到 commit**（`_load_owned_meal(for_update=True)`）。
+    餐費的 `spent_at` 從 `eaten_at` 來：一個請求在改時間、還沒 commit，另一個同時
+    補金額的話，沒有鎖時後者讀到舊的 `eaten_at`、也還看不到餐費，就帶著舊時間
+    補一筆——兩個都成功，餐費落在錯的月份。鎖住之後後者等前者 commit 才讀，讀到的
+    是新時間與（若有）前者剛建的餐費。代價是同一餐的 PATCH 彼此排隊；兩台裝置同時
+    補金額時，後到的也因此看得到先到的那筆、改成更新金額，不再撞
+    `uq_expenses_meal_id` 回 409（下面的 409 處理留著當防線）。
+    `tests/test_meal_time_concurrency.py` 用兩條真的連線守著。
     """
-    meal = await _load_owned_meal(db, meal_id, user)
+    meal = await _load_owned_meal(db, meal_id, user, for_update=True)
 
     changes = payload.model_dump(exclude_unset=True)
     cost_was_sent = "cost" in changes

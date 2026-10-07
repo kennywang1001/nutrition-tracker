@@ -83,3 +83,45 @@ async def test_moving_and_adding_a_cost_at_once_uses_the_new_time(client, db_ses
     await db_session.rollback()
     spent_at = await db_session.scalar(select(Expense.spent_at).where(Expense.meal_id == meal_id))
     assert spent_at == SEP_28
+
+
+async def _meal_whose_cost_is_on_another_day(db_session, user):
+    """餐費的 `spent_at` 跟 `eaten_at` 不一樣（例如改時間功能之前記的、或報表的
+    `PATCH /api/expenses/{id}` 改過）。只有改 `eaten_at` 才把它拉回來。"""
+    meal = await create_meal(db_session, user=user, eaten_at=OCT_3)
+    expense = await create_expense(
+        db_session,
+        user=user,
+        amount=120,
+        category=ExpenseCategory.FOOD,
+        spent_at=SEP_28,
+        meal=meal,
+    )
+    return meal.id, expense.id
+
+
+async def test_editing_only_the_note_leaves_the_cost_date_alone(client, db_session):
+    user = await create_user(db_session)
+    meal_id, expense_id = await _meal_whose_cost_is_on_another_day(db_session, user)
+
+    response = await client.patch(
+        f"/api/meals/{meal_id}", headers=auth(user), json={"note": "加蛋"}
+    )
+
+    assert response.status_code == 200
+    await db_session.rollback()
+    spent_at = await db_session.scalar(select(Expense.spent_at).where(Expense.id == expense_id))
+    assert spent_at == SEP_28
+
+
+async def test_editing_only_the_cost_leaves_the_cost_date_alone(client, db_session):
+    """改金額會讀出既有的餐費——那時 `spent_at` 也不能被順手改成 `eaten_at`。"""
+    user = await create_user(db_session)
+    meal_id, expense_id = await _meal_whose_cost_is_on_another_day(db_session, user)
+
+    response = await client.patch(f"/api/meals/{meal_id}", headers=auth(user), json={"cost": "150"})
+
+    assert response.status_code == 200
+    await db_session.rollback()
+    spent_at = await db_session.scalar(select(Expense.spent_at).where(Expense.id == expense_id))
+    assert spent_at == SEP_28
