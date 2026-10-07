@@ -1145,16 +1145,11 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
 - **第三階段**：社群（P7）。「開帳號的路」與「好友關係」都已完成（見階段進度）。
   按讚、留言、通知、封鎖、好友的趨勢都刻意沒做——等真的用過一陣子再決定要什麼。
 
-**已知待辦：**
+**已知待辦（都已完成，見規格 `docs/superpowers/specs/2026-10-08-keypad-offline-design.md`）：**
 
-- (a) TanStack v5 的 `defaultShouldDehydrateQuery` 只持久化 `success`
-  狀態的查詢——一個「持有快取資料但重新抓取失敗」的查詢，可能在下一次寫入
-  localStorage 時被丟掉，於是第二次離線重新載入可能什麼都不顯示（既有問題，
-  Today 也受影響；修法在 `frontend/src/api/persist.ts`）。**未驗證，審查推論。**
-- (b) 矮螢幕手機（例如 iPhone SE）上，記帳數字鍵盤的最下面幾列在捲動前
-  會被 tab bar 蓋住。可選方案：在 `/expenses/new` 與 `/meals/new` 隱藏
-  tab bar（待使用者決定）。
-- (c) 桌機實體鍵盤打字不會輸入到記帳數字鍵盤。
+- (a) **已完成，bug 實測證實**：有資料但重抓失敗的查詢（`status: "error"`）被下一次寫入從離線快取拿掉，第二次離線重新載入什麼都沒有；`persist.ts` 的 `shouldDehydrateQuery` 改成 success 或「error 而且有 data」（`offline.test.tsx` 三階段測試，修之前紅）。
+- (b) **已完成**：只在 `/expenses/new` 隱藏分頁列（`App.tsx` 的 `LoggedInShell`，`.app-main-no-tab-bar` 拿掉底部留白）；記一餐沒有關閉鈕，不隱藏。
+- (c) **已完成**：記帳數字鍵盤接受實體鍵盤（數字、`.`／`,`、Backspace、Enter 送出），焦點在備註欄或有 Ctrl／Meta／Alt 時不攔（`MoneyKeypad.tsx`）。
 
 ---
 
