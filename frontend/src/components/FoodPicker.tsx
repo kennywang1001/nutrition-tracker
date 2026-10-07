@@ -56,8 +56,8 @@ function dedupeById(lists: Food[][]): Food[] {
 type Props = {
 	/** 選了一個食物。`nutrition === null` 的食物按鈕是 disabled，不會走到這裡。 */
 	onSelect: (food: Food) => void;
-	/** 選填：放在搜尋框正下方的東西，拿到目前的搜尋字（trim 過）。記一餐用它
-	 *  放 AI 估算面板（AI 估算前端規格 §5.1）；編輯這一餐的「加一項」不給。 */
+	/** 選填：放在搜尋框正下方的東西，拿到目前的搜尋字（trim 過）。記一餐與
+	 *  編輯這一餐的「加一項」用它放 AI 估算面板（AI 估算前端規格 §5.1）。 */
 	renderBelowSearch?: (query: string) => ReactNode;
 };
 

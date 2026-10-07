@@ -1279,9 +1279,9 @@ describe("編輯這一餐：項目", () => {
 		await userEvent.click(
 			await screen.findByRole("button", { name: "＋ 加一項" }),
 		);
-		// 「加一項」不給 AI 估算（只有記一餐有）：選擇器出現了、拍照估算沒有。
+		// 「加一項」也有 AI 估算（AI 與編輯畫面的收尾規格 §2 第 1 項）。
 		expect(screen.getByLabelText("搜尋食物")).toBeInTheDocument();
-		expect(screen.queryByLabelText("拍照估算")).toBeNull();
+		expect(screen.getByLabelText("拍照估算")).toBeInTheDocument();
 		await userEvent.click(await screen.findByRole("button", { name: "白飯" }));
 		const form = screen.getByRole("form", { name: "加一項" });
 		expect(within(form).getByText("已選擇：白飯")).toBeInTheDocument();
@@ -1527,5 +1527,175 @@ describe("編輯這一餐：項目", () => {
 				portion_id: 8,
 			}),
 		);
+	});
+
+	describe("加一項：AI 估算", () => {
+		const ESTIMATE = {
+			analysis_id: 12,
+			food_id: null,
+			name: "牛肉麵",
+			brand: null,
+			nutrition: {
+				base_unit: "g",
+				serving_grams: "550.00",
+				kcal: "112.73",
+				protein_g: "5.82",
+				fat_g: "3.27",
+				carb_g: "14.55",
+				serving_kcal: "620.00",
+				serving_protein_g: "32.00",
+				serving_fat_g: "18.00",
+				serving_carb_g: "80.00",
+			},
+			confidence: "0.37",
+			consistency: {
+				atwater_kcal: "610.00",
+				deviation: "10.00",
+				flagged: false,
+			},
+			remaining_today: 19,
+		};
+
+		const NOODLES = {
+			id: 30,
+			name: "牛肉麵",
+			brand: null,
+			is_global: false,
+			nutrition: {
+				base_unit: "g",
+				kcal: "112.73",
+				protein_g: "5.82",
+				fat_g: "3.27",
+				carb_g: "14.55",
+			},
+		};
+
+		// AI 存出來的食物帶一個自己的預設份量「一份」。
+		const ONE_SERVING = {
+			id: 300,
+			label: "一份",
+			grams: "550.00",
+			is_default: true,
+			is_global: false,
+		};
+
+		function aiRoutes(library: unknown[] = []) {
+			return routes(MEAL, [
+				{
+					method: "POST",
+					path: "/api/meals/5/items",
+					handler: () => json(MEAL, 201),
+				},
+				{ path: "/api/foods/frequent", handler: () => json([WHITE_RICE]) },
+				{ path: "/api/foods/3/portions", handler: () => json([]) },
+				{ path: "/api/foods/30/portions", handler: () => json([ONE_SERVING]) },
+				{ path: "/api/foods/40/portions", handler: () => json([]) },
+				// 選擇器的搜尋與面板存之前的同名檢查都打這一支。
+				{ method: "GET", path: "/api/foods?", handler: () => json(library) },
+				{
+					method: "POST",
+					path: "/api/ai/analyze",
+					handler: () => json(ESTIMATE),
+				},
+				{
+					method: "POST",
+					path: "/api/foods",
+					handler: () => json(NOODLES, 201),
+				},
+			]);
+		}
+
+		async function estimateAndConfirm() {
+			await userEvent.type(screen.getByLabelText("搜尋食物"), "牛肉麵");
+			await userEvent.click(
+				screen.getByRole("button", { name: "用 AI 估算「牛肉麵」" }),
+			);
+			const card = await screen.findByRole("region", { name: "AI 估算結果" });
+			await userEvent.click(within(card).getByRole("button", { name: "確認" }));
+			return card;
+		}
+
+		it("食物庫沒有的：估算、確認，存好的食物進到加一項（一份 × 1）", async () => {
+			const fetchMock = mockApi(aiRoutes());
+			renderEditMeal();
+
+			await userEvent.click(
+				await screen.findByRole("button", { name: "＋ 加一項" }),
+			);
+			await estimateAndConfirm();
+
+			const form = await screen.findByRole("form", { name: "加一項" });
+			expect(within(form).getByText("已選擇：牛肉麵")).toBeInTheDocument();
+			await waitFor(() =>
+				expect(within(form).getByLabelText("份量選項")).toHaveValue("300"),
+			);
+			expect(within(form).getByLabelText("份量")).toHaveValue("1");
+			await userEvent.click(within(form).getByRole("button", { name: "加入" }));
+
+			await waitFor(() =>
+				expect(bodyOf(fetchMock, "POST", "/api/meals/5/items")).toEqual({
+					food_id: 30,
+					quantity: "1",
+					portion_id: 300,
+				}),
+			);
+		});
+
+		it("原本選的食物份量打了 200：AI 的食物回到「一份 × 1」", async () => {
+			mockApi(aiRoutes());
+			renderEditMeal();
+
+			await userEvent.click(
+				await screen.findByRole("button", { name: "＋ 加一項" }),
+			);
+			await userEvent.click(
+				await screen.findByRole("button", { name: "白飯" }),
+			);
+			const quantity = within(
+				screen.getByRole("form", { name: "加一項" }),
+			).getByLabelText("份量");
+			await userEvent.clear(quantity);
+			await userEvent.type(quantity, "200");
+			await estimateAndConfirm();
+
+			const form = screen.getByRole("form", { name: "加一項" });
+			expect(
+				await within(form).findByText("已選擇：牛肉麵"),
+			).toBeInTheDocument();
+			await waitFor(() =>
+				expect(within(form).getByLabelText("份量選項")).toHaveValue("300"),
+			);
+			expect(within(form).getByLabelText("份量")).toHaveValue("1");
+		});
+
+		it("食物庫裡已經有同名的：「用食物庫的」進到加一項，不建新食物", async () => {
+			const LIBRARY = { ...NOODLES, id: 40, is_global: true };
+			const fetchMock = mockApi(aiRoutes([LIBRARY]));
+			renderEditMeal();
+
+			await userEvent.click(
+				await screen.findByRole("button", { name: "＋ 加一項" }),
+			);
+			const card = await estimateAndConfirm();
+			await userEvent.click(
+				await within(card).findByRole("button", { name: "用食物庫的" }),
+			);
+
+			const form = await screen.findByRole("form", { name: "加一項" });
+			expect(within(form).getByText("已選擇：牛肉麵")).toBeInTheDocument();
+			await userEvent.click(within(form).getByRole("button", { name: "加入" }));
+
+			await waitFor(() =>
+				expect(bodyOf(fetchMock, "POST", "/api/meals/5/items")).toEqual({
+					food_id: 40,
+					quantity: "1",
+				}),
+			);
+			expect(
+				calls(fetchMock, "POST", "/api/foods").filter(([input]) =>
+					String(input).endsWith("/api/foods"),
+				),
+			).toHaveLength(0);
+		});
 	});
 });

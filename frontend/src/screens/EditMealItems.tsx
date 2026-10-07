@@ -9,6 +9,7 @@ import { ApiError, hasFieldError } from "../api/errors";
 import { type Food, useFood } from "../api/foods";
 import type { Meal } from "../api/meals";
 import { queryKeys } from "../api/queries";
+import { AiEstimatePanel } from "../components/AiEstimatePanel";
 import { FoodPicker } from "../components/FoodPicker";
 import {
 	PortionQuantityFields,
@@ -258,7 +259,7 @@ function ItemRow({
 }
 
 /** 加一項（`POST /api/meals/{id}/items`）：選食物、份量、數量——跟記一餐
- *  同一組元件。 */
+ *  同一組元件，搜尋框下面同樣有 AI 估算（AI 與編輯畫面的收尾規格 §2 第 1 項）。 */
 function AddItem({ mealId, onClose }: { mealId: number; onClose: () => void }) {
 	const queryClient = useQueryClient();
 	const [food, setFood] = useState<Food | null>(null);
@@ -281,14 +282,28 @@ function AddItem({ mealId, onClose }: { mealId: number; onClose: () => void }) {
 		onSuccess: (updated) => afterItemChange(queryClient, mealId, updated),
 	});
 
+	function select(selected: Food) {
+		// 換食物時份量選擇由 usePortionQuantity 自己重設。
+		setFood(selected);
+		add.reset();
+	}
+
 	return (
 		<div className={styles.editor}>
 			<FoodPicker
-				onSelect={(selected) => {
-					// 換食物時份量選擇由 usePortionQuantity 自己重設。
-					setFood(selected);
-					add.reset();
-				}}
+				onSelect={select}
+				renderBelowSearch={(query) => (
+					<AiEstimatePanel
+						text={query}
+						// 估算用的照片不帶：這一餐的照片由照片區處理（規格 §2 第 1 項）。
+						onFoodReady={(ready) => {
+							// 份量自動是一份 × 1（同記一餐）：數量不會跟著換食物歸位，
+							// 先 reset，不然上一個食物打的 200 會留下來。
+							portion.reset();
+							select(ready);
+						}}
+					/>
+				)}
 			/>
 			{food !== null && (
 				<form
