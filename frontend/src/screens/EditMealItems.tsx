@@ -3,7 +3,7 @@ import {
 	useMutation,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "../api/client";
 import { ApiError, hasFieldError } from "../api/errors";
 import { type Food, useFood } from "../api/foods";
@@ -16,6 +16,7 @@ import {
 	usePortionQuantity,
 } from "../components/PortionQuantityFields";
 import { formatMacro } from "../lib/decimal";
+import { useConfirmFocus } from "../lib/use-confirm-focus";
 import styles from "./EditMeal.module.css";
 
 type MealItem = Meal["items"][number];
@@ -185,6 +186,7 @@ function ItemRow({
 	onClose: () => void;
 }) {
 	const queryClient = useQueryClient();
+	const confirmFocus = useConfirmFocus(confirming);
 
 	const remove = useMutation({
 		mutationFn: async () => {
@@ -225,6 +227,7 @@ function ItemRow({
 						修改
 					</button>
 					<button
+						ref={confirmFocus.triggerRef}
 						type="button"
 						aria-label={`刪除${item.food_name}`}
 						onClick={onConfirmDelete}
@@ -248,7 +251,14 @@ function ItemRow({
 					>
 						確定刪除
 					</button>
-					<button type="button" onClick={onClose}>
+					<button
+						ref={confirmFocus.cancelRef}
+						type="button"
+						onClick={() => {
+							confirmFocus.cancelled();
+							onClose();
+						}}
+					>
 						取消
 					</button>
 				</div>
@@ -264,6 +274,17 @@ function AddItem({ mealId, onClose }: { mealId: number; onClose: () => void }) {
 	const queryClient = useQueryClient();
 	const [food, setFood] = useState<Food | null>(null);
 	const portion = usePortionQuantity(food?.id ?? null);
+	// 選好食物（清單或 AI 面板交回）之後焦點移到「已選擇」那一行（同記一餐）：
+	// AI 面板的「確認」跟著卡片消失，不移的話焦點掉到 body。只在選的那一次
+	// 移（旗標），不是每次 render。
+	const focusSelectedRef = useRef(false);
+	const selectedRef = useRef<HTMLParagraphElement>(null);
+	useEffect(() => {
+		if (focusSelectedRef.current && selectedRef.current !== null) {
+			focusSelectedRef.current = false;
+			selectedRef.current.focus();
+		}
+	});
 
 	const add = useMutation({
 		mutationFn: (selected: Food) =>
@@ -285,6 +306,7 @@ function AddItem({ mealId, onClose }: { mealId: number; onClose: () => void }) {
 	function select(selected: Food) {
 		// 換食物時份量選擇由 usePortionQuantity 自己重設。
 		setFood(selected);
+		focusSelectedRef.current = true;
 		add.reset();
 	}
 
@@ -314,7 +336,9 @@ function AddItem({ mealId, onClose }: { mealId: number; onClose: () => void }) {
 						add.mutate(food, { onSuccess: onClose });
 					}}
 				>
-					<p>已選擇：{food.name}</p>
+					<p ref={selectedRef} tabIndex={-1}>
+						已選擇：{food.name}
+					</p>
 					<PortionQuantityFields
 						state={portion}
 						unit={food.nutrition?.base_unit ?? "g"}

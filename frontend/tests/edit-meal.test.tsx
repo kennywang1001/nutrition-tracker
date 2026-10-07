@@ -307,6 +307,100 @@ describe("編輯這一餐：讀取", () => {
 	});
 });
 
+describe("編輯這一餐：從清單點進來（清單快取當 placeholder）", () => {
+	/** 一個要等測試說話才回的 GET。`mockApi` 的 handler 型別是同步的，但它在
+	 *  async 的 fetch mock 裡被 return，回 Promise 也一樣被等。 */
+	function deferredMeal() {
+		let resolve: (response: Response) => void = () => {};
+		const pending = new Promise<Response>((done) => {
+			resolve = done;
+		});
+		return {
+			handler: () => pending as unknown as Response,
+			resolve: (meal: unknown) => resolve(json(meal)),
+		};
+	}
+
+	it("清單裡有這一餐：立刻顯示它的餐別與金額，不先「載入中」", () => {
+		const neverResolves = deferredMeal();
+		mockApi(
+			routes(MEAL, [
+				{ method: "GET", path: "/api/meals/5", handler: neverResolves.handler },
+			]),
+		);
+		const client = newClient();
+		client.setQueryData(queryKeys.meals, [MEAL]);
+		renderEditMeal(client);
+
+		expect(screen.queryByText("載入中…")).not.toBeInTheDocument();
+		expect(screen.getByLabelText("餐別")).toHaveValue("lunch");
+		expect(screen.getByLabelText("金額（選填）")).toHaveValue("180.00");
+	});
+
+	it("清單裡沒有這一餐（別天的）：照樣「載入中」", () => {
+		const neverResolves = deferredMeal();
+		mockApi(
+			routes(MEAL, [
+				{ method: "GET", path: "/api/meals/5", handler: neverResolves.handler },
+			]),
+		);
+		const client = newClient();
+		client.setQueryData(queryKeys.meals, [{ ...MEAL, id: 6 }]);
+		renderEditMeal(client);
+
+		expect(screen.getByText("載入中…")).toBeInTheDocument();
+	});
+
+	it("在 placeholder 上改了備註，真的資料才回來：草稿留著、沒動的欄位跟伺服器，只送備註", async () => {
+		const meal = deferredMeal();
+		const fetchMock = mockApi(
+			routes(MEAL, [
+				{ method: "GET", path: "/api/meals/5", handler: meal.handler },
+			]),
+		);
+		const client = newClient();
+		// 清單快取是舊的：另一台裝置已經把餐別改成晚餐。
+		client.setQueryData(queryKeys.meals, [MEAL]);
+		renderEditMeal(client);
+
+		await userEvent.type(screen.getByLabelText("備註（選填）"), "少飯");
+		meal.resolve({ ...MEAL, meal_type: "dinner" });
+
+		await waitFor(() =>
+			expect(screen.getByLabelText("餐別")).toHaveValue("dinner"),
+		);
+		expect(screen.getByLabelText("備註（選填）")).toHaveValue("少飯");
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		await waitFor(() =>
+			expect(bodyOf(fetchMock, "PATCH", "/api/meals/5")).toEqual({
+				note: "少飯",
+			}),
+		);
+	});
+
+	it("真的資料還沒回來就存：只送改過的欄位，不把 placeholder 的其他值送回去", async () => {
+		const neverResolves = deferredMeal();
+		const fetchMock = mockApi(
+			routes(MEAL, [
+				{ method: "GET", path: "/api/meals/5", handler: neverResolves.handler },
+			]),
+		);
+		const client = newClient();
+		client.setQueryData(queryKeys.meals, [MEAL]);
+		renderEditMeal(client);
+
+		await userEvent.selectOptions(screen.getByLabelText("餐別"), "dinner");
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		await waitFor(() =>
+			expect(bodyOf(fetchMock, "PATCH", "/api/meals/5")).toEqual({
+				meal_type: "dinner",
+			}),
+		);
+	});
+});
+
 describe("編輯這一餐：餐別、金額、備註", () => {
 	it("改成只有我看得到：PATCH 只送 is_private", async () => {
 		const fetchMock = mockApi(routes());
@@ -646,6 +740,21 @@ describe("編輯這一餐：照片", () => {
 		).toBe(false);
 	});
 
+	it("確認框打開時焦點在「取消」；取消後回到「刪除照片」", async () => {
+		mockApi(routes({ ...MEAL, photo_path: "3/abc.jpg" }));
+		renderEditMeal();
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "刪除照片" }),
+		);
+		const dialog = screen.getByRole("alertdialog", { name: "確認刪除照片" });
+		const cancel = within(dialog).getByRole("button", { name: "取消" });
+		expect(cancel).toHaveFocus();
+		await userEvent.click(cancel);
+
+		expect(screen.getByRole("button", { name: "刪除照片" })).toHaveFocus();
+	});
+
 	it("刪除照片要先確認；取消就不送", async () => {
 		const fetchMock = mockApi(
 			routes({ ...MEAL, photo_path: "3/abc.jpg" }, [
@@ -767,6 +876,21 @@ describe("編輯這一餐：刪除這一餐", () => {
 		await userEvent.click(within(dialog).getByRole("button", { name: "取消" }));
 
 		expect(calls(fetchMock, "DELETE", "/api/meals/5")).toHaveLength(0);
+	});
+
+	it("確認框打開時焦點在「取消」；取消後回到「刪除這一餐」", async () => {
+		mockApi(routes());
+		renderEditMeal();
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "刪除這一餐" }),
+		);
+		const dialog = screen.getByRole("alertdialog", { name: "確認刪除這一餐" });
+		const cancel = within(dialog).getByRole("button", { name: "取消" });
+		expect(cancel).toHaveFocus();
+		await userEvent.click(cancel);
+
+		expect(screen.getByRole("button", { name: "刪除這一餐" })).toHaveFocus();
 	});
 
 	it("沒有餐費時，確認文字不提餐費", async () => {
@@ -1248,6 +1372,21 @@ describe("編輯這一餐：項目", () => {
 		expect(screen.getByLabelText("搜尋食物")).toBeInTheDocument();
 	});
 
+	it("刪除一項的確認框打開時焦點在「取消」；取消後回到這一項的「刪除」", async () => {
+		mockApi(itemRoutes());
+		renderEditMeal();
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "刪除滷肉飯" }),
+		);
+		const dialog = screen.getByRole("alertdialog", { name: "確認刪除滷肉飯" });
+		const cancel = within(dialog).getByRole("button", { name: "取消" });
+		expect(cancel).toHaveFocus();
+		await userEvent.click(cancel);
+
+		expect(screen.getByRole("button", { name: "刪除滷肉飯" })).toHaveFocus();
+	});
+
 	it("刪除一項要先確認；取消就不送", async () => {
 		const fetchMock = mockApi(itemRoutes());
 		renderEditMeal();
@@ -1316,7 +1455,8 @@ describe("編輯這一餐：項目", () => {
 		expect(screen.getByLabelText("拍照估算")).toBeInTheDocument();
 		await userEvent.click(await screen.findByRole("button", { name: "白飯" }));
 		const form = screen.getByRole("form", { name: "加一項" });
-		expect(within(form).getByText("已選擇：白飯")).toBeInTheDocument();
+		// 焦點移到「已選擇」（同記一餐）：份量欄位就在它下面。
+		expect(within(form).getByText("已選擇：白飯")).toHaveFocus();
 		const quantity = within(form).getByLabelText("份量");
 		await userEvent.clear(quantity);
 		await userEvent.type(quantity, "150");
@@ -1410,6 +1550,10 @@ describe("編輯這一餐：項目", () => {
 			screen.queryByRole("alertdialog", { name: "確認刪除滷肉飯" }),
 		).not.toBeInTheDocument();
 		expect(screen.getByLabelText("搜尋食物")).toBeInTheDocument();
+		// 不是按「取消」收起來的：焦點不搶回「刪除」。
+		expect(
+			screen.getByRole("button", { name: "刪除滷肉飯" }),
+		).not.toHaveFocus();
 	});
 
 	it("開著刪除確認時，這一列的修改與刪除按鈕先藏起來", async () => {
@@ -1657,7 +1801,8 @@ describe("編輯這一餐：項目", () => {
 			await estimateAndConfirm();
 
 			const form = await screen.findByRole("form", { name: "加一項" });
-			expect(within(form).getByText("已選擇：牛肉麵")).toBeInTheDocument();
+			// 按下的「確認」跟著卡片消失：焦點移到「已選擇」，不掉到 body。
+			expect(within(form).getByText("已選擇：牛肉麵")).toHaveFocus();
 			await waitFor(() =>
 				expect(within(form).getByLabelText("份量選項")).toHaveValue("300"),
 			);

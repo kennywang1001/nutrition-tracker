@@ -20,6 +20,7 @@ import {
 import { queryKeys } from "../api/queries";
 import { fromLocalDateTime, localDateTime } from "../lib/dates";
 import { formatMoney } from "../lib/decimal";
+import { useConfirmFocus } from "../lib/use-confirm-focus";
 import styles from "./EditMeal.module.css";
 import { EditMealItems } from "./EditMealItems";
 
@@ -332,6 +333,7 @@ function MealPhotoSection({ meal }: { meal: Meal }) {
 	const queryClient = useQueryClient();
 	const upload = useUploadMealPhoto(meal.id);
 	const [confirming, setConfirming] = useState(false);
+	const confirmFocus = useConfirmFocus(confirming);
 	const mealId = meal.id;
 	const hasPhoto = meal.photo_path !== null;
 
@@ -404,12 +406,20 @@ function MealPhotoSection({ meal }: { meal: Meal }) {
 						>
 							確定刪除
 						</button>
-						<button type="button" onClick={() => setConfirming(false)}>
+						<button
+							ref={confirmFocus.cancelRef}
+							type="button"
+							onClick={() => {
+								confirmFocus.cancelled();
+								setConfirming(false);
+							}}
+						>
 							取消
 						</button>
 					</div>
 				) : (
 					<button
+						ref={confirmFocus.triggerRef}
 						type="button"
 						className={styles.danger}
 						onClick={() => setConfirming(true)}
@@ -433,6 +443,7 @@ function DeleteMeal({
 }) {
 	const queryClient = useQueryClient();
 	const [confirming, setConfirming] = useState(false);
+	const confirmFocus = useConfirmFocus(confirming);
 
 	const remove = useMutation({
 		mutationFn: () => apiFetch(`/api/meals/${meal.id}`, { method: "DELETE" }),
@@ -474,12 +485,20 @@ function DeleteMeal({
 					>
 						確定刪除
 					</button>
-					<button type="button" onClick={() => setConfirming(false)}>
+					<button
+						ref={confirmFocus.cancelRef}
+						type="button"
+						onClick={() => {
+							confirmFocus.cancelled();
+							setConfirming(false);
+						}}
+					>
 						取消
 					</button>
 				</div>
 			) : (
 				<button
+					ref={confirmFocus.triggerRef}
 					type="button"
 					className={styles.danger}
 					onClick={() => setConfirming(true)}
