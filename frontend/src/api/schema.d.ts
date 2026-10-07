@@ -686,13 +686,21 @@ export interface paths {
          *     項目不在這個端點的範圍內 —— 那是 `POST/DELETE .../items` 的事。
          *
          *     **餐點的欄位與餐費在同一次 commit**——`test_update_meal_commits_exactly_once`
-         *     會掃。已知的落差：同時改 `eaten_at` 時，**既有**餐費的 `spent_at` 不跟著動
-         *     （前端這次不提供改時間，規格 §1.3）。
+         *     會掃。改 `eaten_at` 時餐費的 `spent_at` 跟著改。
          *
          *     用 `exclude_unset` 決定要更新哪些欄位（沒帶的欄位維持原樣），
          *     `MealUpdateRequest` 自己的驗證器已經擋掉 `eaten_at` / `meal_type`
          *     的顯式 `null`；`cost: null` 在下面先被 pop 出來（代表「刪掉餐費」），
          *     所以流到 setattr 迴圈的 `None` 只可能是合法的 `note` 清空。
+         *
+         *     **這一餐的列用 `FOR UPDATE` 鎖到 commit**（`_load_owned_meal(for_update=True)`）。
+         *     餐費的 `spent_at` 從 `eaten_at` 來：一個請求在改時間、還沒 commit，另一個同時
+         *     補金額的話，沒有鎖時後者讀到舊的 `eaten_at`、也還看不到餐費，就帶著舊時間
+         *     補一筆——兩個都成功，餐費落在錯的月份。鎖住之後後者等前者 commit 才讀，讀到的
+         *     是新時間與（若有）前者剛建的餐費。代價是同一餐的 PATCH 彼此排隊；兩台裝置同時
+         *     補金額時，後到的也因此看得到先到的那筆、改成更新金額，不再撞
+         *     `uq_expenses_meal_id` 回 409（下面的 409 處理留著當防線）。
+         *     `tests/test_meal_time_concurrency.py` 用兩條真的連線守著。
          */
         patch: operations["update_meal_api_meals__meal_id__patch"];
         trace?: never;
@@ -1570,6 +1578,7 @@ export interface components {
             food_name: string;
             /** Quantity G */
             quantity_g: string;
+            base_unit: components["schemas"]["BaseUnit"];
             /** Kcal */
             kcal: string;
         };
@@ -1763,6 +1772,7 @@ export interface components {
             quantity: string;
             /** Quantity G */
             quantity_g: string;
+            base_unit: components["schemas"]["BaseUnit"];
             /** Kcal */
             kcal: string;
             /** Protein G */

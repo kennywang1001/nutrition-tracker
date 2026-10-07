@@ -346,7 +346,12 @@ async def _friend_meals(
             macros = scale(revision, item.quantity_g)
             macros_list.append(macros)
             items.append(
-                FriendMealItem(food_name=food.name, quantity_g=item.quantity_g, kcal=macros.kcal)
+                FriendMealItem(
+                    food_name=food.name,
+                    quantity_g=item.quantity_g,
+                    base_unit=revision.base_unit,
+                    kcal=macros.kcal,
+                )
             )
         totals = total(macros_list)
         result.append(

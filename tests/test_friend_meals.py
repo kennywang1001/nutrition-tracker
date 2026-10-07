@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from app.models.food import FoodRevision
+from app.models.food import BaseUnit, FoodRevision
 from app.models.friendship import FriendshipStatus
 from app.security.tokens import create_access_token
 from app.storage.photos import save_photo
@@ -94,13 +94,41 @@ async def test_a_friends_shared_meal_shows_in_the_feed_with_only_the_whitelisted
         "id", "user", "eaten_at", "meal_type", "items",
         "kcal", "protein_g", "fat_g", "carb_g", "has_photo",
     }
-    assert set(shared["items"][0]) == {"food_name", "quantity_g", "kcal"}
+    assert set(shared["items"][0]) == {"food_name", "quantity_g", "base_unit", "kcal"}
     # 測試資料裡真的有餐費、備註、照片路徑、私人食物——上面的白名單比對才不是空轉；
     # 再用文字確認一次備註與照片路徑沒有從別的欄位漏出去。
     assert "今天心情很差" not in response.text
     assert photo not in response.text
     assert "food_id" not in response.text
 
+
+
+async def test_a_friends_liquid_shows_in_ml(client, db_session, pals):
+    """最後幾件規格 §2：好友卡片也顯示 ml，所以 `FriendMealItem` 也帶 `base_unit`
+    （釘住的那一版的）。"""
+    alice, bob, _, revision = pals
+    milk = await create_food(
+        db_session, created_by=alice, owner=alice, name="燕麥奶", base_unit=BaseUnit.ML
+    )
+    milk_revision = await db_session.get(FoodRevision, milk.current_revision_id)
+    await create_meal(
+        db_session,
+        user=alice,
+        eaten_at=datetime.fromisoformat("2026-10-06T04:00:00+00:00"),
+        items=[(milk_revision, 300), (revision, 150)],
+    )
+
+    feed = await client.get("/api/friends/feed", headers=auth(bob))
+    day = await client.get(
+        f"/api/friends/{alice.id}/meals", headers=auth(bob), params={"date": "2026-10-06"}
+    )
+
+    for body in (feed.json(), day.json()):
+        [meal] = body["meals"]
+        assert [(i["food_name"], i["base_unit"]) for i in meal["items"]] == [
+            ("燕麥奶", "ml"),
+            ("愛麗絲的私房菜", "g"),
+        ]
 
 async def test_a_friends_day_uses_the_friends_timezone(client, db_session, pals):
     alice, bob, _, revision = pals

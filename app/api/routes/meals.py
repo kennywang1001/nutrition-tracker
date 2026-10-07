@@ -151,8 +151,10 @@ async def _resolve_item(
 
 
 def _item_response(
-    item: MealItem, food_id: int, food_name: str, macros: Macros
+    item: MealItem, food_id: int, food_name: str, revision: FoodRevision, macros: Macros
 ) -> MealItemResponse:
+    """`revision` 是項目**釘住的**那一版（`item.food_revision_id`），不是食物現在的——
+    `base_unit` 跟營養素一樣凍結在記錄當時（handover §4.3）。"""
     return MealItemResponse(
         id=item.id,
         food_id=food_id,
@@ -163,6 +165,7 @@ def _item_response(
         # 才能拿到 NUMERIC(8, 2) 實際存的精度（"100.00"），跟 foods.py 同一個坑。
         quantity=item.quantity,
         quantity_g=item.quantity_g,
+        base_unit=revision.base_unit,
         kcal=macros.kcal,
         protein_g=macros.protein_g,
         fat_g=macros.fat_g,
@@ -238,7 +241,7 @@ async def create_meal(
         macros = scale(resolved.revision, item.quantity_g)
         macros_list.append(macros)
         items_response.append(
-            _item_response(item, resolved.food_id, resolved.food_name, macros)
+            _item_response(item, resolved.food_id, resolved.food_name, resolved.revision, macros)
         )
 
     totals = total(macros_list)
@@ -327,7 +330,7 @@ def _build_meal_response(
     for item, revision, food in item_rows:
         macros = scale(revision, item.quantity_g)
         macros_list.append(macros)
-        items_response.append(_item_response(item, food.id, food.name, macros))
+        items_response.append(_item_response(item, food.id, food.name, revision, macros))
 
     totals = total(macros_list)
     return MealResponse(

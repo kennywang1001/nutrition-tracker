@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.models.food import BaseUnit
 from app.models.meal import MealType
 
 
@@ -47,6 +48,8 @@ class FriendResponse(BaseModel):
 class FriendMealItem(BaseModel):
     food_name: str
     quantity_g: Decimal
+    # 釘住的那一版的單位（同 `MealItemResponse.base_unit`）。
+    base_unit: BaseUnit
     kcal: Decimal
 
 

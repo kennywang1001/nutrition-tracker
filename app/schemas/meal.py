@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
+from app.models.food import BaseUnit
 from app.models.meal import MealType
 
 # `eaten_at` 一律要帶時區偏移，naive 的一律 422。
@@ -129,6 +130,10 @@ class MealItemResponse(BaseModel):
     # 改了重量，舊的紀錄不跟著變（見計畫陷阱 1）。
     quantity: Decimal
     quantity_g: Decimal
+    # `quantity_g` 的單位（最後幾件規格 §2）：液體是 ml。欄位名不改（改名是破壞性的
+    # API 變更）。取**項目釘住的那一版**的 `base_unit`，跟營養素同一條凍結規則
+    # （handover §4.3）——食物後來審核通過一版 g，舊紀錄的 250 仍然是 250 ml。
+    base_unit: BaseUnit
     kcal: Decimal
     protein_g: Decimal
     fat_g: Decimal

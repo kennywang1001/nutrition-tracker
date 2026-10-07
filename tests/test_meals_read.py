@@ -2,6 +2,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from app.days import day_bounds
+from app.models.food import BaseUnit
 from app.models.meal import MealType
 from app.models.user import UserRole
 from app.security.tokens import create_access_token
@@ -212,6 +213,71 @@ async def test_get_meal_uses_pinned_revision_not_foods_current_revision(client, 
     assert body["items"][0]["kcal"] == "200.00"
     assert body["kcal"] == "200.00"
 
+
+
+async def test_an_ml_food_item_reports_ml_everywhere_a_meal_is_returned(client, db_session):
+    """最後幾件規格 §2：液體的項目帶 `base_unit: "ml"`——建立、讀一餐、某一天的清單
+    三條回 `MealResponse` 的路都要帶（前端靠它顯示 ml，不再一律寫 g）。"""
+    user = await create_user(db_session)
+    milk = await create_food(
+        db_session, created_by=user, owner=user, name="鮮奶", base_unit=BaseUnit.ML
+    )
+    rice = await create_food(db_session, created_by=user, owner=user, name="白飯")
+
+    created = await client.post(
+        "/api/meals",
+        headers=auth(user),
+        json=_create_payload(
+            items=[
+                {"food_id": milk.id, "quantity": "250"},
+                {"food_id": rice.id, "quantity": "150"},
+            ]
+        ),
+    )
+    assert created.status_code == 201
+    meal_id = created.json()["id"]
+    one = await client.get(f"/api/meals/{meal_id}", headers=auth(user))
+    day = await client.get("/api/meals", headers=auth(user), params={"date": "2026-09-04"})
+
+    for items in (created.json()["items"], one.json()["items"], day.json()[0]["items"]):
+        assert [(i["food_name"], i["base_unit"]) for i in items] == [
+            ("鮮奶", "ml"),
+            ("白飯", "g"),
+        ]
+
+
+async def test_base_unit_follows_the_pinned_revision_not_the_foods_current_one(
+    client, db_session
+):
+    """§4.3 的凍結規則，`base_unit` 也照辦：記的時候是 ml，食物後來審核通過一版 g，
+    舊的紀錄仍然是 ml（數字是「當時那一版」的 250 ml，換成 g 就是錯的）。"""
+    admin = await create_user(db_session, role=UserRole.ADMIN)
+    user = await create_user(db_session)
+    food = await create_food(db_session, created_by=user, base_unit=BaseUnit.ML)
+
+    created = await client.post(
+        "/api/meals",
+        headers=auth(user),
+        json=_create_payload(items=[{"food_id": food.id, "quantity": "250"}]),
+    )
+    assert created.status_code == 201
+    meal_id = created.json()["id"]
+
+    pending = await create_pending_revision(db_session, food=food, created_by=admin)
+    pending.base_unit = BaseUnit.G
+    await db_session.commit()
+    approved = await client.post(
+        f"/api/admin/food-revisions/{pending.id}/approve", headers=auth(admin)
+    )
+    assert approved.status_code == 200
+    # 前提：食物現在的版本真的是 g——不然下面的斷言對「拿現在的版本」零鑑別力。
+    now = await client.get(f"/api/foods/{food.id}", headers=auth(user))
+    assert now.json()["nutrition"]["base_unit"] == "g"
+
+    response = await client.get(f"/api/meals/{meal_id}", headers=auth(user))
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["base_unit"] == "ml"
 
 # ---------------------------------------------------------------------------
 # Task 9: GET /api/meals?date= —— 時區在這裡發揮作用
