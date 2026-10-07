@@ -1147,9 +1147,10 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
 
 **已知待辦（都已完成，見規格 `docs/superpowers/specs/2026-10-08-keypad-offline-design.md`）：**
 
-- (a) **已完成，bug 實測證實**：有資料但重抓失敗的查詢（`status: "error"`）被下一次寫入從離線快取拿掉，第二次離線重新載入什麼都沒有；`persist.ts` 的 `shouldDehydrateQuery` 改成 success 或「error 而且有 data」（`offline.test.tsx` 三階段測試，修之前紅）。
+- (a) **已完成，bug 實測證實**：有資料但重抓失敗的查詢（`status: "error"`）被下一次寫入從離線快取拿掉，第二次離線重新載入什麼都沒有；`persist.ts` 的 `shouldDehydrateQuery` 改成 success 或「error 而且有 data」（`offline.test.tsx` 三階段測試，修之前紅）。寫進去之前 persister 的 `serialize` 把它改寫成 success、清掉 error、保留 `isInvalidated: true`——restore 回來的失敗查詢不是 error，在線上重新載入時重抓還在路上也不會顯示離線標示或「無法載入」，重抓再失敗才變回 error。
 - (b) **已完成**：只在 `/expenses/new` 隱藏分頁列（`App.tsx` 的 `LoggedInShell`，`.app-main-no-tab-bar` 拿掉底部留白）；記一餐沒有關閉鈕，不隱藏。
-- (c) **已完成**：記帳數字鍵盤接受實體鍵盤（數字、`.`／`,`、Backspace、Enter 送出），焦點在備註欄或有 Ctrl／Meta／Alt 時不攔（`MoneyKeypad.tsx`）。
+- (c) **已完成**：記帳數字鍵盤接受實體鍵盤（數字、`.`／`,`、Backspace、Enter 送出），焦點在備註欄、有 Ctrl／Meta／Alt、或輸入法組字中時不攔（`MoneyKeypad.tsx`）。Enter 的規則：焦點在任何按鈕或連結上（包括 Tab 走到的數字鍵）時屬於那個控制項；鍵盤上的按鍵滑鼠／觸控點了不拿焦點（mousedown 擋預設動作，焦點在備註時把備註 blur 掉），所以點過數字之後按 Enter 是送出；按住 Enter 的自動重複不算。已知限制：螢幕閱讀器的瀏覽模式會吃掉數字鍵，要切到焦點模式才打得進金額。
+  - 審查提過、刻意不改：監聽器每次金額改變就重新掛一次（行得通、有測試）；Enter 分支裡 `!submitDisabled` 跟 ✓ 的 `disabled` 重複；(b) 的版面沒有 e2e。
 
 ---
 

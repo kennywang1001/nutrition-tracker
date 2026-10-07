@@ -20,16 +20,21 @@ handover「介面改版：已知待辦」的三條：
 | 項目 | 做法 | 理由 |
 |---|---|---|
 | (b) | **只在 `/expenses/new` 隱藏分頁列**，`.app-main` 的底部留白跟著拿掉 | 那一頁是全螢幕的記帳流程、有「關閉」；記一餐沒有關閉鈕（隱藏的話在 iOS 主畫面模式會被困住），而且沒有數字鍵盤 |
-| (c) | 記帳畫面掛**全域 keydown**：數字、`.`／`,`、Backspace、Enter（＝送出，跟 ✓ 一樣受 disabled 限制） | 焦點在文字欄（備註）時不攔——那是打備註；有 Ctrl／Meta／Alt 的組合鍵不攔 |
+| (c) | 記帳畫面掛**全域 keydown**：數字、`.`／`,`、Backspace、Enter（＝送出，跟 ✓ 一樣受 disabled 限制） | 焦點在文字欄（備註）時不攔——那是打備註；有 Ctrl／Meta／Alt 的組合鍵不攔；輸入法組字中（`isComposing`）不攔 |
+| (c) Enter | 焦點在**任何**按鈕或連結上（包括 Tab 走到的數字鍵、「關閉」、分類、✓）時，Enter 屬於那個控制項（原生行為：Tab 到「2」按 Enter 就是按「2」）；焦點在 body 時 Enter 才是送出。鍵盤上的按鍵在 mousedown 擋掉預設動作，滑鼠／觸控點了**不拿焦點**（click 照常），所以點過數字之後按 Enter 是送出；焦點原本在備註欄時點按鍵會把備註 blur 掉。按住 Enter 的自動重複（`repeat`）不算 | 審查發現上一版把數字鍵當例外，Tab 到數字鍵按 Enter 會送出 |
+| (c) 已知限制 | 螢幕閱讀器的瀏覽模式（browse／virtual mode）會自己吃掉數字鍵，要切到焦點模式（focus／forms mode）才打得進金額 | 那是輔助科技的設計，網頁攔不到 |
 | (a) | `shouldDehydrateQuery`：`success`，或 `error` **而且** `data !== undefined`（再加上原本的 `NOT_PERSISTED`） | 有資料的失敗查詢保留最後一份成功的資料；沒資料的失敗不寫 |
+| (a) 寫入前 | persister 的 `serialize` 把有資料的 `error` 改寫成 `success`、清掉 `error` 與失敗次數、保留 `isInvalidated: true`（`data`、`dataUpdatedAt` 不動） | 原樣寫的話 restore 回來是 error，下一次**在線上**載入、重抓還在路上時，今日總覽顯示離線標示、報表顯示「無法載入」；`ApiError` 經過 JSON 也只剩 `{}`。改寫後 restore 回來的查詢算 stale、掛載就重抓，重抓再失敗才變回 error |
 
 ## 3. 測試
 
 - (b) 單元：`/expenses/new` 沒有「主要導覽」、其他頁有；e2e 觸控測試照樣綠。
 - (c) 單元：在記帳畫面按實體鍵 `1`、`2`、`.`、`5`、Backspace → 金額「12.」；Enter 送出（金額有效時）；
-  焦點在備註欄時打數字進備註、不進金額；Ctrl+1 不輸入。
+  焦點在備註欄時打數字進備註、不進金額；Ctrl／Alt／Meta+1 不輸入；Tab 到「2」按 Enter 是按「2」；
+  滑鼠點過數字鍵之後焦點不在按鍵上、Enter 是送出；按住 Enter 的 repeat 不送出；組字中的按鍵不輸入。
 - (a) 單元（`offline.test.tsx` 的兩階段寫法再多一階段）：線上成功 → 離線重新載入（抓取失敗、畫面有資料）→
-  **再一次**離線重新載入，資料還在。先證明修之前會紅。
+  **再一次**離線重新載入，資料還在。先證明修之前會紅。另一條三階段：線上成功 → 離線失敗 → 線上但重抓
+  pending，今日總覽沒有離線標示、報表沒有「無法載入」。
 
 ## 4. 交付
 
