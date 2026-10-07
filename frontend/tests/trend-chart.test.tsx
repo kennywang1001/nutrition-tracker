@@ -349,3 +349,78 @@ describe("TrendChart：日期軸", () => {
 		);
 	});
 });
+
+/** `last` 往回 `count` 天（含 `last`），由舊到新。用 UTC 的 Date 算，
+ *  不經過 `shiftDays`——期望值不能由被測的那一側產生。 */
+function datesEndingAt(last: string, count: number): string[] {
+	const end = Date.parse(`${last}T00:00:00Z`);
+	return Array.from({ length: count }, (_, i) =>
+		new Date(end - (count - 1 - i) * 86_400_000).toISOString().slice(0, 10),
+	);
+}
+
+function labelledDates() {
+	return screen
+		.getAllByTestId(/^trend-date-/)
+		.map((text) =>
+			text.getAttribute("data-testid")?.replace("trend-date-", ""),
+		);
+}
+
+describe("TrendChart：30 天的日期軸", () => {
+	it("只標今天與每往回 7 天的那幾根", () => {
+		// 30 根柱子在 280 寬的圖裡每根約 9 個單位，放不下 30 個「9/15」。
+		// 期望值手寫，不從 datesEndingAt 推：今天、-7、-14、-21、-28。
+		const dates = datesEndingAt("2026-09-16", 30);
+		expect(dates[0]).toBe("2026-08-18");
+		render(
+			<TrendChart
+				today="2026-09-16"
+				days={dates.map((date) => fullDay(date, { kcal: "1800.00" }, null))}
+			/>,
+		);
+
+		expect(labelledDates()).toEqual([
+			"2026-08-19",
+			"2026-08-26",
+			"2026-09-02",
+			"2026-09-09",
+			"2026-09-16",
+		]);
+		expect(screen.getByTestId("trend-date-2026-09-16")).toHaveTextContent(
+			"今天",
+		);
+		expect(screen.getByTestId("trend-date-2026-09-09")).toHaveTextContent(
+			"9/9",
+		);
+	});
+
+	it("沒標日期的柱子，aria-label 照樣有日期", () => {
+		const dates = datesEndingAt("2026-09-16", 30);
+		render(
+			<TrendChart
+				days={dates.map((date) => fullDay(date, { kcal: "1800.00" }, null))}
+			/>,
+		);
+
+		const bars = screen.getAllByRole("img");
+		expect(bars).toHaveLength(30);
+		expect(screen.queryByTestId("trend-date-2026-09-15")).toBeNull();
+		expect(screen.getByTestId("trend-bar-2026-09-15")).toHaveAttribute(
+			"aria-label",
+			expect.stringMatching(/^9\/15，/),
+		);
+	});
+
+	it("7 天時每根都標（剛好 7 根不算「超過 7 天」）", () => {
+		const dates = datesEndingAt("2026-09-16", 7);
+		render(
+			<TrendChart
+				today="2026-09-16"
+				days={dates.map((date) => fullDay(date, { kcal: "1800.00" }, null))}
+			/>,
+		);
+
+		expect(labelledDates()).toEqual(dates);
+	});
+});

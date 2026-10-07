@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { apiFetch } from "../api/client";
 import { queryKeys } from "../api/queries";
@@ -18,10 +18,14 @@ import styles from "./Trend.module.css";
 
 type RangeStats = components["schemas"]["RangeStatsResponse"];
 
-/** 最近七天。兩端都含，所以起點是終點往回推 6 天（不是 7）——
+/** 可以選的期間（趨勢期間規格 §2）。預設 7 天，不記住上次選的——
+ *  跟營養素切換一樣，每次進來都是 7 天。
+ *
+ *  兩端都含，所以起點是終點往回推 `span - 1` 天（7 天是往回 6 天，不是 7）——
  *  `app/api/routes/stats.py` 的 `get_range_stats`：
  *  「使用者說『9/1 到 9/7』預期的是 7 天」。 */
-const SPAN_DAYS = 7;
+const SPANS = [7, 30] as const;
+type Span = (typeof SPANS)[number];
 
 /** 今天那一項的摘要：「今天 1240 / 2000 kcal」；那一項沒有目標（整天沒有
  *  目標，或有目標但這一項沒設）時只寫實際值。 */
@@ -53,8 +57,9 @@ function todaySummary(day: TrendDay, metric: TrendMetric): string {
 export function Trend() {
 	const anchorQuery = useDailyStats();
 
+	const [span, setSpan] = useState<Span>(7);
 	const today = anchorQuery.data?.date ?? null;
-	const from = today === null ? null : shiftDays(today, -(SPAN_DAYS - 1));
+	const from = today === null ? null : shiftDays(today, -(span - 1));
 
 	const rangeQuery = useQuery({
 		// key 一定要有值（TanStack Query 不接受 undefined 的 key），
@@ -64,6 +69,9 @@ export function Trend() {
 		queryFn: () =>
 			apiFetch<RangeStats>(`/api/stats/range?from=${from}&to=${today}`),
 		enabled: from !== null && today !== null,
+		// 換期間時先留著上一段的資料，不要整個畫面退回「載入中…」——
+		// 那會把兩組切換鈕一起拆掉，剛按下去的那顆單選鈕就失去焦點。
+		placeholderData: keepPreviousData,
 	});
 
 	const range = rangeQuery.data;
@@ -92,6 +100,23 @@ export function Trend() {
 									className={styles.metricInput}
 								/>
 								{TREND_METRICS[option].label}
+							</label>
+						))}
+					</fieldset>
+
+					<fieldset className={styles.metrics}>
+						<legend className={styles.legend}>期間</legend>
+						{SPANS.map((option) => (
+							<label key={option} className={styles.metric}>
+								<input
+									type="radio"
+									name="trend-span"
+									value={option}
+									checked={span === option}
+									onChange={() => setSpan(option)}
+									className={styles.metricInput}
+								/>
+								{option} 天
 							</label>
 						))}
 					</fieldset>

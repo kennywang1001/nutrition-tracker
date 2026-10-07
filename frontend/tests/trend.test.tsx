@@ -254,3 +254,122 @@ describe("趨勢：營養素切換", () => {
 		expect(summary).not.toHaveTextContent("/");
 	});
 });
+
+/** 2019-07-04 往回 30 天（含當天），由舊到新。刻意手寫，不用 `shiftDays`
+ *  產生——用被測的函式產生期望值，錯的時候兩邊一起錯。 */
+const THIRTY_DAYS = [
+	"2019-06-05",
+	"2019-06-06",
+	"2019-06-07",
+	"2019-06-08",
+	"2019-06-09",
+	"2019-06-10",
+	"2019-06-11",
+	"2019-06-12",
+	"2019-06-13",
+	"2019-06-14",
+	"2019-06-15",
+	"2019-06-16",
+	"2019-06-17",
+	"2019-06-18",
+	"2019-06-19",
+	"2019-06-20",
+	"2019-06-21",
+	"2019-06-22",
+	"2019-06-23",
+	"2019-06-24",
+	"2019-06-25",
+	"2019-06-26",
+	"2019-06-27",
+	"2019-06-28",
+	"2019-06-29",
+	"2019-06-30",
+	"2019-07-01",
+	"2019-07-02",
+	"2019-07-03",
+	"2019-07-04",
+];
+
+function rangeOf(dates: readonly string[]) {
+	return {
+		date_from: dates[0],
+		date_to: dates[dates.length - 1],
+		adherence: null,
+		trend: dates.map((date) => ({
+			date,
+			actual: macros("1800.00"),
+			target: null,
+			ratio: null,
+		})),
+	};
+}
+
+function rangeCalls(fetchMock: ReturnType<typeof mockApi>) {
+	return fetchMock.mock.calls
+		.map(([input]) => String(input))
+		.filter((url) => url.includes("/api/stats/range"));
+}
+
+describe("趨勢：期間切換", () => {
+	it("預設 7 天", async () => {
+		mockApi([
+			{ path: "/api/stats/range", handler: () => json(rangeBody(null)) },
+			{ path: "/api/stats/daily", handler: () => json(DAILY) },
+		]);
+		render(wrap(<Trend />));
+
+		const period = await screen.findByRole("group", { name: "期間" });
+		expect(period).toBeInTheDocument();
+		expect(screen.getByRole("radio", { name: "7 天" })).toBeChecked();
+		expect(screen.getByRole("radio", { name: "30 天" })).not.toBeChecked();
+	});
+
+	it("切到 30 天：from 是今天往回 29 天（兩端都含），柱子 30 根", async () => {
+		// 30 天的路由排在前面：mockApi 用 includes 比對、取第一個符合的。
+		// 7 天的請求（from=2019-06-28）不會命中第一條。
+		const fetchMock = mockApi([
+			{
+				path: "/api/stats/range?from=2019-06-05&to=2019-07-04",
+				handler: () => json(rangeOf(THIRTY_DAYS)),
+			},
+			{ path: "/api/stats/range", handler: () => json(rangeBody(null)) },
+			{ path: "/api/stats/daily", handler: () => json(DAILY) },
+		]);
+		render(wrap(<Trend />));
+
+		await userEvent.click(await screen.findByRole("radio", { name: "30 天" }));
+
+		expect(screen.getByRole("radio", { name: "30 天" })).toBeChecked();
+		await screen.findByTestId("trend-bar-2019-06-05");
+		expect(screen.getAllByTestId(/^trend-bar-/)).toHaveLength(30);
+		// 斷言請求本身，不只看畫面：from 錯一天（例如 -30）的話 30 天的
+		// 路由不會命中，請求會落到 7 天那條。
+		expect(rangeCalls(fetchMock)).toContain(
+			"/api/stats/range?from=2019-06-05&to=2019-07-04",
+		);
+		expect(
+			rangeCalls(fetchMock).filter((url) => url.includes("from=2019-06-04")),
+		).toHaveLength(0);
+	});
+
+	it("切回 7 天：from 回到往回 6 天", async () => {
+		const fetchMock = mockApi([
+			{
+				path: "/api/stats/range?from=2019-06-05&to=2019-07-04",
+				handler: () => json(rangeOf(THIRTY_DAYS)),
+			},
+			{ path: "/api/stats/range", handler: () => json(rangeBody(null)) },
+			{ path: "/api/stats/daily", handler: () => json(DAILY) },
+		]);
+		render(wrap(<Trend />));
+
+		await userEvent.click(await screen.findByRole("radio", { name: "30 天" }));
+		await screen.findByTestId("trend-bar-2019-06-05");
+		await userEvent.click(screen.getByRole("radio", { name: "7 天" }));
+
+		expect(screen.getAllByTestId(/^trend-bar-/)).toHaveLength(7);
+		expect(rangeCalls(fetchMock)).toContain(
+			"/api/stats/range?from=2019-06-28&to=2019-07-04",
+		);
+	});
+});

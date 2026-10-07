@@ -36,6 +36,21 @@ const VIEW_HEIGHT = 160;
  *  既有的高度比例與位置測試不受影響。 */
 const DATE_BAND = 16;
 const BAR_WIDTH_RATIO = 0.6;
+/** 超過這個天數，日期軸就不是每根都標（趨勢期間規格 §2）。 */
+const LABEL_EVERY_BAR_UP_TO = 7;
+/** 天數多的時候，從最後一根（今天）往回每幾根標一次。 */
+const LABEL_STRIDE = 7;
+
+/** 第 `index` 根（共 `count` 根）下面要不要寫日期。
+ *
+ *  7 天以內每根都標。超過 7 天（30 天時柱寬約 9 個單位，放不下 30 個
+ *  「9/15」）只標最後一根與往回每 7 根——從尾端數，所以今天一定有標，
+ *  而且標到的那幾天都跟今天同一個星期幾。
+ *  沒標的柱子 aria-label 照樣有日期；日期軸本來就是裝飾。 */
+function hasDateLabel(index: number, count: number): boolean {
+	if (count <= LABEL_EVERY_BAR_UP_TO) return true;
+	return (count - 1 - index) % LABEL_STRIDE === 0;
+}
 
 /** 最近幾天的營養素長條圖（規格 §4.4–§4.6）。
  *
@@ -157,17 +172,19 @@ export function TrendChart({ days, metric = "kcal", today = null }: Props) {
 								day.date === today ? "trend-bar trend-bar-today" : "trend-bar"
 							}
 						/>
-						{/* biome-ignore lint/a11y/noAriaHiddenOnFocusable: SVG <text> 不能聚焦，這是規則的誤判；日期是裝飾，柱子的 aria-label 已經有 */}
-						<text
-							data-testid={`trend-date-${day.date}`}
-							x={x + barWidth / 2}
-							y={VIEW_HEIGHT + DATE_BAND - 4}
-							textAnchor="middle"
-							className="trend-date"
-							aria-hidden="true"
-						>
-							{day.date === today ? "今天" : formatCivilDate(day.date)}
-						</text>
+						{hasDateLabel(index, days.length) && (
+							// biome-ignore lint/a11y/noAriaHiddenOnFocusable: SVG <text> 不能聚焦，這是規則的誤判；日期是裝飾，柱子的 aria-label 已經有
+							<text
+								data-testid={`trend-date-${day.date}`}
+								x={x + barWidth / 2}
+								y={VIEW_HEIGHT + DATE_BAND - 4}
+								textAnchor="middle"
+								className="trend-date"
+								aria-hidden="true"
+							>
+								{day.date === today ? "今天" : formatCivilDate(day.date)}
+							</text>
+						)}
 						{targetValue !== null && (
 							<line
 								data-testid={`trend-target-${day.date}`}
