@@ -142,17 +142,20 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> To
 async def logout(payload: LogoutRequest, db: AsyncSession = Depends(get_db)) -> None:
     """登出這一台裝置：這張 refresh token 所屬的整條鏈立刻失效，不能再換發新票。
 
-    對無效、過期、已經登出過的 token 一律回 204——這個端點本來就是冪等的。
+    對無效、過期、已經登出過的 token 回 204——這個端點本來就是冪等的。**例外是 429**：
+    簽章對的票（包括早就撤銷的）同一張一分鐘內超過 `SESSION_LIMIT` 次，回
+    `429 TOO_MANY_SESSION_REQUESTS`；簽章不對的票不計數，永遠是 204。
 
     **先驗簽、再限速、最後才碰資料庫**（安全補強規格 §3.1）：簽章不對的票不計數
-    （驗簽不碰資料庫、不取鎖，本來就便宜）；簽章對的票——包括早就撤銷的——
-    每個使用者每分鐘最多 `SESSION_LIMIT` 次走到 `revoke_session` 的 advisory lock。
+    （驗簽不碰資料庫、不取鎖，本來就便宜）；簽章對的票每張（鍵是它的 `jti`）每分鐘
+    最多 `SESSION_LIMIT` 次走到 `revoke_session` 的 advisory lock。為什麼鍵是 `jti`
+    不是 `sub`，見 `app/ratelimit.py` 的 `session_rate_limiter`。
     """
     try:
         claims = decode_refresh_token(payload.refresh_token)
     except TokenError:
         return
-    session_rate_limiter.hit(str(claims.user_id))
+    session_rate_limiter.hit(str(claims.jti))
     await revoke_session(db, payload.refresh_token)
 
 
@@ -172,13 +175,15 @@ async def logout_all(
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
-    # 先驗簽取 sub、再限速，最後才進 rotate_session 的資料庫與 advisory lock
+    # 先驗簽取 jti、再限速，最後才進 rotate_session 的資料庫與 advisory lock
     # （安全補強規格 §3.1；同 logout）。簽章不對 → 跟原本一樣的 401，不計數。
+    # 鍵是這張票自己的 jti、不是 sub：舊票被重放只燒掉那張票的額度，正常輪替每次
+    # 都拿新的 jti、不會被擋（理由見 app/ratelimit.py 的 session_rate_limiter）。
     try:
         claims = decode_refresh_token(payload.refresh_token)
     except TokenError as exc:
         raise UnauthorizedError("INVALID_TOKEN", "token 無效或已過期") from exc
-    session_rate_limiter.hit(str(claims.user_id))
+    session_rate_limiter.hit(str(claims.jti))
 
     try:
         issued = await rotate_session(db, payload.refresh_token)

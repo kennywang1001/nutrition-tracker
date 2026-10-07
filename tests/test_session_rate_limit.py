@@ -52,7 +52,7 @@ async def _tokens(db_session):
     return issued.refresh_token
 
 
-async def test_logout_and_refresh_share_one_budget_per_user_a_minute(client, db_session):
+async def test_logout_and_refresh_with_the_same_token_share_one_budget(client, db_session):
     token = await _tokens(db_session)
 
     logouts = [
@@ -68,27 +68,37 @@ async def test_logout_and_refresh_share_one_budget_per_user_a_minute(client, db_
     assert int(blocked.headers["Retry-After"]) >= 1
 
 
-async def test_another_user_is_not_affected(client, db_session):
-    spammed = await _tokens(db_session)
-    other = await _tokens(db_session)
-    for _ in range(SESSION_LIMIT):
-        await client.post("/api/auth/logout", json={"refresh_token": spammed})
+async def test_spamming_an_old_token_does_not_lock_out_the_same_users_fresh_token(
+    client, db_session
+):
+    # 鍵是每張票的 jti，不是 sub：拿到某個使用者一張舊票（撤銷了也一樣驗得過簽章，
+    # 14 天內都解得開）的人，狂打只會燒掉那張票自己的額度，不能讓本人換不了票。
+    user = await create_user(db_session)
+    old = (await start_session(db_session, user.id)).refresh_token
+    fresh = (await start_session(db_session, user.id)).refresh_token  # 另一條 family
+    spam = [
+        await client.post("/api/auth/refresh", json={"refresh_token": old})
+        for _ in range(SESSION_LIMIT + 1)
+    ]
 
-    response = await client.post("/api/auth/refresh", json={"refresh_token": other})
+    response = await client.post("/api/auth/refresh", json={"refresh_token": fresh})
 
+    assert spam[-1].status_code == 429  # 舊票的額度確實用完了
     assert response.status_code == 200
 
 
 async def test_garbage_tokens_are_not_counted(client, db_session):
     token = await _tokens(db_session)
+    # 超過額度的次數：只要亂碼在驗簽之前被算進任何一個鍵（例如「先一律記一次再驗簽」），
+    # 第 SESSION_LIMIT + 1 次就會是 429 而不是 401。
     garbage = [
         await client.post("/api/auth/refresh", json={"refresh_token": "not-a-token"})
-        for _ in range(20)
+        for _ in range(SESSION_LIMIT + 1)
     ]
 
     response = await client.post("/api/auth/refresh", json={"refresh_token": token})
 
-    assert {r.status_code for r in garbage} == {401}
+    assert [r.status_code for r in garbage] == [401] * (SESSION_LIMIT + 1)
     assert response.status_code == 200
 
 
