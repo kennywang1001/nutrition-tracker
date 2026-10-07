@@ -1,10 +1,11 @@
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import {
 	BrowserRouter,
 	Navigate,
 	Route,
 	Routes,
+	useMatch,
 	useNavigate,
 } from "react-router";
 // 離線 L2（計畫三 Task 4）：跟下面的 queryClient 一樣是模組層單例，不是
@@ -63,6 +64,29 @@ function AddExpenseRoute() {
 	return <AddExpense onDone={() => navigate("/")} />;
 }
 
+/** 登入後的外框：頁面內容＋分頁列。
+ *
+ *  **記帳（`/expenses/new`）不顯示分頁列**（記帳與離線規格 §2 (b)）：矮螢幕
+ *  （iPhone SE）上分頁列會蓋住數字鍵盤的最下面幾列。那一頁是全螢幕的記帳流程，
+ *  有自己的「關閉」。記一餐不隱藏——它沒有關閉鈕，在 iOS 主畫面模式下隱藏就
+ *  出不去了，而且沒有數字鍵盤。
+ *
+ *  `.app-main` 的底部留白是為分頁列留的，隱藏時一起拿掉（`index.css`）。
+ *  `useMatch` 而不是比 `pathname` 字串：`/expenses/new/` 也命中同一個路由。 */
+function LoggedInShell({ children }: { children: ReactNode }) {
+	const tabBarHidden = useMatch("/expenses/new") !== null;
+	return (
+		<>
+			<main
+				className={tabBarHidden ? "app-main app-main-no-tab-bar" : "app-main"}
+			>
+				{children}
+			</main>
+			{!tabBarHidden && <TabBar />}
+		</>
+	);
+}
+
 /** 未登入時顯示建立帳號的網址。`/join/`：有人手打或轉貼時多一個斜線；登入後的
  *  react-router 本來就把它當 `/join`。 */
 const JOIN_PATHS = new Set(["/join", "/join/"]);
@@ -79,7 +103,7 @@ export function App() {
 		>
 			{loggedIn ? (
 				<BrowserRouter>
-					<main className="app-main">
+					<LoggedInShell>
 						<Routes>
 							{/* 介面改版（規格 §3.2）：總覽｜報表｜＋｜飲食｜我的。
 									「＋」不是路由，是 TabBar 裡打開 AddSheet 的按鈕。 */}
@@ -125,8 +149,7 @@ export function App() {
 							<Route path="/admin/revisions" element={<AdminRevisions />} />
 							<Route path="/join" element={<JoinWhileLoggedIn />} />
 						</Routes>
-					</main>
-					<TabBar />
+					</LoggedInShell>
 				</BrowserRouter>
 			) : JOIN_PATHS.has(window.location.pathname) ? (
 				// 邀請連結（邀請規格 §4.1）。其他網址照舊一律登入畫面。

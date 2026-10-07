@@ -144,6 +144,55 @@ describe("App", () => {
 		).toBeInTheDocument();
 	});
 
+	it("記帳畫面不顯示分頁列，關閉回到總覽後分頁列回來", async () => {
+		// 矮螢幕（iPhone SE）上分頁列會蓋住數字鍵盤的最下面幾列（記帳與離線
+		// 規格 §2 (b)）。記帳有自己的「關閉」，所以只有這一頁隱藏。
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockBackend();
+		render(<App />);
+
+		expect(
+			await screen.findByRole("heading", { name: "總覽" }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("navigation", { name: "主要導覽" }),
+		).toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
+		await userEvent.click(screen.getByRole("link", { name: "記帳" }));
+		// 換頁後的第一個斷言要對準只有記帳頁才有的東西（handover §6 第 53 種）。
+		expect(
+			await screen.findByRole("button", { name: "記一筆" }),
+		).toBeInTheDocument();
+		expect(window.location.pathname).toBe("/expenses/new");
+		expect(
+			screen.queryByRole("navigation", { name: "主要導覽" }),
+		).not.toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "關閉" }));
+		expect(
+			await screen.findByRole("heading", { name: "總覽" }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("navigation", { name: "主要導覽" }),
+		).toBeInTheDocument();
+	});
+
+	it("直接打開 /expenses/new 也不顯示分頁列", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockBackend();
+		window.history.replaceState(null, "", "/expenses/new");
+
+		render(<App />);
+
+		expect(
+			await screen.findByRole("button", { name: "記一筆" }),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByRole("navigation", { name: "主要導覽" }),
+		).not.toBeInTheDocument();
+	});
+
 	it("記一餐存好、照片沒傳上去：回到總覽並顯示通知", async () => {
 		// LogMealRoute 的接線只有 App 層看得到：onSaved 的結果 → navigate 的 state
 		// → 總覽的 role="status"。
