@@ -186,13 +186,20 @@ DB 只存相對路徑。不存進資料庫的真正理由不是效能，是**備
 `user_id == me` 改成「我或我的好友」——後者只要套錯一個端點，好友就看得到生活花費
 與目標，**而 `test_cross_user_isolation.py` 的 38 條照樣全綠**（它們測的是非好友）。
 
-- **既有端點一行都沒改。** 好友的讀取全部在 `/api/friends/...`（`app/api/routes/friends.py`）。
+- **既有的讀取一個都沒放寬。**（`/api/meals` 只多了 `is_private` 的讀寫。）好友的讀取全部在
+  `/api/friends/...`（`app/api/routes/friends.py`）。
 - **唯一入口** `app/friend_visibility.py`：`friend_ids`（只有已接受的）、`load_visible_friend`、
   `shared_meals`（屬於好友、而且 `NOT is_private`）。動態、某一天、照片都從 `shared_meals` 開始。
 - **白名單回應** `FriendMeal`：不是從 `MealResponse` 刪欄位——沒有餐費、備註、照片路徑、
   食物與份量的 id、份量名稱（可能是私人份量）。
-- **守住它的測試**：「在兩人**是好友**的狀態下，既有端點照樣 404」；原始碼掃描「只有好友
-  模組碰 `Friendship`」；私人餐、邀請中、解除後、非好友、好友 id 與餐點 id 不配對都看不到。
+- **守住它的測試**：「在兩人**是好友**的狀態下，既有的單筆端點照樣 404、**列表端點**（今天的餐、
+  支出、月報、每日統計、今日補劑）照樣沒有對方的資料」；原始碼掃描「`Friendship` 與可見性函式
+  （`friend_ids`、`shared_meals`…）只出現在好友模組」——最後審查抓到：原本的掃描只找
+  `Friendship` 這個字，有人在 `list_meals` 直接 import `friend_ids` 就會漏掉；私人餐、邀請中、
+  解除後、非好友、好友 id 與餐點 id 不配對都看不到。
+- **好友資料不進 localStorage**（`["friends", …]` 與 `["friend-photo", …]` 都在 `NOT_PERSISTED`）：
+  對方解除或把一餐改成私人之後，這台裝置離線時不該還看得到。
+- 私人食物的**名稱**好友看得到（「吃了什麼」就是食物名）——刻意的取捨，對策是逐餐的「只有我看得到」。
 - 一對朋友一列（`user_a < user_b`，CHECK 擋自己加自己）；拒絕、收回、解除都是刪列。
 
 ---
@@ -985,7 +992,10 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
   - 三個安全條件的突變（拿掉 `is_private` 過濾、拿掉「已接受」條件、照片不限好友）實作時
     被自動模式的安全檢查擋下，**沒有實際跑過**；對應的測試從寫法上看得出會紅
     （`test_a_private_meal_is_invisible_everywhere`、`test_a_pending_request_shows_nothing`、
-    `test_the_photo_needs_the_friend_and_the_meal_to_match`）。要補跑就手動改、跑、改回。
+    `test_the_photo_needs_the_friend_and_the_meal_to_match`；最後審查逐條讀過、確認各自會紅）。
+    要補跑就手動改、跑、改回。
+  - 極端的日期（`?date=9999-12-31`、`0001-01-01`）在 `day_bounds` 裡 `OverflowError` → 500——
+    `/api/meals?date=` 本來就有（master 就存在），好友的某一天繼承了它。
 - **編輯自己已送出的提案**：後端沒有這個端點，目前只能等審核結果。
 
 ---

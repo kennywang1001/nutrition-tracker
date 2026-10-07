@@ -1,7 +1,7 @@
 """好友（好友規格）。
 
 **好友的讀取全部在這個檔案，經過 `app/friend_visibility.py`。** 既有的端點
-（`/api/meals`、`/api/expenses`…）一行都不改——它們照舊只回自己的資料
+（`/api/meals`、`/api/expenses`…）的讀取一個都不放寬——它們照舊只回自己的資料
 （規格 §1.2：放寬舊規則會讓好友看到生活花費與目標，而既有的 38 條隔離測試
 照樣全綠）。`tests/test_friend_meals.py` 的掃描測試守著這件事。
 """
