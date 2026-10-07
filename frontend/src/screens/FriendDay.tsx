@@ -17,7 +17,7 @@ export function FriendDay() {
 			<section>
 				<h1>好友</h1>
 				<p role="alert">看不到這個人的餐點</p>
-				<Link to="/diet" className={styles.back}>
+				<Link to="/diet?view=friends" className={styles.back}>
 					回飲食
 				</Link>
 			</section>

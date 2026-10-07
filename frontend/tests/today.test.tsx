@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { queryKeys } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
@@ -238,5 +238,42 @@ describe("今日總覽", () => {
 		await userEvent.click(screen.getByRole("radio", { name: "我的" }));
 
 		expect(await screen.findByText("今日餐點")).toBeInTheDocument();
+	});
+
+	it("網址帶 ?view=friends 直接顯示好友動態（從好友的一天按返回會回到這裡）", async () => {
+		mockApi({
+			"/api/stats/daily": () => json(STATS_WITH_TARGET),
+			"/api/supplements/today": () => json([]),
+			"/api/friends/feed": () => json({ meals: [], next_cursor: null }),
+			"/api/friends": () => json([]),
+		});
+		let search = "";
+		function SearchProbe() {
+			search = useLocation().search;
+			return null;
+		}
+		const client = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+
+		render(
+			<QueryClientProvider client={client}>
+				<MemoryRouter initialEntries={["/diet?view=friends"]}>
+					<Today />
+					<SearchProbe />
+				</MemoryRouter>
+			</QueryClientProvider>,
+		);
+
+		expect(
+			await screen.findByText("還沒有好友。到「我的」→「好友」用好友碼加朋友"),
+		).toBeInTheDocument();
+		expect(screen.getByRole("radio", { name: "好友" })).toBeChecked();
+		expect(screen.queryByText("今日餐點")).not.toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("radio", { name: "我的" }));
+
+		expect(await screen.findByText("今日餐點")).toBeInTheDocument();
+		expect(search).toBe("");
 	});
 });

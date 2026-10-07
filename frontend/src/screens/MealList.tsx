@@ -75,10 +75,14 @@ function MealCard({ meal }: { meal: Meal }) {
 	return (
 		<li className={styles.meal}>
 			<div className={styles.cardHeader}>
-				<h3>
-					{formatTime(meal.eaten_at)} · {MEAL_TYPE_LABELS[meal.meal_type]}
+				{/* 標籤放在 h3 外面：放裡面會併進標題的名稱，標題清單念成
+				    「12:30 · 午餐只有我」。 */}
+				<div className={styles.title}>
+					<h3>
+						{formatTime(meal.eaten_at)} · {MEAL_TYPE_LABELS[meal.meal_type]}
+					</h3>
 					{meal.is_private && <span className={styles.privateTag}>只有我</span>}
-				</h3>
+				</div>
 				{/* 名稱帶時間與餐別：一頁有好幾張卡片，每張都寫「編輯」的話
 				    螢幕閱讀器分不出是哪一餐。 */}
 				<Link

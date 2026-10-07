@@ -130,7 +130,7 @@ describe("好友的某一天", () => {
 		expect(await screen.findByText("看不到這個人的餐點")).toBeInTheDocument();
 		expect(screen.getByRole("link", { name: "回飲食" })).toHaveAttribute(
 			"href",
-			"/diet",
+			"/diet?view=friends",
 		);
 	});
 });

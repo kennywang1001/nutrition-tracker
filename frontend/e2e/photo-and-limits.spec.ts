@@ -1,47 +1,12 @@
 import { expect, test } from "@playwright/test";
 import { ADMIN } from "./accounts.ts";
+import { generateJpegBuffer } from "./jpeg.ts";
 
 // 規格 §9.1 最後兩條契約 E2E（前四條在 auth.spec.ts 與 daily-loop.spec.ts）。
 // 這兩條各自守一個 fetch mock 證明不了的後端保證：
 //   1. 照片端點需要認證——mock 的 401 是我們自己寫的，不是後端真的因為
 //      缺 Authorization 標頭而拒絕。
 //   2. 登入端點真的會限速、真的回可讀的 Retry-After——mock 沒有計數器。
-
-/** 用瀏覽器自己的 canvas 產生一張最小的合法 JPEG。
- *
- *  Chromium 的 `canvas.toBlob(..., "image/jpeg")` 輸出標準 baseline
- *  JPEG，後端用 Pillow 解碼一定吃得下（跟 `tests/test_meals_photo.py`
- *  的 `_jpeg_bytes` 做的是同一件事，只是編碼器換成瀏覽器內建的，不必在
- *  Node 端手刻位元組或另外存一份 base64 常數）。8x8 是刻意選的最小值：
- *  遠低於後端 `MAX_PHOTO_BYTES`（10MB），不會被前端或後端的大小檢查攔下，
- *  後端的圖片模組也沒有最小尺寸限制（`app/storage/photos.py`）。 */
-async function generateJpegBuffer(
-	page: import("@playwright/test").Page,
-): Promise<Buffer> {
-	const base64 = await page.evaluate(async () => {
-		const canvas = document.createElement("canvas");
-		canvas.width = 8;
-		canvas.height = 8;
-		const ctx = canvas.getContext("2d");
-		if (ctx === null) throw new Error("canvas 2d context 不存在");
-		ctx.fillStyle = "#ff8800";
-		ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-		const blob = await new Promise<Blob>((resolve, reject) => {
-			canvas.toBlob((result) => {
-				if (result === null) reject(new Error("toBlob 回傳 null"));
-				else resolve(result);
-			}, "image/jpeg");
-		});
-
-		const bytes = new Uint8Array(await blob.arrayBuffer());
-		let binary = "";
-		for (const byte of bytes) binary += String.fromCharCode(byte);
-		return btoa(binary);
-	});
-
-	return Buffer.from(base64, "base64");
-}
 
 test("照片上傳之後，取回來的是圖不是 404", async ({ page, request }) => {
 	// 跟 daily-loop.spec.ts 第一條同樣自給自足——CI 的 e2e job 只用

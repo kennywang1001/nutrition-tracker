@@ -242,16 +242,18 @@ export function FriendsCard() {
 	);
 }
 
+/** `onDone` 在成功**與失敗**之後都跑（`onSettled`）：失敗多半是對方剛好
+ *  收回／接受了（404），重新載入才會讓過時的那一列消失。 */
 type RowProps = { id: number; name: string; onDone: () => void };
 
 function IncomingRow({ id, name, onDone }: RowProps) {
 	const accept = useMutation({
 		mutationFn: () => acceptFriendRequest(id),
-		onSuccess: onDone,
+		onSettled: onDone,
 	});
 	const decline = useMutation({
 		mutationFn: () => deleteFriendRequest(id),
-		onSuccess: onDone,
+		onSettled: onDone,
 	});
 	const busy = accept.isPending || decline.isPending;
 	return (
@@ -287,7 +289,7 @@ function IncomingRow({ id, name, onDone }: RowProps) {
 function OutgoingRow({ id, name, onDone }: RowProps) {
 	const withdraw = useMutation({
 		mutationFn: () => deleteFriendRequest(id),
-		onSuccess: onDone,
+		onSettled: onDone,
 	});
 	return (
 		<li className={styles.row}>

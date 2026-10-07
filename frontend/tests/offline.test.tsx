@@ -398,4 +398,56 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 			{ timeout: 3000 },
 		);
 	});
+
+	it("好友的資料與照片都不會被寫進 localStorage", async () => {
+		// 對方可以解除好友、可以把一餐改成「只有我看得到」——那之後這台裝置
+		// 不該還能離線翻出舊的好友資料。跟 food-search 那條同一個做法：先讓
+		// 這些 query 真的進到 client（setQueryData），再證明 persist 跑過一輪
+		// （stats 在），它們不在才有意義；用 queryKeys 產生的 key 做深比對。
+		mockApi({
+			"/api/stats/daily": () => json(STATS_WITH_TARGET),
+			"/api/supplements/today": () => json([]),
+			"/api/meals": () => json([]),
+		});
+		const client = newTestClient();
+		render(wrap(client, <Today />));
+		await screen.findByText(/1800/);
+
+		const friendKeys = [
+			queryKeys.friends,
+			queryKeys.friendDay(2, "2026-10-05"),
+			queryKeys.friendPhoto(2, 1),
+		];
+		client.setQueryData(queryKeys.friends, [
+			{ id: 2, display_name: "鮑伯", since: "2026-10-01T00:00:00Z" },
+		]);
+		client.setQueryData(queryKeys.friendDay(2, "2026-10-05"), {
+			friend: { id: 2, display_name: "鮑伯" },
+			day: "2026-10-05",
+			meals: [],
+		});
+		client.setQueryData(queryKeys.friendPhoto(2, 1), "blob:photo");
+		const friendKeysJson = friendKeys.map((key) => JSON.stringify(key));
+
+		await waitFor(
+			() => {
+				const raw = localStorage.getItem(OFFLINE_CACHE_STORAGE_KEY);
+				expect(raw).not.toBeNull();
+				const persisted: { queryKey: unknown[] }[] = JSON.parse(raw ?? "{}")
+					.clientState.queries;
+				expect(
+					persisted.some(
+						(query) =>
+							Array.isArray(query.queryKey) && query.queryKey[0] === "stats",
+					),
+				).toBe(true);
+				expect(
+					persisted
+						.map((query) => JSON.stringify(query.queryKey))
+						.filter((key) => friendKeysJson.includes(key)),
+				).toEqual([]);
+			},
+			{ timeout: 3000 },
+		);
+	});
 });

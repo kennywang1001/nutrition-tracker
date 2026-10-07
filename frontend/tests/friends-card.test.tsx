@@ -255,6 +255,38 @@ describe("好友卡片", () => {
 		await waitFor(() => expect(counts.friends).toBeGreaterThanOrEqual(2));
 	});
 
+	it("接受失敗（對方剛好收回，404）也重新載入邀請：過時的那一列要消失", async () => {
+		const { spy, counts } = backend([
+			{
+				method: "POST",
+				path: "/api/friends/requests/31/accept",
+				handler: () =>
+					json(
+						{
+							error: {
+								code: "FRIEND_REQUEST_NOT_FOUND",
+								message: "找不到這個邀請",
+								details: {},
+							},
+						},
+						404,
+					),
+			},
+		]);
+		renderCard();
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "接受卡蘿的邀請" }),
+		);
+
+		await waitFor(() =>
+			expect(sent(spy, "POST", "/api/friends/requests/31/accept")).toHaveLength(
+				1,
+			),
+		);
+		await waitFor(() => expect(counts.requests).toBe(2));
+	});
+
 	it("解除要先確認；確認之後移除這個好友的快取", async () => {
 		const { spy } = backend([
 			{
@@ -268,7 +300,14 @@ describe("好友卡片", () => {
 		});
 		client.setQueryData(queryKeys.friendFeed, { pages: [], pageParams: [] });
 		client.setQueryData(queryKeys.friendDay(2, null), { meals: [] });
+		// 看過的其他日期也要移除——不是只移除「今天」那一個 key。
+		client.setQueryData(queryKeys.friendDay(2, "2026-10-05"), { meals: [] });
 		client.setQueryData(queryKeys.friendPhoto(2, 7), new Blob());
+		// 另一個好友的資料不受影響。
+		const otherDay = { meals: [] };
+		const otherPhoto = new Blob();
+		client.setQueryData(queryKeys.friendDay(9, null), otherDay);
+		client.setQueryData(queryKeys.friendPhoto(9, 1), otherPhoto);
 		renderCard(client);
 
 		await userEvent.click(
@@ -294,7 +333,12 @@ describe("好友卡片", () => {
 		await waitFor(() => {
 			expect(client.getQueryData(queryKeys.friendFeed)).toBeUndefined();
 			expect(client.getQueryData(queryKeys.friendDay(2, null))).toBeUndefined();
+			expect(
+				client.getQueryData(queryKeys.friendDay(2, "2026-10-05")),
+			).toBeUndefined();
 			expect(client.getQueryData(queryKeys.friendPhoto(2, 7))).toBeUndefined();
 		});
+		expect(client.getQueryData(queryKeys.friendDay(9, null))).toBe(otherDay);
+		expect(client.getQueryData(queryKeys.friendPhoto(9, 1))).toBe(otherPhoto);
 	});
 });

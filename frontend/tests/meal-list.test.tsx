@@ -174,5 +174,7 @@ describe("今日餐點清單", () => {
 		expect(
 			within(privateCard as HTMLElement).getByText("只有我"),
 		).toBeInTheDocument();
+		// 標籤不併進標題的名稱：螢幕閱讀器的標題清單只念時間與餐別。
+		expect(privateHeading).not.toHaveAccessibleName(/只有我/);
 	});
 });

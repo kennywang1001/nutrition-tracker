@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { apiFetch } from "../api/client";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
@@ -42,7 +41,16 @@ function supplementKey(item: TodaySupplementItem): string {
 
 export function Today() {
 	const queryClient = useQueryClient();
-	const [view, setView] = useState<"mine" | "friends">("mine");
+	// 看誰的放在網址（`?view=friends`），不是元件狀態：從好友的一天按返回
+	// 要回到好友動態，不是回到「我的」。沒有參數＝我的。換的時候 replace，
+	// 不在瀏覽紀錄裡多一格。
+	const [searchParams, setSearchParams] = useSearchParams();
+	const view: "mine" | "friends" =
+		searchParams.get("view") === "friends" ? "friends" : "mine";
+	const setView = (next: "mine" | "friends") =>
+		setSearchParams(next === "friends" ? { view: "friends" } : {}, {
+			replace: true,
+		});
 
 	// 規格 §5.3：不傳 date，讓後端用 today_in_timezone(user.timezone) 決定
 	// 今天是哪一天——跟 /api/supplements/today 用同一個函式（app/days.py）。

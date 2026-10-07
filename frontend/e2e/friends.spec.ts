@@ -6,6 +6,7 @@ import {
 	test,
 } from "@playwright/test";
 import { ADMIN } from "./accounts.ts";
+import { generateJpegBuffer } from "./jpeg.ts";
 import { login } from "./touch-targets.ts";
 
 const PHONE = { width: 390, height: 844 };
@@ -85,7 +86,7 @@ async function seedFood(
 async function logMeal(
 	page: Page,
 	foodName: string,
-	options: { cost?: string; isPrivate?: boolean },
+	options: { cost?: string; isPrivate?: boolean; photo?: Buffer },
 ) {
 	await page.goto("/");
 	await expect(page.getByRole("heading", { name: "總覽" })).toBeVisible();
@@ -94,6 +95,14 @@ async function logMeal(
 	await page.getByText(foodName, { exact: true }).click();
 	if (options.cost !== undefined) {
 		await page.getByLabel("金額（選填）").fill(options.cost);
+	}
+	if (options.photo !== undefined) {
+		await page.getByLabel("照片（選填）").setInputFiles({
+			name: "meal.jpg",
+			mimeType: "image/jpeg",
+			buffer: options.photo,
+		});
+		await expect(page.getByRole("img", { name: "選好的照片" })).toBeVisible();
 	}
 	if (options.isPrivate === true) {
 		await page.getByLabel("只有我看得到（好友看不到這一餐）").check();
@@ -141,17 +150,30 @@ test("好友：互加、私人的餐看不到、解除之後看不到", async ({
 		pal.page.getByRole("button", { name: /^解除和.+的好友$/ }),
 	).toBeVisible();
 
-	// 5. 管理員記兩餐：X 有金額、公開；Y 私人。
-	await logMeal(page, foodX, { cost: "180" });
+	// 5. 管理員記兩餐：X 有金額、有照片、公開；Y 私人。
+	await logMeal(page, foodX, {
+		cost: "180",
+		photo: await generateJpegBuffer(page),
+	});
 	await logMeal(page, foodY, { isPrivate: true });
 
-	// 6. 夥伴看好友動態：看得到 X、看不到 Y、沒有餐費。
+	// 6. 夥伴看好友動態：看得到 X 與它的照片、看不到 Y。餐費不在白名單裡
+	//    ——那由後端的欄位白名單測試守（test_friend_meals.py），畫面上找
+	//    「180」找不到什麼：好友卡片本來就沒有顯示金額的地方。
 	await pal.page.goto("/diet");
 	await pal.page.getByText("好友", { exact: true }).click();
 	const feed = pal.page.getByRole("region", { name: "好友動態" });
 	await expect(feed.getByText(foodX)).toBeVisible();
 	await expect(feed.getByText(foodY)).toHaveCount(0);
-	await expect(feed.getByText("180")).toHaveCount(0);
+	const photo = feed
+		.getByRole("listitem")
+		.filter({ hasText: foodX })
+		.getByRole("img");
+	await expect(photo).toBeVisible();
+	// 真的解出一張圖，不是破圖的替代文字。
+	await expect
+		.poll(() => photo.evaluate((img: HTMLImageElement) => img.naturalWidth))
+		.toBeGreaterThan(0);
 
 	// 7. 管理員解除好友。
 	await page.goto("/me");

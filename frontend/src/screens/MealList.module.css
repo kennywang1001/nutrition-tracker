@@ -40,6 +40,11 @@
 	border-radius: var(--radius-button);
 }
 
+.title {
+	display: flex;
+	align-items: center;
+}
+
 .privateTag {
 	margin-left: var(--space-2);
 	padding: 2px var(--space-2);
