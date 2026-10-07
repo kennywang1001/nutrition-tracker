@@ -1,7 +1,7 @@
 import pytest
 
 from app.errors import TooManyRequestsError
-from app.ratelimit import KeyedRateLimiter
+from app.ratelimit import SESSION_LIMIT, KeyedRateLimiter
 from app.security.sessions import start_session
 from tests.factories import create_user
 
@@ -52,16 +52,17 @@ async def _tokens(db_session):
     return issued.refresh_token
 
 
-async def test_logout_and_refresh_share_ten_requests_per_user_a_minute(client, db_session):
+async def test_logout_and_refresh_share_one_budget_per_user_a_minute(client, db_session):
     token = await _tokens(db_session)
 
     logouts = [
-        await client.post("/api/auth/logout", json={"refresh_token": token}) for _ in range(10)
+        await client.post("/api/auth/logout", json={"refresh_token": token})
+        for _ in range(SESSION_LIMIT)
     ]
     blocked = await client.post("/api/auth/refresh", json={"refresh_token": token})
 
-    assert [r.status_code for r in logouts] == [204] * 10
-    # 這張票第一次登出就已經撤銷了——第 11 次不是 401，是 429：限速在碰資料庫之前。
+    assert [r.status_code for r in logouts] == [204] * SESSION_LIMIT
+    # 這張票第一次登出就已經撤銷了——超過額度的那一次不是 401，是 429：限速在碰資料庫之前。
     assert blocked.status_code == 429
     assert blocked.json()["error"]["code"] == "TOO_MANY_SESSION_REQUESTS"
     assert int(blocked.headers["Retry-After"]) >= 1
@@ -70,7 +71,7 @@ async def test_logout_and_refresh_share_ten_requests_per_user_a_minute(client, d
 async def test_another_user_is_not_affected(client, db_session):
     spammed = await _tokens(db_session)
     other = await _tokens(db_session)
-    for _ in range(10):
+    for _ in range(SESSION_LIMIT):
         await client.post("/api/auth/logout", json={"refresh_token": spammed})
 
     response = await client.post("/api/auth/refresh", json={"refresh_token": other})
@@ -104,7 +105,7 @@ async def test_a_blocked_request_never_reaches_the_database(client, db_session, 
 
     monkeypatch.setattr("app.api.routes.auth.revoke_session", spy_revoke)
     monkeypatch.setattr("app.api.routes.auth.rotate_session", spy_rotate)
-    for _ in range(10):
+    for _ in range(SESSION_LIMIT):
         await client.post("/api/auth/logout", json={"refresh_token": token})
 
     blocked_logout = await client.post("/api/auth/logout", json={"refresh_token": token})
@@ -112,4 +113,4 @@ async def test_a_blocked_request_never_reaches_the_database(client, db_session, 
 
     assert blocked_logout.status_code == 429
     assert blocked_refresh.status_code == 429
-    assert calls == ["revoke"] * 10
+    assert calls == ["revoke"] * SESSION_LIMIT

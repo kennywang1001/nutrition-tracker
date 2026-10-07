@@ -146,7 +146,7 @@ async def logout(payload: LogoutRequest, db: AsyncSession = Depends(get_db)) -> 
 
     **先驗簽、再限速、最後才碰資料庫**（安全補強規格 §3.1）：簽章不對的票不計數
     （驗簽不碰資料庫、不取鎖，本來就便宜）；簽章對的票——包括早就撤銷的——
-    每個使用者每分鐘最多 10 次走到 `revoke_session` 的 advisory lock。
+    每個使用者每分鐘最多 `SESSION_LIMIT` 次走到 `revoke_session` 的 advisory lock。
     """
     try:
         claims = decode_refresh_token(payload.refresh_token)

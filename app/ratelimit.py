@@ -156,7 +156,7 @@ class LoginRateLimiter:
 login_rate_limiter = LoginRateLimiter()
 
 
-SESSION_LIMIT = 10
+SESSION_LIMIT = 60
 SESSION_WINDOW_SECONDS = 60.0
 
 
@@ -203,7 +203,12 @@ class KeyedRateLimiter:
 
 
 # `/refresh` 與 `/logout` 共用（安全補強規格 §3.1）：鍵是 token 的 `sub`（簽章驗過，
-# 偽造不了）。正常使用大約每 15 分鐘換一次票，幾台裝置加起來遠低於 10 次。
+# 偽造不了）。
+#
+# **60，不是規格原本寫的 10。** 每次整頁載入都會換一次票（access token 只在記憶體），
+# 連續重新整理、開好幾個分頁就是好幾次。10 次時 e2e 實測紅了：一次完整 e2e（約 31 秒）
+# 同一個帳號換了 23 次票、7 次被擋。60 次仍然把交接文件實測的重放（每秒 302 次，
+# 約每分鐘 18,000 次）壓低 300 倍——要擋的是洪水，不是重新整理。
 session_rate_limiter = KeyedRateLimiter(
     limit=SESSION_LIMIT,
     window_seconds=SESSION_WINDOW_SECONDS,
