@@ -50,7 +50,10 @@ export function FriendMealCard({
 					// biome-ignore lint/suspicious/noArrayIndexKey: 白名單回應沒有項目 id，順序由後端固定
 					<li key={index}>
 						{item.food_name}
-						<span> · {formatMacro(item.quantity_g)} g</span>
+						<span>
+							{" "}
+							· {formatMacro(item.quantity_g)} {item.base_unit}
+						</span>
 					</li>
 				))}
 			</ul>

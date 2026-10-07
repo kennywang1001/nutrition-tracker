@@ -79,6 +79,32 @@ describe("好友動態", () => {
 		).not.toBeInTheDocument();
 	});
 
+	it("份量的單位照項目的 base_unit：液體寫 ml", async () => {
+		const meal = friendMeal(7, {
+			items: [
+				{
+					food_name: "燕麥奶",
+					quantity_g: "300.00",
+					base_unit: "ml",
+					kcal: "140.00",
+				},
+				{
+					food_name: "便當",
+					quantity_g: "350.00",
+					base_unit: "g",
+					kcal: "480.00",
+				},
+			],
+		});
+		mockApi(feedRoutes(() => json({ meals: [meal], next_cursor: null })));
+		renderFeed();
+
+		expect(await screen.findByText("燕麥奶")).toHaveTextContent(
+			"燕麥奶 · 300 ml",
+		);
+		expect(screen.getByText("便當")).toHaveTextContent("便當 · 350 g");
+	});
+
 	it("有照片時用好友的照片端點取圖，不打自己的照片端點", async () => {
 		const spy = mockApi([
 			{

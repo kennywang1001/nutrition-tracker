@@ -112,7 +112,10 @@ function MealCard({ meal }: { meal: Meal }) {
 					// 「元素自己的直接子文字節點」比對，不是整棵子樹的 textContent）。
 					<li key={item.id}>
 						{item.food_name}
-						<span> · {formatMacro(item.quantity_g)} g</span>
+						<span>
+							{" "}
+							· {formatMacro(item.quantity_g)} {item.base_unit}
+						</span>
 					</li>
 				))}
 			</ul>

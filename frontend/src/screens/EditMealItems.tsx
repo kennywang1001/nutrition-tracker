@@ -81,15 +81,16 @@ function describeItemError(error: unknown): string {
 	return "儲存失敗，請再試一次";
 }
 
-/** 一項的份量顯示：用份量記的寫「幾份（幾 g）」，直接輸入的寫公克數。
+/** 一項的份量顯示：用份量記的寫「幾份（幾 g）」，直接輸入的寫數量與單位。
  *
- *  單位一律寫 g：`MealItemResponse` 沒有帶食物的 `base_unit`（液體會顯示
- *  成 g——handover 已記錄的已知問題，跟飲食頁的 `MealList` 一致）。 */
+ *  單位是項目的 `base_unit`（液體是 ml）——後端取這一項**釘住的那一版**的，
+ *  跟營養素同一條凍結規則，食物後來改了單位也不動。跟飲食頁的 `MealList`、
+ *  好友卡片一致。 */
 function amountText(item: MealItem): string {
-	const grams = `${formatMacro(item.quantity_g)} g`;
+	const amount = `${formatMacro(item.quantity_g)} ${item.base_unit}`;
 	return item.portion_id === null
-		? grams
-		: `${formatMacro(item.quantity)} 份（${grams}）`;
+		? amount
+		: `${formatMacro(item.quantity)} 份（${amount}）`;
 }
 
 /** 改一項的份量或數量（`PATCH /api/meals/{id}/items/{item_id}`）。 */
@@ -103,7 +104,9 @@ function ItemEditor({
 	onClose: () => void;
 }) {
 	const queryClient = useQueryClient();
-	// 直接輸入時的單位（g 或 ml）要看食物——MealItemResponse 沒有帶。
+	// 直接輸入時的單位（g 或 ml）看食物**現在的**版本（份量清單也是現在的）。
+	// `item.base_unit` 是這一項釘住的那一版的；兩者只在食物後來改了單位時
+	// 不同——那種情況這裡沒處理（PATCH 不換釘住的版本）。
 	const foodQuery = useFood(item.food_id);
 	// 初始值是這一項當初怎麼記的（不是 null）：食物後來才設的預設份量
 	// 不能把「直接輸入 200 g」變成 200 碗。

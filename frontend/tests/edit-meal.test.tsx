@@ -232,6 +232,41 @@ describe("編輯這一餐：讀取", () => {
 		expect(screen.getByTestId("meal-item-51")).toHaveTextContent("滷肉飯");
 	});
 
+	it("項目的份量照 base_unit 寫單位：液體是 ml（直接輸入與用份量記的都是）", async () => {
+		const milk = {
+			...ITEM,
+			id: 52,
+			food_id: 4,
+			food_name: "鮮奶",
+			quantity: "250.00",
+			quantity_g: "250.00",
+			base_unit: "ml",
+		};
+		const glass = {
+			...ITEM,
+			id: 53,
+			food_id: 4,
+			food_name: "豆漿",
+			portion_id: 12,
+			quantity: "2.00",
+			quantity_g: "480.00",
+			base_unit: "ml",
+		};
+		const rice = { ...ITEM, base_unit: "g" };
+		mockApi(routes({ ...MEAL, items: [rice, milk, glass] }));
+		renderEditMeal();
+
+		expect(await screen.findByTestId("meal-item-52")).toHaveTextContent(
+			"250 ml · 360 kcal",
+		);
+		expect(screen.getByTestId("meal-item-53")).toHaveTextContent(
+			"2 份（480 ml）",
+		);
+		expect(screen.getByTestId("meal-item-51")).toHaveTextContent(
+			"200 g · 360 kcal",
+		);
+	});
+
 	it("404：找不到這一餐（可能在另一台裝置上刪了）", async () => {
 		mockApi([
 			{

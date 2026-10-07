@@ -93,6 +93,41 @@ describe("今日餐點清單", () => {
 		expect(screen.getByText(/440/)).toBeInTheDocument();
 	});
 
+	it("份量的單位照項目的 base_unit：液體寫 ml、其他寫 g", async () => {
+		const item = {
+			food_id: 3,
+			portion_id: null,
+			kcal: "100.00",
+			protein_g: "1.00",
+			fat_g: "1.00",
+			carb_g: "1.00",
+		};
+		const milk = {
+			...item,
+			id: 2,
+			food_name: "鮮奶",
+			quantity: "250.00",
+			quantity_g: "250.00",
+			base_unit: "ml",
+		};
+		const rice = {
+			...item,
+			id: 1,
+			food_name: "滷肉飯",
+			quantity: "200.00",
+			quantity_g: "200.00",
+			base_unit: "g",
+		};
+		mockApi({
+			"/api/meals": () => json([{ ...MEALS[1], id: 11, items: [milk, rice] }]),
+		});
+
+		render(wrap(<MealList />));
+
+		expect(await screen.findByText("鮮奶")).toHaveTextContent("鮮奶 · 250 ml");
+		expect(screen.getByText("滷肉飯")).toHaveTextContent("滷肉飯 · 200 g");
+	});
+
 	it("photo_path 不會被當成網址塞進 img", async () => {
 		// **規格 §5.2：`photo_path` 是伺服器端的相對路徑，不是 URL。**
 		// 它唯一的用途是判斷「這一餐有沒有照片」。真的要拿到圖必須打
