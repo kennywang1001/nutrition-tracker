@@ -17,10 +17,24 @@ export type Portion = components["schemas"]["PortionResponse"];
 export function useFoodSearch(q: string, scope: FoodScope) {
 	return useQuery({
 		queryKey: queryKeys.foodSearch(q, scope),
-		queryFn: () =>
-			apiFetch<Food[]>(`/api/foods?q=${encodeURIComponent(q)}&scope=${scope}`),
+		queryFn: () => searchFoods(q, scope),
 		enabled: q.trim() !== "",
 	});
+}
+
+/** `GET /api/foods?q=`：名稱子字串比對（不分大小寫）、依名稱排序。`limit`
+ *  省略時是後端的預設 50（上限 200）。不經過快取——AI 面板存食物之前的
+ *  同名檢查要的是此刻的食物庫。 */
+export async function searchFoods(
+	q: string,
+	scope: FoodScope,
+	limit?: number,
+): Promise<Food[]> {
+	const params = `q=${encodeURIComponent(q)}&scope=${scope}`;
+	const result = await apiFetch<Food[]>(
+		`/api/foods?${params}${limit === undefined ? "" : `&limit=${limit}`}`,
+	);
+	return result ?? [];
 }
 
 /** `useParams()`（Task 5）回傳的是 `string | undefined`——`Number(undefined)`

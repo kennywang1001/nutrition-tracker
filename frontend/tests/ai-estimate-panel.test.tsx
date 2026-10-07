@@ -67,8 +67,22 @@ function routes(
 		...extra,
 		{ method: "POST", path: "/api/ai/analyze", handler: analyzeResult },
 		{ method: "GET", path: "/api/foods/7", handler: () => json(EXISTING) },
+		// 存之前的同名檢查（規格 §2 第 3 項）：預設食物庫裡沒有同名的。
+		{ method: "GET", path: "/api/foods?", handler: () => json([]) },
 		{ method: "POST", path: "/api/foods", handler: () => json(CREATED, 201) },
 	];
+}
+
+/** 存之前搜尋食物庫回這些食物。 */
+function library(foods: unknown[]): Route {
+	return { method: "GET", path: "/api/foods?", handler: () => json(foods) };
+}
+
+function searchedFor(fetchMock: ReturnType<typeof mockApi>): string[] {
+	return fetchMock.mock.calls
+		.map(([input]) => String(input))
+		.filter((url) => url.includes("/api/foods?"))
+		.map((url) => new URL(url, "http://x").searchParams.get("q") ?? "");
 }
 
 function renderPanel(text = "一碗牛肉麵") {
@@ -709,5 +723,187 @@ describe("AI 估算面板：切換時的焦點", () => {
 		expect(
 			within(card).getByRole("heading", { name: "牛肉麵" }),
 		).not.toHaveFocus();
+	});
+});
+
+describe("AI 估算面板：存之前先看食物庫有沒有同名的", () => {
+	// 看得到的公開食物，名稱跟估算的一模一樣。
+	const LIBRARY = { ...CREATED, id: 40, is_global: true };
+	// 名稱只是「包含」估算的名稱——搜尋是子字串比對，會一起回來。
+	const LARGE_BOWL = { ...CREATED, id: 41, name: "牛肉麵（大碗）" };
+
+	it("有同名的：先問；「用食物庫的」交回那一筆，不建新食物", async () => {
+		const fetchMock = mockApi(
+			routes(undefined, [library([LARGE_BOWL, LIBRARY])]),
+		);
+		const { onFoodReady } = renderPanel();
+
+		const card = await estimateByText();
+		await userEvent.click(within(card).getByRole("button", { name: "確認" }));
+
+		expect(
+			await within(card).findByText("食物庫裡已經有「牛肉麵」"),
+		).toBeInTheDocument();
+		expect(searchedFor(fetchMock)).toEqual(["牛肉麵"]);
+		expect(posted(fetchMock, "/api/foods")).toBe(0);
+		await userEvent.click(
+			within(card).getByRole("button", { name: "用食物庫的" }),
+		);
+
+		await waitFor(() =>
+			expect(onFoodReady).toHaveBeenCalledWith(LIBRARY, { image: null }),
+		);
+		expect(posted(fetchMock, "/api/foods")).toBe(0);
+	});
+
+	it("有同名的：「還是用 AI 的數字建一個」照樣存成食物", async () => {
+		const fetchMock = mockApi(routes(undefined, [library([LIBRARY])]));
+		const { onFoodReady } = renderPanel();
+
+		const card = await estimateByText();
+		await userEvent.click(within(card).getByRole("button", { name: "確認" }));
+		await userEvent.click(
+			await within(card).findByRole("button", {
+				name: "還是用 AI 的數字建一個",
+			}),
+		);
+
+		await waitFor(() =>
+			expect(onFoodReady).toHaveBeenCalledWith(CREATED, { image: null }),
+		);
+		expect(posted(fetchMock, "/api/foods")).toBe(1);
+		expect(bodyOf(fetchMock, "POST", "/api/foods")).toMatchObject({
+			name: "牛肉麵",
+			source: "ai",
+		});
+	});
+
+	it("比對不分大小寫、去掉頭尾空白", async () => {
+		const fetchMock = mockApi(
+			routes(
+				() => json({ ...ESTIMATE, name: "Big Mac" }),
+				[library([{ ...LIBRARY, name: " BIG MAC " }])],
+			),
+		);
+		renderPanel();
+
+		const card = await estimateByText();
+		await userEvent.click(within(card).getByRole("button", { name: "確認" }));
+
+		expect(
+			await within(card).findByRole("button", { name: "用食物庫的" }),
+		).toBeInTheDocument();
+		expect(posted(fetchMock, "/api/foods")).toBe(0);
+	});
+
+	it("名稱只是包含估算的名稱：不算同名，照樣存", async () => {
+		const fetchMock = mockApi(routes(undefined, [library([LARGE_BOWL])]));
+		const { onFoodReady } = renderPanel();
+
+		const card = await estimateByText();
+		await userEvent.click(within(card).getByRole("button", { name: "確認" }));
+
+		await waitFor(() =>
+			expect(onFoodReady).toHaveBeenCalledWith(CREATED, { image: null }),
+		);
+		expect(searchedFor(fetchMock)).toEqual(["牛肉麵"]);
+		expect(posted(fetchMock, "/api/foods")).toBe(1);
+		expect(
+			screen.queryByRole("button", { name: "用食物庫的" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("同名的食物沒有生效的營養素：記不了，不拿來問，照樣存", async () => {
+		const fetchMock = mockApi(
+			routes(undefined, [library([{ ...LIBRARY, nutrition: null }])]),
+		);
+		const { onFoodReady } = renderPanel();
+
+		const card = await estimateByText();
+		await userEvent.click(within(card).getByRole("button", { name: "確認" }));
+
+		await waitFor(() =>
+			expect(onFoodReady).toHaveBeenCalledWith(CREATED, { image: null }),
+		);
+		expect(posted(fetchMock, "/api/foods")).toBe(1);
+	});
+
+	it("搜尋食物庫失敗：不擋使用者，照樣存", async () => {
+		const fetchMock = mockApi(
+			routes(undefined, [
+				{
+					method: "GET",
+					path: "/api/foods?",
+					handler: apiError(500, "INTERNAL_ERROR", "boom"),
+				},
+			]),
+		);
+		const { onFoodReady } = renderPanel();
+
+		const card = await estimateByText();
+		await userEvent.click(within(card).getByRole("button", { name: "確認" }));
+
+		await waitFor(() =>
+			expect(onFoodReady).toHaveBeenCalledWith(CREATED, { image: null }),
+		);
+		expect(searchedFor(fetchMock)).toEqual(["牛肉麵"]);
+		expect(posted(fetchMock, "/api/foods")).toBe(1);
+	});
+
+	it("改過名稱再存：用改過的名稱查；問的時候在表單裡，改名稱就收起來", async () => {
+		const RED = { ...LIBRARY, id: 42, name: "紅燒牛肉麵" };
+		const fetchMock = mockApi(routes(undefined, [library([RED])]));
+		const { onFoodReady } = renderPanel();
+
+		const card = await estimateByText();
+		await userEvent.click(
+			within(card).getByRole("button", { name: "需要修改" }),
+		);
+		const form = screen.getByRole("form", { name: "修改 AI 估算" });
+		const name = within(form).getByLabelText("食物名稱");
+		await userEvent.clear(name);
+		await userEvent.type(name, "紅燒牛肉麵");
+		await userEvent.click(
+			within(form).getByRole("button", { name: "存成食物" }),
+		);
+
+		expect(
+			await within(form).findByText("食物庫裡已經有「紅燒牛肉麵」"),
+		).toBeInTheDocument();
+		expect(searchedFor(fetchMock)).toEqual(["紅燒牛肉麵"]);
+		expect(posted(fetchMock, "/api/foods")).toBe(0);
+
+		// 名稱一改，剛才的提問就不算數了（不然「還是建一個」會送出舊的名稱）。
+		await userEvent.type(name, "（小碗）");
+		expect(
+			within(form).queryByRole("button", { name: "用食物庫的" }),
+		).not.toBeInTheDocument();
+		expect(onFoodReady).not.toHaveBeenCalled();
+	});
+
+	it("改過名稱、有同名的：「用食物庫的」交回那一筆", async () => {
+		const RED = { ...LIBRARY, id: 42, name: "紅燒牛肉麵" };
+		const fetchMock = mockApi(routes(undefined, [library([RED])]));
+		const { onFoodReady } = renderPanel();
+
+		const card = await estimateByText();
+		await userEvent.click(
+			within(card).getByRole("button", { name: "需要修改" }),
+		);
+		const form = screen.getByRole("form", { name: "修改 AI 估算" });
+		const name = within(form).getByLabelText("食物名稱");
+		await userEvent.clear(name);
+		await userEvent.type(name, "紅燒牛肉麵");
+		await userEvent.click(
+			within(form).getByRole("button", { name: "存成食物" }),
+		);
+		await userEvent.click(
+			await within(form).findByRole("button", { name: "用食物庫的" }),
+		);
+
+		await waitFor(() =>
+			expect(onFoodReady).toHaveBeenCalledWith(RED, { image: null }),
+		);
+		expect(posted(fetchMock, "/api/foods")).toBe(0);
 	});
 });

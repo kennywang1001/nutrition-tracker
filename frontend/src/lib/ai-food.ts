@@ -1,4 +1,5 @@
 import type { AnalyzeResponse } from "../api/ai";
+import type { Food } from "../api/foods";
 import type { components } from "../api/schema";
 import {
 	formatMacro,
@@ -70,6 +71,25 @@ export function confirmedFoodRequest(estimate: AnalyzeResponse): AiFoodBody {
 		ai_confidence: estimate.confidence,
 		ai_raw_response: estimate,
 	};
+}
+
+/** 存之前的同名檢查（AI 與編輯畫面的收尾規格 §2 第 3 項）：在搜尋結果裡找
+ *  名稱**完全相同**的食物（去頭尾空白、不分大小寫）。搜尋本身是子字串比對，
+ *  「牛肉麵（大碗）」也會回來，所以這裡要再比一次。
+ *
+ *  沒有生效營養素的食物（`nutrition === null`）不算：它記不了（`FoodPicker`
+ *  把它的按鈕停用），拿來問「要不要用食物庫的」只會把使用者帶進死路。 */
+export function findSameNameFood(
+	foods: readonly Food[],
+	name: string,
+): Food | null {
+	const key = name.trim().toLowerCase();
+	return (
+		foods.find(
+			(food) =>
+				food.nutrition !== null && food.name.trim().toLowerCase() === key,
+		) ?? null
+	);
 }
 
 export type EditedResult =

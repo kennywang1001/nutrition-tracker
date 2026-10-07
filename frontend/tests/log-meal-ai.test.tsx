@@ -65,13 +65,15 @@ const ONE_SERVING = {
 };
 
 /** 路徑順序：mockApi 依序用 url.includes 比對——具體的排前面。 */
-function mockLogMeal(frequent: unknown[] = []) {
+function mockLogMeal(frequent: unknown[] = [], library: unknown[] = []) {
 	return mockApi([
 		{ path: "/api/foods/frequent", handler: () => json(frequent) },
 		{ path: "/api/foods/recent", handler: () => json([]) },
 		{ path: "/api/foods/10/portions", handler: () => json([]) },
 		{ path: "/api/foods/30/portions", handler: () => json([ONE_SERVING]) },
-		{ method: "GET", path: "/api/foods?q=", handler: () => json([]) },
+		{ path: "/api/foods/40/portions", handler: () => json([]) },
+		// 選擇器的搜尋與面板存之前的同名檢查都打這一支。
+		{ method: "GET", path: "/api/foods?q=", handler: () => json(library) },
 		{ method: "POST", path: "/api/ai/analyze", handler: () => json(ESTIMATE) },
 		{ method: "POST", path: "/api/foods", handler: () => json(CREATED, 201) },
 		{
@@ -290,5 +292,41 @@ describe("記一餐：AI 估算", () => {
 		await waitFor(() =>
 			expect(document.activeElement).toBe(screen.getByText("已選擇：牛肉麵")),
 		);
+	});
+
+	it("食物庫裡已經有同名的：「用食物庫的」選上那個食物，不建新食物", async () => {
+		const LIBRARY = { ...CREATED, id: 40, is_global: true };
+		const fetchMock = mockLogMeal([], [LIBRARY]);
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+
+		await userEvent.type(screen.getByLabelText("搜尋食物"), "牛肉麵");
+		await userEvent.click(
+			screen.getByRole("button", { name: "用 AI 估算「牛肉麵」" }),
+		);
+		const card = await screen.findByRole("region", { name: "AI 估算結果" });
+		await userEvent.click(within(card).getByRole("button", { name: "確認" }));
+		await userEvent.click(
+			await within(card).findByRole("button", { name: "用食物庫的" }),
+		);
+		await waitFor(() =>
+			expect(
+				screen.queryByRole("region", { name: "AI 估算結果" }),
+			).not.toBeInTheDocument(),
+		);
+		expect(screen.getByText("已選擇：牛肉麵")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() =>
+			expect(mealBody(fetchMock)).toMatchObject({
+				items: [{ food_id: 40, quantity: "1" }],
+			}),
+		);
+		expect(
+			fetchMock.mock.calls.filter(
+				([input, init]) =>
+					(init?.method ?? "GET").toUpperCase() === "POST" &&
+					String(input).endsWith("/api/foods"),
+			),
+		).toHaveLength(0);
 	});
 });

@@ -73,6 +73,8 @@ describe("新增食物：用 AI 填", () => {
 				path: "/api/ai/analyze",
 				handler: () => json(ESTIMATE),
 			},
+			// 存之前的同名檢查：食物庫裡沒有同名的。
+			{ method: "GET", path: "/api/foods?", handler: () => json([]) },
 			{
 				method: "POST",
 				path: "/api/foods",
@@ -105,5 +107,51 @@ describe("新增食物：用 AI 填", () => {
 		).not.toBeInTheDocument();
 		expect(screen.getByLabelText("拍照估算")).toBeInTheDocument();
 		expect(screen.getByLabelText("名稱")).toBeInTheDocument();
+	});
+
+	it("食物庫裡已經有同名的：「用食物庫的」導到那個食物，不建新食物", async () => {
+		const fetchMock = mockApi([
+			{
+				method: "POST",
+				path: "/api/ai/analyze",
+				handler: () => json(ESTIMATE),
+			},
+			{
+				method: "GET",
+				path: "/api/foods?",
+				handler: () =>
+					json([
+						{
+							id: 40,
+							name: "牛肉麵",
+							brand: null,
+							is_global: true,
+							nutrition: {
+								base_unit: "g",
+								kcal: "112.73",
+								protein_g: "5.82",
+								fat_g: "3.27",
+								carb_g: "14.55",
+							},
+						},
+					]),
+			},
+		]);
+		render(wrap(<NewFood />));
+
+		await userEvent.type(screen.getByLabelText("描述這個食物"), "一碗牛肉麵");
+		await userEvent.click(screen.getByRole("button", { name: "估算" }));
+		const card = await screen.findByRole("region", { name: "AI 估算結果" });
+		await userEvent.click(within(card).getByRole("button", { name: "確認" }));
+		await userEvent.click(
+			await within(card).findByRole("button", { name: "用食物庫的" }),
+		);
+
+		expect(await screen.findByText("food-detail:40")).toBeInTheDocument();
+		expect(
+			fetchMock.mock.calls.filter(
+				([, init]) => (init?.method ?? "GET").toUpperCase() === "POST",
+			),
+		).toHaveLength(1); // 只有估算那一次
 	});
 });

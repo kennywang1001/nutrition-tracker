@@ -11,7 +11,7 @@ import {
 import { type AnalyzeResponse, analyzeImage, analyzeText } from "../api/ai";
 import { apiFetch } from "../api/client";
 import { ApiError, describeFieldErrors } from "../api/errors";
-import type { Food } from "../api/foods";
+import { type Food, searchFoods } from "../api/foods";
 import { describePhotoUploadError, PhotoTooLargeError } from "../api/photos";
 import { queryKeys } from "../api/queries";
 import {
@@ -20,6 +20,7 @@ import {
 	draftFromEstimate,
 	type EstimateDraft,
 	editedFoodRequest,
+	findSameNameFood,
 } from "../lib/ai-food";
 import { formatMacro } from "../lib/decimal";
 import styles from "./AiEstimatePanel.module.css";
@@ -38,6 +39,10 @@ type Props = {
 	/** 文字估算按鈕的字。 */
 	textButtonLabel?: (text: string) => string;
 };
+
+/** 同名檢查搜尋的筆數：搜尋是子字串比對、依名稱排序，短的名稱（「飯」）會
+ *  對到很多筆，後端預設的 50 筆可能排不到完全同名的那一筆。用後端的上限。 */
+const SAME_NAME_SEARCH_LIMIT = 200;
 
 function defaultTextButtonLabel(text: string): string {
 	return `用 AI 估算「${text}」`;
@@ -81,7 +86,12 @@ function describeSaveError(error: unknown): string {
 }
 
 /** 從文字或照片估算一份的營養素，確認或修改後存成自己的食物，交回給所在
- *  的畫面（AI 估算前端規格 §4）。記一餐與新增食物共用。
+ *  的畫面（AI 估算前端規格 §4）。記一餐、新增食物、編輯這一餐的「加一項」共用。
+ *
+ *  **存之前先查同名**（AI 與編輯畫面的收尾規格 §2 第 3 項）：看得到的食物裡
+ *  有名稱完全相同的，先問「用食物庫的」還是「還是用 AI 的數字建一個」——
+ *  不然 AI 存出的私人食物會跟公開的同名，之後文字估算命中食物庫時優先回
+ *  自己那一筆，等於 AI 的數字蓋過公開的。
  *
  *  **不顯示 `confidence`**：那是模型自己說的，不是量出來的（P2 規格 §4.1）。
  *  畫面上的可靠度訊號是 `consistency`——算得出來的那個。 */
@@ -106,6 +116,12 @@ export function AiEstimatePanel({
 	// 這一次畫面上已經知道 AI 沒設定：只停用拍照（一定要 AI）。文字估算仍可按——
 	// 後端先查食物庫，命中就不用 AI。
 	const [aiUnavailable, setAiUnavailable] = useState(false);
+	// 存之前在看得到的食物裡找到同名的（規格 §2 第 3 項）：先問要用食物庫的，
+	// 還是照樣用 AI 的數字建一個。`body` 是被攔下來的那一次要存的內容。
+	const [sameName, setSameName] = useState<{
+		food: Food;
+		body: AiFoodBody;
+	} | null>(null);
 
 	// 結果卡片 ↔ 修改表單切換時，按下去的那顆按鈕會消失、焦點掉到 body。
 	// 切到表單 → 焦點到第一個欄位；切回卡片 → 焦點到卡片的標題（規格 §2
@@ -132,9 +148,11 @@ export function AiEstimatePanel({
 		setDraft(null);
 		setFormError(null);
 		setExistingFoodId(null);
+		setSameName(null);
 		// 舊的存檔／讀取失敗訊息不能跟到新的結果卡片上。
 		save.reset();
 		pickExisting.reset();
+		lookup.reset();
 	}
 
 	const analyze = useMutation({
@@ -187,7 +205,30 @@ export function AiEstimatePanel({
 		mutationFn: (foodId: number) => apiFetch<Food>(`/api/foods/${foodId}`),
 	});
 
+	// 存之前先用要存的名稱查一次看得到的食物（公開的＋自己的）。
+	const lookup = useMutation({
+		mutationFn: async (name: string) =>
+			findSameNameFood(
+				await searchFoods(name.trim(), "all", SAME_NAME_SEARCH_LIMIT),
+				name,
+			),
+	});
+
+	/** 「確認」與「存成食物」都走這裡：先查同名，沒有才建。 */
 	function saveFood(body: AiFoodBody) {
+		setSameName(null);
+		lookup.mutate(body.name, {
+			onSuccess: (match) => {
+				if (match === null) createFood(body);
+				else setSameName({ food: match, body });
+			},
+			// 同名檢查只是提醒：查不到（多半是暫時的）不擋使用者存。真的撞到
+			// 自己的食物，後端的 409 FOOD_EXISTS 仍然會接住。
+			onError: () => createFood(body),
+		});
+	}
+
+	function createFood(body: AiFoodBody) {
 		save.mutate(body, {
 			onSuccess: (food) => {
 				if (food) finish(food);
@@ -203,7 +244,12 @@ export function AiEstimatePanel({
 		});
 	}
 
-	const busy = analyze.isPending || save.isPending || pickExisting.isPending;
+	const busy =
+		analyze.isPending ||
+		lookup.isPending ||
+		save.isPending ||
+		pickExisting.isPending;
+	const saving = lookup.isPending || save.isPending;
 
 	function handlePhoto(event: ChangeEvent<HTMLInputElement>) {
 		const file = event.target.files?.[0];
@@ -217,8 +263,16 @@ export function AiEstimatePanel({
 		setDraft(draftFromEstimate(current));
 		setFormError(null);
 		setExistingFoodId(null);
+		setSameName(null);
 		save.reset();
 		focusNextRef.current = "form";
+	}
+
+	function updateDraft(patch: Partial<EstimateDraft>) {
+		if (draft === null) return;
+		setDraft({ ...draft, ...patch });
+		// 改過就不是剛才問的那一份了：「還是建一個」不能送出改之前的內容。
+		setSameName(null);
 	}
 
 	function submitDraft(event: FormEvent, current: AnalyzeResponse) {
@@ -235,6 +289,33 @@ export function AiEstimatePanel({
 	}
 
 	const unit = estimate?.nutrition.base_unit ?? "g";
+
+	const sameNamePrompt = sameName !== null && (
+		<>
+			<p role="alert">食物庫裡已經有「{sameName.food.name}」</p>
+			<div className={styles.actions}>
+				<button
+					type="button"
+					className={styles.primary}
+					disabled={busy}
+					onClick={() => finish(sameName.food)}
+				>
+					用食物庫的
+				</button>
+				<button
+					type="button"
+					className={styles.secondary}
+					disabled={busy}
+					onClick={() => {
+						setSameName(null);
+						createFood(sameName.body);
+					}}
+				>
+					還是用 AI 的數字建一個
+				</button>
+			</div>
+		</>
+	);
 	// 撞名而且附了 food_id 時，畫面用「用現有的／改名」處理；沒附 food_id 就當一般
 	// 失敗，顯示後端的訊息。
 	const saveFailed =
@@ -325,7 +406,9 @@ export function AiEstimatePanel({
 						className={styles.muted}
 					>{`今天還能用 ${estimate.remaining_today} 次`}</p>
 
-					{existingFoodId !== null ? (
+					{sameName !== null ? (
+						sameNamePrompt
+					) : existingFoodId !== null ? (
 						<>
 							<p role="alert">你已經有「{estimate.name}」了</p>
 							<div className={styles.actions}>
@@ -355,7 +438,7 @@ export function AiEstimatePanel({
 								disabled={busy}
 								onClick={() => saveFood(confirmedFoodRequest(estimate))}
 							>
-								{save.isPending ? "存成食物中…" : "確認"}
+								{saving ? "存成食物中…" : "確認"}
 							</button>
 							<button
 								type="button"
@@ -385,9 +468,7 @@ export function AiEstimatePanel({
 						type="text"
 						maxLength={100}
 						value={draft.name}
-						onChange={(event) =>
-							setDraft({ ...draft, name: event.target.value })
-						}
+						onChange={(event) => updateDraft({ name: event.target.value })}
 					/>
 					<label
 						htmlFor={`${id}-serving-grams`}
@@ -398,7 +479,7 @@ export function AiEstimatePanel({
 						inputMode="decimal"
 						value={draft.servingGrams}
 						onChange={(event) =>
-							setDraft({ ...draft, servingGrams: event.target.value })
+							updateDraft({ servingGrams: event.target.value })
 						}
 					/>
 					<label htmlFor={`${id}-kcal`}>一份的熱量（kcal）</label>
@@ -407,9 +488,7 @@ export function AiEstimatePanel({
 						type="text"
 						inputMode="decimal"
 						value={draft.kcal}
-						onChange={(event) =>
-							setDraft({ ...draft, kcal: event.target.value })
-						}
+						onChange={(event) => updateDraft({ kcal: event.target.value })}
 					/>
 					<label htmlFor={`${id}-protein`}>一份的蛋白質（g）</label>
 					<input
@@ -417,9 +496,7 @@ export function AiEstimatePanel({
 						type="text"
 						inputMode="decimal"
 						value={draft.protein_g}
-						onChange={(event) =>
-							setDraft({ ...draft, protein_g: event.target.value })
-						}
+						onChange={(event) => updateDraft({ protein_g: event.target.value })}
 					/>
 					<label htmlFor={`${id}-fat`}>一份的脂肪（g）</label>
 					<input
@@ -427,9 +504,7 @@ export function AiEstimatePanel({
 						type="text"
 						inputMode="decimal"
 						value={draft.fat_g}
-						onChange={(event) =>
-							setDraft({ ...draft, fat_g: event.target.value })
-						}
+						onChange={(event) => updateDraft({ fat_g: event.target.value })}
 					/>
 					<label htmlFor={`${id}-carb`}>一份的碳水化合物（g）</label>
 					<input
@@ -437,18 +512,17 @@ export function AiEstimatePanel({
 						type="text"
 						inputMode="decimal"
 						value={draft.carb_g}
-						onChange={(event) =>
-							setDraft({ ...draft, carb_g: event.target.value })
-						}
+						onChange={(event) => updateDraft({ carb_g: event.target.value })}
 					/>
 					{formError !== null && <p role="alert">{formError}</p>}
 					{existingFoodId !== null && (
 						<p role="alert">你已經有同名的食物了，換個名稱</p>
 					)}
 					{saveFailed && <p role="alert">{describeSaveError(save.error)}</p>}
+					{sameNamePrompt}
 					<div className={styles.actions}>
 						<button type="submit" className={styles.primary} disabled={busy}>
-							{save.isPending ? "存成食物中…" : "存成食物"}
+							{saving ? "存成食物中…" : "存成食物"}
 						</button>
 						<button
 							type="button"
@@ -458,6 +532,7 @@ export function AiEstimatePanel({
 								setDraft(null);
 								setFormError(null);
 								setExistingFoodId(null);
+								setSameName(null);
 								save.reset();
 								focusNextRef.current = "card";
 							}}
