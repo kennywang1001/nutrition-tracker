@@ -5,7 +5,7 @@ from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, File, Query, Response, UploadFile, status
-from sqlalchemy import Row, Select, delete, select
+from sqlalchemy import Row, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -19,6 +19,7 @@ from app.errors import (
     UnprocessableEntityError,
 )
 from app.food_visibility import load_visible_food, load_visible_portion
+from app.meal_reads import item_join_query
 from app.models.expense import Expense, ExpenseCategory
 from app.models.food import Food, FoodRevision
 from app.models.meal import Meal, MealItem
@@ -239,21 +240,6 @@ async def create_meal(
     )
 
 
-def _item_join_query() -> Select[tuple[MealItem, FoodRevision, Food]]:
-    """項目 join 它釘住的 revision、再 join 該 revision 當時所屬的食物。
-
-    刻意不用 `selectinload`：本計畫不宣告 `relationship()`（見計畫「刻意不做的
-    事」/程式碼組織限制），selectinload 需要 ORM 關聯屬性才能運作。改用明確的
-    兩層 join，一次查詢就把項目、營養素、食物名稱全部帶回來 —— 讀一餐或列一天
-    的餐，查詢次數都跟項目數無關，不會有「N 個項目 = N+1 次往返」的問題。
-    """
-    return (
-        select(MealItem, FoodRevision, Food)
-        .join(FoodRevision, MealItem.food_revision_id == FoodRevision.id)
-        .join(Food, FoodRevision.food_id == Food.id)
-    )
-
-
 async def _costs_by_meal(db: AsyncSession, meal_ids: Sequence[int]) -> dict[int, Decimal]:
     """這幾餐各自的餐費（`expenses.meal_id` 指過來的那一筆）。
 
@@ -289,7 +275,7 @@ def _build_meal_response(
     """把一筆 Meal 與它已經 join 好的項目列組成回應。
 
     **一律用項目當時釘住的 food_revision_id 換算，不是食物現在的
-    current_revision_id**（`_item_join_query` 的 join 條件本身就保證了這件事：
+    current_revision_id**（`item_join_query` 的 join 條件本身就保證了這件事：
     join 的起點是 `MealItem.food_revision_id`，從頭到尾没有碰過
     `Food.current_revision_id`）。這是版本化的重點：歷史紀錄要看到的是
     當時的數值，即使食物後來被審核通過新版本，這裡的數字也不能動。
@@ -340,12 +326,12 @@ async def read_meal(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> MealResponse:
-    """讀單一餐點：只有 3 次查詢（餐點、項目、餐費），跟項目數無關（見 `_item_join_query`）。"""
+    """讀單一餐點：只有 3 次查詢（餐點、項目、餐費），跟項目數無關（見 `item_join_query`）。"""
     meal = await _load_owned_meal(db, meal_id, user)
 
     rows = (
         await db.execute(
-            _item_join_query().where(MealItem.meal_id == meal.id).order_by(MealItem.id)
+            item_join_query().where(MealItem.meal_id == meal.id).order_by(MealItem.id)
         )
     ).all()
     costs = await _costs_by_meal(db, [meal.id])
@@ -410,7 +396,7 @@ async def update_meal(
 
     rows = (
         await db.execute(
-            _item_join_query().where(MealItem.meal_id == meal.id).order_by(MealItem.id)
+            item_join_query().where(MealItem.meal_id == meal.id).order_by(MealItem.id)
         )
     ).all()
     costs = await _costs_by_meal(db, [meal.id])
@@ -492,7 +478,7 @@ async def list_meals(
     meal_ids = [meal.id for meal in meals]
     rows = (
         await db.execute(
-            _item_join_query().where(MealItem.meal_id.in_(meal_ids)).order_by(MealItem.id)
+            item_join_query().where(MealItem.meal_id.in_(meal_ids)).order_by(MealItem.id)
         )
     ).all()
 
@@ -544,7 +530,7 @@ async def add_meal_item(
 
     rows = (
         await db.execute(
-            _item_join_query().where(MealItem.meal_id == meal.id).order_by(MealItem.id)
+            item_join_query().where(MealItem.meal_id == meal.id).order_by(MealItem.id)
         )
     ).all()
     costs = await _costs_by_meal(db, [meal.id])
@@ -598,7 +584,7 @@ async def update_meal_item(
 
     rows = (
         await db.execute(
-            _item_join_query().where(MealItem.meal_id == meal.id).order_by(MealItem.id)
+            item_join_query().where(MealItem.meal_id == meal.id).order_by(MealItem.id)
         )
     ).all()
     costs = await _costs_by_meal(db, [meal.id])
@@ -694,7 +680,7 @@ async def upload_meal_photo(
 
     rows = (
         await db.execute(
-            _item_join_query().where(MealItem.meal_id == meal.id).order_by(MealItem.id)
+            item_join_query().where(MealItem.meal_id == meal.id).order_by(MealItem.id)
         )
     ).all()
     costs = await _costs_by_meal(db, [meal.id])

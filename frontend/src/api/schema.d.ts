@@ -463,6 +463,61 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/friends/feed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Friend Feed */
+        get: operations["friend_feed_api_friends_feed_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/friends/{friend_id}/meals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Friend Day */
+        get: operations["friend_day_api_friends__friend_id__meals_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/friends/{friend_id}/meals/{meal_id}/photo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Friend Meal Photo
+         * @description 好友的照片。好友 id 與餐點 id 兩個都要對上：餐要屬於那個好友、而且不是
+         *     「只有我看得到」——任何一項不成立都是同一個 MEAL_NOT_FOUND，不透露是哪一項。
+         */
+        get: operations["friend_meal_photo_api_friends__friend_id__meals__meal_id__photo_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/food-revisions": {
         parameters: {
             query?: never;
@@ -591,7 +646,7 @@ export interface paths {
         };
         /**
          * Read Meal
-         * @description 讀單一餐點：只有 3 次查詢（餐點、項目、餐費），跟項目數無關（見 `_item_join_query`）。
+         * @description 讀單一餐點：只有 3 次查詢（餐點、項目、餐費），跟項目數無關（見 `item_join_query`）。
          */
         get: operations["read_meal_api_meals__meal_id__get"];
         put?: never;
@@ -1450,6 +1505,62 @@ export interface components {
         FriendCodeResponse: {
             /** Code */
             code: string;
+        };
+        /** FriendDayResponse */
+        FriendDayResponse: {
+            friend: components["schemas"]["PersonResponse"];
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /** Meals */
+            meals: components["schemas"]["FriendMeal"][];
+        };
+        /** FriendFeedResponse */
+        FriendFeedResponse: {
+            /** Meals */
+            meals: components["schemas"]["FriendMeal"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /**
+         * FriendMeal
+         * @description 好友看得到的一餐（規格 §4.3）。**白名單**——不是從 `MealResponse` 刪欄位：
+         *     `MealResponse` 以後多了欄位，這裡不會跟著多。沒有餐費、備註、照片路徑、
+         *     食物與份量的 id。
+         */
+        FriendMeal: {
+            /** Id */
+            id: number;
+            user: components["schemas"]["PersonResponse"];
+            /**
+             * Eaten At
+             * Format: date-time
+             */
+            eaten_at: string;
+            meal_type: components["schemas"]["MealType"];
+            /** Items */
+            items: components["schemas"]["FriendMealItem"][];
+            /** Kcal */
+            kcal: string;
+            /** Protein G */
+            protein_g: string;
+            /** Fat G */
+            fat_g: string;
+            /** Carb G */
+            carb_g: string;
+            /** Has Photo */
+            has_photo: boolean;
+        };
+        /** FriendMealItem */
+        FriendMealItem: {
+            /** Food Name */
+            food_name: string;
+            /** Quantity G */
+            quantity_g: string;
+            /** Kcal */
+            kcal: string;
         };
         /** FriendRequestCreate */
         FriendRequestCreate: {
@@ -3141,6 +3252,103 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    friend_feed_api_friends_feed_get: {
+        parameters: {
+            query?: {
+                before?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FriendFeedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    friend_day_api_friends__friend_id__meals_get: {
+        parameters: {
+            query?: {
+                date?: string | null;
+            };
+            header?: never;
+            path: {
+                friend_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FriendDayResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    friend_meal_photo_api_friends__friend_id__meals__meal_id__photo_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                friend_id: number;
+                meal_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
             };
             /** @description Validation Error */
             422: {

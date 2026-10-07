@@ -6,21 +6,44 @@
 照樣全綠）。`tests/test_friend_meals.py` 的掃描測試守著這件事。
 """
 
-from fastapi import APIRouter, Depends, Response, status
-from sqlalchemy import ColumnElement, case, delete, func, or_, select, update
+import base64
+import binascii
+import json
+from collections import defaultdict
+from collections.abc import Sequence
+from datetime import date, datetime
+
+from fastapi import APIRouter, Depends, Query, Response, status
+from sqlalchemy import delete, func, literal, select, tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.api.params import ResourceId
+from app.days import day_bounds, today_in_timezone
 from app.db import get_db
-from app.errors import ConflictError, NotFoundError
+from app.errors import ConflictError, NotFoundError, UnprocessableEntityError
 from app.friend_codes import format_friend_code, new_friend_code, normalize_friend_code
-from app.friend_visibility import ordered_pair
+from app.friend_visibility import (
+    friend_ids,
+    involves,
+    load_visible_friend,
+    ordered_pair,
+    other_side,
+    shared_meals,
+)
+from app.meal_reads import item_join_query
+from app.models.food import Food, FoodRevision
 from app.models.friendship import Friendship, FriendshipStatus
+from app.models.meal import Meal, MealItem
 from app.models.user import User
+from app.nutrition import Macros, scale, total
 from app.schemas.friend import (
     FriendCodeResponse,
+    FriendDayResponse,
+    FriendFeedResponse,
+    FriendMeal,
+    FriendMealItem,
     FriendRequestCreate,
     FriendRequestItem,
     FriendRequestResult,
@@ -28,6 +51,7 @@ from app.schemas.friend import (
     FriendResponse,
     PersonResponse,
 )
+from app.storage.photos import read_photo
 
 router = APIRouter(prefix="/friends", tags=["friends"])
 
@@ -53,14 +77,6 @@ def _person(user: User) -> PersonResponse:
     return PersonResponse(id=user.id, display_name=user.display_name)
 
 
-def _involves(user_id: int) -> ColumnElement[bool]:
-    return or_(Friendship.user_a == user_id, Friendship.user_b == user_id)
-
-
-def _other_side(user_id: int) -> ColumnElement[int]:
-    return case((Friendship.user_a == user_id, Friendship.user_b), else_=Friendship.user_a)
-
-
 async def _load_pair(db: AsyncSession, user_a: int, user_b: int) -> Friendship | None:
     row: Friendship | None = await db.scalar(
         select(Friendship).where(Friendship.user_a == user_a, Friendship.user_b == user_b)
@@ -77,7 +93,7 @@ async def _accept(db: AsyncSession, friendship_id: int, receiver_id: int) -> boo
             Friendship.id == friendship_id,
             Friendship.status == FriendshipStatus.PENDING,
             Friendship.requested_by != receiver_id,
-            _involves(receiver_id),
+            involves(receiver_id),
         )
         .values(status=FriendshipStatus.ACCEPTED, accepted_at=func.now())
         .returning(Friendship.id)
@@ -144,8 +160,8 @@ async def list_requests(
     rows = (
         await db.execute(
             select(Friendship, User)
-            .join(User, User.id == _other_side(user.id))
-            .where(_involves(user.id), Friendship.status == FriendshipStatus.PENDING)
+            .join(User, User.id == other_side(user.id))
+            .where(involves(user.id), Friendship.status == FriendshipStatus.PENDING)
             .order_by(Friendship.created_at.desc(), Friendship.id.desc())
         )
     ).all()
@@ -171,7 +187,7 @@ async def accept_request(
     row = (
         await db.execute(
             select(Friendship, User)
-            .join(User, User.id == _other_side(user.id))
+            .join(User, User.id == other_side(user.id))
             .where(Friendship.id == request_id)
         )
     ).one()
@@ -194,7 +210,7 @@ async def delete_request(
         .where(
             Friendship.id == request_id,
             Friendship.status == FriendshipStatus.PENDING,
-            _involves(user.id),
+            involves(user.id),
         )
         .returning(Friendship.id)
     )
@@ -211,8 +227,8 @@ async def list_friends(
     rows = (
         await db.execute(
             select(Friendship, User)
-            .join(User, User.id == _other_side(user.id))
-            .where(_involves(user.id), Friendship.status == FriendshipStatus.ACCEPTED)
+            .join(User, User.id == other_side(user.id))
+            .where(involves(user.id), Friendship.status == FriendshipStatus.ACCEPTED)
             .order_by(User.display_name, User.id)
         )
     ).all()
@@ -242,3 +258,142 @@ async def unfriend(
     if deleted is None:
         raise NotFoundError("FRIEND_NOT_FOUND", "找不到這個好友")
     await db.commit()
+
+
+def _encode_cursor(meal: Meal) -> str:
+    raw = json.dumps({"t": meal.eaten_at.isoformat(), "id": meal.id}).encode()
+    return base64.urlsafe_b64encode(raw).decode()
+
+
+def _decode_cursor(cursor: str) -> tuple[datetime, int]:
+    try:
+        data = json.loads(base64.urlsafe_b64decode(cursor.encode()))
+        return datetime.fromisoformat(data["t"]), int(data["id"])
+    except (binascii.Error, ValueError, KeyError, TypeError) as exc:
+        raise UnprocessableEntityError("INVALID_CURSOR", "分頁位置看不懂，請重新整理") from exc
+
+
+async def _friend_meals(
+    db: AsyncSession, meals: Sequence[Meal], people: dict[int, User]
+) -> list[FriendMeal]:
+    """組 `FriendMeal`。營養素用跟 `MealResponse` 同一套（`scale`／`total`，釘住
+    當時的 revision）。一次查完所有項目（`meal_id IN (...)`）。"""
+    if not meals:
+        return []
+    rows = (
+        await db.execute(
+            item_join_query()
+            .where(MealItem.meal_id.in_([meal.id for meal in meals]))
+            .order_by(MealItem.id)
+        )
+    ).all()
+    by_meal: dict[int, list[tuple[MealItem, FoodRevision, Food]]] = defaultdict(list)
+    for item, revision, food in rows:
+        by_meal[item.meal_id].append((item, revision, food))
+
+    result: list[FriendMeal] = []
+    for meal in meals:
+        items: list[FriendMealItem] = []
+        macros_list: list[Macros] = []
+        for item, revision, food in by_meal[meal.id]:
+            macros = scale(revision, item.quantity_g)
+            macros_list.append(macros)
+            items.append(
+                FriendMealItem(food_name=food.name, quantity_g=item.quantity_g, kcal=macros.kcal)
+            )
+        totals = total(macros_list)
+        result.append(
+            FriendMeal(
+                id=meal.id,
+                user=_person(people[meal.user_id]),
+                eaten_at=meal.eaten_at,
+                meal_type=meal.meal_type,
+                items=items,
+                kcal=totals.kcal,
+                protein_g=totals.protein_g,
+                fat_g=totals.fat_g,
+                carb_g=totals.carb_g,
+                has_photo=meal.photo_path is not None,
+            )
+        )
+    return result
+
+
+@router.get("/feed", response_model=FriendFeedResponse)
+async def friend_feed(
+    before: str | None = Query(default=None, max_length=200),
+    limit: int = Query(default=20, ge=1, le=50),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FriendFeedResponse:
+    ids = await friend_ids(db, user)
+    if not ids:
+        return FriendFeedResponse(meals=[], next_cursor=None)
+
+    query = shared_meals(ids)
+    if before is not None:
+        eaten_at, meal_id = _decode_cursor(before)
+        # (eaten_at, id) 一起比：同一個時間的兩餐跨頁不重複也不漏。
+        query = query.where(
+            tuple_(Meal.eaten_at, Meal.id)
+            < tuple_(literal(eaten_at, Meal.eaten_at.type), literal(meal_id, Meal.id.type))
+        )
+    meals = (
+        await db.scalars(query.order_by(Meal.eaten_at.desc(), Meal.id.desc()).limit(limit + 1))
+    ).all()
+    page = meals[:limit]
+    people = {
+        person.id: person
+        for person in await db.scalars(select(User).where(User.id.in_({m.user_id for m in page})))
+    }
+    return FriendFeedResponse(
+        meals=await _friend_meals(db, page, people),
+        next_cursor=_encode_cursor(page[-1]) if len(meals) > limit else None,
+    )
+
+
+@router.get("/{friend_id}/meals", response_model=FriendDayResponse)
+async def friend_day(
+    friend_id: ResourceId,
+    date: date | None = Query(default=None),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FriendDayResponse:
+    friend = await load_visible_friend(db, user, friend_id)
+    # 「一天」照好友的時區切（規格 §4.3）——跟他自己看飲食頁同一條日界線。
+    day = date or today_in_timezone(friend.timezone)
+    start, end = day_bounds(day, friend.timezone)
+    meals = (
+        await db.scalars(
+            shared_meals([friend.id])
+            .where(Meal.eaten_at >= start, Meal.eaten_at < end)
+            .order_by(Meal.eaten_at, Meal.id)
+        )
+    ).all()
+    return FriendDayResponse(
+        friend=_person(friend),
+        day=day,
+        meals=await _friend_meals(db, meals, {friend.id: friend}),
+    )
+
+
+@router.get("/{friend_id}/meals/{meal_id}/photo")
+async def friend_meal_photo(
+    friend_id: ResourceId,
+    meal_id: ResourceId,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """好友的照片。好友 id 與餐點 id 兩個都要對上：餐要屬於那個好友、而且不是
+    「只有我看得到」——任何一項不成立都是同一個 MEAL_NOT_FOUND，不透露是哪一項。"""
+    friend = await load_visible_friend(db, user, friend_id)
+    meal = await db.scalar(shared_meals([friend.id]).where(Meal.id == meal_id))
+    if meal is None:
+        raise NotFoundError("MEAL_NOT_FOUND", "找不到該餐點")
+    if meal.photo_path is None:
+        raise NotFoundError("MEAL_PHOTO_NOT_FOUND", "這一餐沒有照片")
+    try:
+        content = read_photo(meal.photo_path)
+    except FileNotFoundError as exc:
+        raise NotFoundError("MEAL_PHOTO_NOT_FOUND", "這一餐沒有照片") from exc
+    return Response(content=content, media_type="image/jpeg")
