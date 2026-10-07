@@ -101,6 +101,19 @@ function itemNotFound() {
 	);
 }
 
+function quantityOutOfRange() {
+	return json(
+		{
+			error: {
+				code: "QUANTITY_OUT_OF_RANGE",
+				message: "換算後的公克數超出範圍（0.01 到 999,999.99 g），請改數量",
+				details: {},
+			},
+		},
+		422,
+	);
+}
+
 /** `extra` 排在前面：`mockApi` 依序用 `url.includes` 比對，而
  *  `/api/meals/5/photo`、`/api/meals/5/items/51` 都「包含」`/api/meals/5`。 */
 function routes(
@@ -1180,6 +1193,23 @@ describe("編輯這一餐：項目", () => {
 			),
 		).toBeInTheDocument();
 		expect(keysOf(invalidate)).toContainEqual(queryKeys.meals);
+	});
+
+	it("換算後的公克數超出範圍（422）：顯示後端訊息，不是通用的儲存失敗", async () => {
+		mockApi(itemRoutes(quantityOutOfRange));
+		renderEditMeal();
+
+		const editor = await openEditor();
+		await userEvent.click(within(editor).getByRole("button", { name: "儲存" }));
+
+		expect(
+			await within(editor).findByText(
+				"換算後的公克數超出範圍（0.01 到 999,999.99 g），請改數量",
+			),
+		).toBeInTheDocument();
+		expect(
+			within(editor).queryByText("儲存失敗，請再試一次"),
+		).not.toBeInTheDocument();
 	});
 
 	it("非數量欄位的 422：說儲存失敗，不說成數量錯誤", async () => {

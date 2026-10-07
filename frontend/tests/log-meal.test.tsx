@@ -462,6 +462,37 @@ describe("記一餐", () => {
 		expect(screen.queryByText("記錄失敗，請再試一次")).not.toBeInTheDocument();
 	});
 
+	it("換算後的公克數超出範圍：顯示後端訊息，不是「記錄失敗，請再試一次」", async () => {
+		mockApi({
+			"/api/foods/frequent": () => json(FREQUENT_FOODS),
+			"/api/foods/recent": () => json([]),
+			"/api/foods/1/portions": () => json([]),
+			"/api/meals": () =>
+				json(
+					{
+						error: {
+							code: "QUANTITY_OUT_OF_RANGE",
+							message:
+								"換算後的公克數超出範圍（0.01 到 999,999.99 g），請改數量",
+							details: {},
+						},
+					},
+					422,
+				),
+		});
+
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		expect(
+			await screen.findByText(
+				"換算後的公克數超出範圍（0.01 到 999,999.99 g），請改數量",
+			),
+		).toBeInTheDocument();
+		expect(screen.queryByText("記錄失敗，請再試一次")).not.toBeInTheDocument();
+	});
+
 	it("cost 格式錯誤顯示金額專屬訊息，不是通用或誤指份量", async () => {
 		// 真實信封形狀（規格 §5.4）：details.errors 是 loc / msg / type 的陣列。
 		// loc 要含 "cost" 才會顯示這句——同一次 POST 的 quantity 欄位

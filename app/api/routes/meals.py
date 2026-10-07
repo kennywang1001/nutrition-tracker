@@ -46,6 +46,10 @@ router = APIRouter(prefix="/meals", tags=["meals"])
 
 _CENTS = Decimal("0.01")
 
+# meal_items.quantity_g 是 Numeric(8,2) ＋ CHECK (quantity_g > 0)（安全補強規格 §3.3）。
+QUANTITY_G_MIN = Decimal("0.01")
+QUANTITY_G_MAX = Decimal("999999.99")
+
 # 10 MiB：涵蓋手機相機拍出來的一般 JPEG（通常幾 MB），同時足夠小，
 # 不會讓一次上傳長時間佔用記憶體或頻寬（計畫 3 Task 14）。
 MAX_PHOTO_BYTES = 10 * 1024 * 1024
@@ -76,13 +80,24 @@ async def _quantity_g(
 
     沒有份量：`quantity` 就是公克數。有份量：載入（看不到 -> 404），
     確認屬於這個食物（不符 -> 422），`grams × quantity` 四捨五入到分。
+    結果要在 0.01 到 999,999.99 g 之間，否則 422 QUANTITY_OUT_OF_RANGE。
     """
     if portion_id is None:
-        return quantity
-    portion = await load_visible_portion(db, portion_id, user)
-    if portion.food_id != food_id:
-        raise UnprocessableEntityError("PORTION_FOOD_MISMATCH", "這個份量不屬於指定的食物")
-    return (portion.grams * quantity).quantize(_CENTS, rounding=ROUND_HALF_UP)
+        quantity_g = quantity
+    else:
+        portion = await load_visible_portion(db, portion_id, user)
+        if portion.food_id != food_id:
+            raise UnprocessableEntityError("PORTION_FOOD_MISMATCH", "這個份量不屬於指定的食物")
+        quantity_g = (portion.grams * quantity).quantize(_CENTS, rounding=ROUND_HALF_UP)
+
+    # 份量（≤10000 g）× 數量（≤10000）可以到一億，也可以四捨五入成 0——兩者都會在
+    # 寫入時變成 500（DataError／CHECK）。在這裡擋成 422。沒有份量時欄位限制已經
+    # 保證在範圍內，但檢查放在兩條路之後，不分支。
+    if not QUANTITY_G_MIN <= quantity_g <= QUANTITY_G_MAX:
+        raise UnprocessableEntityError(
+            "QUANTITY_OUT_OF_RANGE", "換算後的公克數超出範圍（0.01 到 999,999.99 g），請改數量"
+        )
+    return quantity_g
 
 
 async def _resolve_item(

@@ -171,7 +171,8 @@ export function LogMeal({ onSaved }: Props) {
 			// 所以這個 409 仍然要具名處理，不能只靠前端擋（規格 §5.5）。
 			if (
 				caught instanceof ApiError &&
-				caught.code === "FOOD_HAS_NO_REVISION"
+				(caught.code === "FOOD_HAS_NO_REVISION" ||
+					caught.code === "QUANTITY_OUT_OF_RANGE")
 			) {
 				// 訊息直接用後端回的——跟 FoodDetail.tsx 處理
 				// REVISION_PENDING 同一個理由：前端重寫一份只會有兩份文字

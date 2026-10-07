@@ -64,7 +64,11 @@ function describeItemError(error: unknown): string {
 			return "這一項已經不在了（可能在別的裝置刪掉了）";
 		}
 		// 搜尋到送出之間食物失去生效版本（同記一餐）：用後端的訊息。
-		if (error.code === "FOOD_HAS_NO_REVISION") {
+		// 份量 × 數量換算後超出範圍：也用後端的訊息。
+		if (
+			error.code === "FOOD_HAS_NO_REVISION" ||
+			error.code === "QUANTITY_OUT_OF_RANGE"
+		) {
 			return error.message;
 		}
 		// 限制同 MealItemCreateRequest.quantity。其他欄位的 422 走通用訊息。
