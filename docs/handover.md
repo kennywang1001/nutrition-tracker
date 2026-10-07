@@ -954,8 +954,10 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
   cron 設定寫在部署手冊，但**必須在容器內執行**（照片在 Docker volume，
   在 host 跑會看錯目錄）。
 - **修改與刪除已記錄的餐點：已完成**（見階段進度）。已知的缺口：
-  - 不能改時間（規格 §1.3）。後端的 `PATCH /api/meals/{id}` 可以改 `eaten_at`，
-    但**既有餐費的 `spent_at` 不跟著動**。
+  - ~~不能改時間~~——**已完成**（規格 `docs/superpowers/specs/2026-10-07-edit-meal-time-design.md`）：
+    「這一餐」表單多日期與時間兩格（裝置時區、到分鐘比較、未來的時間擋在前端）；改了
+    `eaten_at` 時餐費的 `spent_at` 同一個交易跟著改（跨月補記會搬到正確的月份）。
+    順手修了編輯畫面輸入框不到 44px（e2e 現在量它）。
   - ~~兩個請求同時替同一餐補金額可能建出兩筆支出~~——**已修**（安全補強）：部分唯一索引
     `uq_expenses_meal_id`（migration `0015`，升級前查重複、有就失敗不自動刪）；撞上時
     `PATCH /api/meals/{id}` 整個 rollback、回 `409 MEAL_COST_CONFLICT`，前端顯示並重抓這一餐。
