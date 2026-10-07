@@ -127,6 +127,11 @@ export function ratioOf(
 /** 一組數值的平均。**空陣列回 `null`，不是 `"0"`**——沒有資料就沒有平均，
  *  「平均 0」讀起來是「每天都吃了 0」（跟 `ratioOf` 的 null 同一個道理）。
  *
+ *  **四捨五入到小數兩位（half-up）**——後端的營養素都是兩位小數，平均不需要
+ *  比原始資料更精確。不四捨五入的話三天平均 1000、1000、1001 會是
+ *  `"1000.3333333333333333"`（Decimal 預設 20 位有效數字），直接印在畫面上。
+ *  結果走 `toString()`，所以 `"2.00"` 回 `"2"`，跟 `formatMacro` 一致。
+ *
  *  給趨勢畫面的期間摘要用（趨勢期間規格 §2）。哪些值該算進來（例如「沒記錄
  *  的日子不算」）是呼叫端的事，這裡只負責把給它的值平均。 */
 export function averageOf(values: readonly Numeric[]): Numeric | null {
@@ -134,6 +139,7 @@ export function averageOf(values: readonly Numeric[]): Numeric | null {
 	return values
 		.reduce((total, value) => total.plus(value), new Decimal(0))
 		.dividedBy(values.length)
+		.toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
 		.toString();
 }
 

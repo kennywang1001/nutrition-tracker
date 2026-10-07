@@ -142,6 +142,10 @@ export function TrendChart({ days, metric = "kcal", today = null }: Props) {
 			{days.map((day, index) => {
 				const height = heightOf(day.actual[metric]);
 				const x = index * slot + inset;
+				// 天數多時最後一根很窄（30 天約 9 個單位），置中的「今天」右半邊
+				// 會超出 viewBox 被切掉——改成靠右對齊在圖的右緣。
+				const alignDateRight =
+					days.length > LABEL_EVERY_BAR_UP_TO && index === days.length - 1;
 				// 第一層 null（整天沒目標）與第二層 null（這一項沒設）在這裡
 				// 一起被收斂成「沒有可畫的目標值」——但收斂發生在讀完兩層之後，
 				// 不是用 ?? 0 把它們壓成同一個數字。
@@ -176,9 +180,9 @@ export function TrendChart({ days, metric = "kcal", today = null }: Props) {
 							// biome-ignore lint/a11y/noAriaHiddenOnFocusable: SVG <text> 不能聚焦，這是規則的誤判；日期是裝飾，柱子的 aria-label 已經有
 							<text
 								data-testid={`trend-date-${day.date}`}
-								x={x + barWidth / 2}
+								x={alignDateRight ? VIEW_WIDTH : x + barWidth / 2}
 								y={VIEW_HEIGHT + DATE_BAND - 4}
-								textAnchor="middle"
+								textAnchor={alignDateRight ? "end" : "middle"}
 								className="trend-date"
 								aria-hidden="true"
 							>

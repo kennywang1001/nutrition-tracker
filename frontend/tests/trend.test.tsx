@@ -373,3 +373,194 @@ describe("趨勢：期間切換", () => {
 		);
 	});
 });
+
+type Macro = "kcal" | "protein_g" | "fat_g" | "carb_g";
+
+/** 一天的資料：沒寫的實際值是 "0.00"（沒記錄）；`target` 是 null 表示
+ *  那天整天沒有目標，物件裡沒寫的項目是 null（有目標但那一項沒設）。 */
+function summaryDay(
+	date: string,
+	actual: Partial<Record<Macro, string>>,
+	target: Partial<Record<Macro, string>> | null,
+) {
+	return {
+		date,
+		actual: {
+			kcal: "0.00",
+			protein_g: "0.00",
+			fat_g: "0.00",
+			carb_g: "0.00",
+			...actual,
+		},
+		target:
+			target === null
+				? null
+				: { kcal: null, protein_g: null, fat_g: null, carb_g: null, ...target },
+		ratio: null,
+	};
+}
+
+/** 資料 A。熱量：有記錄的 4 天（1800、2100、1500、1200）平均 1650；
+ *  把沒記錄的 3 天也算進去會是 942.857…。
+ *  熱量目標：1800 那天 2000、2100 那天 2200；1500 那天整天沒目標、
+ *  1200 那天有目標但熱量沒設；6/29 沒記錄但有 5000 的目標（不能算進去）。
+ *  → 目標平均 2100（把沒目標的當 0 會是 1050；算進沒記錄的那天會是 3066.67）。
+ *  蛋白質：60（目標沒設）與 75.5（目標 80）→ 平均 67.75、目標平均 80。
+ *  脂肪：一天都沒有。碳水：只有 250 那天，整段期間沒有碳水目標。 */
+const DATASET_A = [
+	summaryDay(
+		"2019-06-28",
+		{ kcal: "1800.00", protein_g: "60.00" },
+		{ kcal: "2000.00" },
+	),
+	summaryDay("2019-06-29", {}, { kcal: "5000.00" }),
+	summaryDay("2019-06-30", { kcal: "2100.00" }, { kcal: "2200.00" }),
+	summaryDay("2019-07-01", {}, null),
+	summaryDay("2019-07-02", { kcal: "1500.00", carb_g: "250.00" }, null),
+	summaryDay("2019-07-03", {}, null),
+	summaryDay(
+		"2019-07-04",
+		{ kcal: "1200.00", protein_g: "75.50" },
+		{ protein_g: "80.00" },
+	),
+];
+
+/** 資料 B。熱量：有記錄的 2 天（1000、1300）平均 1150；只有 1000 那天有
+ *  目標（1800）→ 目標平均 1800（把 1300 那天當 0 會是 900）。 */
+const DATASET_B = [
+	summaryDay("2019-06-28", {}, { kcal: "9999.00" }),
+	summaryDay("2019-06-29", { kcal: "1000.00" }, { kcal: "1800.00" }),
+	summaryDay("2019-06-30", {}, null),
+	summaryDay("2019-07-01", {}, null),
+	summaryDay("2019-07-02", { kcal: "1300.00" }, null),
+	summaryDay("2019-07-03", {}, null),
+	summaryDay("2019-07-04", {}, null),
+];
+
+function mockDataset(trend: ReturnType<typeof summaryDay>[]) {
+	return mockApi([
+		{ path: "/api/stats/daily", handler: () => json(DAILY) },
+		{
+			path: "/api/stats/range",
+			handler: () => json({ ...rangeBody(null), trend }),
+		},
+	]);
+}
+
+async function summaryText() {
+	return (await screen.findByTestId("period-summary")).textContent;
+}
+
+describe("趨勢：期間摘要", () => {
+	// 每條斷言都比整行文字（textContent 相等），不是「包含」——
+	// 「包含 有記錄的 4 天」擋不住後面多接一段不該出現的目標平均。
+
+	it("沒記錄的日子不算（兩組資料，寫死的數字過不了）", async () => {
+		mockDataset(DATASET_A);
+		const { unmount } = render(wrap(<Trend />));
+		expect(await summaryText()).toBe(
+			"有記錄的 4 天，平均 1650 kcal，目標平均 2100 kcal",
+		);
+		unmount();
+
+		mockDataset(DATASET_B);
+		render(wrap(<Trend />));
+		expect(await summaryText()).toBe(
+			"有記錄的 2 天，平均 1150 kcal，目標平均 1800 kcal",
+		);
+	});
+
+	it("那一項整段期間都沒有目標：不寫目標平均", async () => {
+		mockDataset(DATASET_A);
+		render(wrap(<Trend />));
+
+		await userEvent.click(await screen.findByRole("radio", { name: "碳水" }));
+
+		expect(await summaryText()).toBe("有記錄的 1 天，平均 250 g");
+	});
+
+	it("有的天有目標、有的沒有：目標平均只算有目標的那幾天", async () => {
+		// 熱量（資料 A）：有記錄的 4 天裡只有 2 天有熱量目標。
+		// 蛋白質（資料 A）：有記錄的 2 天裡，有目標（但蛋白質沒設）的那天
+		// 也不算——第二層 null 跟整天沒目標一樣不參與。
+		mockDataset(DATASET_A);
+		const { unmount } = render(wrap(<Trend />));
+		expect(await summaryText()).toBe(
+			"有記錄的 4 天，平均 1650 kcal，目標平均 2100 kcal",
+		);
+		await userEvent.click(screen.getByRole("radio", { name: "蛋白質" }));
+		expect(await summaryText()).toBe(
+			"有記錄的 2 天，平均 67.75 g，目標平均 80 g",
+		);
+		unmount();
+
+		// 資料 B：有記錄的 2 天裡只有 1 天有目標。
+		mockDataset(DATASET_B);
+		render(wrap(<Trend />));
+		expect(await summaryText()).toBe(
+			"有記錄的 2 天，平均 1150 kcal，目標平均 1800 kcal",
+		);
+	});
+
+	it("切換營養素：數字與單位都跟著換，切回來也回來", async () => {
+		mockDataset(DATASET_A);
+		render(wrap(<Trend />));
+		expect(await summaryText()).toBe(
+			"有記錄的 4 天，平均 1650 kcal，目標平均 2100 kcal",
+		);
+
+		await userEvent.click(screen.getByRole("radio", { name: "蛋白質" }));
+		expect(await summaryText()).toBe(
+			"有記錄的 2 天，平均 67.75 g，目標平均 80 g",
+		);
+
+		await userEvent.click(screen.getByRole("radio", { name: "熱量" }));
+		expect(await summaryText()).toBe(
+			"有記錄的 4 天，平均 1650 kcal，目標平均 2100 kcal",
+		);
+	});
+
+	it("那一項一天都沒記：說還沒有記錄，不是「平均 0」", async () => {
+		mockDataset(DATASET_A);
+		render(wrap(<Trend />));
+
+		await userEvent.click(await screen.findByRole("radio", { name: "脂肪" }));
+
+		expect(await summaryText()).toBe("這段期間還沒有記錄");
+	});
+
+	it("平均除不盡時顯示兩位小數", async () => {
+		mockDataset([
+			summaryDay("2019-06-28", { kcal: "1000.00" }, { kcal: "2000.00" }),
+			summaryDay("2019-06-29", { kcal: "1000.00" }, { kcal: "2000.00" }),
+			summaryDay("2019-06-30", { kcal: "1001.00" }, { kcal: "2001.00" }),
+			summaryDay("2019-07-01", {}, null),
+			summaryDay("2019-07-02", {}, null),
+			summaryDay("2019-07-03", {}, null),
+			summaryDay("2019-07-04", {}, null),
+		]);
+		render(wrap(<Trend />));
+
+		expect(await summaryText()).toBe(
+			"有記錄的 3 天，平均 1000.33 kcal，目標平均 2000.33 kcal",
+		);
+	});
+
+	it("30 天的摘要算的是 30 天", async () => {
+		mockApi([
+			{
+				path: "/api/stats/range?from=2019-06-05&to=2019-07-04",
+				handler: () => json(rangeOf(THIRTY_DAYS)),
+			},
+			{ path: "/api/stats/range", handler: () => json(rangeBody(null)) },
+			{ path: "/api/stats/daily", handler: () => json(DAILY) },
+		]);
+		render(wrap(<Trend />));
+		expect(await summaryText()).toBe("有記錄的 7 天，平均 1800 kcal");
+
+		await userEvent.click(screen.getByRole("radio", { name: "30 天" }));
+		await screen.findByTestId("trend-bar-2019-06-05");
+
+		expect(await summaryText()).toBe("有記錄的 30 天，平均 1800 kcal");
+	});
+});

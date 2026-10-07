@@ -13,7 +13,7 @@ import {
 } from "../components/TrendChart";
 import ui from "../components/ui.module.css";
 import { shiftDays } from "../lib/civil-date";
-import { formatMacro } from "../lib/decimal";
+import { averageOf, formatMacro, isPositiveAmount } from "../lib/decimal";
 import styles from "./Trend.module.css";
 
 type RangeStats = components["schemas"]["RangeStatsResponse"];
@@ -36,6 +36,34 @@ function todaySummary(day: TrendDay, metric: TrendMetric): string {
 	return target === null
 		? `今天 ${actual} ${unit}`
 		: `今天 ${actual} / ${formatMacro(target)} ${unit}`;
+}
+
+/** 期間摘要（趨勢期間規格 §2）：「有記錄的 N 天，平均 X kcal」，那幾天有
+ *  這一項的目標時接「，目標平均 Y kcal」。
+ *
+ *  - **「有記錄」是那一項的實際值 > 0。** 沒記的日子算進去，平均會被拉低成
+ *    一個沒有意義的數字。
+ *  - **目標平均只算「有記錄、而且有這一項目標」的那幾天。** 整天沒目標與有目標
+ *    但這一項沒設（兩層 null）都不算進去，也不當成 0。
+ *  - **只給數字，不判斷「達標」**（handover §4.8）：熱量是越低越好還是剛好
+ *    就好、蛋白質是至少還是剛好，因人而異。
+ *
+ *  「> 0」借用 `isPositiveAmount`：它就是「經過 Decimal 比較、不丟例外的
+ *  大於 0」，名字是記帳鍵盤取的，但判斷本身跟金額無關。 */
+function periodSummary(days: readonly TrendDay[], metric: TrendMetric): string {
+	const { unit } = TREND_METRICS[metric];
+	const recorded = days.filter((day) => isPositiveAmount(day.actual[metric]));
+	const average = averageOf(recorded.map((day) => day.actual[metric]));
+	if (average === null) return "這段期間還沒有記錄";
+
+	const targets = recorded
+		.map((day) => (day.target === null ? null : day.target[metric]))
+		.filter((value): value is string => value !== null);
+	const targetAverage = averageOf(targets);
+	const head = `有記錄的 ${recorded.length} 天，平均 ${formatMacro(average)} ${unit}`;
+	return targetAverage === null
+		? head
+		: `${head}，目標平均 ${formatMacro(targetAverage)} ${unit}`;
 }
 
 /** 趨勢畫面（規格 §4）。
@@ -128,6 +156,9 @@ export function Trend() {
 								{todaySummary(todayDay, metric)}
 							</p>
 						)}
+						<p data-testid="period-summary" className={styles.summary}>
+							{periodSummary(range.trend, metric)}
+						</p>
 					</div>
 
 					<div>

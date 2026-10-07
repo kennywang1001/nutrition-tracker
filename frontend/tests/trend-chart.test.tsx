@@ -412,6 +412,32 @@ describe("TrendChart：30 天的日期軸", () => {
 		);
 	});
 
+	it("30 天時「今天」靠右對齊圖的右緣，不會超出圖外被切掉", () => {
+		// 實際截圖踩到的：30 根時最後一根的中心在 x≈275，置中的「今天」
+		// （10px 字、兩個全形字約 20 單位寬）右半邊超出 viewBox 的 280，
+		// 畫面上只剩「今」與半個「天」。jsdom 量不到字寬，所以這裡斷言的是
+		// 「文字的右端（text-anchor=end 的 x）就是圖的右緣」。
+		const dates = datesEndingAt("2026-09-16", 30);
+		render(
+			<TrendChart
+				today="2026-09-16"
+				days={dates.map((date) => fullDay(date, { kcal: "1800.00" }, null))}
+			/>,
+		);
+
+		const width = Number(
+			screen.getByTestId("trend-chart").getAttribute("viewBox")?.split(" ")[2],
+		);
+		const label = screen.getByTestId("trend-date-2026-09-16");
+		expect(label).toHaveAttribute("text-anchor", "end");
+		expect(Number(label.getAttribute("x"))).toBeLessThanOrEqual(width);
+		// 其他標籤照舊置中在柱子下面。
+		expect(screen.getByTestId("trend-date-2026-09-09")).toHaveAttribute(
+			"text-anchor",
+			"middle",
+		);
+	});
+
 	it("7 天時每根都標（剛好 7 根不算「超過 7 天」）", () => {
 		const dates = datesEndingAt("2026-09-16", 7);
 		render(
