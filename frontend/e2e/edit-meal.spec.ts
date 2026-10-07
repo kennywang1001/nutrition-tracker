@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 import { ADMIN } from "./accounts.ts";
+import { expectTouchTargets } from "./touch-targets.ts";
 
 async function login(page: Page) {
 	await page.goto("/");
@@ -50,6 +51,13 @@ test("記一餐（有金額）→ 從總覽進編輯 → 改數量 → 刪掉這
 	await row.getByRole("link").click();
 	await expect(page.getByRole("heading", { name: "編輯這一餐" })).toBeVisible();
 	await expect(page.getByLabel("金額（選填）")).toHaveValue(cost);
+	// 「這一餐」表單的輸入框（含改時間的日期、時間）也是點擊目標：≥ 44px。
+	await expectTouchTargets(
+		page
+			.getByRole("form", { name: "這一餐" })
+			.locator("input:visible, select:visible"),
+		"編輯這一餐：輸入框",
+	);
 
 	// 改數量：100 → 250。
 	await page.getByRole("button", { name: `修改${foodName}` }).click();
