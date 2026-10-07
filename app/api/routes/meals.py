@@ -462,8 +462,9 @@ async def update_meal(
         await db.rollback()
         violation = _violation(exc)
         if violation == (_UNIQUE_VIOLATION, "uq_expenses_meal_id"):
-            # 補金額時另一個請求剛補了一筆：整個請求 rollback，同一次送出的
-            # 餐別、備註也不存——請使用者重新整理看另一台存的值。
+            # 後備：update_meal 鎖住了那一餐（FOR UPDATE），兩台同時補金額會排隊、
+            # 後到的改成更新金額，正常路徑碰不到這裡。萬一有不經過鎖的寫入撞上
+            # 唯一約束：整個請求 rollback，請使用者重新整理看另一台存的值。
             raise ConflictError(
                 "MEAL_COST_CONFLICT", "這一餐的金額剛被另一台裝置改過，請重新整理再試"
             ) from None
