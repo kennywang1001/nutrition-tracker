@@ -154,3 +154,59 @@ class LoginRateLimiter:
 # 用 monkeypatch.setattr("app.api.routes.auth.login_rate_limiter", ...) 換掉，
 # 不要直接改這個 instance 的門檻常數（那會影響所有其他測試）。
 login_rate_limiter = LoginRateLimiter()
+
+
+SESSION_LIMIT = 10
+SESSION_WINDOW_SECONDS = 60.0
+
+
+class KeyedRateLimiter:
+    """固定視窗、每個鍵最多 `limit` 次——**每一次 `hit` 都算**。
+
+    跟 `LoginRateLimiter` 分開：登入只算失敗、成功就重置（擋的是猜密碼）；
+    這裡擋的是「重放」——成功與失敗一樣要算，否則拿同一張票狂打的人每次
+    都「成功」登出（冪等的 204），計數永遠不會累積。
+    """
+
+    def __init__(
+        self,
+        *,
+        limit: int,
+        window_seconds: float,
+        code: str,
+        message: str,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._limit = limit
+        self._window_seconds = window_seconds
+        self._code = code
+        self._message = message
+        self._clock = clock
+        self._windows: dict[str, _Window] = {}
+
+    def hit(self, key: str) -> None:
+        now = self._clock()
+        window = self._windows.get(key)
+        if window is None or now - window.started_at >= self._window_seconds:
+            self._windows[key] = _Window(count=1, started_at=now)
+            return
+        if window.count >= self._limit:
+            raise TooManyRequestsError(
+                self._code,
+                self._message,
+                retry_after_seconds=window.started_at + self._window_seconds - now,
+            )
+        window.count += 1
+
+    def reset(self) -> None:
+        self._windows.clear()
+
+
+# `/refresh` 與 `/logout` 共用（安全補強規格 §3.1）：鍵是 token 的 `sub`（簽章驗過，
+# 偽造不了）。正常使用大約每 15 分鐘換一次票，幾台裝置加起來遠低於 10 次。
+session_rate_limiter = KeyedRateLimiter(
+    limit=SESSION_LIMIT,
+    window_seconds=SESSION_WINDOW_SECONDS,
+    code="TOO_MANY_SESSION_REQUESTS",
+    message="操作太頻繁，請稍後再試",
+)

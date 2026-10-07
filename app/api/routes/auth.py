@@ -11,7 +11,7 @@ from app.db import get_db
 from app.errors import ConflictError, ForbiddenError, UnauthorizedError
 from app.invites import INVITE_INVALID_MESSAGE, find_usable_invite, redeem_invite
 from app.models.user import User
-from app.ratelimit import login_rate_limiter
+from app.ratelimit import login_rate_limiter, session_rate_limiter
 from app.schemas.auth import (
     LoginRequest,
     LogoutRequest,
@@ -29,7 +29,7 @@ from app.security.sessions import (
     rotate_session,
     start_session,
 )
-from app.security.tokens import TokenError
+from app.security.tokens import TokenError, decode_refresh_token
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +143,16 @@ async def logout(payload: LogoutRequest, db: AsyncSession = Depends(get_db)) -> 
     """登出這一台裝置：這張 refresh token 所屬的整條鏈立刻失效，不能再換發新票。
 
     對無效、過期、已經登出過的 token 一律回 204——這個端點本來就是冪等的。
+
+    **先驗簽、再限速、最後才碰資料庫**（安全補強規格 §3.1）：簽章不對的票不計數
+    （驗簽不碰資料庫、不取鎖，本來就便宜）；簽章對的票——包括早就撤銷的——
+    每個使用者每分鐘最多 10 次走到 `revoke_session` 的 advisory lock。
     """
+    try:
+        claims = decode_refresh_token(payload.refresh_token)
+    except TokenError:
+        return
+    session_rate_limiter.hit(str(claims.user_id))
     await revoke_session(db, payload.refresh_token)
 
 
@@ -163,6 +172,14 @@ async def logout_all(
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
+    # 先驗簽取 sub、再限速，最後才進 rotate_session 的資料庫與 advisory lock
+    # （安全補強規格 §3.1；同 logout）。簽章不對 → 跟原本一樣的 401，不計數。
+    try:
+        claims = decode_refresh_token(payload.refresh_token)
+    except TokenError as exc:
+        raise UnauthorizedError("INVALID_TOKEN", "token 無效或已過期") from exc
+    session_rate_limiter.hit(str(claims.user_id))
+
     try:
         issued = await rotate_session(db, payload.refresh_token)
     except ReuseDetectedError as exc:
