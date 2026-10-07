@@ -602,3 +602,112 @@ describe("AI 估算面板：錯誤", () => {
 		).toBeEnabled();
 	});
 });
+
+describe("AI 估算面板：後端分類過的 AI 錯誤", () => {
+	it("AI 設定有問題（金鑰或模型）：顯示後端的訊息，不是通用的估算失敗", async () => {
+		mockApi(
+			routes(
+				apiError(
+					503,
+					"AI_MISCONFIGURED",
+					"AI 設定有問題（金鑰或模型），請管理員檢查",
+				),
+			),
+		);
+		renderPanel();
+
+		await userEvent.click(
+			screen.getByRole("button", { name: "用 AI 估算「一碗牛肉麵」" }),
+		);
+
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent(
+			"AI 設定有問題（金鑰或模型），請管理員檢查",
+		);
+		expect(alert).not.toHaveTextContent("AI 估算失敗");
+	});
+
+	it("AI 服務暫時無法使用：顯示後端的訊息，不是通用的估算失敗", async () => {
+		mockApi(
+			routes(
+				apiError(502, "AI_UPSTREAM_ERROR", "AI 服務暫時無法使用，請稍後再試"),
+			),
+		);
+		renderPanel();
+
+		await userEvent.click(
+			screen.getByRole("button", { name: "用 AI 估算「一碗牛肉麵」" }),
+		);
+
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent("AI 服務暫時無法使用，請稍後再試");
+		expect(alert).not.toHaveTextContent("AI 估算失敗");
+	});
+});
+
+describe("AI 估算面板：切換時的焦點", () => {
+	it("需要修改：焦點到表單的第一個欄位（食物名稱）", async () => {
+		mockApi(routes());
+		renderPanel();
+
+		const card = await estimateByText();
+		await userEvent.click(
+			within(card).getByRole("button", { name: "需要修改" }),
+		);
+
+		const form = screen.getByRole("form", { name: "修改 AI 估算" });
+		expect(within(form).getByLabelText("食物名稱")).toHaveFocus();
+	});
+
+	it("撞名之後按「改名」：焦點也到食物名稱", async () => {
+		mockApi(
+			routes(undefined, [
+				{
+					method: "POST",
+					path: "/api/foods",
+					handler: apiError(409, "FOOD_EXISTS", "你已經建過同名的食物了", {
+						food_id: 7,
+					}),
+				},
+			]),
+		);
+		renderPanel();
+
+		const card = await estimateByText();
+		await userEvent.click(within(card).getByRole("button", { name: "確認" }));
+		await userEvent.click(
+			await within(card).findByRole("button", { name: "改名" }),
+		);
+
+		expect(screen.getByLabelText("食物名稱")).toHaveFocus();
+	});
+
+	it("放棄修改：焦點回到結果卡片的標題", async () => {
+		mockApi(routes());
+		renderPanel();
+
+		const card = await estimateByText();
+		await userEvent.click(
+			within(card).getByRole("button", { name: "需要修改" }),
+		);
+		await userEvent.click(screen.getByRole("button", { name: "放棄修改" }));
+
+		const back = screen.getByRole("region", { name: "AI 估算結果" });
+		expect(within(back).getByRole("heading", { name: "牛肉麵" })).toHaveFocus();
+	});
+
+	it("剛估算完：焦點不會被搶到卡片標題", async () => {
+		mockApi(routes());
+		renderPanel();
+
+		const button = screen.getByRole("button", {
+			name: "用 AI 估算「一碗牛肉麵」",
+		});
+		await userEvent.click(button);
+		const card = await screen.findByRole("region", { name: "AI 估算結果" });
+
+		expect(
+			within(card).getByRole("heading", { name: "牛肉麵" }),
+		).not.toHaveFocus();
+	});
+});

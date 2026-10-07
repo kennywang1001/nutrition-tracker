@@ -1,6 +1,13 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Camera } from "lucide-react";
-import { type ChangeEvent, type FormEvent, useId, useState } from "react";
+import {
+	type ChangeEvent,
+	type FormEvent,
+	useEffect,
+	useId,
+	useRef,
+	useState,
+} from "react";
 import { type AnalyzeResponse, analyzeImage, analyzeText } from "../api/ai";
 import { apiFetch } from "../api/client";
 import { ApiError, describeFieldErrors } from "../api/errors";
@@ -46,6 +53,12 @@ function describeAnalyzeError(error: unknown): string {
 			case "AI_NOT_CONFIGURED":
 				// 後端的訊息說缺什麼（「AI 分析未設定：缺 GEMINI_API_KEY」），
 				// 部署手冊叫操作者照著它補。
+				return error.message;
+			case "AI_MISCONFIGURED":
+			case "AI_UPSTREAM_ERROR":
+				// 後端把供應商的錯誤分成兩類（AI 與編輯畫面的收尾規格 §2 第 2 項）：
+				// 「設定有問題，請管理員檢查」與「暫時無法使用，請稍後再試」——
+				// 該做的事不同，通用的「再試一次」對前者是錯的指示。
 				return error.message;
 			case "AI_BAD_RESPONSE":
 				return "AI 這次的回答看不懂，可以再試一次";
@@ -93,6 +106,25 @@ export function AiEstimatePanel({
 	// 這一次畫面上已經知道 AI 沒設定：只停用拍照（一定要 AI）。文字估算仍可按——
 	// 後端先查食物庫，命中就不用 AI。
 	const [aiUnavailable, setAiUnavailable] = useState(false);
+
+	// 結果卡片 ↔ 修改表單切換時，按下去的那顆按鈕會消失、焦點掉到 body。
+	// 切到表單 → 焦點到第一個欄位；切回卡片 → 焦點到卡片的標題（規格 §2
+	// 第 4 項）。只在切換那一次移（旗標），不是每次 render——剛估算完不搶焦點。
+	const focusNextRef = useRef<"form" | "card" | null>(null);
+	const nameInputRef = useRef<HTMLInputElement>(null);
+	const cardHeadingRef = useRef<HTMLHeadingElement>(null);
+	useEffect(() => {
+		const target =
+			focusNextRef.current === "form"
+				? nameInputRef.current
+				: focusNextRef.current === "card"
+					? cardHeadingRef.current
+					: null;
+		if (target !== null) {
+			focusNextRef.current = null;
+			target.focus();
+		}
+	});
 
 	function clearResult() {
 		setEstimate(null);
@@ -186,6 +218,7 @@ export function AiEstimatePanel({
 		setFormError(null);
 		setExistingFoodId(null);
 		save.reset();
+		focusNextRef.current = "form";
 	}
 
 	function submitDraft(event: FormEvent, current: AnalyzeResponse) {
@@ -269,7 +302,9 @@ export function AiEstimatePanel({
 
 			{estimate !== null && estimate.food_id === null && draft === null && (
 				<section aria-label="AI 估算結果" className={styles.card}>
-					<h3>{estimate.name}</h3>
+					<h3 ref={cardHeadingRef} tabIndex={-1}>
+						{estimate.name}
+					</h3>
 					{estimate.brand !== null && (
 						<p className={styles.muted}>{estimate.brand}</p>
 					)}
@@ -345,6 +380,7 @@ export function AiEstimatePanel({
 				>
 					<label htmlFor={`${id}-name`}>食物名稱</label>
 					<input
+						ref={nameInputRef}
 						id={`${id}-name`}
 						type="text"
 						maxLength={100}
@@ -423,6 +459,7 @@ export function AiEstimatePanel({
 								setFormError(null);
 								setExistingFoodId(null);
 								save.reset();
+								focusNextRef.current = "card";
 							}}
 						>
 							放棄修改
