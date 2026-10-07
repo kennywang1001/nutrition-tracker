@@ -51,6 +51,10 @@ export default defineConfig({
 		environment: "jsdom",
 		setupFiles: ["./src/test/setup.ts"],
 		globals: true,
+		// 整個測試固定在台北時區跑（使用者在台北，開發機也是）。CI 是 UTC：
+		// UTC 下「本地」跟 UTC 一樣，`getUTC*` 或 `…Z` 寫錯的裝置時區 bug
+		// 會靜靜地通過。tests/timezone-pin.test.ts 守著這一行真的生效。
+		env: { TZ: "Asia/Taipei" },
 		// Vitest 的預設 include 是 `**/*.{test,spec}.?(c|m)[jt]s?(x)`，會吃到
 		// Playwright 的 `e2e/auth.spec.ts`（副檔名也叫 .spec.ts）。兩套 runner
 		// 對 `test()` 的定義互不相容，Vitest 硬跑會直接炸掉那個檔案，

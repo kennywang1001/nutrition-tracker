@@ -7,7 +7,6 @@ import { AMOUNT_FORMAT_ERROR } from "../src/api/expenses";
 import { queryKeys } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
-import { localDateTime } from "../src/lib/dates";
 import { EditMeal } from "../src/screens/EditMeal";
 import { json, type Route as MockRoute, mockApi } from "./helpers/mock-api";
 
@@ -420,20 +419,21 @@ describe("編輯這一餐：餐別、金額、備註", () => {
 		expect(keysOf(invalidate)).toContainEqual(queryKeys.expensesAll);
 	});
 
+	// 測試固定在台北時區跑（vite.config.ts 的 test.env.TZ）：下面寫死的值只在
+	// 台北對，UTC 下用 getUTC* 或「…Z」寫錯會拿到另一個值。
 	it("日期與時間預填這一餐在裝置時區的時刻", async () => {
-		mockApi(routes());
+		mockApi(routes({ ...MEAL, eaten_at: "2026-10-03T16:05:00Z" }));
 		renderEditMeal();
 
-		const expected = localDateTime(MEAL.eaten_at);
-		expect(await screen.findByLabelText("日期")).toHaveValue(expected.date);
-		expect(screen.getByLabelText("時間")).toHaveValue(expected.time);
+		// UTC 還是 10/3，台北已經是 10/4 的 00:05。
+		expect(await screen.findByLabelText("日期")).toHaveValue("2026-10-04");
+		expect(screen.getByLabelText("時間")).toHaveValue("00:05");
 	});
 
 	it("只改日期：送出的 eaten_at 換成新日期、時間不變；之後失效統計、趨勢、支出", async () => {
 		const fetchMock = mockApi(routes());
 		const client = renderEditMeal();
 		const invalidate = vi.spyOn(client, "invalidateQueries");
-		const { time } = localDateTime(MEAL.eaten_at);
 
 		const dateInput = await screen.findByLabelText("日期");
 		await userEvent.clear(dateInput);
@@ -442,7 +442,8 @@ describe("編輯這一餐：餐別、金額、備註", () => {
 
 		await waitFor(() =>
 			expect(bodyOf(fetchMock, "PATCH", "/api/meals/5")).toEqual({
-				eaten_at: new Date(`2026-10-02T${time}`).toISOString(),
+				// 台北 10/2 12:30＝UTC 04:30。
+				eaten_at: "2026-10-02T04:30:00.000Z",
 			}),
 		);
 		await waitFor(() => {

@@ -45,21 +45,26 @@ describe("formatDateTime", () => {
 	});
 });
 
+// 下面的期望值**只在台北時區對**（測試時區由 vite.config.ts 的 test.env.TZ
+// 釘住，tests/timezone-pin.test.ts 守著）：UTC 的 04:30 是台北的 12:30。
+// 用 getUTC* 寫錯的話這裡會拿到 04:30。
 describe("localDateTime", () => {
 	it("一個時刻在這台裝置時區的日期與時間（到分鐘）", () => {
-		// 用本地時區建構，結果跟測試機的時區無關。
-		const instant = new Date(2026, 9, 4, 12, 30, 45).toISOString();
-
-		expect(localDateTime(instant)).toEqual({
+		expect(localDateTime("2026-10-04T04:30:45Z")).toEqual({
 			date: "2026-10-04",
 			time: "12:30",
 		});
 	});
 
-	it("個位數補零", () => {
-		const instant = new Date(2026, 0, 5, 7, 3).toISOString();
+	it("UTC 還是前一天、台北已經過午夜：日期是台北的那一天", () => {
+		expect(localDateTime("2026-10-03T16:05:00Z")).toEqual({
+			date: "2026-10-04",
+			time: "00:05",
+		});
+	});
 
-		expect(localDateTime(instant)).toEqual({
+	it("個位數補零", () => {
+		expect(localDateTime("2026-01-04T23:03:00Z")).toEqual({
 			date: "2026-01-05",
 			time: "07:03",
 		});
