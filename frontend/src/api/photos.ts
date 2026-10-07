@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { shrinkToLongestEdge } from "../lib/resize-image";
+import { PhotoTooLargeError, preparePhoto } from "../lib/photo";
 import { apiFetch, fetchPhotoBlob } from "./client";
 import { ApiError } from "./errors";
 import { queryKeys } from "./queries";
@@ -94,40 +94,22 @@ export function useFriendMealPhoto(
 	);
 }
 
-/** 跟後端 `MAX_PHOTO_BYTES`（`app/api/routes/meals.py`）同一個數字。
- *
- *  **兩邊各存一份、不是共用一個常數**：前後端是兩個獨立的執行環境，
- *  沒有共用模組的路徑。這裡刻意跟後端保持一致，是為了讓前端的擋檔
- *  真的對應後端會拒絕的門檻，不是隨便選一個數字。 */
-export const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
-
-/** 前端在送出前就擋下超過大小上限的檔案時丟的錯誤。
- *
- *  跟後端真的回應的 `ApiError(code: "PHOTO_TOO_LARGE")` 分開：這個
- *  從來沒有打過網路 —— 後端有 413 PHOTO_TOO_LARGE，所以這不是不信任
- *  後端，是不要讓手機在慢速連線上傳了 30 秒才被拒。 */
-export class PhotoTooLargeError extends Error {
-	constructor() {
-		super(
-			`照片超過 ${MAX_PHOTO_BYTES / (1024 * 1024)}MB 上限，請換一張較小的照片`,
-		);
-		this.name = "PhotoTooLargeError";
-	}
-}
+/** 大小上限與「太大」的錯誤搬到 `lib/photo.ts`（跟 `preparePhoto` 放一起）；
+ *  這裡原樣轉出，既有的呼叫端不用改。 */
+export { MAX_PHOTO_BYTES, PhotoTooLargeError } from "../lib/photo";
 
 /** 上傳一餐的照片；後端已經有照片的話會取代舊的（`app/api/routes/meals.py`
  *  的 `upload_meal_photo`）。
  *
- *  **順序：先擋大小、再降尺寸、才送出。**
+ *  **順序：先擋大小、再降尺寸、才送出。** 前兩步是 `preparePhoto`
+ *  （`../lib/photo`，跟照片估算共用）：
  *
- *  1. 大小檢查用的是**原始檔案**的位元組數，在呼叫 `shrinkToLongestEdge`
- *     之前就做——不必為一個註定要被拒絕的檔案花 CPU 去降尺寸。
- *  2. `shrinkToLongestEdge`（`../lib/resize-image`）把長邊降到 1280，
- *     跟後端一致。**這一步不是安全邊界**：EXIF 去除仍然由伺服器負責
- *     （`save_photo` 會重新編碼整張圖）——前端降尺寸只是不要在慢速連線
- *     上白傳一張手機拍出來動輒十幾 MB 的原圖。降尺寸這個函式本身沒有
- *     單元測試（jsdom 沒有 canvas，見該檔案開頭的說明），這裡的測試
- *     用 `vi.mock` 把它換成直接回傳原檔。
+ *  1. 大小檢查用的是**原始檔案**的位元組數，在降尺寸之前就做。
+ *  2. 長邊降到 1280，跟後端一致。**這一步不是安全邊界**：EXIF 去除仍然
+ *     由伺服器負責（`save_photo` 會重新編碼整張圖）——前端降尺寸只是不要
+ *     在慢速連線上白傳一張手機拍出來動輒十幾 MB 的原圖。降尺寸這個函式
+ *     本身沒有單元測試（jsdom 沒有 canvas，見 `resize-image.ts` 開頭的
+ *     說明），這裡的測試用 `vi.mock` 把它換成直接回傳原檔。
  *  3. `FormData` 的欄位名必須是 `"file"` ——後端的簽章是
  *     `file: UploadFile = File(...)`，欄位名寫錯的話 FastAPI 回
  *     422 VALIDATION_ERROR，訊息不會直接說「你的欄位名叫錯了」。
@@ -140,11 +122,7 @@ export async function uploadMealPhoto(
 	mealId: number,
 	file: File,
 ): Promise<MealResponse> {
-	if (file.size > MAX_PHOTO_BYTES) {
-		throw new PhotoTooLargeError();
-	}
-
-	const resized = await shrinkToLongestEdge(file, 1280);
+	const resized = await preparePhoto(file);
 
 	const formData = new FormData();
 	formData.append("file", resized);

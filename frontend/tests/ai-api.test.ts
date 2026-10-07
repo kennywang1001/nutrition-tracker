@@ -3,6 +3,7 @@ import { analyzeImage, analyzeText } from "../src/api/ai";
 import { MAX_PHOTO_BYTES, PhotoTooLargeError } from "../src/api/photos";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
+import { preparePhoto } from "../src/lib/photo";
 import { shrinkToLongestEdge } from "../src/lib/resize-image";
 import { json, mockApi } from "./helpers/mock-api";
 
@@ -65,5 +66,32 @@ describe("AI 估算的 API", () => {
 
 		await expect(analyzeImage(file)).rejects.toBeInstanceOf(PhotoTooLargeError);
 		expect(fetchMock).not.toHaveBeenCalled();
+	});
+});
+
+describe("preparePhoto：先擋大小，再縮到 1280", () => {
+	it("太大：丟跟今天一樣的 PhotoTooLargeError，不花 CPU 縮圖", async () => {
+		vi.mocked(shrinkToLongestEdge).mockClear();
+		const file = new File(["x"], "big.jpg", { type: "image/jpeg" });
+		Object.defineProperty(file, "size", { value: MAX_PHOTO_BYTES + 1 });
+
+		const result = preparePhoto(file);
+
+		await expect(result).rejects.toBeInstanceOf(PhotoTooLargeError);
+		await expect(result).rejects.toThrow(
+			"照片超過 10MB 上限，請換一張較小的照片",
+		);
+		expect(vi.mocked(shrinkToLongestEdge)).not.toHaveBeenCalled();
+	});
+
+	it("剛好在上限：縮到 1280，回縮過的那一張", async () => {
+		const file = new File(["x"], "edge.jpg", { type: "image/jpeg" });
+		Object.defineProperty(file, "size", { value: MAX_PHOTO_BYTES });
+		// 縮圖回另一個 File：用 toBe 比同一性（handover §6 第 51 種）。
+		const small = new File(["small"], "small.jpg", { type: "image/jpeg" });
+		vi.mocked(shrinkToLongestEdge).mockResolvedValueOnce(small);
+
+		await expect(preparePhoto(file)).resolves.toBe(small);
+		expect(vi.mocked(shrinkToLongestEdge)).toHaveBeenCalledWith(file, 1280);
 	});
 });

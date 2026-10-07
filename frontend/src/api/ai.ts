@@ -1,6 +1,5 @@
-import { shrinkToLongestEdge } from "../lib/resize-image";
+import { preparePhoto } from "../lib/photo";
 import { apiFetch } from "./client";
-import { MAX_PHOTO_BYTES, PhotoTooLargeError } from "./photos";
 import type { components } from "./schema";
 
 export type AnalyzeResponse = components["schemas"]["AnalyzeResponse"];
@@ -23,14 +22,10 @@ export function analyzeText(text: string): Promise<AnalyzeResponse> {
 	return analyze({ kind: "text", text });
 }
 
-/** 照片估算。**前處理跟上傳餐點照片同一套**（`uploadMealPhoto`）：先擋大小
- *  （原始檔案的位元組數，不必為註定被拒的檔案花 CPU 縮圖），再把長邊縮到
- *  1280，最後轉 base64。照片只拿來估算，後端不存（P2 規格 §6）。 */
+/** 照片估算。**前處理跟上傳餐點照片同一套**（`preparePhoto`：先擋大小，
+ *  再把長邊縮到 1280），最後轉 base64。照片只拿來估算，後端不存（P2 規格 §6）。 */
 export async function analyzeImage(file: File): Promise<AnalyzeResponse> {
-	if (file.size > MAX_PHOTO_BYTES) {
-		throw new PhotoTooLargeError();
-	}
-	const resized = await shrinkToLongestEdge(file, 1280);
+	const resized = await preparePhoto(file);
 	return analyze({ kind: "image", image_base64: await fileToBase64(resized) });
 }
 
