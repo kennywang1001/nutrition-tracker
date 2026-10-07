@@ -48,6 +48,7 @@ function isTextEntry(target: EventTarget | null): boolean {
 export function MoneyKeypad({ value, onChange, submitDisabled }: Props) {
 	const press = (key: KeypadKey) => onChange(applyKey(value, key));
 	const submitRef = useRef<HTMLButtonElement>(null);
+	const keypadRef = useRef<HTMLDivElement>(null);
 
 	// 實體鍵盤（記帳與離線規格 §2 (c)）：桌機打字直接進金額。掛在 window，
 	// 焦點在 body 或任何一顆按鈕上都收得到。
@@ -63,6 +64,17 @@ export function MoneyKeypad({ value, onChange, submitDisabled }: Props) {
 			if (isTextEntry(event.target)) return;
 			const key = keyFromEvent(event.key);
 			if (key === null) return;
+			// 焦點在鍵盤**以外**的按鈕或連結（「關閉」、分類）時，Enter 屬於那個
+			// 控制項——瀏覽器的標準行為。鍵盤上的按鈕例外：點過「5」之後按 Enter
+			// 是送出，不是再按一次「5」。
+			if (
+				key === "submit" &&
+				(event.target instanceof HTMLButtonElement ||
+					event.target instanceof HTMLAnchorElement) &&
+				!keypadRef.current?.contains(event.target)
+			) {
+				return;
+			}
 			event.preventDefault();
 			if (key === "submit") {
 				if (!submitDisabled) submitRef.current?.click();
@@ -76,7 +88,12 @@ export function MoneyKeypad({ value, onChange, submitDisabled }: Props) {
 
 	return (
 		// biome-ignore lint/a11y/useSemanticElements: role=group 與 fieldset 語意相同；fieldset 要另外重設 border、padding、min-inline-size，換過去沒有無障礙上的好處
-		<div className={styles.keypad} role="group" aria-label="數字鍵盤">
+		<div
+			ref={keypadRef}
+			className={styles.keypad}
+			role="group"
+			aria-label="數字鍵盤"
+		>
 			{DIGIT_ROWS.flat().map((digit) => (
 				<button
 					key={digit}

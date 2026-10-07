@@ -292,6 +292,19 @@ describe("記帳 /expenses/new", () => {
 		expect(screen.getByLabelText("金額")).toHaveTextContent(/^\$5$/);
 	});
 
+	it("實體鍵盤：焦點在鍵盤以外的按鈕（關閉）時，Enter 是按那顆按鈕，不是送出", async () => {
+		const fetchMock = mockApi([]);
+		const { onDone } = renderScreen();
+
+		await userEvent.keyboard("7");
+		screen.getByRole("button", { name: "關閉" }).focus();
+		await userEvent.keyboard("{Enter}");
+
+		await waitFor(() => expect(onDone).toHaveBeenCalled());
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
 	it("實體鍵盤：金額是空的時 Enter 不送出", async () => {
 		const fetchMock = mockApi([]);
 		renderScreen();
