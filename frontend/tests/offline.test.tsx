@@ -104,7 +104,7 @@ function agePersistedCacheBy(ms: number) {
 
 type PersistedQuerySnapshot = {
 	queryKey: unknown[];
-	state: { status: string; dataUpdatedAt: number };
+	state: { status: string; dataUpdatedAt: number; data?: unknown };
 };
 
 function readPersistedQueries(): PersistedQuerySnapshot[] {
@@ -120,7 +120,7 @@ function readPersistedQueries(): PersistedQuerySnapshot[] {
  *
  *  **為什麼不能只等 `localStorage.getItem(...) !== null`：** `persistClient`
  *  在 query 一被建立（`added` 事件，狀態還是 `pending`）就會寫一次——
- *  `defaultShouldDehydrateQuery` 把它濾掉，寫進去的是空的 `queries: []`。
+ *  `shouldDehydrateQuery`（`persist.ts`）把它濾掉，寫進去的是空的 `queries: []`。
  *  真正帶著資料的那次寫入是**下一次**節流視窗到期後才發生（預設
  *  1 秒）。只等「非 null」會抓到那個提早的空快照，之後所有讀取都會找不到
  *  這筆 query——這是實測踩過的（第一版測試因此紅在「找不到 stats/daily
@@ -190,6 +190,89 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 
 		// 數字還在，即使這次的 fetch 全部失敗。
 		expect(await screen.findByText(/1800/)).toBeInTheDocument();
+	});
+
+	it("離線重新載入兩次，資料還在（抓取失敗的查詢不會被下一次寫入洗掉）", async () => {
+		// 記帳與離線規格 §2 (a)。TanStack v5 的 `defaultShouldDehydrateQuery`
+		// 只寫 `status === "success"` 的查詢；離線重新載入後背景重抓失敗，
+		// stats 變成 `status: "error"`（`data` 還在、畫面也還有數字），下一次
+		// 節流寫入就把它從 localStorage 拿掉了——第二次離線重新載入什麼都沒有。
+
+		// 第一階段：線上成功，寫進 localStorage。
+		mockApi({
+			"/api/stats/daily": () => json(STATS_WITH_TARGET),
+			"/api/supplements/today": () => json([]),
+			"/api/meals": () => json([]),
+		});
+		const clientA = newTestClient();
+		const first = render(wrap(clientA, <Today />));
+		await screen.findByText(/1800/);
+		await waitFor(
+			() => expect(findPersistedStatsSuccess()).not.toBeUndefined(),
+			{ timeout: 3000 },
+		);
+		first.unmount();
+		agePersistedCacheBy(5 * 60 * 1000);
+
+		// 第二階段：離線重新載入。資料從快取來，背景重抓失敗（離線標示只在
+		// isError 而且有資料時出現，所以等到它就等於等到了那次失敗）。
+		goOffline();
+		const clientB = newTestClient();
+		const second = render(wrap(clientB, <Today />));
+		expect(await screen.findByTestId("offline-banner")).toBeInTheDocument();
+		expect(screen.getByText(/1800/)).toBeInTheDocument();
+		// 等失敗**之後**的那次寫入：只看「stats 有資料」會被第一階段留下的快照
+		// 騙過（那份一直都在，直到下一次寫入蓋掉它），所以要認 status 是 error。
+		await waitFor(
+			() => {
+				const stats = readPersistedQueries().find(
+					(query) =>
+						query.queryKey[0] === "stats" && query.queryKey[1] === "daily",
+				);
+				expect(stats?.state.status).toBe("error");
+				expect(stats?.state.data).toEqual(STATS_WITH_TARGET);
+			},
+			{ timeout: 3000 },
+		);
+		second.unmount();
+
+		// 第三階段：再一次離線重新載入，數字還在。
+		const clientC = newTestClient();
+		render(wrap(clientC, <Today />));
+		expect(await screen.findByText(/1800/)).toBeInTheDocument();
+		expect(await screen.findByTestId("offline-banner")).toBeInTheDocument();
+	});
+
+	it("沒有資料的失敗查詢不寫進 localStorage", async () => {
+		// 上一條的另一半：放寬成「有資料的 error 也寫」，不是「所有 error 都寫」。
+		mockApi({
+			"/api/stats/daily": () =>
+				json(
+					{ error: { code: "INTERNAL_ERROR", message: "壞了", details: {} } },
+					500,
+				),
+			"/api/supplements/today": () => json([]),
+			"/api/meals": () => json([]),
+		});
+		const client = newTestClient();
+		render(wrap(client, <Today />));
+		expect(await screen.findByText("無法載入今天的營養素")).toBeInTheDocument();
+
+		// 失敗之後再觸發一次寫入，等到它真的寫進去——這樣讀到的一定是失敗
+		// **之後**的快照，「stats 不在」才不是因為那次寫入還沒發生。
+		client.setQueryData(["persist-probe"], 1);
+		await waitFor(
+			() =>
+				expect(
+					readPersistedQueries().some(
+						(query) => query.queryKey[0] === "persist-probe",
+					),
+				).toBe(true),
+			{ timeout: 3000 },
+		);
+		expect(
+			readPersistedQueries().some((query) => query.queryKey[0] === "stats"),
+		).toBe(false);
 	});
 
 	it("資料來自快取時顯示「最後更新於」，用的是 dataUpdatedAt 不是 Date.now()", async () => {
@@ -331,7 +414,7 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 		//
 		// 直接用 `setQueryData` 把一筆 food-search 的結果塞進 client：
 		// `setQueryData` 會把那個 query 的狀態設成 "success"，而
-		// `defaultShouldDehydrateQuery` 只看 `state.status === "success"`
+		// `shouldDehydrateQuery` 對沒有失敗過的 query 只看 `state.status === "success"`
 		// ——跟真的打一次 `useFoodSearch` 對持久化層來說是等價的輸入。
 		//
 		// **這是避免假綠燈的關鍵**：如果這條測試從沒讓 food-search 這個

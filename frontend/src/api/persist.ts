@@ -1,5 +1,4 @@
 import { createAsyncStoragePersister } from "@tanstack/query-async-storage-persister";
-import { defaultShouldDehydrateQuery } from "@tanstack/react-query";
 import type { PersistQueryClientProviderProps } from "@tanstack/react-query-persist-client";
 
 /** 離線 L2：把 TanStack Query 的 query 狀態（含 `dataUpdatedAt`）存進
@@ -105,8 +104,15 @@ export function createOfflinePersistOptions(
 		}),
 		maxAge: MAX_AGE_MS,
 		dehydrateOptions: {
+			// **不用 `defaultShouldDehydrateQuery`**：它只寫 `status === "success"`。
+			// 離線重新載入時資料從這份快取來、背景重抓失敗，query 變成
+			// `status: "error"` 但 `data` 還在（畫面也還顯示著）——預設規則讓下一次
+			// 節流寫入把它從 localStorage 拿掉，第二次離線重新載入就什麼都沒有了
+			// （實測過，`tests/offline.test.tsx`「離線重新載入兩次」）。有資料的失敗
+			// 保留最後一份成功的資料與它的 `dataUpdatedAt`；沒有資料的失敗照舊不寫。
 			shouldDehydrateQuery: (query) =>
-				defaultShouldDehydrateQuery(query) &&
+				(query.state.status === "success" ||
+					(query.state.status === "error" && query.state.data !== undefined)) &&
 				!NOT_PERSISTED.has(query.queryKey[0]),
 		},
 	};
