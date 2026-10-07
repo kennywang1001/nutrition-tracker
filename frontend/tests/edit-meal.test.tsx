@@ -254,17 +254,49 @@ describe("編輯這一餐：讀取", () => {
 		expect(await screen.findByText("找不到這一餐")).toBeInTheDocument();
 	});
 
-	it("其他錯誤：說載入失敗，不是說找不到", async () => {
-		mockApi([
-			{
-				path: "/api/meals/5",
-				handler: () =>
-					json({ error: { code: "X", message: "x", details: {} } }, 500),
-			},
-		]);
-		renderEditMeal();
+	/** `useMeal` 自己給了 `retry`（蓋過 `newClient` 的 `retry: false`）：
+	 *  會失敗的讀取都要給一個 `retryDelay` 短的 client，不然要等 7 秒。 */
+	describe("重試", () => {
+		it("404 不重試：只打一次，立刻說找不到", async () => {
+			const fetchMock = mockApi([
+				{
+					path: "/api/meals/5",
+					handler: () =>
+						json(
+							{
+								error: {
+									code: "MEAL_NOT_FOUND",
+									message: "找不到該餐點",
+									details: {},
+								},
+							},
+							404,
+						),
+				},
+			]);
+			// 預設的 retry（3 次）與 retryDelay（1、2、4 秒）：會重試的話，
+			// findByText 的 1 秒等不到「找不到這一餐」。
+			renderEditMeal(new QueryClient());
 
-		expect(await screen.findByText("無法載入這一餐")).toBeInTheDocument();
+			expect(await screen.findByText("找不到這一餐")).toBeInTheDocument();
+			expect(calls(fetchMock, "GET", "/api/meals/5")).toHaveLength(1);
+		});
+
+		it("其他錯誤照樣重試（最多 3 次），之後說載入失敗，不是說找不到", async () => {
+			const fetchMock = mockApi([
+				{
+					path: "/api/meals/5",
+					handler: () =>
+						json({ error: { code: "X", message: "x", details: {} } }, 500),
+				},
+			]);
+			renderEditMeal(
+				new QueryClient({ defaultOptions: { queries: { retryDelay: 1 } } }),
+			);
+
+			expect(await screen.findByText("無法載入這一餐")).toBeInTheDocument();
+			expect(calls(fetchMock, "GET", "/api/meals/5")).toHaveLength(4);
+		});
 	});
 
 	it("沒有項目時說沒有項目", async () => {

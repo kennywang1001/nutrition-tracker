@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Coffee, Cookie, type LucideIcon, Moon, Sun } from "lucide-react";
 import { apiFetch } from "./client";
+import { retryUnlessNotFound } from "./errors";
 import { queryKeys } from "./queries";
 import type { components } from "./schema";
 
@@ -43,11 +44,15 @@ export const MEAL_TYPE_ORDER: readonly MealType[] = [
 ];
 
 /** 一餐（編輯畫面）。`useParams` 給的 id 可能是 `NaN`——那時不發請求，
- *  畫面自己說「找不到這一餐」（跟 `useFood` 同一個作法）。 */
+ *  畫面自己說「找不到這一餐」（跟 `useFood` 同一個作法）。
+ *
+ *  404 不重試（`retryUnlessNotFound`）：那一餐在另一台裝置刪掉了，重試
+ *  只會讓「找不到這一餐」晚 7 秒出現。 */
 export function useMeal(mealId: number) {
 	return useQuery({
 		queryKey: queryKeys.meal(mealId),
 		queryFn: () => apiFetch<Meal>(`/api/meals/${mealId}`),
 		enabled: Number.isFinite(mealId),
+		retry: retryUnlessNotFound,
 	});
 }

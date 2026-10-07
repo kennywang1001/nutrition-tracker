@@ -41,6 +41,19 @@ export class ApiError extends Error {
 	}
 }
 
+/** 給 `useQuery` 的 `retry`：404 不重試，其他照 TanStack 的預設（最多 3 次）。
+ *
+ *  404 是穩定的狀態（那一餐在另一台裝置刪了、網址的 id 不存在），不是暫時性
+ *  錯誤——照預設重試 3 次要等約 7 秒（1＋2＋4）才顯示「找不到」（AI 與編輯
+ *  畫面的收尾規格 §2 第 6 項）。 */
+export function retryUnlessNotFound(
+	failureCount: number,
+	error: unknown,
+): boolean {
+	if (error instanceof ApiError && error.status === 404) return false;
+	return failureCount < 3;
+}
+
 function parseRetryAfter(response: Response): number | null {
 	const raw = response.headers.get("retry-after");
 	if (raw === null) return null;
