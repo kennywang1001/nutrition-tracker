@@ -81,6 +81,12 @@ def _extract_text(response: types.GenerateContentResponse) -> str:
 _MISCONFIGURED_STATUS_CODES = frozenset({401, 403, 404})
 
 
+# `AI_MODEL` 含 `?`、`&` 或 `..` 時，google-genai 在送出之前就自己丟這個
+# ValueError（`google.genai._transformers.t_model`）——模型名稱是設定，重試不會好。
+# 只認這一句：其他的 ValueError 不是設定錯，照舊往外拋。
+_INVALID_MODEL_MESSAGE = "invalid model parameter."
+
+
 def _is_misconfiguration(error: errors.APIError) -> bool:
     """設定的問題（重試不會好）：401／403／404，或是 400 而內容指向金鑰或模型
     （`API_KEY_INVALID`、「API key not valid」、「GenerateContentRequest.model:
@@ -137,6 +143,10 @@ class GeminiEstimator:
             if _is_misconfiguration(exc):
                 raise EstimatorMisconfiguredError(str(exc)) from exc
             raise EstimatorUpstreamError(str(exc)) from exc
+        except ValueError as exc:
+            if str(exc) == _INVALID_MODEL_MESSAGE:
+                raise EstimatorMisconfiguredError(str(exc)) from exc
+            raise
         except httpx.TransportError as exc:
             # 連不上、逾時：google-genai 沒有包自己的例外，httpx 的直接穿出來
             # （沒裝 aiohttp 時非同步走 httpx，見 `google/genai/_api_client.py`）。

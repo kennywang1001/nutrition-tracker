@@ -1,6 +1,7 @@
 """供應商的 SDK 丟錯時怎麼分類（AI 與編輯畫面的收尾規格 §2 第 2 項）。
 
-- **設定錯誤**（認證、權限、找不到模型、模型名稱不合法的 400）→ estimator 拋
+- **設定錯誤**（認證、權限、找不到模型、模型名稱不合法的 400；Gemini 的 SDK 在送出之前
+  就擋下的模型名稱）→ estimator 拋
   `EstimatorMisconfiguredError` → 路由回 `503 AI_MISCONFIGURED`，**不記一列、不算額度**。
 - **上游錯誤**（連線、逾時、5xx、限流、其他 API 錯誤）→ `EstimatorUpstreamError`
   → `502 AI_UPSTREAM_ERROR`，**照舊記一列失敗**。
@@ -107,8 +108,8 @@ def _anthropic_estimator(upstream: FakeUpstream) -> AnthropicEstimator:
     return estimator
 
 
-def _gemini_estimator(upstream: FakeUpstream) -> GeminiEstimator:
-    estimator = GeminiEstimator(api_key="not-real", model="gemini-test")
+def _gemini_estimator(upstream: FakeUpstream, *, model: str = "gemini-test") -> GeminiEstimator:
+    estimator = GeminiEstimator(api_key="not-real", model=model)
     # 沒給 retry_options 時 google-genai 只試一次（`retry_args(None)`），不用另外關。
     estimator._client = genai.Client(
         api_key="not-real",
@@ -348,6 +349,35 @@ async def test_gemini_sdk_errors_are_classified(make_upstream, expected, sdk_err
     assert type(excinfo.value.__cause__) is sdk_error
 
 
+async def test_gemini_invalid_model_name_is_misconfigured_before_any_request():
+    """`AI_MODEL` 含 `?`、`&` 或 `..`：google-genai 在送出之前就自己丟
+    `ValueError('invalid model parameter.')`（`_transformers.t_model`）。那是設定錯，
+    不是上游錯——也不是沒分類的 500。"""
+    upstream = FakeUpstream(body=_gemini_ok_body(_VALID_ESTIMATE_JSON))
+    estimator = _gemini_estimator(upstream, model="bad?model")
+
+    with pytest.raises(EstimatorMisconfiguredError) as excinfo:
+        await estimator.estimate_text("一碗滷肉飯")
+
+    # 根本沒送出去：SDK 在組網址之前就擋下來了。
+    assert upstream.requests == 0
+    assert type(excinfo.value.__cause__) is ValueError
+
+
+async def test_gemini_other_value_errors_are_not_classified_as_misconfigured(monkeypatch):
+    """只接 SDK 那一句「invalid model parameter.」——別的 ValueError 照舊往外拋。"""
+    upstream = FakeUpstream(body=_gemini_ok_body(_VALID_ESTIMATE_JSON))
+    estimator = _gemini_estimator(upstream)
+
+    async def boom(**kwargs: object) -> None:
+        raise ValueError("something else")
+
+    monkeypatch.setattr(estimator._client.aio.models, "generate_content", boom)
+
+    with pytest.raises(ValueError, match="something else"):
+        await estimator.estimate_text("一碗滷肉飯")
+
+
 _ANTHROPIC_OK_BODY = {
     "id": "msg_test",
     "type": "message",
@@ -482,6 +512,23 @@ async def test_misconfigured_provider_is_503_and_not_recorded(client, db_session
     )
 
     assert upstream.requests == 1
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "AI_MISCONFIGURED"
+    assert response.json()["error"]["message"] == _MISCONFIGURED_MESSAGE
+    assert await _rows(db_session, user_id) == []
+
+
+async def test_gemini_invalid_model_name_is_503_and_not_recorded(client, db_session):
+    user = await create_user(db_session)
+    user_id = user.id
+    upstream = FakeUpstream(body=_gemini_ok_body(_VALID_ESTIMATE_JSON))
+    _inject(_gemini_estimator(upstream, model="bad?model"))
+
+    response = await client.post(
+        "/api/ai/analyze", headers=_auth(user), json={"kind": "text", "text": "一段描述"}
+    )
+
+    assert upstream.requests == 0
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "AI_MISCONFIGURED"
     assert response.json()["error"]["message"] == _MISCONFIGURED_MESSAGE
