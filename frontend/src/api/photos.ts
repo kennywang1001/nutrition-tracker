@@ -62,23 +62,35 @@ function usePhotoObjectUrl(
 	return { objectUrl, isError: photoQuery.isError };
 }
 
-/** 一餐自己的照片：走 `/api/meals/{mealId}/photo`。細節見 `usePhotoObjectUrl`。 */
-export function useMealPhoto(mealId: number): {
-	objectUrl: string | null;
-	isError: boolean;
-} {
+export type PhotoSize = "full" | "thumb";
+
+function sized(path: string, size: PhotoSize): string {
+	return size === "thumb" ? `${path}?size=thumb` : path;
+}
+
+/** 一餐自己的照片：走 `/api/meals/{mealId}/photo`（`size` 為 `"thumb"` 時加
+ *  `?size=thumb`，取長邊 640 的縮圖）。細節見 `usePhotoObjectUrl`。 */
+export function useMealPhoto(mealId: number, size: PhotoSize = "full") {
 	return usePhotoObjectUrl(
-		queryKeys.mealPhoto(mealId),
-		`/api/meals/${mealId}/photo`,
+		size === "thumb"
+			? queryKeys.mealPhotoThumb(mealId)
+			: queryKeys.mealPhoto(mealId),
+		sized(`/api/meals/${mealId}/photo`, size),
 	);
 }
 
-/** 好友的照片（好友規格 §4.3）：走 `/api/friends/{friendId}/meals/{mealId}/photo`，
- *  key 在 `friend-photo` 底下（不持久化；解除好友時整組移除）。 */
-export function useFriendMealPhoto(friendId: number, mealId: number) {
+/** 好友的照片（好友規格 §4.3）：走 `/api/friends/{friendId}/meals/{mealId}/photo`
+ *  （`size` 同上），key 在 `friend-photo` 底下（不持久化；解除好友時整組移除）。 */
+export function useFriendMealPhoto(
+	friendId: number,
+	mealId: number,
+	size: PhotoSize = "full",
+) {
 	return usePhotoObjectUrl(
-		queryKeys.friendPhoto(friendId, mealId),
-		`/api/friends/${friendId}/meals/${mealId}/photo`,
+		size === "thumb"
+			? queryKeys.friendPhotoThumb(friendId, mealId)
+			: queryKeys.friendPhoto(friendId, mealId),
+		sized(`/api/friends/${friendId}/meals/${mealId}/photo`, size),
 	);
 }
 

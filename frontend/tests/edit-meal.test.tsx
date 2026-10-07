@@ -431,6 +431,23 @@ describe("編輯這一餐：照片", () => {
 		).not.toBeInTheDocument();
 	});
 
+	it("預覽要的是原圖，不是縮圖", async () => {
+		const fetchMock = mockApi(routes({ ...MEAL, photo_path: "3/abc.jpg" }));
+		renderEditMeal();
+
+		await screen.findByRole("button", { name: "刪除照片" });
+		await waitFor(() =>
+			expect(
+				fetchMock.mock.calls.some(([url]) =>
+					String(url).endsWith("/api/meals/5/photo"),
+				),
+			).toBe(true),
+		);
+		expect(
+			fetchMock.mock.calls.some(([url]) => String(url).includes("size=thumb")),
+		).toBe(false);
+	});
+
 	it("刪除照片要先確認；取消就不送", async () => {
 		const fetchMock = mockApi(
 			routes({ ...MEAL, photo_path: "3/abc.jpg" }, [

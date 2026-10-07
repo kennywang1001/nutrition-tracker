@@ -1,11 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { render, renderHook, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
+import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useMealPhoto } from "../src/api/photos";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
-import { mockApiByPath as mockApi } from "./helpers/mock-api";
+import { MealList } from "../src/screens/MealList";
+import { json, mockApiByPath as mockApi } from "./helpers/mock-api";
 
 // QueryWrapper 從 today.test.tsx 的 wrap 改寫——`renderHook` 的 `wrapper`
 // 選項要的是一個接受 `children` 的元件，不是 `wrap()` 那樣直接回一段 JSX
@@ -98,5 +101,55 @@ describe("useMealPhoto", () => {
 
 		await waitFor(() => expect(result.current.isError).toBe(true));
 		expect(result.current.objectUrl).toBeNull();
+	});
+});
+
+describe("餐點卡片的照片", () => {
+	it("卡片要的是縮圖，點了才抓原圖", async () => {
+		const fetchMock = mockApi({
+			"/api/meals/11/photo": () =>
+				new Response(new Blob(["fake-jpeg"], { type: "image/jpeg" }), {
+					status: 200,
+				}),
+			"/api/meals": () =>
+				json([
+					{
+						id: 11,
+						eaten_at: "2026-09-21T12:30:00+08:00",
+						meal_type: "lunch",
+						note: null,
+						photo_path: "3/abc123.jpg",
+						items: [],
+						kcal: "0.00",
+						protein_g: "0.00",
+						fat_g: "0.00",
+						carb_g: "0.00",
+					},
+				]),
+		});
+		const urls = () => fetchMock.mock.calls.map(([url]) => String(url));
+		const client = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+
+		render(
+			<QueryClientProvider client={client}>
+				<MemoryRouter>
+					<MealList />
+				</MemoryRouter>
+			</QueryClientProvider>,
+		);
+		const trigger = await screen.findByRole("button", { name: /^看大圖：/ });
+
+		expect(
+			urls().some((u) => u.endsWith("/api/meals/11/photo?size=thumb")),
+		).toBe(true);
+		expect(urls().some((u) => u.endsWith("/api/meals/11/photo"))).toBe(false);
+
+		await userEvent.click(trigger);
+
+		await waitFor(() =>
+			expect(urls().some((u) => u.endsWith("/api/meals/11/photo"))).toBe(true),
+		);
 	});
 });

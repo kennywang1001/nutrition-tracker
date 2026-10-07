@@ -102,13 +102,47 @@ describe("好友動態", () => {
 		await waitFor(() =>
 			expect(
 				spy.mock.calls.some(([url]) =>
-					String(url).endsWith("/api/friends/2/meals/7/photo"),
+					String(url).endsWith("/api/friends/2/meals/7/photo?size=thumb"),
 				),
 			).toBe(true),
 		);
 		expect(
 			spy.mock.calls.some(([url]) =>
 				String(url).includes("/api/meals/7/photo"),
+			),
+		).toBe(false);
+	});
+
+	it("有照片的卡片要的是縮圖", async () => {
+		const spy = mockApi([
+			{
+				method: "GET",
+				path: "/api/friends/2/meals/7/photo",
+				handler: () =>
+					new Response(new Blob(["jpeg"]), {
+						headers: { "content-type": "image/jpeg" },
+					}),
+			},
+			...feedRoutes(() =>
+				json({
+					meals: [friendMeal(7, { has_photo: true })],
+					next_cursor: null,
+				}),
+			),
+		]);
+		renderFeed();
+
+		await screen.findByText("便當 7");
+		await waitFor(() =>
+			expect(
+				spy.mock.calls.some(([url]) =>
+					String(url).endsWith("/api/friends/2/meals/7/photo?size=thumb"),
+				),
+			).toBe(true),
+		);
+		expect(
+			spy.mock.calls.some(([url]) =>
+				String(url).endsWith("/api/friends/2/meals/7/photo"),
 			),
 		).toBe(false);
 	});

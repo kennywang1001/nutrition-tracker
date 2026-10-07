@@ -5,18 +5,21 @@ import { useFriendMealPhoto } from "../api/photos";
 import { formatDateTime } from "../lib/dates";
 import { formatMacro } from "../lib/decimal";
 import styles from "./FriendMealCard.module.css";
+import { ZoomablePhoto } from "./ZoomablePhoto";
 
 function FriendPhoto({ meal }: { meal: FriendMeal }) {
-	const { objectUrl, isError } = useFriendMealPhoto(meal.user.id, meal.id);
+	const thumb = useFriendMealPhoto(meal.user.id, meal.id, "thumb");
 	return (
 		<>
-			{objectUrl !== null && (
-				<img
-					src={objectUrl}
+			{thumb.objectUrl !== null && (
+				<ZoomablePhoto
 					alt={`${meal.user.display_name}的${MEAL_TYPE_LABELS[meal.meal_type]}`}
+					thumbUrl={thumb.objectUrl}
+					// biome-ignore lint/correctness/useHookAtTopLevel: 只在 ZoomablePhoto 的 Viewer 裡、每次 render 都以同樣順序呼叫，符合 hooks 規則
+					useFull={() => useFriendMealPhoto(meal.user.id, meal.id)}
 				/>
 			)}
-			{isError && <p>照片無法顯示</p>}
+			{thumb.isError && <p>照片無法顯示</p>}
 		</>
 	);
 }

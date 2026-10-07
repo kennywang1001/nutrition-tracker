@@ -6,6 +6,7 @@ import {
 	useMealPhoto,
 	useUploadMealPhoto,
 } from "../api/photos";
+import { ZoomablePhoto } from "../components/ZoomablePhoto";
 import { formatTime } from "../lib/dates";
 import { formatMacro } from "../lib/decimal";
 import styles from "./MealList.module.css";
@@ -14,7 +15,8 @@ import styles from "./MealList.module.css";
  *  它是伺服器端的相對路徑，不是 URL（規格 §5.2），唯一的用途是讓呼叫端
  *  判斷「這一餐有沒有照片」（見 `MealCard` 的 `photo_path !== null`）。
  *  真的取圖走 `useMealPhoto`：帶 token 打 `GET /api/meals/{id}/photo`，
- *  拿 blob 轉成 object URL。
+ *  拿 blob 轉成 object URL。清單用縮圖（`?size=thumb`），點了才由
+ *  `ZoomablePhoto` 抓原圖。
  *
  *  外層 `data-testid` 在照片還沒載入完（`objectUrl` 仍是 `null`）時就
  *  先出現——它標的是「這一餐有照片」這個事實，不是「圖已經載好了」。
@@ -24,13 +26,20 @@ import styles from "./MealList.module.css";
  *  可能出現的情況）——`isError` 時就不渲染 `<img>`，不是留一個壞掉的
  *  URL 在畫面上。 */
 function MealPhoto({ meal }: { meal: Meal }) {
-	const { objectUrl, isError } = useMealPhoto(meal.id);
+	const thumb = useMealPhoto(meal.id, "thumb");
 	const alt = `${MEAL_TYPE_LABELS[meal.meal_type]}（${formatTime(meal.eaten_at)}）的照片`;
 
 	return (
 		<div data-testid={`meal-photo-${meal.id}`}>
-			{objectUrl !== null && <img src={objectUrl} alt={alt} />}
-			{isError && <p>照片無法顯示</p>}
+			{thumb.objectUrl !== null && (
+				<ZoomablePhoto
+					alt={alt}
+					thumbUrl={thumb.objectUrl}
+					// biome-ignore lint/correctness/useHookAtTopLevel: 只在 ZoomablePhoto 的 Viewer 裡、每次 render 都以同樣順序呼叫，符合 hooks 規則
+					useFull={() => useMealPhoto(meal.id)}
+				/>
+			)}
+			{thumb.isError && <p>照片無法顯示</p>}
 		</div>
 	);
 }

@@ -107,6 +107,8 @@ export const queryKeys = {
 	/** 好友的照片：跟 `mealPhoto` 一樣不持久化（`persist.ts` 的 `NOT_PERSISTED`）。 */
 	friendPhoto: (friendId: number, mealId: number) =>
 		["friend-photo", friendId, mealId] as const,
+	friendPhotoThumb: (friendId: number, mealId: number) =>
+		["friend-photo", friendId, mealId, "thumb"] as const,
 	friendPhotos: (friendId: number) => ["friend-photo", friendId] as const,
 	/** 某個月的花費清單。`month` 是 `"YYYY-MM"`，或 `null` 代表
 	 *  「讓後端決定這個月」（後端省略 `?month=` 時走
@@ -156,6 +158,9 @@ export const queryKeys = {
 	// 漏一個就靜默回到過度失效。換成獨立的命名空間之後，前綴比對自然
 	// 就做對的事，而且沒有「忘記加 exact」這個失敗模式。
 	mealPhoto: (mealId: number) => ["meal-photo", mealId] as const,
+	/** 縮圖（縮圖規格 §4.1）：掛在 `mealPhoto(id)` 底下——上傳、刪照片時失效
+	 *  `mealPhoto(id)` 是前綴比對，原圖與縮圖一起失效。 */
+	mealPhotoThumb: (mealId: number) => ["meal-photo", mealId, "thumb"] as const,
 } as const;
 
 /** 整個 app 共用的單一 `QueryClient`。
