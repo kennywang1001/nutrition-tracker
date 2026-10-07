@@ -215,4 +215,28 @@ describe("今日總覽", () => {
 			"/foods",
 		);
 	});
+
+	it("切到好友顯示好友動態、切回我的", async () => {
+		// `/api/friends/feed` 要排在 `/api/friends` 之前（includes 依序比對）。
+		mockApi({
+			"/api/stats/daily": () => json(STATS_WITH_TARGET),
+			"/api/supplements/today": () => json([]),
+			"/api/friends/feed": () => json({ meals: [], next_cursor: null }),
+			"/api/friends": () => json([]),
+		});
+
+		render(wrap(<Today />));
+		expect(await screen.findByText("今日餐點")).toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("radio", { name: "好友" }));
+
+		expect(
+			await screen.findByText("還沒有好友。到「我的」→「好友」用好友碼加朋友"),
+		).toBeInTheDocument();
+		expect(screen.queryByText("今日餐點")).not.toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("radio", { name: "我的" }));
+
+		expect(await screen.findByText("今日餐點")).toBeInTheDocument();
+	});
 });

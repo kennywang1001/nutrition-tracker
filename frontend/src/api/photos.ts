@@ -8,7 +8,7 @@ import type { components } from "./schema";
 
 type MealResponse = components["schemas"]["MealResponse"];
 
-/** 取一餐的照片，回一個可以塞進 `<img src>` 的 object URL。
+/** 取一張照片，回一個可以塞進 `<img src>` 的 object URL。
  *
  *  **為什麼不能直接用 `/api/meals/{id}/photo` 當 `<img src>`：**
  *  那個端點需要 `Authorization` 標頭（規格 §5.2），而 `<img>` 發的請求
@@ -29,13 +29,16 @@ type MealResponse = components["schemas"]["MealResponse"];
  *  **不用預設的 retry：** 404 在這裡是一個穩定狀態，不是暫時性錯誤，
  *  重試三次只會浪費行動網路的流量（這個 app 走 Tailscale，連線本來就
  *  不一定快）。 */
-export function useMealPhoto(mealId: number): {
+function usePhotoObjectUrl(
+	queryKey: readonly unknown[],
+	path: string,
+): {
 	objectUrl: string | null;
 	isError: boolean;
 } {
 	const photoQuery = useQuery({
-		queryKey: queryKeys.mealPhoto(mealId),
-		queryFn: () => fetchPhotoBlob(`/api/meals/${mealId}/photo`),
+		queryKey,
+		queryFn: () => fetchPhotoBlob(path),
 		retry: false,
 	});
 
@@ -57,6 +60,26 @@ export function useMealPhoto(mealId: number): {
 	}, [blob]);
 
 	return { objectUrl, isError: photoQuery.isError };
+}
+
+/** 一餐自己的照片：走 `/api/meals/{mealId}/photo`。細節見 `usePhotoObjectUrl`。 */
+export function useMealPhoto(mealId: number): {
+	objectUrl: string | null;
+	isError: boolean;
+} {
+	return usePhotoObjectUrl(
+		queryKeys.mealPhoto(mealId),
+		`/api/meals/${mealId}/photo`,
+	);
+}
+
+/** 好友的照片（好友規格 §4.3）：走 `/api/friends/{friendId}/meals/{mealId}/photo`，
+ *  key 在 `friend-photo` 底下（不持久化；解除好友時整組移除）。 */
+export function useFriendMealPhoto(friendId: number, mealId: number) {
+	return usePhotoObjectUrl(
+		queryKeys.friendPhoto(friendId, mealId),
+		`/api/friends/${friendId}/meals/${mealId}/photo`,
+	);
 }
 
 /** 跟後端 `MAX_PHOTO_BYTES`（`app/api/routes/meals.py`）同一個數字。

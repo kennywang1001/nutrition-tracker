@@ -25,6 +25,7 @@ import { EditMeal } from "./screens/EditMeal";
 import { Expenses } from "./screens/Expenses";
 import { FoodDetail } from "./screens/FoodDetail";
 import { FoodLibrary } from "./screens/FoodLibrary";
+import { FriendDay } from "./screens/FriendDay";
 import { Join, JoinWhileLoggedIn } from "./screens/Join";
 import { Login } from "./screens/Login";
 import { LogMeal, PHOTO_UPLOAD_FAILED_NOTICE } from "./screens/LogMeal";
@@ -102,6 +103,7 @@ export function App() {
 								element={<Navigate to="/reports" replace />}
 							/>
 							<Route path="/trend" element={<Trend />} />
+							<Route path="/friends/:id" element={<FriendDay />} />
 							<Route path="/foods" element={<FoodLibrary />} />
 							{/* 順序在這裡不像後端 foods.py 的 /frequent /recent 那樣要緊
 								（那是 FastAPI 依宣告順序比對）——react-router 依「靜態片段
