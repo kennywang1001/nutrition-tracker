@@ -7,7 +7,8 @@
        不計入每日上限，也不寫 ai_analyses
     （命中食物庫之後才建 AI 實作——AI 沒設定時，命中食物庫照樣能用）
     ② 檢查今日額度（數 ai_analyses 今天的列數）
-    ③ 呼叫 LLM。不管成功失敗都寫一列 ai_analyses —— 兩種都花了錢
+    ③ 呼叫 LLM。不管成功失敗都寫一列 ai_analyses —— 兩種都花了錢。
+       唯一的例外：供應商說設定錯了（金鑰、權限、模型）→ 503，不寫——它直接拒絕，沒有計費
     ④ 純函式一致性檢查（app/ai/consistency.py）
     ⑤ 回傳估算值 + 一致性結果 + analysis_id + food_id（只有命中食物庫才有）
        + remaining_today，到這裡為止沒有寫入任何食物
@@ -17,6 +18,7 @@ import base64
 import binascii
 import hashlib
 import io
+import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
@@ -27,13 +29,19 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.consistency import check_consistency
-from app.ai.estimator import RawEstimate
+from app.ai.estimator import EstimatorMisconfiguredError, EstimatorUpstreamError, RawEstimate
 from app.api.deps import EstimatorFactory, get_current_user, get_estimator_factory
 from app.api.routes.meals import MAX_PHOTO_BYTES
 from app.config import settings
 from app.days import day_bounds, today_in_timezone
 from app.db import get_db
-from app.errors import PayloadTooLargeError, TooManyRequestsError, UnprocessableEntityError
+from app.errors import (
+    BadGatewayError,
+    PayloadTooLargeError,
+    ServiceUnavailableError,
+    TooManyRequestsError,
+    UnprocessableEntityError,
+)
 from app.models.ai_analysis import AiAnalysis, AnalysisKind
 from app.models.food import BaseUnit, Food, FoodRevision
 from app.models.user import User
@@ -45,6 +53,8 @@ from app.schemas.ai import (
     ConsistencyResult,
 )
 from app.storage.photos import MAX_IMAGE_PIXELS
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
@@ -202,10 +212,23 @@ async def _call_estimator_or_record_failure(
     fixture 的最外層 rollback，production 是 get_db 那個 per-request
     session 沒有 commit 就直接 close）一起丟掉，於是「LLM 一直失敗」
     會變成一個不花錢的無限迴圈，而它其實每次都在計費。
+
+    **例外是設定錯誤**（`EstimatorMisconfiguredError`：金鑰、權限、模型）——供應商
+    直接拒絕、沒有計費，不記一列也就不算額度（AI 與編輯畫面的收尾規格 §2 第 2 項）。
+    記的話，管理員修好設定之前，每個人每按一次就少一次額度。
+
+    上游錯誤（`EstimatorUpstreamError`）照舊記一列，再換成 502 AI_UPSTREAM_ERROR；
+    沒分類的例外也照舊記一列，原樣往外拋（500）。
     """
     try:
         return await call()
-    except Exception:
+    except EstimatorMisconfiguredError as exc:
+        # 不記列，所以這一行 log 是管理員唯一看得到「供應商說了什麼」的地方。
+        logger.error("AI 供應商拒絕了設定（model=%s）：%s", model, exc)
+        raise ServiceUnavailableError(
+            "AI_MISCONFIGURED", "AI 設定有問題（金鑰或模型），請管理員檢查"
+        ) from exc
+    except Exception as exc:
         db.add(
             AiAnalysis(
                 user_id=user_id,
@@ -216,6 +239,11 @@ async def _call_estimator_or_record_failure(
             )
         )
         await db.commit()
+        if isinstance(exc, EstimatorUpstreamError):
+            logger.warning("AI 供應商暫時無法使用（model=%s）：%s", model, exc)
+            raise BadGatewayError(
+                "AI_UPSTREAM_ERROR", "AI 服務暫時無法使用，請稍後再試"
+            ) from exc
         raise
 
 

@@ -1,11 +1,13 @@
 """用 Google Gemini 估算「一份」的營養素（`AI_PROVIDER=gemini`）。
 
 從 `feat/p2-gemini` 分支（P2 計畫一 b）搬來；那條分支把 Anthropic 整個換掉，
-這裡改成並存。不獨立測試——見 `app/ai/estimator.py` 的說明。
+這裡改成並存。不打真的 API 測——見 `app/ai/estimator.py` 的說明；SDK 的錯誤怎麼
+分類，由 `tests/test_ai_provider_errors.py` 把 client 換成接假傳輸層的版本來測。
 """
 
+import httpx
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 
 from app.ai.estimator import (
     ALLOWED_IMAGE_MEDIA_TYPES,
@@ -13,6 +15,8 @@ from app.ai.estimator import (
     MAX_OUTPUT_TOKENS,
     SYSTEM_PROMPT,
     TEXT_ESTIMATE_INSTRUCTION,
+    EstimatorMisconfiguredError,
+    EstimatorUpstreamError,
     RawEstimate,
     parse_raw_estimate,
 )
@@ -72,6 +76,26 @@ def _extract_text(response: types.GenerateContentResponse) -> str:
     return text
 
 
+# 金鑰錯、沒權限、模型不存在。**Gemini 的金鑰錯是 400 INVALID_ARGUMENT**
+# （「API key not valid」，details 帶 `API_KEY_INVALID`），不是 401——所以 400 要看內容。
+_MISCONFIGURED_STATUS_CODES = frozenset({401, 403, 404})
+
+
+def _is_misconfiguration(error: errors.APIError) -> bool:
+    """設定的問題（重試不會好）：401／403／404，或是 400 而內容指向金鑰或模型
+    （`API_KEY_INVALID`、「API key not valid」、「GenerateContentRequest.model:
+    unexpected model name format」）。
+
+    其他的 400 不算：那是這次請求的內容被拒，不是設定錯。
+    """
+    if error.code in _MISCONFIGURED_STATUS_CODES:
+        return True
+    if error.code != 400:
+        return False
+    text = f"{error.message or ''} {error.details}".lower()
+    return "api_key_invalid" in text or "api key" in text or "model" in text
+
+
 class GeminiEstimator:
     def __init__(self, *, api_key: str, model: str) -> None:
         # 非同步走 `client.aio`——`genai.Client` 是同一個物件底下切出同步／
@@ -100,9 +124,21 @@ class GeminiEstimator:
             response_mime_type="application/json",
             response_schema=_RESPONSE_SCHEMA,
         )
-        response = await self._client.aio.models.generate_content(
-            model=self.model,
-            contents=contents,
-            config=config,
-        )
+        # 只包 SDK 那一次呼叫：回應解析失敗是 AI_BAD_RESPONSE（parse_raw_estimate），
+        # 不是上游錯誤。
+        try:
+            response = await self._client.aio.models.generate_content(
+                model=self.model,
+                contents=contents,
+                config=config,
+            )
+        except errors.APIError as exc:
+            # ClientError（4xx，含 429 RESOURCE_EXHAUSTED）與 ServerError（5xx）。
+            if _is_misconfiguration(exc):
+                raise EstimatorMisconfiguredError(str(exc)) from exc
+            raise EstimatorUpstreamError(str(exc)) from exc
+        except httpx.TransportError as exc:
+            # 連不上、逾時：google-genai 沒有包自己的例外，httpx 的直接穿出來
+            # （沒裝 aiohttp 時非同步走 httpx，見 `google/genai/_api_client.py`）。
+            raise EstimatorUpstreamError(str(exc) or type(exc).__name__) from exc
         return parse_raw_estimate(_extract_text(response))

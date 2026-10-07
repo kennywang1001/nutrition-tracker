@@ -13,8 +13,10 @@
 `AI_PROVIDER` 決定（`app/api/deps.py` 的 `build_estimator`）。這個檔案只放兩家
 共用的：Protocol、`RawEstimate`、提示詞、回覆的形狀與 `parse_raw_estimate()`。
 
-兩家實作都不獨立測試——打真的網路：慢、花錢、不可重現（P2 規格 §8.1）。路由的
-測試注入假實作，間接驗證整條路徑接得起來。
+兩家實作都不打真的網路測——慢、花錢、不可重現（P2 規格 §8.1）。路由的
+測試注入假實作，間接驗證整條路徑接得起來。唯一直接測實作的是 SDK 例外的分類
+（`tests/test_ai_provider_errors.py`：client 換成接假傳輸層的版本，例外由 SDK
+自己建出來）。
 
 **但 `parse_raw_estimate()` 是純函式**（不碰網路、不碰資料庫），拆出來單獨測，
 見 `tests/test_ai_estimator.py`。它就是規格 §8.2「LLM 回傳垃圾不能讓畫面
@@ -32,6 +34,23 @@ from pydantic import BaseModel, Field, ValidationError
 from app.errors import BadGatewayError
 
 logger = logging.getLogger(__name__)
+
+
+class EstimatorMisconfiguredError(Exception):
+    """供應商拒絕了這個設定：金鑰錯、沒權限、`AI_MODEL` 不存在。
+
+    兩家實作把 SDK 的例外翻成這個（AI 與編輯畫面的收尾規格 §2 第 2 項）。路由回
+    `503 AI_MISCONFIGURED`，**不記 `ai_analyses`、不算額度**——供應商直接拒絕，
+    沒有計費；算額度的話，管理員修好設定之前使用者的額度就被一直吃掉。
+    """
+
+
+class EstimatorUpstreamError(Exception):
+    """供應商那邊暫時出問題：連不上、逾時、5xx、限流、其他 API 錯誤。
+
+    路由回 `502 AI_UPSTREAM_ERROR`，**照舊記一列失敗**——請求可能已經送到、
+    已經計費（P2 規格 §7「兩種都花了錢」）。
+    """
 
 
 @dataclass(frozen=True)
