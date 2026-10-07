@@ -357,6 +357,40 @@ describe("編輯這一餐：餐別、金額、備註", () => {
 
 		expect(await screen.findByText(AMOUNT_FORMAT_ERROR)).toBeInTheDocument();
 	});
+
+	it("金額被別的裝置改過（409）：顯示後端訊息並重新抓這一餐", async () => {
+		const message = "這一餐的金額剛被另一台裝置改過，請重新整理再試";
+		const fetchMock = mockApi(
+			routes(MEAL, [
+				{
+					method: "PATCH",
+					path: "/api/meals/5",
+					handler: () =>
+						json(
+							{
+								error: {
+									code: "MEAL_COST_CONFLICT",
+									message,
+									details: {},
+								},
+							},
+							409,
+						),
+				},
+			]),
+		);
+		renderEditMeal();
+
+		const cost = await screen.findByLabelText("金額（選填）");
+		await userEvent.clear(cost);
+		await userEvent.type(cost, "200");
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		expect(await screen.findByText(message)).toBeInTheDocument();
+		await waitFor(() =>
+			expect(calls(fetchMock, "GET", "/api/meals/5")).toHaveLength(2),
+		);
+	});
 });
 
 describe("編輯這一餐：照片", () => {

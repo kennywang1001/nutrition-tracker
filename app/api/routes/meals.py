@@ -6,6 +6,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, File, Query, Response, UploadFile, status
 from sqlalchemy import Row, delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -240,16 +241,21 @@ async def create_meal(
     )
 
 
+async def _existing_meal_expense(db: AsyncSession, meal_id: int) -> Expense | None:
+    """這一餐的餐費（資料庫保證最多一筆：`uq_expenses_meal_id`）。"""
+    expense: Expense | None = await db.scalar(
+        select(Expense).where(Expense.meal_id == meal_id).order_by(Expense.id).limit(1)
+    )
+    return expense
+
+
 async def _costs_by_meal(db: AsyncSession, meal_ids: Sequence[int]) -> dict[int, Decimal]:
     """這幾餐各自的餐費（`expenses.meal_id` 指過來的那一筆）。
 
     **一次查完**（`meal_id IN (...)`），跟 `list_meals` 查項目同一個作法——
     不是每一餐各查一次。
 
-    **前提：一餐最多一筆餐費**（編輯餐點規格 §3.2）：`POST /api/meals` 只建
-    一筆、`PATCH /api/expenses/{id}` 不能改 `meal_id`、手動記帳的 `meal_id`
-    一律是 NULL。萬一前提被打破，取 id 最小的那一筆——跟 `update_meal` 改
-    金額時動的是同一筆。
+    資料庫保證一餐最多一筆餐費（`uq_expenses_meal_id`）。
     """
     if not meal_ids:
         return {}
@@ -368,11 +374,8 @@ async def update_meal(
         setattr(meal, field, value)
 
     if cost_was_sent:
-        # 前提：一餐最多一筆餐費（見 _costs_by_meal）。取 id 最小的那一筆，
-        # 跟回應裡顯示的是同一筆。
-        existing = await db.scalar(
-            select(Expense).where(Expense.meal_id == meal.id).order_by(Expense.id).limit(1)
-        )
+        # 資料庫保證一餐最多一筆餐費（`uq_expenses_meal_id`）。
+        existing = await _existing_meal_expense(db, meal.id)
         if new_cost is None:
             if existing is not None:
                 await db.delete(existing)
@@ -391,7 +394,15 @@ async def update_meal(
                 )
             )
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # 補金額時另一個請求剛補了一筆（uq_expenses_meal_id）：整個請求 rollback，
+        # 同一次送出的餐別、備註也不存——請使用者重新整理看另一台存的值。
+        await db.rollback()
+        raise ConflictError(
+            "MEAL_COST_CONFLICT", "這一餐的金額剛被另一台裝置改過，請重新整理再試"
+        ) from None
     await db.refresh(meal)
 
     rows = (

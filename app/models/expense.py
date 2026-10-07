@@ -13,6 +13,7 @@ from sqlalchemy import (
     Numeric,
     Text,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -77,9 +78,14 @@ class Expense(Base):
         # ai_analyses 的 (user_id, created_at) 同一個理由：反過來的話，
         # 全部使用者的列都散在同一段時間範圍裡，前導欄位篩不掉任何列。
         Index("ix_expenses_user_id_spent_at", "user_id", "spent_at"),
-        # 為了「這一餐花了多少」的反查，以及 ON DELETE SET NULL 本身——
-        # 沒有這個索引，每刪一筆 meal 都要全表掃描 expenses。
-        Index("ix_expenses_meal_id", "meal_id"),
+        # 一餐最多一筆餐費（安全補強規格 §3.2）：部分唯一索引，手動記的帳
+        # （meal_id 是 null）不受限制。同時服務 ON DELETE SET NULL 的查找。
+        Index(
+            "uq_expenses_meal_id",
+            "meal_id",
+            unique=True,
+            postgresql_where=text("meal_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)

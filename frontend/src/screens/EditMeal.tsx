@@ -70,6 +70,10 @@ function mealChanges(
 }
 
 function describeSaveError(error: unknown): string {
+	// 另一台裝置剛補了這一餐的金額（安全補強規格 §4.2）：用後端的訊息。
+	if (error instanceof ApiError && error.code === "MEAL_COST_CONFLICT") {
+		return error.message;
+	}
 	// VALIDATION_ERROR 只有在真的是 cost 時才說金額（同記一餐）。
 	if (
 		error instanceof ApiError &&
@@ -104,6 +108,13 @@ function MealDetailsForm({ meal }: { meal: Meal }) {
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify(body),
 			}),
+		onError: (caught: unknown) => {
+			if (caught instanceof ApiError && caught.code === "MEAL_COST_CONFLICT") {
+				// 重抓這一餐、清掉金額草稿：欄位換成另一台存的值。
+				setCost(undefined);
+				queryClient.invalidateQueries({ queryKey: queryKeys.meal(meal.id) });
+			}
+		},
 		onSuccess: (updated, body) => {
 			// PATCH 的回應就是更新後的整餐：先寫進這一餐的快取，再清草稿。
 			// 只清草稿的話，重抓回來之前表單會閃回舊的伺服器值（慢速連線上
