@@ -37,7 +37,7 @@
 |---|---|---|
 | 範圍 | 交接文件的三件**加上**「只有 401 才登出」與「公克數變 0」（使用者選 A） | 前者不做，限速反而讓人被登出；後者跟「太大」是同一行程式的兩端 |
 | 同時補金額 | 第二個請求 **409**，請他重新整理（A） | 極少見；自動合併要在 rollback 後重做整個請求 |
-| 限速的做法 | **新的通用限速器**，鍵是 token 的 `sub`（A） | 登入的限速器只算失敗、成功就重置——換票要算每一次；IP 在這個架構沒有意義 |
+| 限速的做法 | **新的通用限速器**，鍵是 token 的 `sub`（A）。**審查後改成 token 自己的 `jti`**（使用者決定，見 §3.1） | 登入的限速器只算失敗、成功就重置——換票要算每一次；IP 在這個架構沒有意義。`sub` 會讓一張舊票鎖住本人，見 §3.1 |
 
 ---
 
@@ -55,18 +55,27 @@ class KeyedRateLimiter:
     def reset(self) -> None: ...
 ```
 
-實例 `session_rate_limiter`：**每個使用者每 60 秒 60 次**（原本定 10 次——實作時 e2e 證明太緊：每次整頁載入都會換票，一次完整 e2e 同一個帳號 31 秒內換了 23 次；60 次仍把實測的重放壓低 300 倍），`code="TOO_MANY_SESSION_REQUESTS"`、
-`message="操作太頻繁，請稍後再試"`。`/refresh` 與 `/logout` 共用（鍵是 `str(user_id)`）。
+實例 `session_rate_limiter`：**每張票每 60 秒 60 次**（原本定 10 次——實作時 e2e 證明太緊：每次整頁載入都會換票，一次完整 e2e 同一個帳號 31 秒內換了 23 次；60 次仍把實測的重放壓低 300 倍），`code="TOO_MANY_SESSION_REQUESTS"`、
+`message="操作太頻繁，請稍後再試"`。`/refresh` 與 `/logout` 共用（鍵是 `str(claims.jti)`；原本是
+`str(user_id)`，審查後改掉，理由在下面）。
 
 兩個端點的順序：
 
-1. **先驗 token 的簽章與期限**（`decode_refresh_token`），取 `sub`。驗不過 → 照現在的行為
+1. **先驗 token 的簽章與期限**（`decode_refresh_token`），取 `jti`。驗不過 → 照現在的行為
    （`/refresh` 401、`/logout` 204）。**不計數**：驗簽是 HMAC，不碰資料庫、不取鎖，本來就便宜。
-2. `session_rate_limiter.hit(str(claims.user_id))`——超過 → `429` ＋ `Retry-After`。
+2. `session_rate_limiter.hit(str(claims.jti))`——超過 → `429` ＋ `Retry-After`。
 3. 才呼叫 `rotate_session`／`revoke_session`（資料庫、advisory lock）。
 
-`sub` 是 token 自己聲稱的，但簽章驗過了，偽造不了；攻擊者能消耗的只有**他手上那張票**所屬使用者的額度——
-最壞是那個使用者一分鐘內換不了票（§4.1 讓這不會變成登出）。
+**為什麼鍵是 `jti`，不是 `sub`（審查後改的）。** 簽章驗過不代表票是活的：換過、登出過、被重用偵測撤銷的
+舊票，14 天內照樣驗得過簽章。鍵如果是 `sub`，拿到使用者 X **任何一張舊票**的人每分鐘打 60 次，就能讓 X 的
+額度一直用完——X 在每一台裝置上換票都是 429，access token 一過期就用不了，**而且只要他持續打就一直這樣**，
+不是「一分鐘」而已（§4.1 只保證 429 不會清掉 token，不會讓換票成功）。鍵是 `jti` 時：
+
+- 重放舊票只燒掉**那張舊票自己**的額度，碰不到本人手上的票；
+- 正常輪替每次都拿到新的 `jti`，永遠不會被限速；
+- 洪水仍然被壓在每張票每分鐘 60 次，走到 advisory lock 的量一樣有上限。
+
+同一張票的 `/refresh` 與 `/logout` 仍然共用一份額度。
 
 `tests/conftest.py` 的 autouse fixture 每個測試都重置它（同 `login_rate_limiter`）。
 
@@ -85,6 +94,11 @@ class KeyedRateLimiter:
 **`PATCH /api/meals/{id}`**：補金額（原本沒有餐費）撞上唯一約束 → `IntegrityError` → `rollback` →
 `409 MEAL_COST_CONFLICT`「這一餐的金額剛被另一台裝置改過，請重新整理再試」。同一個請求裡的其他改動
 （餐別、備註、`is_private`）一起 rollback。
+
+（審查後補）**只有** `uq_expenses_meal_id` 的唯一違反（SQLSTATE `23505`）回 409——看 asyncpg 帶的
+`sqlstate` 與 `constraint_name`，不解析訊息字串。補餐費時這一餐剛被另一台刪掉（`fk_expenses_meal_id_meals`
+外鍵違反，`23503`）→ rollback → `404 MEAL_NOT_FOUND`「找不到該餐點」。其他約束違反是 bug，rollback 後照樣往上丟。
+前端收到 409 時清掉金額草稿，並失效 `meals` 與 `expenses`，總覽與報表也拿到另一台的金額。
 
 `_costs_by_meal`、`update_meal` 裡「萬一一餐有兩筆，取 id 最小的」的防禦說明改成「資料庫保證最多一筆」
 （`order_by(Expense.id)` 留著，無害）。
@@ -130,13 +144,15 @@ if not (QUANTITY_G_MIN <= quantity_g <= QUANTITY_G_MAX):   # 0.01 與 999999.99�
 
 ### 5.1 後端
 
-- 限速：同一個使用者第 11 次 → 429、`Retry-After` 有值；`/refresh` 與 `/logout` 共用額度；假時鐘過了視窗恢復；
-  別的使用者不受影響；簽章不對的 token 打 20 次不計數（之後同一個使用者的正常換票成功）；被擋的請求
-  **不呼叫** `rotate_session`／`revoke_session`（spy）。
+- 限速：同一張票超過額度 → 429、`Retry-After` 有值；同一張票的 `/refresh` 與 `/logout` 共用額度；假時鐘過了
+  視窗恢復；同一個使用者的**另一張票**不受舊票洪水影響（鍵是 `sub` 時會紅）；簽章不對的 token 打
+  `SESSION_LIMIT + 1` 次都是 401、不計數（之後正常換票成功；驗簽前用常數鍵計數的突變會在超過額度那次紅）；
+  被擋的請求**不呼叫** `rotate_session`／`revoke_session`（spy）。
 - 餐費：資料庫直接擋同一個 `meal_id` 的第二筆（`IntegrityError` 指名 `uq_expenses_meal_id`）；`meal_id` 是
-  null 的多筆共存；補金額撞上 → 409、同一個請求的其他改動沒有存（monkeypatch 在補之前先插一筆）。
+  null 的多筆共存；補金額撞上 → 409、同一個請求的其他改動沒有存（monkeypatch 在補之前先插一筆）；
+  補金額時餐點剛被刪 → 404 `MEAL_NOT_FOUND`；其他約束違反不變成 409（往上丟）。
 - 公克數：份量 10000 g × 10000 → 422；份量 0.01 g × 0.01 → 422；三條路（新增一餐、加一項、改一項）都驗，
-  而且都**沒寫進資料庫**。
+  而且都**沒寫進資料庫**。兩端剛好落在端點上也能存：399.96 g × 2500.25 = 999,999.99 g、1 g × 0.01 = 0.01 g。
 - migration 的「有重複就失敗」：測試資料庫從空升級，驗不到——部署前對 dev 資料庫手動跑一次重複查詢。
 
 ### 5.2 前端

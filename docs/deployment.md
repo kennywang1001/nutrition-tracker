@@ -262,7 +262,10 @@ docker compose --env-file .env.production \
 > **2026-10 安全補強有 migration `0015`（一餐最多一筆餐費）。升級前先查有沒有重複的餐費：**
 >
 > ```bash
-> sudo docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml >   exec -T db psql -U wallet -d wallet -c >   "SELECT meal_id, count(*) FROM expenses WHERE meal_id IS NOT NULL GROUP BY meal_id HAVING count(*) > 1;"
+> docker compose --env-file .env.production \
+>   -f docker-compose.yml -f docker-compose.prod.yml \
+>   exec -T db psql -U wallet -d wallet -c \
+>   "SELECT meal_id, count(*) FROM expenses WHERE meal_id IS NOT NULL GROUP BY meal_id HAVING count(*) > 1;"
 > ```
 >
 > 顯示 `(0 rows)` 才升級。有結果的話 migration 會失敗（不會自動刪錢的紀錄）——先到報表刪掉
