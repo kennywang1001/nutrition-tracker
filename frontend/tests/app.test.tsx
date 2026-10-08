@@ -339,6 +339,66 @@ describe("App 的 /join（邀請規格 §4.1）", () => {
 	});
 });
 
+describe("App 的 /reset-password（帳號設定規格 §5.5）", () => {
+	it("沒登入時打開 /reset-password 顯示重設密碼，不是登入；包在 app-auth 裡", async () => {
+		window.history.replaceState(null, "", "/reset-password#tok-1");
+		mockBackend((url) =>
+			url.includes("/api/auth/password-reset-status")
+				? jsonResponse({ valid: true })
+				: undefined,
+		);
+
+		render(<App />);
+
+		expect(
+			await screen.findByLabelText("再輸入一次新密碼"),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("heading", { name: "重設密碼" }),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByRole("heading", { name: "登入" }),
+		).not.toBeInTheDocument();
+		expect(screen.getAllByRole("main")).toHaveLength(1);
+		expect(screen.getByRole("main")).toHaveClass("app-auth");
+	});
+
+	it("沒登入時打開 /reset-password/（多一個斜線）也是重設密碼", async () => {
+		window.history.replaceState(null, "", "/reset-password/#tok-1");
+		mockBackend((url) =>
+			url.includes("/api/auth/password-reset-status")
+				? jsonResponse({ valid: true })
+				: undefined,
+		);
+
+		render(<App />);
+
+		expect(
+			await screen.findByLabelText("再輸入一次新密碼"),
+		).toBeInTheDocument();
+	});
+
+	it("已登入打開 /reset-password：說明文字，不打任何重設端點，碼從網址列拿掉", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		const spy = mockBackend();
+		window.history.replaceState(null, "", "/reset-password#tok-1");
+
+		render(<App />);
+
+		expect(
+			await screen.findByText(
+				"你已經登入了。這個連結是給忘記密碼的人用的；要改自己的密碼，請到「我的」→「修改密碼」。",
+			),
+		).toBeInTheDocument();
+		expect(
+			spy.mock.calls.some(([url]) => String(url).includes("/api/auth/")),
+		).toBe(false);
+		// 連結還能用：留在網址列（歷史紀錄、螢幕截圖）就是一條能改別人密碼的連結。
+		expect(window.location.pathname).toBe("/reset-password");
+		expect(window.location.hash).toBe("");
+	});
+});
+
 describe("App 的電腦版外框（電腦版版面規格 §3）", () => {
 	// 路徑、token、fetch mock 由檔案最上面的 beforeEach 重設；寬度由
 	// src/test/setup.ts 的 beforeEach 重設回手機版。

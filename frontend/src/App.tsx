@@ -38,6 +38,10 @@ import { LogMeal, PHOTO_UPLOAD_FAILED_NOTICE } from "./screens/LogMeal";
 import { Me } from "./screens/Me";
 import { NewFood } from "./screens/NewFood";
 import { Overview } from "./screens/Overview";
+import {
+	ResetPassword,
+	ResetPasswordWhileLoggedIn,
+} from "./screens/ResetPassword";
 import { Supplements } from "./screens/Supplements";
 import { Targets } from "./screens/Targets";
 import { Today } from "./screens/Today";
@@ -124,9 +128,12 @@ function LoggedInShell({ children }: { children: ReactNode }) {
  *  react-router 本來就把它當 `/join`。 */
 const JOIN_PATHS = new Set(["/join", "/join/"]);
 
+/** 未登入時顯示重設密碼的網址（帳號設定規格 §5.5），斜線的理由同 JOIN_PATHS。 */
+const RESET_PATHS = new Set(["/reset-password", "/reset-password/"]);
+
 export function App() {
-	// 未登入 → `/join` 是建立帳號，其他一律 <Login>（不掛 BrowserRouter，
-	// 沒有路由可以比對）。
+	// 未登入 → `/join` 是建立帳號、`/reset-password` 是重設密碼，其他一律 <Login>
+	// （不掛 BrowserRouter，沒有路由可以比對）。
 	const [loggedIn, setLoggedIn] = useState(getRefreshToken() !== null);
 
 	return (
@@ -185,6 +192,10 @@ export function App() {
 								規格 §3.3）。 */}
 							<Route path="/admin/revisions" element={<AdminRevisions />} />
 							<Route path="/join" element={<JoinWhileLoggedIn />} />
+							<Route
+								path="/reset-password"
+								element={<ResetPasswordWhileLoggedIn />}
+							/>
 						</Routes>
 					</LoggedInShell>
 				</BrowserRouter>
@@ -195,6 +206,12 @@ export function App() {
 				// 沒有分頁列；電腦版的寬度規則也只看 .app-desktop 底下的 .app-main。
 				<main className="app-auth">
 					<Join onSuccess={() => setLoggedIn(true)} />
+				</main>
+			) : RESET_PATHS.has(window.location.pathname) ? (
+				// 重設密碼連結（帳號設定規格 §5.5）。不收 onSuccess：成功後不自動登入（決定 16），
+				// 「去登入」是整頁的 <a href="/">，重新載入後沒有票，落在下面的登入畫面。
+				<main className="app-auth">
+					<ResetPassword />
 				</main>
 			) : (
 				<main className="app-auth">
