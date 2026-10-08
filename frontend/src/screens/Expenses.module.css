@@ -11,6 +11,37 @@
 	font-weight: 600;
 }
 
+/* 月份切換：‹ 上個月｜2026年10月｜下個月 ›，手機與電腦版都是一列。
+   按鈕的外觀、44px、停用時變淡都來自 ui.secondary；這裡只管排列。
+   最寬 420px：電腦版的內容區有 1100px，兩顆按鈕不該被推到兩端。 */
+.monthSwitch {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-2);
+	max-width: 420px;
+	margin-bottom: var(--space-3);
+}
+
+.monthSwitch button {
+	flex: none;
+	white-space: nowrap;
+}
+
+.monthLabel {
+	margin: 0;
+	font-size: var(--font-size-total);
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+	text-align: center;
+}
+
+/* 換月份時留著的是上一個月的資料（keepPreviousData），新的還沒回來：調淡。
+   螢幕閱讀器那邊由 aria-busy 說。同 Trend.module.css 的 .stale。 */
+.stale {
+	opacity: var(--opacity-stale);
+}
+
 .list {
 	list-style: none;
 	margin: 0;

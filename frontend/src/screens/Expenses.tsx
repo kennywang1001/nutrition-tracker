@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { type FormEvent, useState } from "react";
-import { Link } from "react-router";
+import { type FormEvent, useEffect, useState } from "react";
+import { Link, useSearchParams } from "react-router";
 import { apiFetch } from "../api/client";
 import { ApiError } from "../api/errors";
 import {
@@ -16,7 +16,9 @@ import { CategoryBar } from "../components/CategoryBar";
 import { CategoryDonut } from "../components/CategoryDonut";
 import { CategoryIcon } from "../components/IconBadge";
 import layout from "../components/layout.module.css";
+import ui from "../components/ui.module.css";
 import { formatMoney, isPositiveAmount } from "../lib/decimal";
+import { formatYearMonth, isYearMonth, shiftMonth } from "../lib/months";
 import { useConfirmFocus } from "../lib/use-confirm-focus";
 import styles from "./Expenses.module.css";
 
@@ -194,19 +196,29 @@ function ExpenseRow({ expense, onChanged }: RowProps) {
 
 type MonthSummaryProps = {
 	query: ReturnType<typeof useExpenseSummary>;
+	/** 看的不是這個月時，那個月的名字（「2026年9月」）；這個月是 `null`。 */
+	otherMonth: string | null;
 };
 
-/** 這個月的總額與分類佔比。用 early return 取代巢狀三元——跟 `ExpenseRow`
+/** 一個月的總額與分類佔比。用 early return 取代巢狀三元——跟 `ExpenseRow`
  *  同一個理由，分支一多，巢狀三元就比依序判斷難讀。
  *
  *  **本地 const 是讓窄化撐過 `.map()` callback 的關鍵**：TS 確實會窄化
  *  `query.data` 本身，但窄化不會跟著閉包進到 callback 裡——指到同一個
  *  本地變數就會。 */
-function MonthSummary({ query }: MonthSummaryProps) {
+function MonthSummary({ query, otherMonth }: MonthSummaryProps) {
 	if (query.isPending) return <p>載入中…</p>;
 	const summary = query.data;
 	// 失敗不能卡在「載入中…」——那會讓使用者以為還在等，而不是知道要重試。
-	if (query.isError || summary == null) return <p>無法載入本月報表</p>;
+	if (query.isError || summary == null) {
+		return (
+			<p>
+				{otherMonth === null
+					? "無法載入本月報表"
+					: `無法載入${otherMonth}的報表`}
+			</p>
+		);
+	}
 	return (
 		<div>
 			<p className={styles.monthTotal}>
@@ -226,26 +238,92 @@ function MonthSummary({ query }: MonthSummaryProps) {
 					))}
 				</>
 			) : (
-				<p>這個月還沒有支出</p>
+				<p>
+					{otherMonth === null ? "這個月還沒有支出" : `${otherMonth}沒有支出`}
+				</p>
 			)}
 		</div>
 	);
 }
 
-/** 報表：這個月的總額、分類佔比與花費清單（可改金額、刪除）。
+/** 換月份後、新的那個月還沒回來時，畫面上留著的是上一個月的資料
+ *  （`keepPreviousData`）：調淡、`aria-busy`，同趨勢頁換期間的作法。 */
+function staleProps(stale: boolean) {
+	return stale ? { "aria-busy": true, className: styles.stale } : {};
+}
+
+/** 報表：一個月的總額、分類佔比與花費清單（可改金額、刪除）。
  *
  *  新增改由「＋」→ 記帳（`AddExpense.tsx`）；入口是 tab bar 的「報表」
  *  （`/reports`，舊網址 `/expenses` 會轉址過來）。
  *
- *  **`month` 固定傳 `null`**：讓後端用使用者時區決定「這個月」
- *  （`this_month_in_timezone`）。前端沒有月份選擇器——規格 §1.1 要回答的
- *  是「**這個**月花了多少」，看別的月份不在範圍內（規格 §8）。
+ *  **看哪個月寫在網址上：`?month=YYYY-MM`，沒有就是這個月**（報表月份與匯出
+ *  規格 §2）。重新整理、上一頁、下一頁因此都對。
+ *
+ *  **「這個月」是後端說的，不是裝置的日期。** `useExpenseSummary(null)` 不帶
+ *  `?month=`，後端用使用者時區決定（`this_month_in_timezone`），回應的 `month`
+ *  就是那個月——「下個月」到這裡為止、網址上的月份有沒有超過，都跟它比。
+ *  還不知道（載入中、失敗）的時候不猜：沒帶月份就兩顆都不能按。
+ *
+ *  **網址上的月份不能用就當成沒帶，並用 `replace` 清掉**（上一頁不會回到一個
+ *  只會再被清掉的網址）：格式不對的馬上清；比這個月還後面的，等後端回了這個月
+ *  才知道，那時才清。剛好等於這個月的不清——清掉的話，離線快取裡那份「這個月」
+ *  如果是上個月留下的，會把人從他要看的月份帶走。
  */
 export function Expenses() {
 	const queryClient = useQueryClient();
-	const expensesQuery = useExpenses(null);
+	const [searchParams, setSearchParams] = useSearchParams();
+
+	const currentQuery = useExpenseSummary(null);
+	const currentMonth = currentQuery.data?.month ?? null;
+
+	const raw = searchParams.get("month");
+	const requested = raw !== null && isYearMonth(raw) ? raw : null;
+	// `YYYY-MM` 補零、等長：字串比大小就是月份的先後。
+	const isFuture =
+		requested !== null && currentMonth !== null && requested > currentMonth;
+	/** 要看的月份；`null`＝這個月（讓後端決定）。 */
+	const selected = isFuture ? null : requested;
+	const needsCleanup = raw !== null && selected === null;
+
+	useEffect(() => {
+		if (!needsCleanup) return;
+		setSearchParams(
+			(current) => {
+				const params = new URLSearchParams(current);
+				params.delete("month");
+				return params;
+			},
+			{ replace: true },
+		);
+	}, [needsCleanup, setSearchParams]);
+
+	const expensesQuery = useExpenses(selected);
 	const expenses = expensesQuery.data ?? [];
-	const summaryQuery = useExpenseSummary(null);
+	const summaryQuery = useExpenseSummary(selected);
+
+	/** 畫面上是哪個月；`null`＝沒帶月份，而且還不知道這個月是哪個月。 */
+	const shownMonth = selected ?? currentMonth;
+	const monthName = shownMonth === null ? null : formatYearMonth(shownMonth);
+	const isCurrent = selected === null || selected === currentMonth;
+	const otherMonth = isCurrent ? null : monthName;
+
+	const previous = shownMonth === null ? null : shiftMonth(shownMonth, -1);
+	const next =
+		shownMonth === null || currentMonth === null || shownMonth >= currentMonth
+			? null
+			: shiftMonth(shownMonth, 1);
+
+	/** 換月份：新的一筆歷史紀錄（預設就是 push）。到這個月就把參數拿掉——
+	 *  沒有參數才會跟著後端的「這個月」走，跨月之後不會停在舊的月份。 */
+	function goTo(month: string) {
+		setSearchParams((current) => {
+			const params = new URLSearchParams(current);
+			if (month === currentMonth) params.delete("month");
+			else params.set("month", month);
+			return params;
+		});
+	}
 
 	return (
 		<section>
@@ -256,43 +334,90 @@ export function Expenses() {
 				<Link to="/trend">營養趨勢</Link>
 			</nav>
 
+			{/* 箭頭是裝飾（aria-hidden）：按鈕的名稱就是「上個月」「下個月」。
+			    月份是 role="status"：換月份時螢幕閱讀器會唸出新的月份。 */}
+			{/* biome-ignore lint/a11y/useSemanticElements: role=group 與 fieldset 語意相同；fieldset 要另外重設 border、padding、min-inline-size（同 MoneyKeypad） */}
+			<div className={styles.monthSwitch} role="group" aria-label="切換月份">
+				<button
+					type="button"
+					className={ui.secondary}
+					disabled={previous === null}
+					onClick={() => {
+						if (previous !== null) goTo(previous);
+					}}
+				>
+					<span aria-hidden="true">‹ </span>上個月
+				</button>
+				<p className={styles.monthLabel} role="status">
+					{monthName ?? "這個月"}
+				</p>
+				<button
+					type="button"
+					className={ui.secondary}
+					disabled={next === null}
+					onClick={() => {
+						if (next !== null) goTo(next);
+					}}
+				>
+					下個月<span aria-hidden="true"> ›</span>
+				</button>
+			</div>
+
 			{/* 電腦版：左＝這個月花了多少、右＝這個月的明細（電腦版版面規格 §4）。
 			    本來的順序就是先摘要後明細，手機版照樣往下排。 */}
 			<div className={layout.columns}>
 				<div>
-					<h2>這個月花了多少</h2>
+					<h2>
+						{otherMonth === null ? "這個月花了多少" : `${otherMonth}花了多少`}
+					</h2>
 					<Card testId="expense-summary">
-						<MonthSummary query={summaryQuery} />
+						<div
+							data-testid="month-summary"
+							{...staleProps(summaryQuery.isPlaceholderData)}
+						>
+							<MonthSummary query={summaryQuery} otherMonth={otherMonth} />
+						</div>
 					</Card>
 				</div>
 
 				<div>
-					<h2>這個月</h2>
+					<h2>{otherMonth ?? "這個月"}</h2>
 					<Card>
-						{expensesQuery.isPending ? (
-							<p>載入中…</p>
-						) : expensesQuery.isError ? (
-							// 失敗不能落到「這個月還沒有記錄花費」——這是報表畫面，
-							// 空清單的措辭會引誘使用者重打一筆，造成重複記帳
-							// （跟 MealList.tsx 的 isError 分支同一個理由）。
-							<p>無法載入花費清單</p>
-						) : expenses.length === 0 ? (
-							<p>這個月還沒有記錄花費</p>
-						) : (
-							<ul className={styles.list}>
-								{expenses.map((expense) => (
-									<ExpenseRow
-										key={expense.id}
-										expense={expense}
-										onChanged={() =>
-											void queryClient.invalidateQueries({
-												queryKey: queryKeys.expensesAll,
-											})
-										}
-									/>
-								))}
-							</ul>
-						)}
+						<div
+							data-testid="month-list"
+							{...staleProps(expensesQuery.isPlaceholderData)}
+						>
+							{expensesQuery.isPending ? (
+								<p>載入中…</p>
+							) : expensesQuery.isError ? (
+								// 失敗不能落到「這個月還沒有記錄花費」——這是報表畫面，
+								// 空清單的措辭會引誘使用者重打一筆，造成重複記帳
+								// （跟 MealList.tsx 的 isError 分支同一個理由）。
+								<p>無法載入花費清單</p>
+							) : expenses.length === 0 ? (
+								<p>
+									{otherMonth === null
+										? "這個月還沒有記錄花費"
+										: `${otherMonth}沒有記錄花費`}
+								</p>
+							) : (
+								<ul className={styles.list}>
+									{expenses.map((expense) => (
+										<ExpenseRow
+											key={expense.id}
+											expense={expense}
+											onChanged={() =>
+												// 前綴比對：每個月的清單與報表、總覽的今天支出一起失效
+												// ——改的是過去的月份也一樣。
+												void queryClient.invalidateQueries({
+													queryKey: queryKeys.expensesAll,
+												})
+											}
+										/>
+									))}
+								</ul>
+							)}
+						</div>
 					</Card>
 				</div>
 			</div>

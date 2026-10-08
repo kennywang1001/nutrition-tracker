@@ -24,13 +24,18 @@ import { json, mockApiByPath as mockApi } from "./helpers/mock-api";
 // 需要 MemoryRouter：P3-C Task 2 在「今日補劑」區塊加了一個連到
 // /supplements 的 <Link>，不掛 Router 會直接炸掉（跟 today.test.tsx 同一個
 // 理由）。
-function wrap(client: QueryClient, children: ReactNode) {
+function wrap(
+	client: QueryClient,
+	children: ReactNode,
+	// 報表的月份在網址上（`?month=`）：要測「停在某個月重新載入」就給網址。
+	entries: string[] = ["/"],
+) {
 	return (
 		<PersistQueryClientProvider
 			client={client}
 			persistOptions={createOfflinePersistOptions(window.localStorage)}
 		>
-			<MemoryRouter>{children}</MemoryRouter>
+			<MemoryRouter initialEntries={entries}>{children}</MemoryRouter>
 		</PersistQueryClientProvider>
 	);
 }
@@ -697,5 +702,75 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 			},
 			{ timeout: 3000 },
 		);
+	});
+
+	it("過去月份的報表也進離線快取：離線重新載入停在那個月，資料還在", async () => {
+		// 報表可以看其他月份之後（報表月份與匯出規格 §2）：`["expenses", "list" | "summary",
+		// "2026-08"]` 跟這個月的 key（月份是 null）走同一條持久化規則。這一條在 persist.ts
+		// 沒有任何改動的情況下就該是綠的——它守的是以後有人把 "expenses" 加進
+		// NOT_PERSISTED、或讓帶月份的 key 換了命名空間。
+		const august = {
+			month: "2026-08",
+			total: "640.00",
+			by_category: [
+				{ category: "food", total: "400.00", count: 2 },
+				{ category: "transport", total: "240.00", count: 1 },
+			],
+		};
+		const routes = {
+			// 具體的排前面（url.includes 依序比對）。
+			"/api/expenses/summary?month=2026-08": () => json(august),
+			"/api/expenses?month=2026-08": () =>
+				json([
+					{
+						id: 7,
+						amount: "240.00",
+						category: "transport",
+						spent_at: "2026-08-20T04:00:00+00:00",
+						note: "八月的高鐵",
+						meal_id: null,
+					},
+				]),
+			"/api/expenses/summary": () =>
+				json({ month: "2026-09", total: "0.00", by_category: [] }),
+			"/api/expenses": () => json([]),
+		};
+		const persistedMonths = () =>
+			readPersistedQueries()
+				.filter((query) => query.queryKey[0] === "expenses")
+				.map((query) => JSON.stringify(query.queryKey))
+				.sort();
+
+		// 第一階段：線上，停在八月。
+		mockApi(routes);
+		const first = render(
+			wrap(newTestClient(), <Expenses />, ["/reports?month=2026-08"]),
+		);
+		await screen.findByText("八月的高鐵");
+		await waitFor(
+			() =>
+				expect(persistedMonths()).toEqual([
+					JSON.stringify(queryKeys.expenses("2026-08")),
+					JSON.stringify(queryKeys.expenseSummary("2026-08")),
+					JSON.stringify(queryKeys.expenseSummary(null)),
+				]),
+			{ timeout: 3000 },
+		);
+		first.unmount();
+
+		// 第二階段：離線，全新的 QueryClient，同一個網址。
+		vi.restoreAllMocks();
+		const offline = goOffline();
+		render(wrap(newTestClient(), <Expenses />, ["/reports?month=2026-08"]));
+
+		expect(await screen.findByText("八月的高鐵")).toBeInTheDocument();
+		expect(screen.getByTestId("expense-summary")).toHaveTextContent(
+			"總計 640.00",
+		);
+		expect(
+			screen.getByRole("heading", { name: "2026年8月花了多少" }),
+		).toBeInTheDocument();
+		// 資料來自 localStorage：還新鮮（staleTime 60 秒），一個請求都沒發。
+		expect(offline).not.toHaveBeenCalled();
 	});
 });

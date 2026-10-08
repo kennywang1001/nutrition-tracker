@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import {
 	Bus,
 	Ellipsis,
@@ -90,7 +90,13 @@ export const CATEGORY_ICONS: Record<ExpenseCategory, LucideIcon> = {
  *  `month` 為 `null` 時**不帶 `?month=`**，讓後端用使用者時區決定這個月
  *  （`this_month_in_timezone`）。前端不自己算月份——跟 `Today.tsx` 的
  *  `dailyStats` 查詢不自己算今天是同一條規矩（`queryKeys.dailyStats`
- *  不帶日期參數，見 `api/queries.ts` 檔頭註解）。 */
+ *  不帶日期參數，見 `api/queries.ts` 檔頭註解）。
+ *
+ *  **`keepPreviousData`**（報表換月份）：`month` 換了、新的那個月還沒回來時，
+ *  `data` 先留著上一個月的，`isPlaceholderData` 是 true——報表據此把卡片調淡、
+ *  標成載入中，而不是整塊退回「載入中…」。`month` 固定不變的呼叫端（總覽的
+ *  `useExpenseSummary(null)`）永遠碰不到這條路。新的月份載入**失敗**時沒有
+ *  資料可留：`data` 是 undefined、`isError` 是 true。 */
 export function useExpenses(month: string | null) {
 	return useQuery({
 		queryKey: queryKeys.expenses(month),
@@ -98,10 +104,14 @@ export function useExpenses(month: string | null) {
 			apiFetch<Expense[]>(
 				month === null ? "/api/expenses" : `/api/expenses?month=${month}`,
 			),
+		placeholderData: keepPreviousData,
 	});
 }
 
-/** 月報表：總額 + 分類佔比。`month` 的語意同 `useExpenses`。 */
+/** 月報表：總額 + 分類佔比。`month` 的語意、`keepPreviousData` 同 `useExpenses`。
+ *
+ *  回應裡的 `month` 是後端正規化過的 `YYYY-MM`；`month` 傳 `null` 時它就是
+ *  「後端說的這個月」——報表的月份切換拿它當「不能再往後」的界線，不自己算。 */
 export function useExpenseSummary(month: string | null) {
 	return useQuery({
 		queryKey: queryKeys.expenseSummary(month),
@@ -111,6 +121,7 @@ export function useExpenseSummary(month: string | null) {
 					? "/api/expenses/summary"
 					: `/api/expenses/summary?month=${month}`,
 			),
+		placeholderData: keepPreviousData,
 	});
 }
 
