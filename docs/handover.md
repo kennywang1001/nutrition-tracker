@@ -51,6 +51,7 @@
 | 小項目包 | 份量的修改與刪除（`PATCH`／`DELETE /api/foods/{id}/portions/{pid}`，已記的餐不受影響）；編輯歷史的日期改成好讀格式；趨勢圖日期軸；報表清單按鈕換新外觀（規格 `docs/superpowers/specs/2026-10-06-small-items-design.md`、計畫 `docs/superpowers/plans/2026-10-06-small-items.md`） | ✅ |
 | 開帳號的路（社群第一步） | 管理員在「我的」產生一次性邀請連結（7 天、只能用一次、可撤銷，資料庫只存 SHA-256）；朋友打開 `/join#<碼>` 自己建帳號。**註冊一定要有邀請**（規格 `docs/superpowers/specs/2026-10-06-invites-design.md`、計畫 `docs/superpowers/plans/2026-10-06-invites.md`） | ✅ |
 | 好友關係（社群第二步） | 好友碼（`XXXX-XXXX`，可重設）送邀請、對方接受；飲食頁「我的｜好友」看好友動態，點名字看他的某一天（照他的時區）；好友看得到吃了什麼、照片、熱量與營養素，**看不到餐費與備註**；每一餐可設「只有我看得到」（規格 `docs/superpowers/specs/2026-10-07-friends-design.md`、計畫 `docs/superpowers/plans/2026-10-07-friends.md`） | ✅ |
+| 部署改成 CI 做映像 | CI 的 `publish` job 把兩個映像推到 GHCR（多架構）；NAS 上 `sudo ./scripts/deploy.sh` 拉映像、備份、migration、等 healthy、起不來自動退版（規格 `docs/superpowers/specs/2026-10-08-image-deploy-design.md`；部署手冊「二、更新」） | ✅（`publish` job 要等第一次 push 到 master 才驗得到） |
 | UI 改版 第三階段 | 社群（P7）：第一步「開帳號的路」、第二步「好友關係」已完成。按讚、留言、通知刻意沒做——等真的用過再說 | 🟡 |
 
 > **P4 早於 P2/P3 完成是刻意的，但當初的理由有瑕疵。**
@@ -856,6 +857,8 @@ app 的 `queryClient` 預設 `staleTime` 60 秒、快取會持久化，reload �
 | `docker ps` 顯示 `Up` | **不代表活著**。uvicorn reloader 父行程在子行程崩潰時仍活著 |
 | 改環境變數後 `restart` | **不夠**，要 `up -d`（會重建容器） |
 | 在本機起 prod 疊加設定 | 會**接管同名的 dev 容器**（專案名稱相同），dev 的 `db` 會失去 `5433` 的埠發佈。驗證完要 `down` 再 `docker compose up -d` 把 dev 收回來，否則 host 上的 pytest 連不到資料庫 |
+| prod 疊加檔不帶 `docker-compose.release.yml` 就 `up -d` | 改用 CI 映像之後，`-f docker-compose.yml -f docker-compose.prod.yml up -d` 會**用 NAS 上的原始碼 build** 新映像、換掉 CI 的映像（`build:` 還在那兩個檔案裡）。改了 `.env.production` 要重建容器時，用同一個版本重跑 `deploy.sh` |
+| `docker compose up` 等 `depends_on: service_healthy` | 依賴的容器**一直重啟**時 compose 會回「dependency failed to start: … is unhealthy」並非零結束，被依賴的那個（caddy）停在 `created`、**沒有人會再啟動它**。`deploy.sh` 看到 `up` 失敗就不再等、直接退版 |
 | 改依賴後 | **必須重建映像**，`--reload` 只換程式碼不換依賴 |
 | **新增 migration 後** | 也**必須重建映像**。`Dockerfile` 是 `COPY . .`，migration 檔案是烤進映像的，不是掛載的 —— dev 的原始碼掛載只有 `./app`。症狀是 `relation "xxx" does not exist`，而檔案明明在 repo 裡 |
 | `ruff format` | **CI 只跑 `ruff check .`，沒有跑 `ruff format --check`**。這個 repo 有既有的格式差異，跑 `ruff format` 會把一堆跟你這次改動無關的行重排進 diff 裡。不要在不相干的改動裡順手跑它 |
@@ -1131,10 +1134,27 @@ DATABASE_URL="postgresql+asyncpg://wallet:wallet@localhost:5433/wallet_test" \
 
 完整步驟見 [`docs/deployment.md`](deployment.md)。重點：
 
+**NAS 不 build 映像。** master 的測試全過之後，CI 的 `publish` job 把 `nutrition-tracker-api`
+與 `nutrition-tracker-web`（Caddy＋前端）推到 GHCR（amd64＋arm64，標籤＝commit 完整 SHA 與 `latest`）。
+NAS 上：
+
 ```bash
-docker compose --env-file .env.production \
-  -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+sudo ./scripts/deploy.sh          # git pull --ff-only，部署 HEAD 的映像
+sudo ./scripts/deploy.sh <sha>    # 部署指定版本（退版用；不動 git）
 ```
+
+腳本：拉映像 → 目前在跑的映像標成 `:rollback` → 備份 → 用新映像跑 migration（失敗就停在舊版）→
+`up -d --no-build`、等 api 與 caddy `healthy`（等不到就自動退回 `:rollback`、非零結束）→ 寫 `deployed-version`。
+用到的疊加檔是 `docker-compose.yml`＋`docker-compose.prod.yml`＋`docker-compose.release.yml`
+（最後這個把 `build` 拿掉、`image` 換成 GHCR 的 `${APP_VERSION}`）。
+規格 `docs/superpowers/specs/2026-10-08-image-deploy-design.md`。
+
+- **退版不倒回 migration**（migration 都是加法）。退到舊版時資料庫比映像新，腳本會認出來、跳過 migration。
+- **本機試 `deploy.sh` 一定要設 `COMPOSE_PROJECT_NAME`**（例如 `nt-deploy-test`），否則專案名稱是
+  `wallet`、會接管 dev（§7）。腳本看到 dev 的容器（override 起的）會拒絕，但不要靠這個。
+  本機實測的做法：`SKIP_PULL=1`、本機 build 並打上 GHCR 名稱的映像、`ENV_FILE`／`BACKUP_DIR`／
+  `DEPLOYED_VERSION_FILE` 指到暫存目錄。
+- 舊的「在 NAS 上 `up -d --build`」留在部署手冊當備案。
 
 **看 `(healthy)` 不要看 `Up`。**
 

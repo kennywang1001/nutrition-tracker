@@ -84,9 +84,9 @@ BIND_ADDR=127.0.0.1
 （例如「AI 分析未設定：缺 GEMINI_API_KEY」）。四個變數都由
 `docker-compose.yml` 用 `${VAR:-}` 傳進 api 容器（空字串＝沒設）。
 
-**換供應商**：改 `AI_PROVIDER` 與 `AI_MODEL`（以及那一家的金鑰），然後
-`up -d`（不是 `restart`，見「二、更新」）。每日上限（預設 20 次）兩家共用、
-照樣算。
+**換供應商**：改 `AI_PROVIDER` 與 `AI_MODEL`（以及那一家的金鑰），然後用同一個版本
+重新部署一次（不是 `restart`，見「二、更新」的「改了 `.env.production` 之後」）。
+每日上限（預設 20 次）兩家共用、照樣算。
 
 **打開之後怎麼確認**：在記一餐打一個食物庫沒有的東西，按「用 AI 估算」——
 看到結果卡片就是通的；看到「AI 分析未設定」就照訊息補設定。金鑰或 `AI_MODEL`
@@ -119,16 +119,22 @@ required variable JWT_SECRET is missing a value: JWT_SECRET is required in
 production. Generate one with: openssl rand -hex 32
 ```
 
-### 5. 啟動
+### 5. 啟動（第一次部署）
+
+映像由 CI 做好放在 GHCR，NAS 不 build。先照「二、更新」的
+**第一次設定**讓 NAS 拉得到映像（套件設成 Public，或 `docker login ghcr.io`），然後：
 
 ```bash
-docker compose --env-file .env.production \
-  -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+sudo ./scripts/deploy.sh
 ```
 
-第一次會建映像，視 NAS 的效能可能要十幾分鐘。
+第一次部署時資料庫還不存在：腳本會跳過備份、先起資料庫、跑完所有 migration，
+再起 api 與 caddy、等兩個都 `healthy`。最後一行是 `✓ 部署完成：<commit SHA>`。
 
-### 6. 確認兩個容器都健康
+> 拉不到映像（`denied`／`manifest unknown`）：套件還是私人的、或 CI 還沒做好
+> 這個 commit 的映像（GitHub → Actions，看那個 commit 的 `publish` job）。
+
+### 6. 確認容器都健康
 
 ```bash
 docker compose --env-file .env.production \
@@ -138,30 +144,23 @@ docker compose --env-file .env.production \
 預期輸出（**`healthy` 是重點**，不是 `Up`）：
 
 ```
-NAME            SERVICE   STATUS
-wallet-api-1    api       Up 30 seconds (healthy)
-wallet-db-1     db        Up 40 seconds (healthy)
+NAME                       SERVICE   STATUS
+nutrition-tracker-api-1    api       Up 30 seconds (healthy)
+nutrition-tracker-caddy-1  caddy     Up 20 seconds (healthy)
+nutrition-tracker-db-1     db        Up 40 seconds (healthy)
 ```
 
 > **`Up` 不代表活著。** 這個專案實際踩過兩次：uvicorn 的 reloader 父行程
 > 在子行程 import 失敗時仍然活著，`docker ps` 顯示 `Up 4 days`
 > 而 API 已經死了四天。healthcheck 就是為此存在的 —— 看 `(healthy)`，不要看 `Up`。
+> `deploy.sh` 自己也是等到兩個都 `(healthy)` 才算部署成功。
 >
-> 停在 `(health: starting)` 是正常的，`start_period` 是 10 秒。
 > 變成 `(unhealthy)` 的話直接看 log：
 > `docker compose ... logs api --tail 50`
 
-### 7. 套用資料庫 migration
+### 7. 確認資料庫 migration
 
-```bash
-docker compose --env-file .env.production \
-  -f docker-compose.yml -f docker-compose.prod.yml \
-  exec api python -m alembic upgrade head
-```
-
-預期輸出是一連串 `Running upgrade 0001 -> 0002, ...` 直到 `0006`。
-
-確認：
+`deploy.sh` 已經跑過 `alembic upgrade head`。確認：
 
 ```bash
 docker compose --env-file .env.production \
@@ -169,7 +168,7 @@ docker compose --env-file .env.production \
   exec api python -m alembic current
 ```
 
-預期輸出包含 `0006 (head)`。
+預期輸出包含 `(head)`。
 
 ### 8. 建立管理員帳號
 
@@ -247,23 +246,83 @@ console.log(window.isSecureContext, !!navigator.serviceWorker, !!navigator.locks
 
 ## 二、更新
 
-**「只改程式碼」與「改了依賴」是兩件不同的事，混淆會得到最難查的那種故障。**
+**NAS 不再 build 映像。** master 上每個 commit 的測試全過之後，CI（`.github/workflows/ci.yml`
+的 `publish` job）把兩個映像推到 GHCR，標籤是 commit 的完整 SHA（另外還有 `latest`）：
 
-production 沒有原始碼掛載也沒有 `--reload`，程式碼是 build 進映像的，
-所以**兩種情況都要重建映像**：
+- `ghcr.io/kennywang1001/nutrition-tracker-api:<sha>`
+- `ghcr.io/kennywang1001/nutrition-tracker-web:<sha>`（Caddy＋前端）
+
+amd64 與 arm64 都有，NAS 是哪一種 CPU 都能跑。NAS 上由 `scripts/deploy.sh` 拉映像、部署。
+規格：`docs/superpowers/specs/2026-10-08-image-deploy-design.md`。
+
+### 第一次設定
+
+只做一次。
+
+1. **讓 NAS 拉得到映像**——擇一：
+   - **套件設成 Public**（建議，NAS 上不用任何權杖）：GitHub → 自己的頁面 → **Packages** →
+     `nutrition-tracker-api` → **Package settings** → 最下面 **Danger Zone** → **Change visibility** → Public。
+     `nutrition-tracker-web` 再做一次。（套件要等 CI 第一次推過才會出現。）
+   - **保持私人**：GitHub → Settings → Developer settings → Personal access tokens (classic)
+     → 新增一個**只勾 `read:packages`** 的權杖，然後在 NAS 上：
+
+     ```bash
+     sudo docker login ghcr.io -u kennywang1001
+     # Password 貼上權杖
+     ```
+
+     要用 `sudo` 登入：`deploy.sh` 以 root 跑 docker，登入資訊存在 root 那邊。
+2. **確認 `.env.production`** 存在而且解析得出來（「一、首次部署」第 4 步最後那個 `config` 指令印 `OK`）。
+   `deploy.sh` 一開始也會檢查，漏填會指名是哪一個變數。
+3. **`scripts/deploy.sh` 要可執行**：`ls -l scripts/deploy.sh` 看得到 `x`。沒有的話 `chmod +x scripts/deploy.sh`
+   （git 已經把它記成可執行，正常 clone／pull 下來就是）。
+
+> **為什麼用 `sudo`：** Synology 上一般使用者沒有 docker 的權限，所以整支腳本用 root 跑
+> （`scripts/backup.sh` 也在裡面一起跑）。腳本裡的 `git` 會自動以 **repo 的擁有者**身分執行——
+> root 跑 git 會被「dubious ownership」擋下，就算沒擋，`git pull` 也會在 `.git` 裡留下
+> root 的檔案，之後你自己的 `git` 就寫不進去了。
+
+> **從「在 NAS 上 build」換過來的那一次**不用特別處理：腳本會把目前在跑的（NAS 上 build 的）
+> 映像標成 `:rollback`，新版起不來就退回它。`deployed-version` 那時還不存在，所以「上一版」
+> 會顯示 `unknown`。
+
+### 每次部署
+
+先在 GitHub → Actions 確認那個 master commit 的 `publish` job 是綠的，然後：
 
 ```bash
 cd ~/apps/nutrition-tracker
-git pull
-docker compose --env-file .env.production \
-  -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+sudo ./scripts/deploy.sh
 ```
 
-> **2026-10 這一版（AI 估算的前端）多了一個 Python 套件（`google-genai`）**，
-> 上面的 `--build` 會裝進去；沒有 migration。要打開 AI，先照「4. 產生密鑰並
-> 填設定」在 `.env.production` 填好 AI 變數再 `up -d --build`。
+腳本做的事（任何一步失敗就停，**舊版照常運作**，只有第 6 步會自動退回）：
 
-> **2026-10 安全補強有 migration `0015`（一餐最多一筆餐費）。升級前先查有沒有重複的餐費：**
+| 步驟 | 做什麼 | 失敗時 |
+|---|---|---|
+| 1 | `git pull --ff-only`，版本＝`HEAD` 的 SHA；檢查 `.env.production` | 停，什麼都沒動 |
+| 2 | 拉那個 SHA 的兩個映像 | 「CI 還沒做好這個版本的映像（或測試沒過）」，停 |
+| 3 | 把**目前正在跑**的兩個映像標成本機的 `:rollback` | — |
+| 4 | 備份資料庫（`scripts/backup.sh`，到 `backups/`） | 停 |
+| 5 | 用**新映像**跑 `alembic upgrade head` | 停，還沒切換；整次 upgrade 是一個交易，資料庫沒動 |
+| 6 | `up -d --no-build`，等 `api` 與 `caddy` 都 `healthy`（最多 120 秒） | **自動換回 `:rollback`**、印「已退回上一版」、以非零結束 |
+| 7 | 把版本寫進 `deployed-version` | — |
+
+成功時最後幾行長這樣：
+
+```
+== [7/7] 紀錄版本
+version=<這次的 SHA>
+previous=<上一版的 SHA>
+deployed_at=2026-10-08T02:31:51Z
+
+✓ 部署完成：<這次的 SHA>（要退回上一版：sudo ./scripts/deploy.sh <上一版的 SHA>）
+```
+
+可以覆寫的環境變數（`sudo VAR=值 ./scripts/deploy.sh`）：`HEALTH_TIMEOUT`（秒，預設 120）、
+`ENV_FILE`（預設 `.env.production`）、`COMPOSE_PROJECT_NAME`（預設是目錄名稱）。
+
+> **`0015`（一餐最多一筆餐費）不用再手動先查。** 有重複的餐費時 migration 會失敗，
+> 腳本停在第 5 步、舊版照常運作，訊息會列出是哪幾餐。想先看一眼也可以（選配）：
 >
 > ```bash
 > docker compose --env-file .env.production \
@@ -272,30 +331,94 @@ docker compose --env-file .env.production \
 >   "SELECT meal_id, count(*) FROM expenses WHERE meal_id IS NOT NULL GROUP BY meal_id HAVING count(*) > 1;"
 > ```
 >
-> 顯示 `(0 rows)` 才升級。有結果的話 migration 會失敗（不會自動刪錢的紀錄）——先到報表刪掉
-> 那幾餐多的那筆，再跑 `alembic upgrade head`。
+> 顯示 `(0 rows)` 就沒事。有結果的話先到報表刪掉那幾餐多的那筆（不會自動刪錢的紀錄），再重跑 `deploy.sh`。
 
-> **2026-10 好友關係有三支 migration：`0012`（好友碼，會替既有使用者補碼）、
-> `0013`（好友關係）、`0014`（每一餐的「只有我看得到」）**——一樣是 `up -d --build`
-> 之後跑一次下面那行就全部套用。
+> **改了 `.env.production`（換 AI 供應商、換 `JWT_SECRET`）之後**，用同一個版本重新部署一次，
+> 容器才會帶著新的值重建：
+>
+> ```bash
+> sudo ./scripts/deploy.sh "$(sed -n 's/^version=//p' deployed-version)"
+> ```
+>
+> **`docker compose restart` 不夠**——它只重啟現有容器，不會重新讀設定。這個專案在開發期間踩過：
+> 改了環境變數之後 `restart`，容器仍然帶著舊的值進入崩潰迴圈。
 
-> **2026-10 開帳號的路（邀請連結）有 migration：`0011_create_invites`**——
-> `up -d --build` 之後一定要跑下面那行。這一版之後**註冊一定要有邀請**：
-> 用管理員帳號登入，「我的」→「邀請朋友」產生連結傳給朋友。你的帳號必須是
-> 管理員（`create-admin`）。
+> **舊映像會一直留在 NAS 上**（每次部署多兩個）。偶爾清一下：`sudo docker image prune -a`
+> 會刪掉所有沒有容器在用的映像——包括 `:rollback`，所以確定這一版沒問題之後再清。
+> 之後要退版也沒關係，`deploy.sh <sha>` 會從 GHCR 再拉一次。
 
-如果這次的更新有 migration：
+### 退版
+
+**自動：** 新版起不來（第 6 步等不到 `healthy`）時，腳本自己換回部署前在跑的映像，不用做任何事。
+
+**手動**（新版起得來、但用了才發現有問題）：
 
 ```bash
-docker compose --env-file .env.production \
+cat deployed-version                     # previous= 那一行就是上一版
+sudo ./scripts/deploy.sh <上一版的 SHA>   # 給 SHA 時不動 git，只換映像
+```
+
+> **退版不會倒回 migration。** 新版的 migration 已經套用，舊程式跟新的資料表一起跑——本專案的
+> migration 都是加法（加欄位、加表、加索引），舊程式不會碰到它們。資料庫比要部署的版本新時
+> （舊映像不認得資料庫目前的 migration），腳本會說「這是退到舊版，跳過 migration」，不會失敗。
+> 哪天出現「刪欄位、改名」這種 migration，那一版就不能這樣退，要另外想辦法（還原備份）。
+
+> **退版之後 git 還停在新的 commit 上。** 下一次不帶參數的 `sudo ./scripts/deploy.sh` 會 `git pull`
+> 然後部署 `HEAD`——如果 master 上還是那個有問題的 commit，就會再部署它一次。
+> 先在 master 上修好（或 revert）、等 CI 做好新映像，再不帶參數部署。
+
+> 給 SHA 部署時，用的是**目前 checkout 的** compose 檔（不是那個 commit 的）。兩者之間 compose 檔
+> 有改過的話，要先 `git checkout` 到相符的版本。
+
+### 在 Synology 任務排程表按一下就部署
+
+不想 SSH 進去的話，可以在 DSM 設一個「手動執行」的任務：
+
+1. **控制台 → 任務排程表 → 新增 → 排定的任務 → 使用者定義的指令碼**
+2. **一般**：任務名稱 `部署 nutrition-tracker`；使用者選 **root**（docker 要 root；腳本裡的 git
+   會自動以 repo 擁有者身分跑）；**取消勾選「已啟用」**——這個任務只手動執行，不要定時跑。
+3. **排程**：隨便設（停用的任務不會照排程跑）。
+4. **任務設定**：
+   - 勾「**透過電子郵件傳送執行詳細資訊**」→「**只在指令碼異常終止時傳送**」（可選；退版、migration 失敗都是非零結束）
+   - 使用者定義的指令碼（`YOUR_USER` 換成自己的帳號）：
+
+     ```bash
+     cd /var/services/homes/YOUR_USER/apps/nutrition-tracker && mkdir -p backups && bash scripts/deploy.sh >> backups/deploy.log 2>&1
+     ```
+
+要部署時：在任務排程表選這個任務 →「**執行**」。跑完看 `backups/deploy.log` 的最後幾行
+（或「動作 → 檢視結果」）。退到指定版本這種一次性的事還是用 SSH。
+
+### 備案：在 NAS 上 build（舊的做法）
+
+GHCR 或 CI 出問題、又急著上線時，還是可以用原始碼在 NAS 上 build（慢；沒有自動退版，
+`deployed-version` 也不會更新）：
+
+```bash
+cd ~/apps/nutrition-tracker
+git pull
+sudo bash scripts/backup.sh
+sudo docker compose --env-file .env.production \
+  -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+sudo docker compose --env-file .env.production \
   -f docker-compose.yml -f docker-compose.prod.yml \
   exec api python -m alembic upgrade head
 ```
 
-> **`docker compose restart` 不夠。** 它只是重啟現有容器，不會換映像、
-> 也不會重新讀 compose 設定。改了環境變數或程式碼一律用 `up -d`。
-> 這個專案在開發期間踩過：改了 `docker-compose.yml` 的環境變數之後
-> `restart`，容器仍然帶著舊的值進入崩潰迴圈。
+> 這條路**不帶** `-f docker-compose.release.yml`——那個檔案把 `build` 拿掉了，帶了它就不會 build。
+> 改依賴、加 migration 都要重新 build（`Dockerfile` 是 `COPY . .`，migration 是烤進映像的）。
+> CI 恢復之後，下一次照常 `sudo ./scripts/deploy.sh` 就回到正常的路（這次 build 的映像會被標成 `:rollback`）。
+
+### 各版本的升級備註
+
+`deploy.sh` 會跑所有還沒套用的 migration，下面這些不用再各自手動跑 `alembic`：
+
+- **`0015`（一餐最多一筆餐費）**：有重複的餐費時 migration 會失敗、部署停住——見上面「每次部署」的備註。
+- **`0012`～`0014`（好友關係）**：`0012` 會替既有使用者補好友碼。
+- **`0011_create_invites`（邀請連結）**：這一版之後**註冊一定要有邀請**：用管理員帳號登入，
+  「我的」→「邀請朋友」產生連結傳給朋友。你的帳號必須是管理員（`create-admin`）。
+- **AI 估算的前端**：多了 Python 套件 `google-genai`（已經在映像裡）；要打開 AI，先照
+  「4. 產生密鑰並填設定」在 `.env.production` 填好 AI 變數再部署。
 
 ---
 
@@ -420,10 +543,12 @@ curl -X POST https://<你的 tailnet 網域>/api/auth/logout-all \
 
 ```bash
 openssl rand -hex 32          # 產生新密鑰
-# 編輯 .env.production，把 JWT_SECRET 換成新值
-docker compose --env-file .env.production \
-  -f docker-compose.yml -f docker-compose.prod.yml up -d
+# 編輯 .env.production，把 JWT_SECRET 換成新值，然後用同一個版本重新部署（容器帶新值重建）
+sudo ./scripts/deploy.sh "$(sed -n 's/^version=//p' deployed-version)"
 ```
+
+> 不要用 `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d`：少了
+> `docker-compose.release.yml`，compose 會用 NAS 上的原始碼 build 新映像來換掉 CI 的映像。
 
 所有 access token 與 refresh token 立刻失效，**包含所有其他使用者的** ——
 每個人都要重新登入。只有在「連 15 分鐘都不能等」時才用。
@@ -476,7 +601,8 @@ docker compose --env-file .env.production \
 最常見的兩個原因：
 
 1. **依賴變了但映像沒重建** —— 症狀是 `ModuleNotFoundError`。
-   用 `up -d --build`，不是 `restart`。
+   用 CI 的映像部署（`sudo ./scripts/deploy.sh`）時不會發生；走「在 NAS 上 build」
+   備案時要 `up -d --build`，不是 `restart`。
 2. **`JWT_SECRET` 沒設或設成被禁的值** —— 症狀是
    `ValidationError: 1 validation error for Settings`。
    密鑰刻意沒有預設值可以退回（fail closed），
