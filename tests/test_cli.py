@@ -5,10 +5,12 @@ import pytest
 from sqlalchemy import select
 
 from app.cli import build_parser, cleanup_expired_sessions, create_admin, create_regular_user
+from app.models.password_reset import PasswordResetToken
 from app.models.session import RefreshSession
 from app.models.user import User, UserRole
 from app.security.password import verify_password
-from tests.factories import create_user
+from app.security.sessions import start_session
+from tests.factories import create_password_reset, create_user
 
 
 async def test_create_admin_creates_an_admin_user(db_session):
@@ -161,6 +163,84 @@ def test_parser_accepts_create_user():
     )
     assert args.command == "create-user"
     assert args.email == "member@example.com"
+
+
+async def test_a_new_account_is_really_committed(db_session):
+    """新帳號那條路自己 commit（既有帳號那條路的 commit 在 `revoke_all_for_user` 裡，
+    兩條路分開之後各要一根釘子）。第 11 種：共用的 session 看不出有沒有 commit，先 rollback。"""
+    await create_regular_user(db_session, "member@example.com", "a-good-password", "成員")
+
+    await db_session.rollback()
+
+    stored = await db_session.scalar(select(User.id).where(User.email == "member@example.com"))
+    assert stored is not None
+
+
+@pytest.mark.parametrize("reset_with", [create_regular_user, create_admin])
+async def test_resetting_an_existing_account_logs_it_out_and_kills_its_reset_links(
+    db_session, reset_with
+):
+    """對既有帳號跑 `create-user`／`create-admin` 就是**重設密碼**（審查 M1）：
+
+    - 這個人還沒用的重設連結要一起撤銷——不然管理員昨天產生的那條連結，在 CLI 重設之後
+      仍然能把密碼再換一次（`create-admin` 的情況更糟：那條連結的對象變成了管理員）；
+    - 所有裝置登出——重設的理由多半是「密碼忘了或外流了」，舊的 refresh token 不該繼續換得到票。
+
+    別人的 session 不能被牽連（撤銷的範圍是這個人，不是全部）。
+    """
+    someone_else = await create_user(db_session, role=UserRole.ADMIN)
+    member = await create_user(db_session, email="member@example.com")
+    someone_else_id, member_id = someone_else.id, member.id
+    link, _ = await create_password_reset(db_session, user=member, created_by=someone_else)
+    link_id = link.id
+    await start_session(db_session, member_id)
+    await start_session(db_session, member_id)
+    await start_session(db_session, someone_else_id)
+
+    _, created = await reset_with(db_session, "member@example.com", "a-new-password", "成員")
+
+    assert created is False
+    await db_session.rollback()  # 第 11 種：下面看的都是「真的 commit 了嗎」
+    still_live = (
+        await db_session.scalars(
+            select(RefreshSession.user_id).where(RefreshSession.revoked_at.is_(None))
+        )
+    ).all()
+    assert still_live == [someone_else_id]
+    stored_link = await db_session.scalar(
+        select(PasswordResetToken).where(PasswordResetToken.id == link_id)
+    )
+    assert stored_link is not None
+    assert stored_link.revoked_at is not None and stored_link.used_at is None
+    stored_hash = await db_session.scalar(select(User.password_hash).where(User.id == member_id))
+    assert stored_hash is not None and verify_password("a-new-password", stored_hash)
+
+
+async def test_a_cli_reset_that_fails_while_revoking_changes_nothing(db_session, monkeypatch):
+    """新密碼、撤銷連結、撤銷 session 是**同一個交易**（`revoke_all_for_user` 的 commit 就是
+    它的 commit）：撤銷之前出事，密碼不能已經換掉——否則留下「新密碼＋還活著的舊 session」。"""
+    admin = await create_user(db_session, role=UserRole.ADMIN)
+    member = await create_user(db_session, email="member@example.com")
+    member_id, original_hash = member.id, member.password_hash
+    link, _ = await create_password_reset(db_session, user=member, created_by=admin)
+    link_id = link.id
+
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError("撤銷失敗")
+
+    monkeypatch.setattr("app.cli.revoke_all_for_user", boom)
+
+    with pytest.raises(RuntimeError):
+        await create_regular_user(db_session, "member@example.com", "a-new-password", "成員")
+
+    await db_session.rollback()
+    assert (
+        await db_session.scalar(select(User.password_hash).where(User.id == member_id))
+    ) == original_hash
+    stored_link = await db_session.scalar(
+        select(PasswordResetToken).where(PasswordResetToken.id == link_id)
+    )
+    assert stored_link is not None and stored_link.revoked_at is None
 
 
 def _session_row(user_id: int, *, expires_at: datetime) -> RefreshSession:

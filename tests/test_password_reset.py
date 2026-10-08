@@ -7,18 +7,21 @@ import pytest
 from sqlalchemy import select
 
 from app.models.password_reset import PasswordResetToken
-from app.models.user import UserRole
-from app.password_resets import RESET_INVALID_MESSAGE, new_reset_token
+from app.models.user import User, UserRole
+from app.password_resets import RESET_INVALID_MESSAGE, new_reset_token, redeem_reset
 from app.ratelimit import PER_EMAIL_LIMIT
 from app.security.password import hash_password
 from tests.factories import DEFAULT_PASSWORD, create_password_reset, create_user
 
 NEW_PASSWORD = "reset-new-password"
-DEAD_KINDS = ["unknown", "expired", "revoked", "used"]
+DEAD_KINDS = ["unknown", "expired", "revoked", "used", "target_is_now_an_admin"]
 
 
 async def _dead_token(db_session, kind: str) -> str:
-    """四種不能用的連結。**過期用時間造**（不是撤銷）：拿掉 `expires_at > now()` 時只有它會紅。"""
+    """五種不能用的連結。**過期用時間造**（不是撤銷）：拿掉 `expires_at > now()` 時只有它會紅。
+
+    `target_is_now_an_admin`：產生的時候對象是一般使用者（管理員拿不到連結，規格決定 12），
+    之後才變成管理員。那一列本身沒用過、沒撤銷、沒過期——只有「對象不能是管理員」擋得住。"""
     admin = await create_user(db_session, role=UserRole.ADMIN)
     user = await create_user(db_session)
     now = datetime.now(UTC)
@@ -37,6 +40,11 @@ async def _dead_token(db_session, kind: str) -> str:
         return token
     if kind == "used":
         _, token = await create_password_reset(db_session, user=user, created_by=admin, used=True)
+        return token
+    if kind == "target_is_now_an_admin":
+        _, token = await create_password_reset(db_session, user=user, created_by=admin)
+        user.role = UserRole.ADMIN
+        await db_session.commit()
         return token
     raise AssertionError(kind)
 
@@ -114,6 +122,28 @@ async def test_a_dead_link_never_reaches_argon2(client, db_session, monkeypatch,
     await _reset(client, token)
 
     assert calls == []
+
+
+async def test_a_link_for_someone_who_became_an_admin_cannot_be_redeemed(client, db_session):
+    """上面那幾條走的是「先查」那一關。**兌換本身**（條件式 UPDATE）也要擋：查的時候還是一般
+    使用者、兌換前才變成管理員的話，只有這一關看得到。而且舊密碼要還在。"""
+    admin = await create_user(db_session, role=UserRole.ADMIN)
+    user = await create_user(db_session)
+    user_id, email = user.id, user.email
+    reset, _ = await create_password_reset(db_session, user=user, created_by=admin)
+    reset_id = reset.id
+    user.role = UserRole.ADMIN
+    await db_session.commit()
+
+    assert await redeem_reset(db_session, reset_id) is None
+
+    await db_session.rollback()
+    stored = await db_session.scalar(
+        select(PasswordResetToken).where(PasswordResetToken.id == reset_id)
+    )
+    assert stored is not None and stored.used_at is None
+    assert (await db_session.scalar(select(User.role).where(User.id == user_id))) is UserRole.ADMIN
+    assert (await _login(client, email, DEFAULT_PASSWORD)).status_code == 200
 
 
 async def test_losing_the_redeem_race_is_403_and_changes_nothing(client, db_session, monkeypatch):

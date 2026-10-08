@@ -14,7 +14,9 @@ from app.db import SessionLocal
 from app.models.meal import Meal
 from app.models.session import RefreshSession
 from app.models.user import User, UserRole
+from app.password_resets import revoke_live_resets
 from app.security.password import MIN_PASSWORD_LENGTH, hash_password
+from app.security.sessions import revoke_all_for_user
 from app.storage.photos import thumbnail_path
 
 # P4 計畫 Task 6、陷阱 5：一張剛寫入、DB 還沒 commit 的照片，在掃描眼中就是
@@ -42,6 +44,10 @@ async def _upsert_account(
 
     `on_existing_admin` 不是 `None` 時，遇到既有的管理員就拋
     `ValueError(on_existing_admin)` 而**什麼都不改** —— 見 `create_regular_user`。
+
+    **對既有帳號就是重設密碼**，所以跟另外兩條重設的路（改密碼、重設連結）做一樣的事：
+    同一個交易裡撤銷這個人還沒用的重設連結、撤銷所有 refresh session（帳號設定審查 M1）。
+    已經發出去的 access token 最多還能用 15 分鐘（handover §8.1）。
     """
     if len(password) < MIN_PASSWORD_LENGTH:
         raise ValueError(f"密碼至少 {MIN_PASSWORD_LENGTH} 個字元")
@@ -72,7 +78,18 @@ async def _upsert_account(
     user.display_name = display_name
     user.role = role
 
-    await db.commit()
+    if created:
+        # 新帳號沒有連結也沒有 session 可以撤銷。
+        await db.commit()
+    else:
+        # 順序同 `app/api/routes/auth.py` 的 `reset_password`：`users` 列（flush 送出上面的
+        # UPDATE）→ 連結列 → advisory lock。**`revoke_all_for_user` 自己 commit**——它的 commit
+        # 就是這個交易的 commit，新雜湊、撤銷連結、撤銷 session 一起進去或一起不進去；
+        # 不要在它前面加 commit（撤銷失敗會留下「新密碼＋還活著的舊 session」）。
+        user_id = user.id
+        await db.flush()
+        await revoke_live_resets(db, user_id)
+        await revoke_all_for_user(db, user_id)
     await db.refresh(user)
     return user, created
 
@@ -307,7 +324,10 @@ async def _run_create_admin(email: str, password: str, display_name: str) -> Non
         if created:
             print(f"管理員帳號已建立：{user.email} (id={user.id})")
         else:
-            print(f"既有帳號已提升為管理員，密碼已重設：{user.email} (id={user.id})")
+            print(
+                f"既有帳號已提升為管理員，密碼已重設（所有裝置已登出、未使用的重設連結已撤銷）："
+                f"{user.email} (id={user.id})"
+            )
 
 
 async def _run_create_user(email: str, password: str, display_name: str) -> None:
@@ -316,7 +336,10 @@ async def _run_create_user(email: str, password: str, display_name: str) -> None
         if created:
             print(f"一般使用者帳號已建立：{user.email} (id={user.id})")
         else:
-            print(f"既有帳號的密碼已重設：{user.email} (id={user.id})")
+            print(
+                f"既有帳號的密碼已重設（所有裝置已登出、未使用的重設連結已撤銷）："
+                f"{user.email} (id={user.id})"
+            )
 
 
 async def _run_cleanup_photos(*, dry_run: bool, min_age_hours: float) -> None:
