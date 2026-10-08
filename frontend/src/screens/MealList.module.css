@@ -64,42 +64,18 @@
 	font-weight: 600;
 }
 
-/* 照片的上傳鈕：同 EditMeal.module.css 的 .photoButton／.fileInput——虛線框、
-   相機圖示，看得出是「可以點的地方」但不搶主要內容。 */
+/* 照片的上傳鈕：虛線框、相機圖示、藏起來的 input 都在 components/PhotoPickerButton。 */
 .upload {
 	margin-bottom: var(--space-2);
 }
 
+/* 卡片裡的上傳鈕比記一餐、編輯這一餐的小一號：字 14px、44px 含框線
+   （border-box）——每一張卡片都有一個，不能搶項目與合計的版面。
+   只設 PhotoPickerButton 沒設的屬性，不會跟它同權重的規則打架。 */
 .photoButton {
-	display: inline-flex;
-	align-items: center;
-	gap: var(--space-2);
-	min-height: 44px;
 	box-sizing: border-box;
-	padding: 0 var(--space-3);
-	border: 1px dashed var(--color-border);
-	border-radius: var(--radius-button);
-	color: var(--color-text-muted);
 	font-size: 14px;
 	cursor: pointer;
-}
-
-/* 視覺上藏起來但仍可用鍵盤對焦（不是 display:none），外框畫在前一個兄弟 label 上。 */
-.fileInput {
-	position: absolute;
-	width: 1px;
-	height: 1px;
-	opacity: 0;
-}
-
-.photoButton:has(+ .fileInput:focus-visible) {
-	outline: 2px solid var(--color-action);
-	outline-offset: 2px;
-}
-
-/* 上傳中 input 是 disabled，但標籤看起來還能按——跟著淡掉。 */
-.photoButton:has(+ .fileInput:disabled) {
-	opacity: 0.4;
 }
 
 /* 縮圖最寬 240px（同編輯這一餐的照片預覽）：電腦版右欄將近 600px 寬，

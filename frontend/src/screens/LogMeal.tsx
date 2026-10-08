@@ -1,5 +1,4 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Camera } from "lucide-react";
 import { type ChangeEvent, useEffect, useRef, useState } from "react";
 import { apiFetch } from "../api/client";
 import { ApiError, hasFieldError } from "../api/errors";
@@ -14,6 +13,7 @@ import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
 import { AiEstimatePanel } from "../components/AiEstimatePanel";
 import { FoodPicker } from "../components/FoodPicker";
+import { PhotoPickerButton } from "../components/PhotoPickerButton";
 import {
 	PortionQuantityFields,
 	usePortionQuantity,
@@ -277,18 +277,13 @@ export function LogMeal({ onSaved }: Props) {
 						只有我看得到（好友看不到這一餐）
 					</label>
 
-					<label htmlFor="meal-photo" className={styles.photoButton}>
-						<Camera aria-hidden="true" size={18} />
-						照片（選填）
-					</label>
 					{/* 不加 capture：iPhone 會同時給「拍照」與「從相簿選」
 					    （MealList 的補傳有 capture="environment"，那裡的情境是
 					    「現在正在吃」，直接開相機比較快）。 */}
-					<input
+					<PhotoPickerButton
 						id="meal-photo"
-						type="file"
+						label="照片（選填）"
 						accept="image/*"
-						className={styles.fileInput}
 						disabled={saveMeal.isPending}
 						onChange={handlePhotoChange}
 					/>

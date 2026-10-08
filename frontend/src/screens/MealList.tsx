@@ -1,4 +1,3 @@
-import { Camera } from "lucide-react";
 import type { ChangeEvent } from "react";
 import { Link } from "react-router";
 import { MEAL_TYPE_LABELS, type Meal, useTodayMeals } from "../api/meals";
@@ -7,6 +6,7 @@ import {
 	useMealPhoto,
 	useUploadMealPhoto,
 } from "../api/photos";
+import { PhotoPickerButton } from "../components/PhotoPickerButton";
 import { ZoomablePhoto } from "../components/ZoomablePhoto";
 import { formatTime } from "../lib/dates";
 import { formatMacro } from "../lib/decimal";
@@ -64,22 +64,16 @@ function MealPhotoUpload({ mealId }: { mealId: number }) {
 		upload.mutate(file);
 	}
 
-	// 外觀照編輯這一餐的「加照片」（EditMeal.module.css）：虛線框的標籤＋相機
-	// 圖示當按鈕，真的 input 視覺上藏起來但仍在 tab 順序裡（鍵盤對焦時外框畫在
-	// 標籤上）。不用 display:none——那會讓它不能對焦，鍵盤使用者就上傳不了。
-	// 圖示 aria-hidden：input 的名稱維持「上傳照片」（測試與螢幕閱讀器都靠它）。
+	// 外觀同編輯這一餐的「加照片」（PhotoPickerButton）；名稱維持「上傳照片」
+	// （測試與螢幕閱讀器都靠它）。
 	return (
 		<div className={styles.upload}>
-			<label htmlFor={inputId} className={styles.photoButton}>
-				<Camera aria-hidden="true" size={18} />
-				上傳照片
-			</label>
-			<input
+			<PhotoPickerButton
 				id={inputId}
-				type="file"
+				label="上傳照片"
 				accept="image/*"
 				capture="environment"
-				className={styles.fileInput}
+				className={styles.photoButton}
 				// 上傳中停用：不然還能再選一張，兩個 POST 同時在跑，晚回來的那張
 				// 蓋掉早回來的——不一定是使用者最後選的。同編輯這一餐的「加照片」。
 				disabled={upload.isPending}

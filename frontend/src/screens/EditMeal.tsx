@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Camera, X } from "lucide-react";
+import { X } from "lucide-react";
 import { type ChangeEvent, type ReactNode, useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { apiFetch } from "../api/client";
@@ -18,6 +18,7 @@ import {
 	useUploadMealPhoto,
 } from "../api/photos";
 import { queryKeys } from "../api/queries";
+import { PhotoPickerButton } from "../components/PhotoPickerButton";
 import { fromLocalDateTime, localDateTime } from "../lib/dates";
 import { formatMoney } from "../lib/decimal";
 import { useConfirmFocus } from "../lib/use-confirm-focus";
@@ -377,15 +378,10 @@ function MealPhotoSection({ meal }: { meal: Meal }) {
 			<h2 id="edit-meal-photo-title">照片</h2>
 			{hasPhoto && <PhotoPreview mealId={meal.id} />}
 
-			<label htmlFor="edit-meal-photo" className={styles.photoButton}>
-				<Camera aria-hidden="true" size={18} />
-				{hasPhoto ? "換照片" : "加照片"}
-			</label>
-			<input
+			<PhotoPickerButton
 				id="edit-meal-photo"
-				type="file"
+				label={hasPhoto ? "換照片" : "加照片"}
 				accept="image/*"
-				className={styles.fileInput}
 				disabled={upload.isPending}
 				onChange={handleChange}
 			/>

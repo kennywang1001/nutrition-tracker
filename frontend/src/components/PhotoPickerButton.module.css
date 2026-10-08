@@ -1,0 +1,44 @@
+/* 「選一張照片」的按鈕（PhotoPickerButton.tsx）。
+ *
+ * 一般的 class（權重 0,1,0），不包 :where()：新增食物裡的 AI 面板在
+ * ui.module.css 的 .screen 底下，那裡的 :where(.screen label) 會把標籤
+ * 變成 13px 的 block——零權重的規則誰贏看載入順序，這裡要穩穩贏過它。
+ * 呼叫端用 className 加的差異只設這裡沒設的屬性（字級等），不會跟這裡打架。 */
+
+.button {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	min-height: 44px;
+	padding: 0 var(--space-3);
+	border: 1px dashed var(--color-border);
+	border-radius: var(--radius-button);
+	color: var(--color-text-muted);
+}
+
+/* AI 估算面板：跟「估算」按鈕同一套珊瑚橘外觀。寫在 .button 之後，同權重靠順序。 */
+.accent {
+	border-color: var(--color-accent);
+	background: var(--color-surface);
+	color: var(--color-action);
+	font-size: 15px;
+	font-weight: 600;
+}
+
+/* 視覺上藏起來但仍可用鍵盤對焦（不是 display:none），外框畫在前一個兄弟標籤上。 */
+.input {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	opacity: 0;
+}
+
+.button:has(+ .input:focus-visible) {
+	outline: 2px solid var(--color-action);
+	outline-offset: 2px;
+}
+
+/* 上傳／儲存中 input 是 disabled，但標籤看起來還能按——跟著淡掉。 */
+.button:has(+ .input:disabled) {
+	opacity: 0.4;
+}

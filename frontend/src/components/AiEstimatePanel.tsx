@@ -1,5 +1,4 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Camera } from "lucide-react";
 import {
 	type ChangeEvent,
 	type FormEvent,
@@ -24,6 +23,7 @@ import {
 } from "../lib/ai-food";
 import { formatMacro } from "../lib/decimal";
 import styles from "./AiEstimatePanel.module.css";
+import { PhotoPickerButton } from "./PhotoPickerButton";
 
 type AnalyzeInput =
 	| { kind: "text"; text: string }
@@ -348,15 +348,11 @@ export function AiEstimatePanel({
 						{textButtonLabel(trimmed)}
 					</button>
 				)}
-				<label htmlFor={photoInputId} className={styles.photoButton}>
-					<Camera aria-hidden="true" size={18} />
-					拍照估算
-				</label>
-				<input
+				<PhotoPickerButton
 					id={photoInputId}
-					type="file"
+					label="拍照估算"
 					accept="image/*"
-					className={styles.fileInput}
+					variant="accent"
 					disabled={busy || aiUnavailable}
 					onChange={handlePhoto}
 				/>
