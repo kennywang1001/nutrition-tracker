@@ -97,6 +97,11 @@
 	outline-offset: 2px;
 }
 
+/* 上傳中 input 是 disabled，但標籤看起來還能按——跟著淡掉。 */
+.photoButton:has(+ .fileInput:disabled) {
+	opacity: 0.4;
+}
+
 /* 縮圖最寬 240px（同編輯這一餐的照片預覽）：電腦版右欄將近 600px 寬，
    拉滿的話一張方形照片就佔掉整個視窗的高度；要看大圖點下去（ZoomablePhoto）。
    跟上傳鈕之間留一點空。 */
@@ -106,9 +111,14 @@
 }
 
 .photo p,
+.upload [role="status"],
 .upload [role="alert"] {
 	margin: var(--space-1) 0 0;
 	font-size: 13px;
+}
+
+.upload [role="status"] {
+	color: var(--color-text-muted);
 }
 
 .upload [role="alert"] {

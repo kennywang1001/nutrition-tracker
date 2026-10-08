@@ -185,6 +185,40 @@ describe("上傳餐點照片", () => {
 		await waitFor(() => expect(photoGetCalls()).toBe(2));
 	});
 
+	it("上傳中選取框停用、顯示「上傳中…」，傳完才能再選", async () => {
+		// 上傳中還能再選一張的話，兩個 POST 同時在跑，哪一個晚回來哪一張就
+		// 是這一餐的照片——不一定是使用者最後選的那張。跟編輯這一餐、記一餐
+		// 一樣：上傳期間 input 停用。
+		let finishUpload: () => void = () => {};
+		const uploading = new Promise<Response>((done) => {
+			finishUpload = () => done(json(meal({ photo_path: "11/new.jpg" })));
+		});
+		mockApi([
+			{
+				method: "POST",
+				path: "/api/meals/11/photo",
+				// mockApi 的 handler 在 async 的 fetch mock 裡被 return，回 Promise 一樣被等。
+				handler: () => uploading as unknown as Response,
+			},
+			{ method: "GET", path: "/api/meals", handler: () => json([meal()]) },
+		]);
+
+		render(wrap(<MealList />));
+		const input = await screen.findByLabelText("上傳照片");
+		expect(input).toBeEnabled();
+		await userEvent.upload(
+			input,
+			new File(["fake-jpeg"], "lunch.jpg", { type: "image/jpeg" }),
+		);
+
+		await waitFor(() => expect(input).toBeDisabled());
+		expect(screen.getByRole("status")).toHaveTextContent("上傳中…");
+
+		finishUpload();
+		await waitFor(() => expect(input).toBeEnabled());
+		expect(screen.queryByText("上傳中…")).not.toBeInTheDocument();
+	});
+
 	it("後端回 INVALID_PHOTO 時顯示的是「無法識別的圖片」", async () => {
 		// 422 INVALID_PHOTO。前端先降尺寸之後理論上不會發生，
 		// 但「理論上不會發生」的東西如果讓畫面白掉，代價不對稱。

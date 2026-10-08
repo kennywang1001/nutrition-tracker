@@ -80,8 +80,12 @@ function MealPhotoUpload({ mealId }: { mealId: number }) {
 				accept="image/*"
 				capture="environment"
 				className={styles.fileInput}
+				// 上傳中停用：不然還能再選一張，兩個 POST 同時在跑，晚回來的那張
+				// 蓋掉早回來的——不一定是使用者最後選的。同編輯這一餐的「加照片」。
+				disabled={upload.isPending}
 				onChange={handleChange}
 			/>
+			{upload.isPending && <p role="status">上傳中…</p>}
 			{upload.isError && (
 				<p role="alert">{describePhotoUploadError(upload.error)}</p>
 			)}
