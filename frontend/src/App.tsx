@@ -26,6 +26,7 @@ import { contentWidthFor } from "./lib/layout";
 import { useIsDesktop } from "./lib/use-is-desktop";
 import { AddExpense } from "./screens/AddExpense";
 import { AdminRevisions } from "./screens/AdminRevisions";
+import { ChangePassword } from "./screens/ChangePassword";
 import { EditMeal } from "./screens/EditMeal";
 import { Expenses } from "./screens/Expenses";
 import { FoodDetail } from "./screens/FoodDetail";
@@ -148,6 +149,8 @@ export function App() {
 							/>
 							{/* 每日目標（帳號設定規格 §5.2），入口是「我的」的每日目標卡片。 */}
 							<Route path="/me/targets" element={<Targets />} />
+							{/* 修改密碼（帳號設定規格 §5.3），入口是「我的」帳號卡片的「修改密碼」。 */}
+							<Route path="/me/password" element={<ChangePassword />} />
 							<Route path="/expenses/new" element={<AddExpenseRoute />} />
 							<Route path="/meals/new" element={<LogMealRoute />} />
 							{/* 修改或刪除一筆已經記下的餐（編輯餐點規格 §4.2）。入口：飲食頁
