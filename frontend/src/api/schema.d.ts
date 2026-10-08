@@ -636,6 +636,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Users
+         * @description 所有帳號（帳號設定規格 §3.3）。帳號只有個位數，不分頁。
+         */
+        get: operations["list_users_api_admin_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/users/{user_id}/password-reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Password Reset
+         * @description 替一般使用者產生一次性重設密碼連結（帳號設定規格 §3.4）。
+         *
+         *     **FOR UPDATE 那個使用者列**：同一個人的兩次「產生」排隊，後到的看得到先到的那一列並把它
+         *     撤銷——不然兩邊各自撤銷「看得到的」舊連結、各插一條，留下兩條活的。真正的最後一道是
+         *     部分唯一索引 `uq_password_reset_tokens_one_live_per_user`（搶輸會是 IntegrityError）。
+         *     這段 FOR UPDATE 沒有並行測試（要兩條真的連線搶鎖；同 revoke_invite 的取捨）。
+         *
+         *     **只給一般使用者**（規格決定 12）：偷到管理員 access token 的人不能用它接管管理員帳號；
+         *     管理員改自己的密碼用 `/api/me/password`，別的管理員用 CLI。
+         */
+        post: operations["create_password_reset_api_admin_users__user_id__password_reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/meals": {
         parameters: {
             query?: never;
@@ -1287,6 +1335,19 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AdminUserItem
+         * @description `GET /api/admin/users` 的一列（規格 §3.3）。白名單：沒有時區、好友碼、建立時間。
+         */
+        AdminUserItem: {
+            /** Id */
+            id: number;
+            /** Email */
+            email: string;
+            /** Display Name */
+            display_name: string;
+            role: components["schemas"]["UserRole"];
+        };
         /** AnalyzeImageRequest */
         AnalyzeImageRequest: {
             /**
@@ -1970,6 +2031,16 @@ export interface components {
             fat_g: string;
             /** Carb G */
             carb_g: string;
+        };
+        /** PasswordResetCreatedResponse */
+        PasswordResetCreatedResponse: {
+            /** Token */
+            token: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
         };
         /** PendingRevisionResponse */
         PendingRevisionResponse: {
@@ -3661,6 +3732,57 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_users_api_admin_users_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUserItem"][];
+                };
+            };
+        };
+    };
+    create_password_reset_api_admin_users__user_id__password_reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasswordResetCreatedResponse"];
+                };
             };
             /** @description Validation Error */
             422: {

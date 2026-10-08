@@ -2,6 +2,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.models.user import UserRole
 from app.schemas.validators import DisplayName, IanaTimezone
 from app.security.password import MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH
 
@@ -49,3 +50,12 @@ class ChangePasswordRequest(BaseModel):
 
     current_password: str = Field(min_length=1, max_length=1024)
     new_password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH)
+
+
+class AdminUserItem(BaseModel):
+    """`GET /api/admin/users` 的一列（規格 §3.3）。白名單：沒有時區、好友碼、建立時間。"""
+
+    id: int
+    email: str
+    display_name: str
+    role: UserRole
