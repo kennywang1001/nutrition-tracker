@@ -33,15 +33,19 @@ async function parseBody<T>(response: Response): Promise<T | null> {
  *
  *  重送之後又 401 就不再重試 —— 那代表問題不在票過期，無限重試只會把
  *  429 也一起惹出來（規格 §6.2）。換票失敗（`refreshTokens()` 回 `false`）
- *  時也不重送原請求，直接把當下這個（第一次的 401）response 交回去。 */
+ *  時也不重送原請求，直接把當下這個（第一次的 401）response 交回去。
+ *
+ *  `refresh`：怎麼換票。預設是 `refreshTokens()`（自己取鎖）；已經握著換票的鎖的呼叫者
+ *  （`auth/refresh.ts` 的 `withTokenLock`）要傳它給的那個，否則會等自己握著的鎖。 */
 async function fetchWithAuthRetry(
 	path: string,
 	init: RequestInit,
+	refresh: () => Promise<boolean> = refreshTokens,
 ): Promise<Response> {
 	let response = await fetch(path, withAuth(init));
 
 	if (response.status === 401) {
-		const refreshed = await refreshTokens();
+		const refreshed = await refresh();
 		if (refreshed) {
 			response = await fetch(path, withAuth(init));
 		}
@@ -55,12 +59,14 @@ async function fetchWithAuthRetry(
  *
  *  成功回解析後的 body（204 回 `null`）；失敗拋 `ApiError`。
  *
- *  401 時會換一次票並重送**一次**（`fetchWithAuthRetry`）。 */
+ *  401 時會換一次票並重送**一次**（`fetchWithAuthRetry`）。`options.refresh` 只有已經
+ *  握著換票的鎖的呼叫者才傳（見 `fetchWithAuthRetry`）。 */
 export async function apiFetch<T = unknown>(
 	path: string,
 	init: RequestInit = {},
+	options: { refresh?: () => Promise<boolean> } = {},
 ): Promise<T | null> {
-	const response = await fetchWithAuthRetry(path, init);
+	const response = await fetchWithAuthRetry(path, init, options.refresh);
 
 	if (!response.ok) {
 		throw await parseErrorResponse(response);

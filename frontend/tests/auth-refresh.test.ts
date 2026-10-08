@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { refreshTokens, resetRefreshStateForTests } from "../src/auth/refresh";
-import { clearTokens, setTokens } from "../src/auth/store";
+import { changePassword } from "../src/auth/session";
+import { clearTokens, getRefreshToken, setTokens } from "../src/auth/store";
 
 beforeEach(() => {
 	localStorage.clear();
@@ -160,5 +161,141 @@ describe("single-flight refresh", () => {
 
 		const { getRefreshToken } = await import("../src/auth/store");
 		expect(getRefreshToken()).toBe("r1");
+	});
+});
+
+describe("換票的鎖（navigator.locks 的 token-refresh）", () => {
+	// jsdom 沒有 navigator.locks。這裡裝一個只有 `request` 的假實作：同名的請求排隊、
+	// 一次一個（Web Locks 的預設模式），並記下被要求過的名字。
+	let requested: string[] = [];
+
+	beforeEach(() => {
+		requested = [];
+		const tails = new Map<string, Promise<unknown>>();
+		Object.defineProperty(navigator, "locks", {
+			configurable: true,
+			value: {
+				request: (name: string, callback: () => Promise<unknown>) => {
+					requested.push(name);
+					const run = (tails.get(name) ?? Promise.resolve()).then(callback);
+					tails.set(
+						name,
+						run.catch(() => undefined),
+					);
+					return run;
+				},
+			},
+		});
+	});
+
+	afterEach(() => {
+		Reflect.deleteProperty(navigator, "locks");
+	});
+
+	function tokens(access: string, refresh: string) {
+		return new Response(
+			JSON.stringify({
+				access_token: access,
+				refresh_token: refresh,
+				token_type: "bearer",
+			}),
+			{ status: 200, headers: { "content-type": "application/json" } },
+		);
+	}
+
+	/** 讓已經排進 microtask／timer 的東西都跑完：沒被鎖擋住的請求這時一定已經送出去了。 */
+	async function settle() {
+		for (let turn = 0; turn < 5; turn += 1) {
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		}
+	}
+
+	it("換票在 token-refresh 這把鎖裡做", async () => {
+		setTokens({ access_token: "old", refresh_token: "r1" });
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(tokens("new", "r2"));
+
+		expect(await refreshTokens()).toBe(true);
+
+		expect(requested).toEqual(["token-refresh"]);
+	});
+
+	it("改密碼握著同一把鎖：這段期間開始的換票要等它做完，而且用的是新的那張票", async () => {
+		// 沒有鎖的話：改密碼的請求還在路上，另一個請求（或另一個分頁）拿舊票去換——
+		// 換得到的那張被改密碼一起撤銷，卻可能比改密碼的新票晚寫進 localStorage，把它
+		// 蓋掉；或者換票排在撤銷之後直接 401，把剛改完密碼的這台登出（帳號設定審查 M6）。
+		setTokens({ access_token: "a1", refresh_token: "r1" });
+		let finishPasswordChange: (response: Response) => void = () => undefined;
+		const refreshedWith: string[] = [];
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+			const url = String(input);
+			if (url.includes("/api/me/password")) {
+				return new Promise<Response>((resolve) => {
+					finishPasswordChange = resolve;
+				});
+			}
+			if (url.includes("/api/auth/refresh")) {
+				refreshedWith.push(JSON.parse(String(init?.body)).refresh_token);
+				return tokens("a3", "r3");
+			}
+			throw new Error(`沒有準備這個請求：${url}`);
+		});
+
+		const changing = changePassword("old-password", "new-password-1");
+		await settle();
+		const refreshing = refreshTokens();
+		await settle();
+
+		// 改密碼還沒回來：換票不能已經送出去。
+		expect(refreshedWith).toEqual([]);
+
+		finishPasswordChange(tokens("a2", "r2"));
+		await changing;
+		expect(await refreshing).toBe(true);
+
+		// 等到鎖之後重新讀 localStorage：用的是改密碼拿到的 r2，不是進來時的 r1。
+		expect(refreshedWith).toEqual(["r2"]);
+		expect(getRefreshToken()).toBe("r3");
+		expect(requested).toEqual(["token-refresh", "token-refresh"]);
+	});
+
+	it("改密碼時 access token 已經過期：在自己握著的鎖裡換票、重送，不會卡死", async () => {
+		// Web Locks 不能重入。改密碼握著鎖，401 之後如果照平常呼叫 refreshTokens()（它會再
+		// 要一次同一把鎖），就永遠等不到自己放手。
+		setTokens({ access_token: "expired", refresh_token: "r1" });
+		const calls: string[] = [];
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+			const url = String(input);
+			const bearer = new Headers(init?.headers).get("authorization");
+			if (url.includes("/api/me/password")) {
+				calls.push(`password ${bearer}`);
+				if (bearer === "Bearer a2") return tokens("a3", "r3");
+				return new Response(
+					JSON.stringify({
+						error: { code: "INVALID_TOKEN", message: "x", details: {} },
+					}),
+					{ status: 401, headers: { "content-type": "application/json" } },
+				);
+			}
+			if (url.includes("/api/auth/refresh")) {
+				calls.push(`refresh ${JSON.parse(String(init?.body)).refresh_token}`);
+				return tokens("a2", "r2");
+			}
+			throw new Error(`沒有準備這個請求：${url}`);
+		});
+
+		const outcome = await Promise.race([
+			changePassword("old-password", "new-password-1").then(() => "done"),
+			new Promise((resolve) => setTimeout(() => resolve("卡住了"), 500)),
+		]);
+
+		expect(outcome).toBe("done");
+		expect(calls).toEqual([
+			"password Bearer expired",
+			"refresh r1",
+			"password Bearer a2",
+		]);
+		expect(getRefreshToken()).toBe("r3");
+		// 只要了一次鎖（改密碼自己的那一次）；裡面的換票沒有再要。
+		expect(requested).toEqual(["token-refresh"]);
 	});
 });

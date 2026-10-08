@@ -1,5 +1,6 @@
 import { apiFetch } from "../api/client";
 import { clearQueryCacheOnForcedLogout, queryClient } from "../api/queries";
+import { withTokenLock } from "./refresh";
 import {
 	clearTokens,
 	getRefreshToken,
@@ -20,21 +21,30 @@ export async function login(email: string, password: string): Promise<void> {
 
 /** 改自己的密碼（帳號設定規格 §3.2、§5.3）。後端撤銷了**所有** refresh session（包括這台
  *  舊的那條——access token 不帶 family，後端分不出哪條是這台），回一組新的。不換上去的話，
- *  這台下一次換票就被登出。失敗時（422／429）不碰本地的票。 */
-export async function changePassword(
+ *  這台下一次換票就被登出。失敗時（422／429）不碰本地的票。
+ *
+ *  **從送出請求到 `setTokens` 都握著換票的鎖**（`withTokenLock`，理由在那裡）：這段期間
+ *  不能有另一個換票拿舊票去換、再把結果寫回來。 */
+export function changePassword(
 	currentPassword: string,
 	newPassword: string,
 ): Promise<void> {
-	const tokens = await apiFetch<Tokens>("/api/me/password", {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({
-			current_password: currentPassword,
-			new_password: newPassword,
-		}),
+	return withTokenLock(async (refreshWhileLocked) => {
+		const tokens = await apiFetch<Tokens>(
+			"/api/me/password",
+			{
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					current_password: currentPassword,
+					new_password: newPassword,
+				}),
+			},
+			{ refresh: refreshWhileLocked },
+		);
+		if (tokens === null) throw new Error("修改密碼的回應沒有 body");
+		setTokens(tokens);
 	});
-	if (tokens === null) throw new Error("修改密碼的回應沒有 body");
-	setTokens(tokens);
 }
 
 /** 登出。**不管伺服器怎麼回都清掉本地狀態**（規格 §6.6）。

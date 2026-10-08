@@ -1,6 +1,11 @@
 import { clearQueryCacheOnForcedLogout, queryClient } from "../api/queries";
 import { clearTokens, getRefreshToken, setTokens } from "./store";
 
+/** 跨分頁的鎖的名字（`navigator.locks`）。**所有會把 localStorage 裡的 refresh token
+ *  換成另一張的動作都要握著它**：換票（下面的 `refreshTokens`）與改密碼
+ *  （`withTokenLock`，`auth/session.ts` 的 `changePassword` 用）。 */
+const TOKEN_LOCK = "token-refresh";
+
 /** 分頁**內**的 single-flight：並行的呼叫者共用同一個 promise。 */
 let inFlight: Promise<boolean> | null = null;
 
@@ -68,7 +73,7 @@ export function refreshTokens(): Promise<boolean> {
 
 	const run = async (): Promise<boolean> => {
 		if (typeof navigator !== "undefined" && navigator.locks !== undefined) {
-			return navigator.locks.request("token-refresh", performRefresh);
+			return navigator.locks.request(TOKEN_LOCK, performRefresh);
 		}
 		// jsdom 沒有 navigator.locks。退回只有分頁內的保護 ——
 		// 在測試環境裡這是對的（只有一個 context），在真機上永遠走不到這條
@@ -83,4 +88,29 @@ export function refreshTokens(): Promise<boolean> {
 	});
 
 	return inFlight;
+}
+
+/** 握著換票的那把鎖做一件**會換掉 refresh token** 的事（目前只有改密碼）。
+ *
+ *  改密碼時後端撤銷所有 refresh session、回一組新的。請求在路上的時候，如果另一個請求
+ *  （或另一個分頁）拿舊票去換：
+ *  - 換票先到 → 換到的那張被改密碼一起撤銷，卻可能比新票**晚**寫進 localStorage，把它
+ *    蓋掉——下一次換票 401，剛改完密碼的這台反而被登出；
+ *  - 換票後到 → 舊票已經撤銷，直接 401，同樣被登出。
+ *  握著鎖，換票就排在後面；等到鎖的時候 `performRefresh` 重新讀 localStorage，用的是
+ *  新的那張（帳號設定審查 M6）。
+ *
+ *  **`task` 拿到一個「已經在鎖裡」的換票函式，裡面的請求要用它**（`apiFetch` 的第三個
+ *  參數），不能用平常的 `refreshTokens()`：Web Locks 不能重入，握著鎖再要同一把鎖會
+ *  永遠等不到自己放手——access token 過期時（整頁重新載入之後一定是）就會走到。
+ *
+ *  沒有 `navigator.locks`（非 secure context、jsdom）時沒有鎖可握：退回原本的行為，
+ *  裡面的換票用 `refreshTokens()`，至少跟同一個分頁裡正在飛的換票共用同一個 promise。 */
+export function withTokenLock<T>(
+	task: (refreshWhileLocked: () => Promise<boolean>) => Promise<T>,
+): Promise<T> {
+	if (typeof navigator !== "undefined" && navigator.locks !== undefined) {
+		return navigator.locks.request(TOKEN_LOCK, () => task(performRefresh));
+	}
+	return task(refreshTokens);
 }
