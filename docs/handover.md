@@ -1290,7 +1290,7 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
 同一個分支順手補了三個從來沒改版過的畫面（規格 §8，純樣式與標記，可及名稱、testid、主要區塊的 DOM 順序都沒動）：
 
 - **登入**：跟建立帳號一樣包 `ui.module.css` 的 `.screen`（h1 在卡片外、表單是卡片、標籤在上的整列輸入框、主要按鈕、
-  錯誤用危險色）。`.app-auth` 的上方留白是 `clamp(var(--space-6), 10vh, 120px)`——用 vh 不用 media query，斷點只寫在 `layout.ts`。
+  錯誤用危險色）。`.app-auth` 的上方留白是 `clamp(var(--space-6), 10vh, 120px)`——用 vh 不用 media query，斷點只寫在 `layout.ts`。建立帳號頁（`/join`）也套用同一個留白。
 - **飲食頁營養素**：`MacroBar` 一列＝名稱在左、`實際 / 目標`＋百分比在右（等寬數字），下面一條 `<progress>`，跟總覽
   「今天熱量」同樣是 `ratioOf()` 的比例、`Math.min(ratio, 1)` 夾滿格；「未設定」或目標是 0 不畫條。沒有目標時的 `<dl>` 也排成一列一項。
 - **今日餐點卡片**：上傳照片改成「加照片」那種虛線框標籤＋相機圖示，`<input type=file>` 視覺上藏起來但仍可用鍵盤對焦
