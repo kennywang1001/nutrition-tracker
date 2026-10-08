@@ -9,6 +9,11 @@
 	margin: 0;
 }
 
+/* 電腦版：左欄只有 2/5 寬，兩張數字卡上下疊（電腦版版面規格 §4）。 */
+:global(.app-desktop) .cards {
+	grid-template-columns: minmax(0, 1fr);
+}
+
 .label {
 	margin: 0 0 var(--space-1);
 	font-size: 12px;

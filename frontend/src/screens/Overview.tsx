@@ -10,6 +10,7 @@ import { MEAL_TYPE_LABELS, useTodayMeals } from "../api/meals";
 import { useDailyStats } from "../api/stats";
 import { Card } from "../components/Card";
 import { CategoryIcon, MealTypeIcon } from "../components/IconBadge";
+import layout from "../components/layout.module.css";
 import { formatTime } from "../lib/dates";
 import { formatMacro, formatMoney, ratioOf } from "../lib/decimal";
 import { buildTimeline, type TimelineRow } from "../lib/timeline";
@@ -243,11 +244,15 @@ export function Overview() {
 				{notice !== null && <p className={styles.notice}>{notice}</p>}
 			</div>
 			<OfflineBanner />
-			<div className={styles.cards}>
-				<MonthSpendCard />
-				<TodayKcalCard />
+			{/* 電腦版：左＝兩張數字卡、右＝今天的時間線（電腦版版面規格 §4）。
+			    本來的順序就是先卡片後時間線，手機版照樣往下排。 */}
+			<div className={layout.columns}>
+				<div className={styles.cards}>
+					<MonthSpendCard />
+					<TodayKcalCard />
+				</div>
+				<TodayTimeline />
 			</div>
-			<TodayTimeline />
 		</section>
 	);
 }

@@ -117,7 +117,9 @@ export function Today() {
 				))}
 			</fieldset>
 			{view === "friends" ? (
-				<FriendFeed />
+				<div className={styles.friendFeed}>
+					<FriendFeed />
+				</div>
 			) : (
 				<>
 					{/* 介面改版：「食物庫」不再是 tab，入口在這裡（今天吃了什麼的
@@ -127,115 +129,125 @@ export function Today() {
 						<Link to="/foods">食物庫</Link>
 					</nav>
 
-					{statsQuery.isLoading && <p>載入中…</p>}
-					{statsQuery.isError && stats === undefined && (
-						<p>無法載入今天的營養素</p>
-					)}
-					{isOfflineStats && (
-						<p data-testid="offline-banner">
-							離線資料，最後更新於 {formatTime(statsQuery.dataUpdatedAt)}
-						</p>
-					)}
+					{/* 電腦版：營養素與補劑在左欄、餐點在右欄（電腦版版面規格 §4）。
+					    DOM 順序維持 營養素 → 餐點 → 補劑（手機版就是照這個順序往下排），
+					    左右靠 Today.module.css 的 grid-template-areas 擺，不是靠換 DOM
+					    順序——換了的話手機版與螢幕閱讀器的順序會跟著變。 */}
+					<div className={styles.columns}>
+						<div className={styles.macros}>
+							{statsQuery.isLoading && <p>載入中…</p>}
+							{statsQuery.isError && stats === undefined && (
+								<p>無法載入今天的營養素</p>
+							)}
+							{isOfflineStats && (
+								<p data-testid="offline-banner">
+									離線資料，最後更新於 {formatTime(statsQuery.dataUpdatedAt)}
+								</p>
+							)}
 
-					{stats &&
-						(stats.target === null ? (
-							// 規格 §5.7 第一層 null：這一天完全沒有生效的目標。**不要**
-							// 逐項顯示「未設定」（那是第二層 null 的畫面，見 else 分支的
-							// MacroBar）——兩者混為一談會讓使用者以為自己是「設了目標但
-							// 剛好每一項都沒填」，而不是「根本沒設目標」。
+							{stats &&
+								(stats.target === null ? (
+									// 規格 §5.7 第一層 null：這一天完全沒有生效的目標。**不要**
+									// 逐項顯示「未設定」（那是第二層 null 的畫面，見 else 分支的
+									// MacroBar）——兩者混為一談會讓使用者以為自己是「設了目標但
+									// 剛好每一項都沒填」，而不是「根本沒設目標」。
+									<Card>
+										<p>尚未設定目標</p>
+										<dl>
+											<div data-testid="macro-kcal">
+												<dt>熱量</dt>
+												<dd>{formatMacro(stats.actual.kcal)}</dd>
+											</div>
+											<div data-testid="macro-protein_g">
+												<dt>蛋白質</dt>
+												<dd>{formatMacro(stats.actual.protein_g)}</dd>
+											</div>
+											<div data-testid="macro-fat_g">
+												<dt>脂肪</dt>
+												<dd>{formatMacro(stats.actual.fat_g)}</dd>
+											</div>
+											<div data-testid="macro-carb_g">
+												<dt>碳水</dt>
+												<dd>{formatMacro(stats.actual.carb_g)}</dd>
+											</div>
+										</dl>
+									</Card>
+								) : (
+									// 規格 §5.7 第二層 null：目標存在，但個別欄位可能是 null
+									// （「有目標，但這一項沒設」）。MacroBar 自己處理那一列的
+									// 「未設定」，其他列照常顯示比例——不在這裡把兩層混在一起判斷。
+									<Card>
+										<MacroBar
+											field="kcal"
+											label="熱量"
+											actual={stats.actual.kcal}
+											target={stats.target.kcal}
+										/>
+										<MacroBar
+											field="protein_g"
+											label="蛋白質"
+											actual={stats.actual.protein_g}
+											target={stats.target.protein_g}
+										/>
+										<MacroBar
+											field="fat_g"
+											label="脂肪"
+											actual={stats.actual.fat_g}
+											target={stats.target.fat_g}
+										/>
+										<MacroBar
+											field="carb_g"
+											label="碳水"
+											actual={stats.actual.carb_g}
+											target={stats.target.carb_g}
+										/>
+									</Card>
+								))}
+						</div>
+						<div className={styles.meals}>
+							<MealList />
+						</div>
+						<div className={styles.supplements}>
 							<Card>
-								<p>尚未設定目標</p>
-								<dl>
-									<div data-testid="macro-kcal">
-										<dt>熱量</dt>
-										<dd>{formatMacro(stats.actual.kcal)}</dd>
-									</div>
-									<div data-testid="macro-protein_g">
-										<dt>蛋白質</dt>
-										<dd>{formatMacro(stats.actual.protein_g)}</dd>
-									</div>
-									<div data-testid="macro-fat_g">
-										<dt>脂肪</dt>
-										<dd>{formatMacro(stats.actual.fat_g)}</dd>
-									</div>
-									<div data-testid="macro-carb_g">
-										<dt>碳水</dt>
-										<dd>{formatMacro(stats.actual.carb_g)}</dd>
-									</div>
-								</dl>
+								<h2>今日補劑</h2>
+								{/* 補劑的新增與「當天吃了就點一份進去」（P3-C Task 2）的入口。
+						    補劑不是 tab（tab bar 固定是 總覽／報表／＋／飲食／我的），
+						    入口放在飲食畫面——這裡是使用者會看到補劑的地方，也是他們
+						    想「加一個」的當下。 */}
+								<Link to="/supplements">新增補劑</Link>
+								<ul>
+									{supplements.map((item) => (
+										<li key={supplementKey(item)}>
+											<span>{item.supplement_name}</span>
+											{/* 規格 §5.8：plan_id 為 null 是臨時記錄，一定 done=true，
+									    不該有打卡按鈕——只有「計畫存在但今天還沒打卡」才給打卡。 */}
+											{item.plan_id !== null && !item.done && (
+												<button
+													type="button"
+													disabled={checkIn.isPending}
+													onClick={() => checkIn.mutate(item)}
+												>
+													打卡
+												</button>
+											)}
+											{item.done && (
+												<button
+													type="button"
+													disabled={cancel.isPending}
+													onClick={() => {
+														if (item.intake_id !== null)
+															cancel.mutate(item.intake_id);
+													}}
+												>
+													取消
+												</button>
+											)}
+										</li>
+									))}
+								</ul>
 							</Card>
-						) : (
-							// 規格 §5.7 第二層 null：目標存在，但個別欄位可能是 null
-							// （「有目標，但這一項沒設」）。MacroBar 自己處理那一列的
-							// 「未設定」，其他列照常顯示比例——不在這裡把兩層混在一起判斷。
-							<Card>
-								<MacroBar
-									field="kcal"
-									label="熱量"
-									actual={stats.actual.kcal}
-									target={stats.target.kcal}
-								/>
-								<MacroBar
-									field="protein_g"
-									label="蛋白質"
-									actual={stats.actual.protein_g}
-									target={stats.target.protein_g}
-								/>
-								<MacroBar
-									field="fat_g"
-									label="脂肪"
-									actual={stats.actual.fat_g}
-									target={stats.target.fat_g}
-								/>
-								<MacroBar
-									field="carb_g"
-									label="碳水"
-									actual={stats.actual.carb_g}
-									target={stats.target.carb_g}
-								/>
-							</Card>
-						))}
-
-					<MealList />
-
-					<Card>
-						<h2>今日補劑</h2>
-						{/* 補劑的新增與「當天吃了就點一份進去」（P3-C Task 2）的入口。
-				    補劑不是 tab（tab bar 固定是 總覽／報表／＋／飲食／我的），
-				    入口放在飲食畫面——這裡是使用者會看到補劑的地方，也是他們
-				    想「加一個」的當下。 */}
-						<Link to="/supplements">新增補劑</Link>
-						<ul>
-							{supplements.map((item) => (
-								<li key={supplementKey(item)}>
-									<span>{item.supplement_name}</span>
-									{/* 規格 §5.8：plan_id 為 null 是臨時記錄，一定 done=true，
-							    不該有打卡按鈕——只有「計畫存在但今天還沒打卡」才給打卡。 */}
-									{item.plan_id !== null && !item.done && (
-										<button
-											type="button"
-											disabled={checkIn.isPending}
-											onClick={() => checkIn.mutate(item)}
-										>
-											打卡
-										</button>
-									)}
-									{item.done && (
-										<button
-											type="button"
-											disabled={cancel.isPending}
-											onClick={() => {
-												if (item.intake_id !== null)
-													cancel.mutate(item.intake_id);
-											}}
-										>
-											取消
-										</button>
-									)}
-								</li>
-							))}
-						</ul>
-					</Card>
+						</div>
+					</div>
 				</>
 			)}
 		</section>

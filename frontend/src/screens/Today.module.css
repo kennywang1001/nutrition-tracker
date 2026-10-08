@@ -79,3 +79,47 @@
 	font-size: 15px;
 	font-weight: 600;
 }
+
+/* 電腦版的兩欄（電腦版版面規格 §4）：左＝營養素＋補劑、右＝餐點（跨兩列）。
+   DOM 順序是 營養素、餐點、補劑——手機版照這個順序往下排，不受影響。
+   第二列是 1fr 不是 auto：餐點比左欄高時，多出來的高度全部給第二列，補劑
+   才會緊貼在營養素下面；兩列都 auto 的話會平分，營養素與補劑中間空一截。 */
+:global(.app-desktop) .columns {
+	display: grid;
+	grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+	grid-template-rows: auto 1fr;
+	grid-template-areas:
+		"macros meals"
+		"supplements meals";
+	gap: var(--space-4) var(--space-6);
+	align-items: start;
+}
+
+:global(.app-desktop) .macros {
+	grid-area: macros;
+}
+
+:global(.app-desktop) .meals {
+	grid-area: meals;
+}
+
+:global(.app-desktop) .supplements {
+	grid-area: supplements;
+}
+
+/* 兩欄的第一個標題／卡片貼齊上緣（同 components/layout.module.css）。 */
+:global(.app-desktop) .columns > * > :first-child {
+	margin-top: 0;
+}
+
+/* 右欄的第一個子元素是 MealList 的 <section>，它本身沒有 margin，上緣的
+   空白來自裡面的 <h2>「今日餐點」——grid item 自成一個格式化環境，h2 的
+   margin 不會穿出去，要直接拿掉，右欄的標題才會跟左欄的卡片對齊。 */
+:global(.app-desktop) .meals > section > h2:first-child {
+	margin-top: 0;
+}
+
+/* 好友動態是單欄，最寬 640px、靠左（跟上面的「看誰的」對齊）。 */
+:global(.app-desktop) .friendFeed {
+	max-width: 640px;
+}

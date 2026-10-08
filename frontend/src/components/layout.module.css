@@ -1,0 +1,17 @@
+/* 電腦版的兩欄（電腦版版面規格 §4）。只在外框有 app-desktop 時生效；
+   手機版是普通的區塊，子元素照原本的順序往下排。
+   左右比 2:3、上緣對齊；整頁一起捲，不做各欄獨立捲動。
+   用的地方：總覽、報表。飲食的兩欄要用 grid-template-areas 保住 DOM 順序，
+   寫在 Today.module.css。 */
+:global(.app-desktop) .columns {
+	display: grid;
+	grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+	gap: var(--space-6);
+	align-items: start;
+}
+
+/* 兩欄的第一個標題／卡片貼齊上緣，左右兩欄才對得齊。權重 (0,3,0)：蓋過
+   Card 的 margin 與各頁標題自己的 class（例如總覽的 .sectionTitle）。 */
+:global(.app-desktop) .columns > * > :first-child {
+	margin-top: 0;
+}
