@@ -228,3 +228,79 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
           npm run e2e
+
+  publish:
+    # 規格 docs/superpowers/specs/2026-10-08-image-deploy-design.md §2.1：
+    # 測試全過才做映像，NAS 只拉映像、不在 NAS 上 build。
+    #
+    # if 的寫法：上面四個測試 job 會被路徑過濾**跳過**，跳過算過——
+    # 預設的 success() 會把「有 needs 被跳過」當成不成立而連這個 job 一起跳過，
+    # 所以改用 !failure() && !cancelled()：純文件的 commit 也做映像，
+    # 每個 master commit 都有對應的映像（deploy.sh 用 commit SHA 找映像）；
+    # 任何一個測試**失敗**或被取消就不做。
+    needs: [changes, backend, frontend, contract, e2e]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master' && !failure() && !cancelled()
+    runs-on: ubuntu-latest
+    # 只有這個 job 能寫 GHCR；用內建的 GITHUB_TOKEN，不新增任何 secret。
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # 映像名稱必須全小寫（GHCR 的規定）；deploy.sh 與 docker-compose.release.yml 用同樣的名字。
+      API_IMAGE: ghcr.io/kennywang1001/nutrition-tracker-api
+      WEB_IMAGE: ghcr.io/kennywang1001/nutrition-tracker-web
+      SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # 不知道 NAS 是哪一種 CPU，amd64 與 arm64 都做；arm64 在 runner 上靠 QEMU 模擬。
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 標籤：commit 的完整 SHA（deploy.sh 用的）與 latest（方便人看）。
+      # source 標籤讓 GHCR 把套件連到這個 repo；多架構映像的 index 沒有自己的
+      # config，所以同一個值另外寫成 index 的 annotation。
+      # cache 用 GHA cache、每個映像各自一個 scope（不然兩個映像會互相蓋掉快取）；
+      # mode=max 連中間層一起快取，arm64 在 QEMU 下重跑 pip install 很慢。
+      - name: api 映像
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.API_IMAGE }}:${{ github.sha }}
+            ${{ env.API_IMAGE }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ env.SOURCE_URL }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          annotations: |
+            index:org.opencontainers.image.source=${{ env.SOURCE_URL }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: web 映像（Caddy＋前端）
+        uses: docker/build-push-action@v7
+        with:
+          # context 是 repo 根目錄：映像同時需要 frontend/ 與 caddy/（見 frontend/Dockerfile）。
+          context: .
+          file: frontend/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.WEB_IMAGE }}:${{ github.sha }}
+            ${{ env.WEB_IMAGE }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ env.SOURCE_URL }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          annotations: |
+            index:org.opencontainers.image.source=${{ env.SOURCE_URL }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
