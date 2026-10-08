@@ -143,12 +143,16 @@ a {
 	max-width: 480px;
 }
 
-/* 登入、建立帳號（未登入，沒有導覽）：兩種寬度都一樣。 */
+/* 登入、建立帳號（未登入，沒有導覽）：兩種寬度都一樣。
+   上方留白跟著視窗高度走：表單貼著視窗頂端看起來像版面壞掉，電腦版的視窗
+   又高、內容只有一張小卡片。用 vh 不用 media query——斷點只寫在
+   lib/layout.ts（電腦版版面規格 §2），未登入的畫面也沒有 app-desktop 可看。
+   不做垂直置中：錯誤訊息出現時整張卡片會跟著往上跳。 */
 .app-auth {
 	box-sizing: border-box;
 	max-width: 400px;
 	margin-inline: auto;
-	padding: 0 var(--space-3) var(--space-6);
+	padding: clamp(var(--space-6), 10vh, 120px) var(--space-3) var(--space-6);
 }
 
 /* 圖的「大小」由 CSS 決定，但每一根柱子的「高度」不是——那是在

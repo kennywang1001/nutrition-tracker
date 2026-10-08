@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { ApiError } from "../api/errors";
 import { login } from "../auth/session";
+import ui from "../components/ui.module.css";
 
 type Props = { onSuccess: () => void };
 
@@ -56,31 +57,36 @@ export function Login({ onSuccess }: Props) {
 				? `${error}（${cooldown} 秒後可再試）`
 				: error;
 
+	// 跟建立帳號（Join.tsx）同一套外觀：ui.module.css 的 .screen 把直接底下的
+	// <form> 畫成卡片、欄位改成標籤在上的整列輸入框、送出鈕是主要按鈕、
+	// role="alert" 用危險色。h1 因此要放在 form 外面——放在裡面會被包進卡片。
 	return (
-		<form onSubmit={handleSubmit}>
+		<section className={ui.screen}>
 			<h1>登入</h1>
-			<label htmlFor="email">Email</label>
-			<input
-				id="email"
-				type="email"
-				autoComplete="username"
-				value={email}
-				onChange={(e) => setEmail(e.target.value)}
-				required
-			/>
-			<label htmlFor="password">密碼</label>
-			<input
-				id="password"
-				type="password"
-				autoComplete="current-password"
-				value={password}
-				onChange={(e) => setPassword(e.target.value)}
-				required
-			/>
-			{displayedError !== null && <p role="alert">{displayedError}</p>}
-			<button type="submit" disabled={busy || lockedOut}>
-				登入
-			</button>
-		</form>
+			<form onSubmit={handleSubmit}>
+				<label htmlFor="email">Email</label>
+				<input
+					id="email"
+					type="email"
+					autoComplete="username"
+					value={email}
+					onChange={(e) => setEmail(e.target.value)}
+					required
+				/>
+				<label htmlFor="password">密碼</label>
+				<input
+					id="password"
+					type="password"
+					autoComplete="current-password"
+					value={password}
+					onChange={(e) => setPassword(e.target.value)}
+					required
+				/>
+				{displayedError !== null && <p role="alert">{displayedError}</p>}
+				<button type="submit" disabled={busy || lockedOut}>
+					登入
+				</button>
+			</form>
+		</section>
 	);
 }
