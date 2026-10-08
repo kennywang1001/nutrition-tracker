@@ -161,12 +161,11 @@ test.describe("手機尺寸", () => {
 		await expect(previous).toBeEnabled();
 		await expectTouchTargets(switcher.getByRole("button"), "月份切換");
 
-		const boxes = await Promise.all(
-			[previous, switcher.getByRole("status"), next].map((locator) =>
-				locator.boundingBox(),
-			),
-		);
-		const [left, label, right] = boxes;
+		// 一個一個量、不從陣列解構：`noUncheckedIndexedAccess` 底下解構出來的每一個
+		// 都多一個 `undefined`，只擋 `null` 過不了型別檢查。
+		const left = await previous.boundingBox();
+		const label = await switcher.getByRole("status").boundingBox();
+		const right = await next.boundingBox();
 		if (left === null || label === null || right === null) {
 			throw new Error("月份切換的三個元素有一個量不到");
 		}
