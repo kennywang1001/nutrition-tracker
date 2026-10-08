@@ -3,17 +3,19 @@ import { Link } from "react-router";
 import { apiFetch } from "../api/client";
 import { useMe } from "../api/me";
 import { logout } from "../auth/session";
+import { AccountCard } from "../components/AccountCard";
 import { Card } from "../components/Card";
 import { FriendsCard } from "../components/FriendsCard";
 import { InviteFriends } from "../components/InviteFriends";
+import { TargetsCard } from "../components/TargetsCard";
 import styles from "./Me.module.css";
 
 type Props = { onLoggedOut: () => void };
 
-/** 我的：帳號、登出、管理員的審核入口（介面改版規格 §5.7）。 */
+/** 我的：帳號、每日目標、好友、管理員的審核與邀請、登出（介面改版規格 §5.7、帳號設定規格 §5.1）。 */
 export function Me({ onLoggedOut }: Props) {
-	const meQuery = useMe();
-	const me = meQuery.data;
+	// 帳號卡片自己讀 useMe；這裡只剩「是不是管理員」要用它（同一個 query，不會多打一次）。
+	const me = useMe().data;
 	// `me?.role` 而不是先判斷 isPending：useMe() 還在載入時 data 是
 	// undefined，`undefined?.role === "admin"` 自然是 false——「審核」一開始
 	// 就不畫，不會先閃一下再消失。
@@ -33,15 +35,9 @@ export function Me({ onLoggedOut }: Props) {
 		<section>
 			<h1>我的</h1>
 
-			<Card>
-				{meQuery.isPending ? (
-					<p>載入中…</p>
-				) : meQuery.isError || me == null ? (
-					<p>無法載入帳號資料</p>
-				) : (
-					<p className={styles.email}>{me.email}</p>
-				)}
-			</Card>
+			<AccountCard />
+
+			<TargetsCard />
 
 			<FriendsCard />
 

@@ -1,0 +1,64 @@
+.text {
+	margin: 0;
+}
+
+.name {
+	margin: 0;
+	font-size: 16px;
+	font-weight: 600;
+}
+
+.email {
+	margin: 0;
+	color: var(--color-text-muted);
+}
+
+.form {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin-top: var(--space-3);
+}
+
+.form label {
+	font-size: 13px;
+	color: var(--color-text-muted);
+}
+
+.form input {
+	box-sizing: border-box;
+	width: 100%;
+	min-height: 44px;
+	padding: var(--space-2) var(--space-3);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-button);
+	background: var(--color-bg);
+	color: var(--color-text);
+}
+
+.actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2);
+	margin-top: var(--space-3);
+}
+
+/* 表單裡的按鈕列緊接在輸入框或錯誤訊息後面，form 的 gap 已經留了距離。 */
+.form .actions {
+	margin-top: 0;
+}
+
+/* 連結也是點擊目標：至少 44px 高（規格 §5.6）。 */
+.link {
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+	padding: 0 var(--space-2);
+	font-weight: 600;
+}
+
+.error {
+	margin: 0;
+	color: var(--color-danger);
+}

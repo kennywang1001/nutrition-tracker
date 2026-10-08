@@ -1,0 +1,32 @@
+.title {
+	margin: 0 0 var(--space-2);
+}
+
+.text {
+	margin: 0;
+}
+
+.list {
+	margin: 0;
+}
+
+/* 一列一項，標籤靠左、數值靠右。 */
+.row {
+	display: flex;
+	justify-content: space-between;
+	gap: var(--space-2);
+	padding: var(--space-1) 0;
+}
+
+.row dd {
+	margin: 0;
+	font-variant-numeric: tabular-nums;
+}
+
+/* 連結也是點擊目標：至少 44px 高（規格 §5.6）。 */
+.link {
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+	font-weight: 600;
+}
