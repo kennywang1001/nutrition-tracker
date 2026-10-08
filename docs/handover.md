@@ -1269,8 +1269,11 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
 - **視窗拉寬拉窄跨過斷點會重新掛載整頁**（兩種外框的 `children` 在不同父元素底下），表單打到一半會不見、「新增」選單會關。
   刻意接受。
 - **測試環境預設是手機版**：`src/test/setup.ts` 裝了 `src/test/media.ts` 的假 `matchMedia`；要測電腦版就
-  `act(() => setDesktop(true))`。幾何（誰在誰右邊、寬度）jsdom 量不到，在 `e2e/desktop-layout.spec.ts`（1280×800 與
-  390×844 各一組）。**Playwright 預設的 1280×720 是電腦版**：沒有 `test.use({ viewport })` 的既有 e2e 現在都跑在電腦版上，
+  `act(() => setDesktop(true))`。`useIsDesktop` 整個 app 共用一個 `MediaQueryList`（第一次用到才建，掛與拿監聽者一定是同一個物件），
+  setup 每個測試前用 `resetDesktopQueryForTests()` 丟掉快取；假實作每個物件各自記監聽者，`listenerCount()` 量得到漏掉的監聽器。
+  幾何（誰在誰右邊、寬度）jsdom 量不到，在 `e2e/desktop-layout.spec.ts`（1280×800、390×844、768×1024：電腦版內容區最寬 640
+  並在導覽右邊的空間置中、手機版 `main` 最寬 600 並置中）。**那個檔案登入後只用點擊導覽換頁**——連續 `page.goto` 會在並行全跑時
+  觸發 refresh token 重用、被登出（同 `money-loop.spec.ts`）。**Playwright 預設的 1280×720 是電腦版**：沒有 `test.use({ viewport })` 的既有 e2e 現在都跑在電腦版上，
   等於電腦版的回歸測試；`touch-targets`、`mobile-form-zoom`、`friends`、`invites` 固定手機尺寸，守手機版。
   新寫的 e2e 如果依賴「導覽在底部」之類的手機版假設，要自己釘手機尺寸。
 - e2e 順便補上了 (b) 的一部分：手機尺寸的記帳頁沒有分頁列。
@@ -1281,7 +1284,8 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
   `.layer` 是 `flex-direction: column`，上下置中靠的是 `justify-content`，左右才是 `align-items`。補了一條「水平中心 = 視窗中心」。
 - 拿掉飲食頁補劑的 `grid-area: supplements` **不是**有效的突變：grid 的自動擺放剛好把它放進左欄第二列，跟寫了一樣。
   有效的是把第二列的 `1fr` 改成 `auto`（補劑跟營養素中間空一大截）——e2e 量「補劑緊貼在營養素卡片下面」。
-  這條只在今天的餐點比左欄長時有鑑別力；本機 dev 資料庫的示範帳號今天的餐點右欄有六萬多 px 高（e2e 一直在記），所以量得到；乾淨的 CI 資料庫上這條大概量不出差別。
+  那個缺陷只在右欄比左欄長時看得到，右欄多長又看今天記了幾餐，所以 e2e 量之前自己把右欄的 `min-height` 撐到比整個 grid
+  再高 3000px，不靠資料庫：把餐點全部藏起來（模擬乾淨的資料庫）時，`auto auto` 照樣紅（補劑往下掉約 1500px）。
 
 ---
 

@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach } from "vitest";
+import { resetDesktopQueryForTests } from "../lib/use-is-desktop";
 import { installMatchMedia, resetDesktop } from "./media";
 
 // jsdom（目前鎖的版本，29.x）沒有實作 URL.createObjectURL /
@@ -26,7 +27,9 @@ if (typeof URL.revokeObjectURL !== "function") {
 }
 
 // 電腦版版面（規格 §6）：jsdom 沒有 matchMedia；預設是手機版。
+// useIsDesktop 快取它的 MediaQueryList，每個測試前丟掉，從乾淨的狀態開始。
 installMatchMedia();
 beforeEach(() => {
 	resetDesktop();
+	resetDesktopQueryForTests();
 });
