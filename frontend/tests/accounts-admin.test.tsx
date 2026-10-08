@@ -137,6 +137,43 @@ describe("所有帳號（管理員）", () => {
 		]);
 	});
 
+	it("產生之後焦點移到連結那一區（清單很長時按鈕在下面、連結在卡片最上面）", async () => {
+		// 連結顯示在卡片最上面，而按下去的那顆按鈕可能在一長串帳號的最底下：畫面上什麼都
+		// 沒變，螢幕閱讀器也不會念（帳號設定審查 M7）。焦點移過去，瀏覽器會把它捲進畫面。
+		let issued = 0;
+		adminBackend(() => {
+			issued += 1;
+			return json(
+				{ token: `tok-${issued}`, expires_at: "2026-10-09T12:00:00Z" },
+				201,
+			);
+		});
+		render(wrap(<AccountsAdmin />));
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: MING_BUTTON }),
+		);
+
+		const region = await screen.findByRole("region", {
+			name: "給 小明 的重設密碼連結",
+		});
+		expect(region).toHaveFocus();
+		const link = within(region).getByLabelText("重設密碼連結");
+		expect(link).toHaveValue(`${window.location.origin}/reset-password#tok-1`);
+
+		// 再產生一次：新的連結出來，焦點要**再**移過去一次。先把焦點移開（點了連結的輸入框），
+		// 不然「還在那一區上」分不出是又移了一次，還是從第一次留到現在。
+		await userEvent.click(link);
+		expect(region).not.toHaveFocus();
+		await userEvent.click(screen.getByRole("button", { name: MING_BUTTON }));
+		await waitFor(() =>
+			expect(screen.getByLabelText("重設密碼連結")).toHaveValue(
+				`${window.location.origin}/reset-password#tok-2`,
+			),
+		);
+		expect(region).toHaveFocus();
+	});
+
 	it("複製：連結寫進剪貼簿、顯示「已複製」", async () => {
 		const user = userEvent.setup();
 		adminBackend(() =>

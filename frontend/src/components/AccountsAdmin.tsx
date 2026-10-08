@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
 	type AdminUser,
 	createPasswordReset,
@@ -30,6 +30,16 @@ export function AccountsAdmin() {
 	const [created, setCreated] = useState<Created | null>(null);
 	const [notice, setNotice] = useState<string | null>(null);
 	const [copyStatus, setCopyStatus] = useState<string | null>(null);
+	const createdRef = useRef<HTMLElement>(null);
+
+	// 連結在卡片最上面，按下去的按鈕可能在一長串帳號的最底下（dev 資料庫有上百個）：不移
+	// 焦點的話畫面上什麼都沒變，螢幕閱讀器也不知道連結出來了。焦點移過去，瀏覽器會把它捲進
+	// 畫面、念出這一區的名字（帳號設定審查 M7；作法同改密碼、重設密碼成功後的 `role="status"`）。
+	// `InviteFriends` 不用：它的連結就出現在送出鈕正下方。
+	// 依 `created` 這個物件：每產生一次都是新的物件，連續替同一個人產生兩次也會再移一次。
+	useEffect(() => {
+		if (created !== null) createdRef.current?.focus();
+	}, [created]);
 
 	const create = useMutation({
 		mutationFn: (user: AdminUser) => createPasswordReset(user.id),
@@ -64,8 +74,17 @@ export function AccountsAdmin() {
 			<h2 className={styles.title}>所有帳號</h2>
 
 			{created !== null && link !== null && (
-				<div className={styles.created}>
-					<p className={styles.createdFor}>給 {created.name} 的重設密碼連結</p>
+				// 有名字的 <section>（role="region"）：焦點移過來時念的是「給 X 的重設密碼連結」。
+				// tabIndex -1：只給程式移焦點用，不進 Tab 順序。
+				<section
+					className={styles.created}
+					ref={createdRef}
+					tabIndex={-1}
+					aria-labelledby="reset-link-for"
+				>
+					<p id="reset-link-for" className={styles.createdFor}>
+						給 {created.name} 的重設密碼連結
+					</p>
 					<label htmlFor="reset-link">重設密碼連結</label>
 					<input
 						id="reset-link"
@@ -103,7 +122,7 @@ export function AccountsAdmin() {
 						</button>
 					</div>
 					{copyStatus !== null && <p role="status">{copyStatus}</p>}
-				</div>
+				</section>
 			)}
 
 			{notice !== null && (
