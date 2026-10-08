@@ -27,7 +27,10 @@ export function MacroBar({ field, label, actual, target }: Props) {
 	// 數字與百分比各自留在自己的 <span>：測試用 getByText(/1800/) 找數字，
 	// 一個 span 只裝一種東西，比對才不會黏到旁邊的字。
 	return (
-		<div data-testid={`macro-${field}`} className={styles.row}>
+		<div
+			data-testid={`macro-${field}`}
+			className={`${styles.row} ${styles.bar}`}
+		>
 			<div className={styles.line}>
 				<span className={styles.label}>{label}</span>
 				<span className={styles.figures}>

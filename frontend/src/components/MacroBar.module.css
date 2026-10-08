@@ -1,12 +1,18 @@
 /* 飲食頁的營養素列（MacroBar）。進度條是 components/RatioProgress，
-   跟總覽「今天熱量」卡片同一個元件，兩張卡片的條才長得一樣。 */
+   跟總覽「今天熱量」卡片同一個元件，兩張卡片的條才長得一樣。
+
+   .row／.line／.label 也給飲食頁「尚未設定目標」的 <dl> 用（Today.tsx 直接
+   import 這個模組）：有沒有目標，營養素都是同一種「名稱在左、數字在右、
+   列間一條線」的列，排版只寫這一份。 */
 
 .row {
 	padding: var(--space-2) 0;
 	border-bottom: 1px solid var(--color-border);
 }
 
-.row:first-child {
+/* MacroBar 的第一列就在卡片最上面，不留上內距。不寫在 .row 上：「尚未設定
+   目標」的列上面還有一行說明，它的第一列要留著跟說明之間的距離。 */
+.bar:first-child {
 	padding-top: 0;
 }
 

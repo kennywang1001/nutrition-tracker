@@ -6,6 +6,7 @@ import type { components } from "../api/schema";
 import { useDailyStats } from "../api/stats";
 import { Card } from "../components/Card";
 import { MacroBar } from "../components/MacroBar";
+import macro from "../components/MacroBar.module.css";
 import ui from "../components/ui.module.css";
 import { formatTime } from "../lib/dates";
 import { formatMacro } from "../lib/decimal";
@@ -154,22 +155,35 @@ export function Today() {
 									// 剛好每一項都沒填」，而不是「根本沒設目標」。
 									<Card>
 										<p className={styles.noTarget}>尚未設定目標</p>
-										{/* 一列一項：名稱在左、數字在右（跟有目標時的 MacroBar 同一個節奏）。 */}
+										{/* 一列一項：名稱在左、數字在右——列的排版直接用 MacroBar 的
+										    .row／.line／.label，跟有目標時同一個節奏。 */}
 										<dl className={styles.macroList}>
-											<div data-testid="macro-kcal">
-												<dt>熱量</dt>
+											<div
+												data-testid="macro-kcal"
+												className={`${macro.row} ${macro.line}`}
+											>
+												<dt className={macro.label}>熱量</dt>
 												<dd>{formatMacro(stats.actual.kcal)}</dd>
 											</div>
-											<div data-testid="macro-protein_g">
-												<dt>蛋白質</dt>
+											<div
+												data-testid="macro-protein_g"
+												className={`${macro.row} ${macro.line}`}
+											>
+												<dt className={macro.label}>蛋白質</dt>
 												<dd>{formatMacro(stats.actual.protein_g)}</dd>
 											</div>
-											<div data-testid="macro-fat_g">
-												<dt>脂肪</dt>
+											<div
+												data-testid="macro-fat_g"
+												className={`${macro.row} ${macro.line}`}
+											>
+												<dt className={macro.label}>脂肪</dt>
 												<dd>{formatMacro(stats.actual.fat_g)}</dd>
 											</div>
-											<div data-testid="macro-carb_g">
-												<dt>碳水</dt>
+											<div
+												data-testid="macro-carb_g"
+												className={`${macro.row} ${macro.line}`}
+											>
+												<dt className={macro.label}>碳水</dt>
 												<dd>{formatMacro(stats.actual.carb_g)}</dd>
 											</div>
 										</dl>

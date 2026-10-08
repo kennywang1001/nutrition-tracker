@@ -131,26 +131,10 @@
 	color: var(--color-text-muted);
 }
 
+/* 列的排版（名稱左、數字右、列間的線）是 MacroBar.module.css 的
+   .row／.line／.label，這裡只重設 <dl>／<dd> 的瀏覽器預設 margin。 */
 .macroList {
 	margin: 0;
-}
-
-.macroList > div {
-	display: flex;
-	align-items: baseline;
-	justify-content: space-between;
-	gap: var(--space-3);
-	padding: var(--space-2) 0;
-	border-bottom: 1px solid var(--color-border);
-}
-
-.macroList > div:last-child {
-	padding-bottom: 0;
-	border-bottom: none;
-}
-
-.macroList dt {
-	font-weight: 600;
 }
 
 .macroList dd {
