@@ -38,6 +38,7 @@ import { Me } from "./screens/Me";
 import { NewFood } from "./screens/NewFood";
 import { Overview } from "./screens/Overview";
 import { Supplements } from "./screens/Supplements";
+import { Targets } from "./screens/Targets";
 import { Today } from "./screens/Today";
 import { Trend } from "./screens/Trend";
 
@@ -145,6 +146,8 @@ export function App() {
 								path="/me"
 								element={<Me onLoggedOut={() => setLoggedIn(false)} />}
 							/>
+							{/* 每日目標（帳號設定規格 §5.2），入口是「我的」的每日目標卡片。 */}
+							<Route path="/me/targets" element={<Targets />} />
 							<Route path="/expenses/new" element={<AddExpenseRoute />} />
 							<Route path="/meals/new" element={<LogMealRoute />} />
 							{/* 修改或刪除一筆已經記下的餐（編輯餐點規格 §4.2）。入口：飲食頁

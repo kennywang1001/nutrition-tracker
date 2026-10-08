@@ -1,0 +1,271 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter, Route, Routes } from "react-router";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { queryKeys } from "../src/api/queries";
+import { resetRefreshStateForTests } from "../src/auth/refresh";
+import { clearTokens, setTokens } from "../src/auth/store";
+import { Targets } from "../src/screens/Targets";
+import { json, mockApi } from "./helpers/mock-api";
+
+const ZERO = { kcal: "0", protein_g: "0", fat_g: "0", carb_g: "0" };
+const STATS = {
+	date: "2019-07-04",
+	actual: ZERO,
+	target: { kcal: "1800.00", protein_g: "120.00", fat_g: null, carb_g: null },
+	ratio: { kcal: "0.00", protein_g: "0.00", fat_g: null, carb_g: null },
+	breakdown: { food: ZERO, supplement: ZERO },
+};
+
+const SAVED = {
+	id: 7,
+	kcal: "1800.00",
+	protein_g: null,
+	fat_g: "60.00",
+	carb_g: null,
+	label: null,
+	effective_from: "2019-07-04",
+	effective_to: null,
+};
+
+function statsRoute(body: unknown = STATS, status = 200) {
+	return {
+		method: "GET",
+		path: "/api/stats/daily",
+		handler: () => json(body, status),
+	};
+}
+
+function putRoute(handler: () => Response | Promise<Response>) {
+	return { method: "PUT", path: "/api/targets/today", handler };
+}
+
+function errorResponse(status: number, code: string, message: string) {
+	return json({ error: { code, message, details: {} } }, status);
+}
+
+/** QueryClient 由測試建立：要讀快取、證明失效。`staleTime` 跟 app 一樣是 60 秒——
+ *  預設的 0 會讓重新掛載自己重抓，「有沒有失效」就看不出來（handover「開帳號的路」）。 */
+function renderScreen() {
+	const client = new QueryClient({
+		defaultOptions: { queries: { retry: false, staleTime: 60_000 } },
+	});
+	render(
+		<QueryClientProvider client={client}>
+			<MemoryRouter initialEntries={["/me/targets"]}>
+				<Routes>
+					<Route path="/me/targets" element={<Targets />} />
+					<Route path="/me" element={<h1>我的</h1>} />
+				</Routes>
+			</MemoryRouter>
+		</QueryClientProvider>,
+	);
+	return client;
+}
+
+function putBodies(spy: ReturnType<typeof mockApi>): unknown[] {
+	return spy.mock.calls
+		.filter(([, init]) => init?.method === "PUT")
+		.map(([, init]) => JSON.parse(String(init?.body)));
+}
+
+function statsGets(spy: ReturnType<typeof mockApi>): number {
+	return spy.mock.calls.filter(
+		([input, init]) =>
+			(init?.method ?? "GET") === "GET" &&
+			String(input).includes("/api/stats/daily"),
+	).length;
+}
+
+/** 斷言「沒有送出」之前先等一下：mutate 是非同步的，立刻斷言在守衛壞掉時也成立（第 41 種）。 */
+function settle() {
+	return new Promise((resolve) => setTimeout(resolve, 50));
+}
+
+beforeEach(() => {
+	localStorage.clear();
+	clearTokens();
+	resetRefreshStateForTests();
+	vi.restoreAllMocks();
+	setTokens({ access_token: "a", refresh_token: "r" });
+});
+
+describe("/me/targets", () => {
+	it("預填今天生效的目標，沒設的空白", async () => {
+		mockApi([statsRoute()]);
+		renderScreen();
+
+		expect(await screen.findByLabelText("熱量（kcal）")).toHaveValue("1800");
+		expect(screen.getByLabelText("蛋白質（g）")).toHaveValue("120");
+		expect(screen.getByLabelText("脂肪（g）")).toHaveValue("");
+		expect(screen.getByLabelText("碳水（g）")).toHaveValue("");
+		expect(screen.getByLabelText("熱量（kcal）")).toHaveAttribute(
+			"inputmode",
+			"decimal",
+		);
+	});
+
+	it("送出的 body：四個鍵都在，空白是 null", async () => {
+		const spy = mockApi([statsRoute(), putRoute(() => json(SAVED))]);
+		renderScreen();
+
+		await userEvent.clear(await screen.findByLabelText("蛋白質（g）"));
+		await userEvent.type(screen.getByLabelText("脂肪（g）"), " 60 ");
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		await waitFor(() => expect(putBodies(spy)).toHaveLength(1));
+		expect(putBodies(spy)[0]).toEqual({
+			kcal: "1800",
+			protein_g: null,
+			fat_g: "60",
+			carb_g: null,
+		});
+	});
+
+	it("全部清空也能存（今天起沒有目標）：四個 null", async () => {
+		const spy = mockApi([statsRoute(), putRoute(() => json(SAVED))]);
+		renderScreen();
+
+		await userEvent.clear(await screen.findByLabelText("熱量（kcal）"));
+		await userEvent.clear(screen.getByLabelText("蛋白質（g）"));
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		await waitFor(() => expect(putBodies(spy)).toHaveLength(1));
+		expect(putBodies(spy)[0]).toEqual({
+			kcal: null,
+			protein_g: null,
+			fat_g: null,
+			carb_g: null,
+		});
+	});
+
+	it("存好之後失效今天的統計與所有期間的趨勢，回到 /me", async () => {
+		const spy = mockApi([statsRoute(), putRoute(() => json(SAVED))]);
+		const client = renderScreen();
+		// 趨勢不在這一頁掛著：沒人觀察的 query 失效之後不會重抓，`isInvalidated` 留著，看得到。
+		// key 用 queryKeys 產生，不寫死字面值（第 23 種）。
+		const rangeKey = queryKeys.rangeStats("2019-06-28", "2019-07-04");
+		client.setQueryData(rangeKey, []);
+		expect(client.getQueryState(rangeKey)?.isInvalidated).toBe(false);
+
+		await userEvent.type(await screen.findByLabelText("碳水（g）"), "200");
+		expect(statsGets(spy)).toBe(1);
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		expect(
+			await screen.findByRole("heading", { name: "我的" }),
+		).toBeInTheDocument();
+		expect(client.getQueryState(rangeKey)?.isInvalidated).toBe(true);
+		// 今天的統計在這一頁掛著：失效會立刻重抓（staleTime 60 秒，不失效就不會再打一次）。
+		await waitFor(() => expect(statsGets(spy)).toBe(2));
+	});
+
+	it.each([
+		["0", "熱量要是大於 0 的數字"],
+		["12.345", "熱量最多兩位小數"],
+		["20001", "熱量不能超過 20000"],
+	])("前端檢查：熱量 %s → 「%s」、不送出", async (value, message) => {
+		// PUT 掛著不回：守衛壞掉時請求送出去了、但畫面不會導走，紅的是「沒有 PUT」那一行，
+		// 不是「找不到 alert」（紅燈要紅在被測的性質上，第 12 種）。
+		const spy = mockApi([
+			statsRoute(),
+			putRoute(() => new Promise<Response>(() => {})),
+		]);
+		renderScreen();
+
+		const kcal = await screen.findByLabelText("熱量（kcal）");
+		await userEvent.clear(kcal);
+		await userEvent.type(kcal, value);
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(message);
+		await settle();
+		expect(putBodies(spy)).toHaveLength(0);
+	});
+
+	it("讀不到目前的目標：不顯示表單（空白表單存下去等於清掉目標）", async () => {
+		mockApi([
+			statsRoute(
+				{ error: { code: "INTERNAL_ERROR", message: "壞了", details: {} } },
+				500,
+			),
+		]);
+		renderScreen();
+
+		expect(await screen.findByText("無法載入目前的目標")).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "儲存" }),
+		).not.toBeInTheDocument();
+		expect(screen.queryByLabelText("熱量（kcal）")).not.toBeInTheDocument();
+	});
+
+	it("409：顯示後端的訊息，留在這一頁", async () => {
+		mockApi([
+			statsRoute(),
+			putRoute(() =>
+				errorResponse(
+					409,
+					"TARGET_CONFLICT",
+					"目標剛被另一台裝置改過，請重新整理再試",
+				),
+			),
+		]);
+		renderScreen();
+
+		await userEvent.click(await screen.findByRole("button", { name: "儲存" }));
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"目標剛被另一台裝置改過，請重新整理再試",
+		);
+		expect(screen.getByLabelText("熱量（kcal）")).toBeInTheDocument();
+	});
+
+	it("422：顯示欄位訊息", async () => {
+		mockApi([
+			statsRoute(),
+			putRoute(() =>
+				json(
+					{
+						error: {
+							code: "VALIDATION_ERROR",
+							message: "輸入有誤",
+							details: {
+								errors: [
+									{
+										loc: ["body", "kcal"],
+										msg: "Input should be greater than 0",
+										type: "greater_than",
+									},
+								],
+							},
+						},
+					},
+					422,
+				),
+			),
+		]);
+		renderScreen();
+
+		await userEvent.click(await screen.findByRole("button", { name: "儲存" }));
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"kcal：Input should be greater than 0",
+		);
+	});
+
+	it("其他錯誤：「儲存失敗，請再試一次」", async () => {
+		mockApi([
+			statsRoute(),
+			putRoute(() => new Response("boom", { status: 500 })),
+		]);
+		renderScreen();
+
+		await userEvent.click(await screen.findByRole("button", { name: "儲存" }));
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"儲存失敗，請再試一次",
+		);
+		expect(screen.getByLabelText("熱量（kcal）")).toBeInTheDocument();
+	});
+});
