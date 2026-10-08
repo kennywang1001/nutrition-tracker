@@ -9,6 +9,7 @@ import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { Today } from "../src/screens/Today";
 import { json, mockApiByPath as mockApi } from "./helpers/mock-api";
+import { percentText } from "./helpers/percent";
 
 // 需要 MemoryRouter：P3-C Task 2 在「今日補劑」區塊加了一個連到
 // /supplements 的 <Link>，不掛 Router 會直接炸掉（跟 food-library.test.tsx
@@ -134,7 +135,7 @@ describe("今日總覽", () => {
 			"value",
 			"1",
 		);
-		expect(carbRow).toHaveTextContent("200%");
+		expect(carbRow).toHaveTextContent(percentText(2));
 		expect(
 			within(screen.getByTestId("macro-fat_g")).queryByRole("progressbar"),
 		).not.toBeInTheDocument();

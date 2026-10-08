@@ -10,6 +10,7 @@ import { clearTokens, setTokens } from "../src/auth/store";
 import { AiEstimatePanel } from "../src/components/AiEstimatePanel";
 import { shrinkToLongestEdge } from "../src/lib/resize-image";
 import { json, mockApi, type Route } from "./helpers/mock-api";
+import { percentText } from "./helpers/percent";
 
 vi.mock("../src/lib/resize-image", () => ({
 	shrinkToLongestEdge: vi.fn((file: File) => Promise.resolve(file)),
@@ -173,7 +174,7 @@ describe("AI 估算面板：估算", () => {
 		const card = await estimateByText();
 
 		expect(card).not.toHaveTextContent("0.37");
-		expect(card).not.toHaveTextContent("37%");
+		expect(card).not.toHaveTextContent(percentText(0.37));
 		expect(card).not.toHaveTextContent("信心");
 	});
 

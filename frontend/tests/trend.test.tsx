@@ -8,6 +8,7 @@ import { clearTokens, setTokens } from "../src/auth/store";
 import { Trend } from "../src/screens/Trend";
 import trendStyles from "../src/screens/Trend.module.css";
 import { json, mockApi } from "./helpers/mock-api";
+import { percentText } from "./helpers/percent";
 
 /** 換期間時調淡卡片的 class。CSS module 的型別是 `string | undefined`；
  *  真的不見了會變成 "undefined"，斷言一樣紅，不會空字串假綠。 */
@@ -143,7 +144,9 @@ describe("趨勢畫面", () => {
 
 		render(wrap(<Trend />));
 
-		expect(await screen.findByTestId("adherence")).toHaveTextContent("85%");
+		expect(await screen.findByTestId("adherence")).toHaveTextContent(
+			percentText(0.85),
+		);
 	});
 
 	it("adherence 是 null 時說沒有計畫，不是 0%", async () => {
@@ -159,7 +162,7 @@ describe("趨勢畫面", () => {
 
 		const adherence = await screen.findByTestId("adherence");
 		expect(adherence).toHaveTextContent("沒有補劑計畫");
-		expect(adherence).not.toHaveTextContent("0%");
+		expect(adherence).not.toHaveTextContent(percentText(0));
 	});
 });
 

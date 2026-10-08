@@ -9,6 +9,7 @@ import { clearTokens, setTokens } from "../src/auth/store";
 import { CategoryBar } from "../src/components/CategoryBar";
 import { Expenses } from "../src/screens/Expenses";
 import { json, mockApi } from "./helpers/mock-api";
+import { percentText } from "./helpers/percent";
 
 // 需要 MemoryRouter：營養趨勢的入口是 <Link>。
 function wrap(children: ReactNode) {
@@ -468,9 +469,12 @@ describe("記帳 /expenses", () => {
 		expect(foodRow).toHaveTextContent("飲食");
 		expect(foodRow).toHaveTextContent("350.00");
 		expect(foodRow).toHaveTextContent("2 筆");
-		// 350/400 = 87.5% → 四捨五入到整數是 88%
-		expect(foodRow).toHaveTextContent("88%");
-		expect(screen.getByTestId("category-transport")).toHaveTextContent("13%");
+		// 350/400 = 87.5% → 四捨五入到整數是 88%（en／zh-TW 寫成 "88%"；
+		// 長相看機器語系，所以用 percentText 算，見 helpers/percent.ts）。
+		expect(foodRow).toHaveTextContent(percentText(0.88));
+		expect(screen.getByTestId("category-transport")).toHaveTextContent(
+			percentText(0.13),
+		);
 	});
 
 	it("空月份的總額是 0.00，不是空白也不是錯誤", async () => {
