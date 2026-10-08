@@ -1,7 +1,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
@@ -11,6 +11,7 @@ from app.db import get_db
 from app.errors import ConflictError, ForbiddenError, UnauthorizedError
 from app.invites import INVITE_INVALID_MESSAGE, find_usable_invite, redeem_invite
 from app.models.user import User
+from app.password_resets import RESET_INVALID_MESSAGE, find_usable_reset, redeem_reset
 from app.ratelimit import login_rate_limiter, session_rate_limiter
 from app.schemas.auth import (
     LoginRequest,
@@ -21,6 +22,11 @@ from app.schemas.auth import (
     UserResponse,
 )
 from app.schemas.invite import InviteStatusRequest, InviteStatusResponse
+from app.schemas.password_reset import (
+    PasswordResetRequest,
+    PasswordResetStatusRequest,
+    PasswordResetStatusResponse,
+)
 from app.security.password import DUMMY_PASSWORD_HASH, hash_password, verify_password
 from app.security.sessions import (
     ReuseDetectedError,
@@ -88,6 +94,55 @@ async def invite_status(
     """註冊畫面一打開就先問（規格 §4.1），失效的連結不用填完表單才知道。
     邀請碼放在 body，不放網址——不進存取紀錄。"""
     return InviteStatusResponse(valid=await find_usable_invite(db, payload.token) is not None)
+
+
+@router.post("/password-reset-status", response_model=PasswordResetStatusResponse)
+async def password_reset_status(
+    payload: PasswordResetStatusRequest, db: AsyncSession = Depends(get_db)
+) -> PasswordResetStatusResponse:
+    """重設密碼頁一打開就先問（帳號設定規格 §3.5），同 invite-status。
+    碼放在 body，不放網址——不進存取紀錄。不限速：一次 SHA-256 加一次索引查詢。"""
+    return PasswordResetStatusResponse(
+        valid=await find_usable_reset(db, payload.token) is not None
+    )
+
+
+@router.post("/password-reset", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_password(payload: PasswordResetRequest, db: AsyncSession = Depends(get_db)) -> None:
+    """用管理員產生的一次性連結設新密碼（帳號設定規格 §3.6）。不自動登入。"""
+    # 1. 先查連結，**在 Argon2 之前**（同 register 查邀請）：亂碼或用過的連結只花一次
+    #    SHA-256 與一次索引查詢。四種失效同一個錯誤——對方能做的事都一樣：要一個新的。
+    reset = await find_usable_reset(db, payload.token)
+    if reset is None:
+        raise ForbiddenError("RESET_LINK_INVALID", RESET_INVALID_MESSAGE)
+    reset_id = reset.id
+
+    password_hash = await run_in_threadpool(hash_password, payload.new_password)
+
+    # 2. 同一個交易：兌換（條件式 UPDATE）→ 新雜湊 → 撤銷所有 session。
+    #    revoke_all_for_user 取 advisory lock 之後**自己 commit**——它的 commit 就是這個
+    #    交易的 commit；前兩個寫入都還沒 commit，所以三件事一起進去或一起不進去
+    #    （test_a_failure_after_redeeming_rolls_back_the_password_and_the_link）。
+    #    不要在中間加 commit。
+    user_id = await redeem_reset(db, reset_id)
+    if user_id is None:
+        # 查的時候還能用、兌換時已經被別人用掉或撤銷（兩個請求同時用同一條連結）。
+        await db.rollback()
+        raise ForbiddenError("RESET_LINK_INVALID", RESET_INVALID_MESSAGE)
+    email = await db.scalar(
+        update(User)
+        .where(User.id == user_id)
+        .values(password_hash=password_hash)
+        .returning(User.email)
+    )
+    await revoke_all_for_user(db, user_id)
+
+    # 3. 之前猜錯被限速的人，不用再等一分鐘才能用新密碼登入。鍵要跟 login 的一樣
+    #    （LoginRequest 正規化成小寫；change_password 也用 email.lower()）。
+    if email is not None:
+        login_rate_limiter.record_success(email.lower())
+    # 稽核：只寫 id（規格 §6）——不寫碼、不寫密碼、不寫 email。
+    logger.info("使用者 %s 用重設連結重設了密碼（reset_id=%s）", user_id, reset_id)
 
 
 @router.post("/login", response_model=TokenResponse)

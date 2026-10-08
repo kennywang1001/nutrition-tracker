@@ -92,6 +92,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/password-reset-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Password Reset Status
+         * @description 重設密碼頁一打開就先問（帳號設定規格 §3.5），同 invite-status。
+         *     碼放在 body，不放網址——不進存取紀錄。不限速：一次 SHA-256 加一次索引查詢。
+         */
+        post: operations["password_reset_status_api_auth_password_reset_status_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/password-reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset Password
+         * @description 用管理員產生的一次性連結設新密碼（帳號設定規格 §3.6）。不自動登入。
+         */
+        post: operations["reset_password_api_auth_password_reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/login": {
         parameters: {
             query?: never;
@@ -2042,6 +2083,23 @@ export interface components {
              */
             expires_at: string;
         };
+        /** PasswordResetRequest */
+        PasswordResetRequest: {
+            /** Token */
+            token: string;
+            /** New Password */
+            new_password: string;
+        };
+        /** PasswordResetStatusRequest */
+        PasswordResetStatusRequest: {
+            /** Token */
+            token: string;
+        };
+        /** PasswordResetStatusResponse */
+        PasswordResetStatusResponse: {
+            /** Valid */
+            valid: boolean;
+        };
         /** PendingRevisionResponse */
         PendingRevisionResponse: {
             /** Id */
@@ -2705,6 +2763,70 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["InviteStatusResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    password_reset_status_api_auth_password_reset_status_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordResetStatusRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasswordResetStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_password_api_auth_password_reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
