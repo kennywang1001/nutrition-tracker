@@ -317,8 +317,8 @@ sudo ./scripts/deploy.sh
 
 | 步驟 | 做什麼 | 失敗時 |
 |---|---|---|
-| 開始前 | 拿部署鎖；印出並檢查 `docker compose version`（v2.20 以上）；檢查這個 compose 專案裡沒有開發環境的容器 | 停，什麼都沒動 |
-| 1 | `git pull --ff-only`，版本＝`HEAD` 的 SHA；檢查 `.env.production` | 停，什麼都沒動 |
+| 開始前 | 拿部署鎖；印出並檢查 `docker compose version`（v2.20 以上）；檢查 `.env.production` 存在；檢查這個 compose 專案裡沒有開發環境的容器 | 停，什麼都沒動 |
+| 1 | `git pull --ff-only`，版本＝`HEAD` 的 SHA | 停，什麼都沒動 |
 | 2 | 拉那個 SHA 的兩個映像 | 「CI 還沒做好這個版本的映像（或測試沒過）」，停 |
 | 3 | 把目前的 api、caddy 映像標成本機的 `:rollback`（在跑的容器；沒在跑就用停著的容器） | 停 |
 | 4 | 備份資料庫（`scripts/backup.sh`，到 `backups/`）。資料庫停著就先起來再備份；只有「沒有資料庫容器、也沒有資料 volume」才跳過 | 停 |

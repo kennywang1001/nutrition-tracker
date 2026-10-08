@@ -140,16 +140,18 @@ check_compose_version() {
 # 以 repo 擁有者的身分跑 git：用 sudo 執行這支腳本時，root 跑 git 會被
 # 「dubious ownership」擋下，就算沒擋，git pull 也會在 .git 裡留下 root 的檔案，
 # 之後一般使用者的 git 就寫不進去了。-H：用擁有者的 HOME（ssh 金鑰、gitconfig）。
+# 9>&-：不把部署鎖的 fd 交給 git——git pull 可能在背景留下 gc／maintenance，
+# 拿著 fd 的話部署結束了鎖還在。
 git_repo() {
   if [[ "$(id -u)" -eq 0 ]]; then
     local owner
     owner="$(stat -c %U "$REPO_ROOT")"
     if [[ "$owner" != root ]]; then
-      sudo -H -u "$owner" git -C "$REPO_ROOT" "$@"
+      sudo -H -u "$owner" git -C "$REPO_ROOT" "$@" 9>&-
       return
     fi
   fi
-  git -C "$REPO_ROOT" "$@"
+  git -C "$REPO_ROOT" "$@" 9>&-
 }
 
 # 某個服務的容器 ID（含沒在跑的；同一個服務只取第一個）。

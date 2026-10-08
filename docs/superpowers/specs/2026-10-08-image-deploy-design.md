@@ -20,8 +20,8 @@
   `!failure()` 就會替紅的程式碼做映像。全跑之後純文件的 commit 也照樣測、照樣做映像（每個 master commit 都有
   對應的映像）。PR 與其他分支照常用路徑過濾；過濾清單也涵蓋 `Dockerfile`、`.dockerignore`、`docker-compose*.yml`、
   `scripts/**`（後端）與 `caddy/**`（前端）。
-- `publish` 有 `concurrency: publish-master`（`cancel-in-progress: false`）：一次只推一組映像，舊的不會晚一步把
-  `latest` 蓋回去。
+- `publish` 有 `concurrency: publish-master`（`cancel-in-progress: false`）：一次只推一組映像。它只排隊、不按 commit
+  先後，所以 `latest` 偶爾可能指向較舊的 commit；`deploy.sh` 一律用 SHA，不看 `latest`。
 - workflow 預設 `permissions: contents: read`；`changes` 另外要 `pull-requests: read`（paths-filter 在 PR 上讀 API）。
 - 兩個映像推到 GHCR：`ghcr.io/kennywang1001/nutrition-tracker-api` 與 `…-web`（`frontend/Dockerfile`，Caddy＋前端），
   標籤是 **commit 的完整 SHA** 與 `latest`。
