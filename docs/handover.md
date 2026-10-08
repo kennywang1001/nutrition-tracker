@@ -1414,8 +1414,13 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
   畫面 `screens/Targets.tsx`（`/me/targets`）、`ChangePassword.tsx`（`/me/password`）、`ResetPassword.tsx`（沒登入的
   `/reset-password#<碼>`，已登入打開是說明頁）；API 層 `api/targets.ts`、`admin-users.ts`、`password-reset.ts`；
   `lib/link-token.ts`（`#` 後面的碼，`/join` 共用）、`lib/targets.ts`（四個欄位的標籤、單位、上限）、`lib/decimal.ts` 的 `checkTargetInput`。
-  `/me/targets` 的表單用 `api/stats.ts` 的 `useFreshDailyStats()`（掛載時一定重抓）、等 `isFetchedAfterMount` 才預填——存的是
-  整組四個值，拿快取的舊值預填會把沒動的幾格悄悄改回去；重抓失敗或離線就是「無法載入目前的目標」。「所有帳號」產生連結後
+  `/me/targets` 的表單用 `api/stats.ts` 的 `useFreshDailyStats()`（掛載時一定重抓）、等 `isFetchedAfterMount && isSuccess`
+  才預填——存的是整組四個值，拿快取的舊值預填會把沒動的幾格悄悄改回去；重抓失敗或離線就是「無法載入目前的目標」。
+  **`isFetchedAfterMount` 單獨不夠**：它比的是 `dataUpdateCount` 有沒有比 observer 建立時大，而整頁重新載入時
+  `PersistQueryClientProvider` 還在還原，那時建立的 observer 記下的是 0，還原把 localStorage 裡那份狀態（≥ 1）蓋上去
+  就算「抓過了」——請求還沒回來，舊值已經填進表單。所以 `Targets` 先看 `useIsRestoring()`，還原完才掛真的去抓的那一層
+  （`TargetsLoader`）。**之後有別的畫面要「只用掛載後抓回來的那一份」，一樣要擋還原**；測試要用兩個 `QueryClient`
+  透過 localStorage 交接才驗得到（`tests/targets.test.tsx`「整頁重新載入」），`setQueryData` 預先放資料走不到這條路。「所有帳號」產生連結後
   焦點移到連結那一區（連結在卡片最上面，按鈕可能在一長串帳號的最下面）。
 - e2e：`e2e/account-settings.spec.ts`（目標、改密碼、重設連結三條）、`e2e/new-account.ts`（`newAccount()`：用 API 邀請＋註冊開一個
   新帳號；`loginAs()`）。**會改密碼或目標的 e2e 一律自己開帳號**，不要動 `kenny.demo@example.com`、`e2e.member@example.com`。

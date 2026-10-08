@@ -1,4 +1,8 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+	useIsRestoring,
+	useMutation,
+	useQueryClient,
+} from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 import { useNavigate } from "react-router";
 import { ApiError, describeFieldErrors } from "../api/errors";
@@ -35,8 +39,27 @@ function problemText(
  *
  *  **表單只用掛載之後才抓回來的那一份預填**（帳號設定審查 M5）。存的是整組四個值，
  *  拿快取裡的舊值預填，沒動的那幾格會被悄悄改回去——快取可能是另一台裝置改之前的、
- *  或離線還原的。重抓失敗就顯示錯誤，不拿舊值湊一張表單。 */
+ *  或離線還原的。重抓失敗就顯示錯誤，不拿舊值湊一張表單。
+ *
+ *  **離線快取還在還原的時候不掛 `TargetsLoader`**（整頁重新載入停在這一頁時會遇到）。
+ *  「掛載之後才抓回來的」是 `isFetchedAfterMount` 說的，而它比的是「現在的 `dataUpdateCount`」
+ *  與「observer 建立時的」。還原期間建立的 observer 記下的是空的狀態（0）；還原接著把
+ *  localStorage 裡那份狀態整個蓋上去（`dataUpdateCount` ≥ 1）——一個請求都還沒回來，
+ *  `isFetchedAfterMount` 與 `isSuccess` 就都是 true 了，舊的值被填進表單，而且預填只做一次。
+ *  等還原做完才建立 observer，它記下的就是還原之後的狀態，之後只有真的抓回來的才算數。 */
 export function Targets() {
+	const restoring = useIsRestoring();
+
+	return (
+		<section className={ui.screen}>
+			<h1>每日目標</h1>
+			{restoring ? <p>載入中…</p> : <TargetsLoader />}
+		</section>
+	);
+}
+
+/** 重抓今天的統計，拿到第一份新鮮的才畫表單。**只能在離線快取還原完之後掛載**（見 `Targets`）。 */
+function TargetsLoader() {
 	const stats = useFreshDailyStats();
 	// 第一份新鮮的資料**記下來就不再換**：表單出來之後，背景重抓（切回分頁）失敗不能把
 	// 表單換成錯誤訊息、帶回別的值也不能蓋掉使用者打到一半的字。render 期間設 state 是
@@ -52,20 +75,11 @@ export function Targets() {
 	// 還沒有結果、而且真的還在抓。離線時 query 是 paused，不會自己結束——那算讀不到。
 	const waiting = !stats.isFetchedAfterMount && stats.fetchStatus !== "paused";
 
-	return (
-		<section className={ui.screen}>
-			<h1>每日目標</h1>
-			{prefill !== null ? (
-				<TargetsForm current={prefill.target} />
-			) : waiting || fresh != null ? (
-				<p>載入中…</p>
-			) : (
-				// 不顯示空白表單：四格空白存下去＝今天起沒有目標，等於把目標清掉。
-				// 也不顯示帶著快取舊值的表單（見上面）。
-				<p role="alert">無法載入目前的目標</p>
-			)}
-		</section>
-	);
+	if (prefill !== null) return <TargetsForm current={prefill.target} />;
+	if (waiting || fresh != null) return <p>載入中…</p>;
+	// 不顯示空白表單：四格空白存下去＝今天起沒有目標，等於把目標清掉。
+	// 也不顯示帶著快取舊值的表單（見 `Targets`）。
+	return <p role="alert">無法載入目前的目標</p>;
 }
 
 function initialValues(current: DailyStats["target"]): Values {

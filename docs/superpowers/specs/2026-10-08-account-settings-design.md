@@ -245,8 +245,10 @@
 
 `ui.screen`；h1「每日目標」；說明「留空＝不設定。從今天開始生效，之前的日子維持原本的目標。」；四個
 `inputMode="decimal"` 欄位（標籤同 5.1），預填目前的值。**預填只用這一頁掛載之後才抓回來的那一份**
-（`useFreshDailyStats`：`refetchOnMount: "always"`，等 `isFetchedAfterMount`）：存的是整組四個值，拿快取的舊值預填會把
-沒動的幾格悄悄改回去。重抓還沒回來 → 「載入中…」；重抓失敗、離線、沒有資料 → 「無法載入目前的目標」**不顯示表單**
+（`useFreshDailyStats`：`refetchOnMount: "always"`，等 `isFetchedAfterMount && isSuccess`）：存的是整組四個值，拿快取的
+舊值預填會把沒動的幾格悄悄改回去。**離線快取還在還原時（`useIsRestoring()`）不掛去抓的那一層**，只顯示「載入中…」：
+整頁重新載入停在這一頁時，還原期間建立的 observer 會把「還原蓋上來的那份」也算成掛載之後抓到的
+（`isFetchedAfterMount` 比的是 `dataUpdateCount`，還原會讓它變大），光靠 `isFetchedAfterMount` 擋不住。重抓還沒回來 → 「載入中…」；重抓失敗、離線、沒有資料 → 「無法載入目前的目標」**不顯示表單**
 （空白表單存下去會把目標清掉；帶著舊值的表單會把別台裝置的修改蓋掉）。表單出來之後不再跟著 query 變
 （背景重抓失敗不會把打到一半的字清掉）。
 

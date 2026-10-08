@@ -3,11 +3,17 @@ import {
 	QueryClient,
 	QueryClientProvider,
 } from "@tanstack/react-query";
+import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	createOfflinePersistOptions,
+	OFFLINE_CACHE_STORAGE_KEY,
+} from "../src/api/persist";
 import { queryKeys } from "../src/api/queries";
+import { useDailyStats } from "../src/api/stats";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { Targets } from "../src/screens/Targets";
@@ -389,5 +395,132 @@ describe("/me/targets", () => {
 			"儲存失敗，請再試一次",
 		);
 		expect(screen.getByLabelText("熱量（kcal）")).toBeInTheDocument();
+	});
+});
+
+// 整頁重新載入停在 /me/targets（帳號設定審查 M5 的第二輪）。`App` 用 `PersistQueryClientProvider`：
+// 還原離線快取的那段時間，畫面已經 render 了。那時候建立的 observer 記下的「掛載時的狀態」是空的，
+// 還原把 localStorage 裡那份（`dataUpdateCount` ≥ 1）蓋上去之後，`isFetchedAfterMount` 就是 true——
+// 一個請求都還沒回來，舊的目標已經被當成「掛載之後才抓回來的」填進表單，而且預填只做一次。
+//
+// 只有「兩個 QueryClient 透過同一份 localStorage 交接」驗得到（同 offline.test.tsx）：上面
+// `renderScreenWithCache` 的 `setQueryData` 是在 observer 建立**之前**就把資料放進快取，走不到這條路。
+describe("/me/targets：整頁重新載入，離線快取裡有舊的目標", () => {
+	const OLD = {
+		...STATS,
+		target: {
+			kcal: "1500.00",
+			protein_g: "90.00",
+			fat_g: "50.00",
+			carb_g: null,
+		},
+	};
+
+	function newClient() {
+		return new QueryClient({
+			defaultOptions: { queries: { retry: false, staleTime: 60_000 } },
+		});
+	}
+
+	function wrap(client: QueryClient, at: string) {
+		return (
+			<PersistQueryClientProvider
+				client={client}
+				persistOptions={createOfflinePersistOptions(window.localStorage)}
+			>
+				<MemoryRouter initialEntries={[at]}>
+					<Routes>
+						<Route path="/" element={<Probe />} />
+						<Route path="/me/targets" element={<Targets />} />
+					</Routes>
+				</MemoryRouter>
+			</PersistQueryClientProvider>
+		);
+	}
+
+	/** 上一次載入：別的畫面（總覽、飲食、「我的」）讀過今天的統計，它就進了離線快取。 */
+	function Probe() {
+		const stats = useDailyStats();
+		return <p>上一次載入：{stats.data?.target?.kcal ?? "還沒有"}</p>;
+	}
+
+	/** 第一階段：線上讀到舊的目標，等它真的寫進 localStorage（節流寫入，約 1 秒）。 */
+	async function persistOldTarget() {
+		mockApi([statsRoute(OLD)]);
+		const first = render(wrap(newClient(), "/"));
+		await screen.findByText("上一次載入：1500.00");
+		await waitFor(
+			() =>
+				expect(localStorage.getItem(OFFLINE_CACHE_STORAGE_KEY) ?? "").toContain(
+					"1500.00",
+				),
+			{ timeout: 3000 },
+		);
+		first.unmount();
+		vi.restoreAllMocks();
+	}
+
+	it("伺服器上已經是新的目標：重抓回來之前沒有表單，回來之後預填新的值", async () => {
+		await persistOldTarget();
+		let respond: (response: Response) => void = () => undefined;
+		const spy = mockApi([
+			{
+				method: "GET",
+				path: "/api/stats/daily",
+				handler: () =>
+					new Promise<Response>((resolve) => {
+						respond = resolve;
+					}),
+			},
+		]);
+		render(wrap(newClient(), "/me/targets"));
+
+		// 重抓發出去＝還原已經做完了。再等一下：還原的結果是排程之後才通知畫面的，
+		// 立刻斷言會在「表單還沒來得及畫出來」的時候就通過（第 41 種）。
+		await waitFor(() => expect(statsGets(spy)).toBe(1));
+		await act(() => settle());
+		expect(screen.queryByLabelText("熱量（kcal）")).not.toBeInTheDocument();
+		expect(screen.queryByDisplayValue("1500")).not.toBeInTheDocument();
+		expect(screen.getByText("載入中…")).toBeInTheDocument();
+
+		respond(json(STATS));
+
+		expect(await screen.findByLabelText("熱量（kcal）")).toHaveValue("1800");
+		expect(screen.getByLabelText("蛋白質（g）")).toHaveValue("120");
+		// 離線快取裡有、伺服器上已經清掉的那一格是空白，不是舊的 50。
+		expect(screen.getByLabelText("脂肪（g）")).toHaveValue("");
+	});
+
+	it("連不上（重抓失敗）：「無法載入目前的目標」，不顯示帶著舊值的表單", async () => {
+		await persistOldTarget();
+		// 連 Response 都沒有——斷線時瀏覽器的 fetch 是直接 reject（同 offline.test.tsx 的 goOffline）。
+		const spy = vi
+			.spyOn(globalThis, "fetch")
+			.mockRejectedValue(new TypeError("network request failed"));
+		render(wrap(newClient(), "/me/targets"));
+
+		expect(await screen.findByText("無法載入目前的目標")).toBeInTheDocument();
+		expect(spy).toHaveBeenCalled();
+		expect(screen.queryByLabelText("熱量（kcal）")).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "儲存" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("瀏覽器知道自己離線（重抓被暫停）：也是「無法載入目前的目標」，沒有表單", async () => {
+		await persistOldTarget();
+		const spy = mockApi([statsRoute()]);
+		onlineManager.setOnline(false);
+		try {
+			render(wrap(newClient(), "/me/targets"));
+
+			expect(await screen.findByText("無法載入目前的目標")).toBeInTheDocument();
+			// 還原做完之後畫面才會換：等一下再看，表單不能在這之後冒出來。
+			await act(() => settle());
+			expect(screen.queryByLabelText("熱量（kcal）")).not.toBeInTheDocument();
+			expect(statsGets(spy)).toBe(0);
+		} finally {
+			onlineManager.setOnline(true);
+		}
 	});
 });

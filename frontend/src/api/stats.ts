@@ -29,8 +29,18 @@ function fetchDailyStats() {
  *  存的時候整組送回去」的畫面用（`/me/targets`）。
  *
  *  `useDailyStats` 在 `staleTime`（60 秒）內掛載不會重抓，離線快取還原的更舊。拿那份預填，
- *  使用者只改一格按儲存，其他格就被悄悄改回快取裡的舊值（帳號設定審查 M5）。呼叫端用
- *  `isFetchedAfterMount` 判斷「這一份是掛載之後才拿到的」。 */
+ *  使用者只改一格按儲存，其他格就被悄悄改回快取裡的舊值（帳號設定審查 M5）。
+ *
+ *  **`refetchOnMount: "always"` 只保證「會去抓」，不保證「你手上這份是抓回來的」。** 呼叫端要
+ *  做兩件事：
+ *
+ *  1. 用 `isFetchedAfterMount && isSuccess` 判斷「這一份是掛載之後才拿到的」。
+ *  2. **離線快取還在還原時（`useIsRestoring()`）不要呼叫這支 hook**——包一層，還原完才掛。
+ *     `isFetchedAfterMount` 比的是「現在的 `dataUpdateCount`」與「observer 建立時的」；還原
+ *     期間建立的 observer 記下的是 0，還原把 localStorage 裡那份狀態（≥ 1）蓋上去之後，
+ *     它就是 true 了——而那時一個請求都還沒回來。整頁重新載入停在那個畫面時就會遇到
+ *     （`screens/Targets.tsx` 的 `Targets`／`TargetsLoader`，`tests/targets.test.tsx`
+ *     「整頁重新載入」）。 */
 export function useFreshDailyStats() {
 	return useQuery({
 		queryKey: queryKeys.dailyStats,
