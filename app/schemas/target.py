@@ -55,6 +55,23 @@ class TargetResponse(BaseModel):
     effective_to: date | None
 
 
+class TargetTodayRequest(BaseModel):
+    """`PUT /api/targets/today`（帳號設定規格 §3.1）：從使用者時區的今天起，目標是這四個值。
+
+    **四個鍵都必須送**（PUT＝整組取代）：沒有 default 的 `Field(...)` 在 Pydantic v2 是必填，
+    值可以是 null（＝不設定）。「省略＝沿用」是 PATCH 的語意，表單送的是整組，混用會讓「清空
+    一格」悄悄變成「沿用」。
+
+    **值必須 > 0**（既有的 POST／PATCH 是 `ge=0`，不動）：0 的目標算不出比例（stats 回
+    null），畫面上跟「未設定」分不出來。上限沿用 `_MAX_KCAL`／`_MAX_GRAMS`。
+    """
+
+    kcal: Decimal | None = Field(gt=0, le=_MAX_KCAL, max_digits=8, decimal_places=2)
+    protein_g: Decimal | None = Field(gt=0, le=_MAX_GRAMS, max_digits=8, decimal_places=2)
+    fat_g: Decimal | None = Field(gt=0, le=_MAX_GRAMS, max_digits=8, decimal_places=2)
+    carb_g: Decimal | None = Field(gt=0, le=_MAX_GRAMS, max_digits=8, decimal_places=2)
+
+
 class TargetUpdateRequest(BaseModel):
     """`PATCH /api/targets/{id}` 的請求 —— 決定 1：跟計畫 4a 的
     `supplement_plans` 同構，這不是原地修改，是「關閉舊期間、開新期間」。

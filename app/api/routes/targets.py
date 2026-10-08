@@ -1,7 +1,7 @@
 from datetime import date
 
 from fastapi import APIRouter, Depends, Query, status
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,7 +12,12 @@ from app.db import get_db
 from app.errors import ConflictError, NotFoundError, UnprocessableEntityError
 from app.models.target import UserTarget
 from app.models.user import User
-from app.schemas.target import TargetCreateRequest, TargetResponse, TargetUpdateRequest
+from app.schemas.target import (
+    TargetCreateRequest,
+    TargetResponse,
+    TargetTodayRequest,
+    TargetUpdateRequest,
+)
 
 router = APIRouter(prefix="/targets", tags=["targets"])
 
@@ -96,6 +101,93 @@ async def list_or_get_target(
         )
     )
     return _to_response(target) if target is not None else None
+
+
+async def _new_period_end(
+    db: AsyncSession, user_id: int, today: date, current: UserTarget | None
+) -> date | None:
+    """新期間在哪一天結束（帳號設定規格決定 3）：有目前的期間就沿用它的結束日；沒有就是
+    下一筆未來期間的開始日，再沒有就開放式。
+
+    抽成函式也是測試的接縫：讓它回 None 就造得出「插入撞上別的期間」——平常只有兩台裝置
+    同時存才會發生（`test_a_clash_is_409_and_writes_nothing`）。"""
+    if current is not None:
+        return current.effective_to
+    next_start: date | None = await db.scalar(
+        select(func.min(UserTarget.effective_from)).where(
+            UserTarget.user_id == user_id, UserTarget.effective_from > today
+        )
+    )
+    return next_start
+
+
+@router.put("/today", response_model=TargetResponse)
+async def set_target_from_today(
+    payload: TargetTodayRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TargetResponse:
+    """從使用者的今天起，目標是這四個值；過去的日子維持原本的目標（帳號設定規格 §3.1）。
+
+    「今天」由後端算（`today_in_timezone`）——前端不能自己算日界線。三種狀態一個端點：
+
+    - **今天才開始的那一筆：原地改。** 期間是 `[from, to)`，它還沒有任何「過去的一天」，
+      改它不會改寫歷史（§4.4 的「舊列數值永遠不動」保護的是過去的日子）。`PATCH` 做不到
+      這件事——新的生效日 ≤ 舊的生效日會 422。
+    - **更早開始的：關閉＋開新**，順序同 `update_target`（先 flush 關閉，EXCLUDE 才看得到）。
+    - **沒有：開一筆新的。**
+
+    並行不加鎖：資料庫的 EXCLUDE 保證不重疊，輸的一方整筆 rollback、409，重存一次就會走
+    「原地改」（規格決定 5）。
+    """
+    today = today_in_timezone(user.timezone)
+
+    current = await db.scalar(
+        select(UserTarget).where(
+            UserTarget.user_id == user.id,
+            UserTarget.effective_from <= today,
+            or_(UserTarget.effective_to.is_(None), UserTarget.effective_to > today),
+        )
+    )
+
+    if current is not None and current.effective_from == today:
+        current.kcal = payload.kcal
+        current.protein_g = payload.protein_g
+        current.fat_g = payload.fat_g
+        current.carb_g = payload.carb_g
+        await db.commit()
+        await db.refresh(current)
+        return _to_response(current)
+
+    new_effective_to = await _new_period_end(db, user.id, today, current)
+    label = current.label if current is not None else None
+    if current is not None:
+        current.effective_to = today
+        await db.flush()  # 1. 先關舊的——順序不能換，見 update_target
+
+    new_target = UserTarget(
+        user_id=user.id,
+        kcal=payload.kcal,
+        protein_g=payload.protein_g,
+        fat_g=payload.fat_g,
+        carb_g=payload.carb_g,
+        label=label,
+        effective_from=today,
+        effective_to=new_effective_to,
+    )
+    db.add(new_target)
+    try:
+        await db.flush()  # 2. 再開新的
+    except IntegrityError as exc:
+        # rollback 連上面的關閉一起復原：不會留下「舊的關了、新的沒開」。
+        await db.rollback()
+        raise ConflictError(
+            "TARGET_CONFLICT", "目標剛被另一台裝置改過，請重新整理再試"
+        ) from exc
+
+    await db.commit()
+    await db.refresh(new_target)
+    return _to_response(new_target)
 
 
 async def _load_owned_target(db: AsyncSession, target_id: int, user: User) -> UserTarget:

@@ -1013,6 +1013,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/targets/today": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Target From Today
+         * @description 從使用者的今天起，目標是這四個值；過去的日子維持原本的目標（帳號設定規格 §3.1）。
+         *
+         *     「今天」由後端算（`today_in_timezone`）——前端不能自己算日界線。三種狀態一個端點：
+         *
+         *     - **今天才開始的那一筆：原地改。** 期間是 `[from, to)`，它還沒有任何「過去的一天」，
+         *       改它不會改寫歷史（§4.4 的「舊列數值永遠不動」保護的是過去的日子）。`PATCH` 做不到
+         *       這件事——新的生效日 ≤ 舊的生效日會 422。
+         *     - **更早開始的：關閉＋開新**，順序同 `update_target`（先 flush 關閉，EXCLUDE 才看得到）。
+         *     - **沒有：開一筆新的。**
+         *
+         *     並行不加鎖：資料庫的 EXCLUDE 保證不重疊，輸的一方整筆 rollback、409，重存一次就會走
+         *     「原地改」（規格決定 5）。
+         */
+        put: operations["set_target_from_today_api_targets_today_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/targets/{target_id}": {
         parameters: {
             query?: never;
@@ -2305,6 +2336,27 @@ export interface components {
             effective_from: string;
             /** Effective To */
             effective_to: string | null;
+        };
+        /**
+         * TargetTodayRequest
+         * @description `PUT /api/targets/today`（帳號設定規格 §3.1）：從使用者時區的今天起，目標是這四個值。
+         *
+         *     **四個鍵都必須送**（PUT＝整組取代）：沒有 default 的 `Field(...)` 在 Pydantic v2 是必填，
+         *     值可以是 null（＝不設定）。「省略＝沿用」是 PATCH 的語意，表單送的是整組，混用會讓「清空
+         *     一格」悄悄變成「沿用」。
+         *
+         *     **值必須 > 0**（既有的 POST／PATCH 是 `ge=0`，不動）：0 的目標算不出比例（stats 回
+         *     null），畫面上跟「未設定」分不出來。上限沿用 `_MAX_KCAL`／`_MAX_GRAMS`。
+         */
+        TargetTodayRequest: {
+            /** Kcal */
+            kcal: number | string | null;
+            /** Protein G */
+            protein_g: number | string | null;
+            /** Fat G */
+            fat_g: number | string | null;
+            /** Carb G */
+            carb_g: number | string | null;
         };
         /**
          * TargetUpdateRequest
@@ -4220,6 +4272,39 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TargetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_target_from_today_api_targets_today_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TargetTodayRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
