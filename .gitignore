@@ -24,6 +24,9 @@ backups/
 
 # scripts/deploy.sh 寫的版本紀錄（這台機器目前跑哪個 commit 的映像），不進版控
 deployed-version
+# scripts/deploy.sh 的部署鎖（flock 用的檔案；沒有 flock 時是資料夾）
+.deploy.lock
+.deploy.lock.d/
 
 # 編輯器與作業系統
 .vscode/

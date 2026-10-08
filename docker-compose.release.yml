@@ -14,14 +14,17 @@
 # 不如當場說清楚。變數代換是「每個檔案各自解析」（docker-compose.yml 的註解），
 # 所以這個必填只寫在這個檔案，不影響沒帶 -f docker-compose.release.yml 的指令。
 #
-# `build: !reset null` 把 docker-compose.yml／docker-compose.prod.yml 的 build 拿掉：
-# 這個組合**不可能**在 NAS 上 build——就算忘了 --no-build，映像不存在也只會拉不到、
-# 大聲失敗，而不是安靜地用 NAS 上的原始碼建一個「看起來是那個版本」的映像。
+# 這裡**故意不寫 `build: !reset null`**：Synology 內建的 Compose 可能比較舊，而舊版 Compose
+# 不認得 `!reset` 時是**安靜地忽略**（實測 v2.15.1、v2.17.3：不報錯、build 照樣在；v2.18.1 起才有作用）——
+# 寫了等於假裝有保護。所以 docker-compose.yml／docker-compose.prod.yml 的 build 還在，
+# 「不在 NAS 上 build」靠的是 deploy.sh 每個 up／run 都帶 --no-build：映像不存在就
+# 大聲失敗，不會安靜地用 NAS 上的原始碼建一個「看起來是那個版本」的映像。
+# 自己手打這串指令時也一定要帶 --no-build（不帶的話，本機沒有那個映像時 compose 會 build）。
+# `pull` 不受 build 影響：有 image 的服務照樣從 GHCR 拉（--ignore-buildable 預設是關的；
+# 拉不到就非零結束——本機 Compose v2.40 實測）。
 services:
   api:
     image: "ghcr.io/kennywang1001/nutrition-tracker-api:${APP_VERSION:?APP_VERSION is required: the commit SHA (or tag) of the image to run. Use scripts/deploy.sh}"
-    build: !reset null
 
   caddy:
     image: "ghcr.io/kennywang1001/nutrition-tracker-web:${APP_VERSION:?APP_VERSION is required: the commit SHA (or tag) of the image to run. Use scripts/deploy.sh}"
-    build: !reset null
