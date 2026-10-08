@@ -6,12 +6,14 @@ import { logout } from "../auth/session";
 import { AccountCard } from "../components/AccountCard";
 import { AccountsAdmin } from "../components/AccountsAdmin";
 import { Card } from "../components/Card";
+import { ExportCard } from "../components/ExportCard";
 import { FriendsCard } from "../components/FriendsCard";
 import { InviteFriends } from "../components/InviteFriends";
 import { TargetsCard } from "../components/TargetsCard";
 import styles from "./Me.module.css";
 
-/** 我的：帳號、每日目標、好友、管理員的審核、邀請與所有帳號、登出（介面改版規格 §5.7、帳號設定規格 §5.1）。 */
+/** 我的：帳號、每日目標、好友、匯出資料、管理員的審核、邀請與所有帳號、登出
+ *  （介面改版規格 §5.7、帳號設定規格 §5.1、報表月份與匯出規格 §4.2）。 */
 export function Me() {
 	// 帳號卡片自己讀 useMe；這裡只剩「是不是管理員」要用它（同一個 query，不會多打一次）。
 	const me = useMe().data;
@@ -39,6 +41,9 @@ export function Me() {
 			<TargetsCard />
 
 			<FriendsCard />
+
+			{/* 放在管理員的幾張卡片前面：「所有帳號」可能很長，匯出不該被推到最下面。 */}
+			<ExportCard />
 
 			{isAdmin && (
 				<Card>

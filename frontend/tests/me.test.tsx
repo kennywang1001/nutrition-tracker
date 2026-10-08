@@ -420,3 +420,35 @@ describe("我的：每日目標卡片", () => {
 		expect(within(card).queryByText("未設定")).not.toBeInTheDocument();
 	});
 });
+
+describe("我的：匯出資料", () => {
+	it("每個人都有「匯出資料」卡片，在登出之前；畫出來的時候不打任何匯出端點", async () => {
+		// 卡片自己的行為在 export-card.test.tsx；這裡只守「我的」有沒有把它放進來。
+		const fetchMock = mockApi([
+			statsRoute(),
+			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
+		]);
+
+		render(wrap(<Me />));
+
+		await screen.findByText("kenny@example.com");
+		const card = screen.getByTestId("export-card");
+		expect(
+			within(card).getByRole("heading", { name: "匯出資料" }),
+		).toBeInTheDocument();
+		expect(
+			within(card)
+				.getAllByRole("button")
+				.map((button) => button.textContent),
+		).toEqual(["餐點", "花費", "補劑"]);
+		const logout = screen.getByRole("button", { name: "登出" });
+		expect(
+			card.compareDocumentPosition(logout) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		expect(
+			fetchMock.mock.calls
+				.map(([input]) => String(input))
+				.filter((url) => url.includes("/api/export")),
+		).toEqual([]);
+	});
+});

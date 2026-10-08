@@ -1,0 +1,29 @@
+.title {
+	margin: 0 0 var(--space-2);
+}
+
+.hint {
+	margin: 0;
+	font-size: 13px;
+	color: var(--color-text-muted);
+}
+
+/* 三顆按鈕一列、等寬；外觀與 44px 來自 ui.secondary。 */
+.actions {
+	display: flex;
+	gap: var(--space-2);
+	margin: var(--space-3) 0 var(--space-2);
+}
+
+.actions button {
+	flex: 1;
+	/* 「下載中…」比「餐點」寬：不換行，也不把另外兩顆擠小。 */
+	min-width: 0;
+	padding: 0 var(--space-2);
+	white-space: nowrap;
+}
+
+.error {
+	margin: 0;
+	color: var(--color-danger);
+}
