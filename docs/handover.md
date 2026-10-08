@@ -869,7 +869,7 @@ app 的 `queryClient` 預設 `staleTime` 60 秒、快取會持久化，reload �
 | Windows Python 改 markdown | 文字模式寫入會把**整份檔案**轉成 CRLF，跟 `.gitattributes`（`* text=auto eol=lf`）衝突，整個 diff 變成雜訊。用 `newline="
 "` |
 | `tsBuildInfoFile` | 要放在**被 gitignore 蓋到的目錄**（這個 repo 是 `./node_modules/.tmp/`）。`tsconfig.e2e.json` 原本指向 `./e2e_modules/.tmp/`，於是那個 build cache 一直被 git 追蹤，每跑一次 typecheck 就多一個 modified |
-| 改了後端的 request/response schema | **一定要 `npm run gen:api` 重新產生 `frontend/src/api/schema.d.ts`**，而**本機沒有任何東西會提醒你**。唯一的守衛是 CI 的 `contract` job（它起後端、重新產生、`git diff --exit-code`）。P3-B 計畫二 Task 8 加了 `FoodCreateRequest.is_global` 卻沒重新產生，backend / frontend / e2e 三個 job 全過，只有 contract 紅 |
+| 改了後端的 request/response schema | **一定要 `npm run gen:api` 重新產生 `frontend/src/api/schema.d.ts`**，而**本機沒有任何東西會提醒你**。**連 docstring 也算**——端點的說明文字會進 OpenAPI 的 `description`。2026-10 連續三次漏（安全補強、改吃的時間各改了一段 docstring 沒重新產生，都是下一個分支才補上）：**任何動到 `app/api/routes/*.py` 或 `app/schemas/*.py` 的 commit 都重新產生一次**。唯一的守衛是 CI 的 `contract` job（它起後端、重新產生、`git diff --exit-code`）。P3-B 計畫二 Task 8 加了 `FoodCreateRequest.is_global` 卻沒重新產生，backend / frontend / e2e 三個 job 全過，只有 contract 紅 |
 | react-router 的路由順序 | **依片段具體程度排名，不依宣告順序** —— 跟 FastAPI 完全不是同一種機制。`/foods/:id` 排在 `/foods/new` 前面，`/foods/new` 仍然命中靜態路徑（用 `matchRoutes` 實測過） |
 
 ---
@@ -1061,8 +1061,8 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
   ~~對液體仍顯示 g~~——**已完成**（最後幾件規格）：`MealItemResponse` 與好友的
   `FriendMealItem` 多 `base_unit`，取**項目釘住的那一版**的（§4.3 的凍結規則：食物後來審核
   通過一版 g，舊紀錄仍是 ml；`quantity_g` 的欄位名不改）。飲食頁卡片、編輯畫面的項目、好友卡片
-  顯示 `{數字} {base_unit}`。已知沒處理：編輯畫面「改一項」直接輸入的單位看的是食物**現在的**
-  版本，食物後來改了單位時會跟項目釘住的單位不同（PATCH 不換釘住的版本）。修改與刪除在小項目包做完（規格
+  顯示 `{數字} {base_unit}`；編輯畫面「改一項」直接輸入的單位也用項目釘住的那一版（PATCH 不換
+  釘住的版本，輸入的數字照那一版的單位換算）。修改與刪除在小項目包做完（規格
   `docs/superpowers/specs/2026-10-06-small-items-design.md`）：已記的餐不受影響
   （改重量不重算 `quantity_g`；刪除時 `portion_id` 變 null、公克數照舊）；
   介面上只有私人份量能改、刪，公開份量的修改與刪除只開放 API 給管理員。

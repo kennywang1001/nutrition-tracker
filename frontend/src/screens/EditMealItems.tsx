@@ -6,7 +6,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "../api/client";
 import { ApiError, hasFieldError } from "../api/errors";
-import { type Food, useFood } from "../api/foods";
+import type { Food } from "../api/foods";
 import type { Meal } from "../api/meals";
 import { queryKeys } from "../api/queries";
 import { AiEstimatePanel } from "../components/AiEstimatePanel";
@@ -104,10 +104,9 @@ function ItemEditor({
 	onClose: () => void;
 }) {
 	const queryClient = useQueryClient();
-	// 直接輸入時的單位（g 或 ml）看食物**現在的**版本（份量清單也是現在的）。
-	// `item.base_unit` 是這一項釘住的那一版的；兩者只在食物後來改了單位時
-	// 不同——那種情況這裡沒處理（PATCH 不換釘住的版本）。
-	const foodQuery = useFood(item.food_id);
+	// 直接輸入時的單位（g 或 ml）用這一項**釘住的那一版**（`item.base_unit`）：
+	// PATCH 不換釘住的版本，輸入的數字照那一版的單位換算——食物後來改了單位，
+	// 這一項的數字照樣是當初的單位（凍結歷史，handover §4.3）。
 	// 初始值是這一項當初怎麼記的（不是 null）：食物後來才設的預設份量
 	// 不能把「直接輸入 200 g」變成 200 碗。
 	// `portion_id` 是 ON DELETE SET NULL：份量被刪掉的項目 `portion_id` 變
@@ -153,7 +152,7 @@ function ItemEditor({
 		>
 			<PortionQuantityFields
 				state={portion}
-				unit={foodQuery.data?.nutrition?.base_unit ?? "g"}
+				unit={item.base_unit}
 				idPrefix={`item-${item.id}-`}
 			/>
 			{save.isError && <p role="alert">{describeItemError(save.error)}</p>}

@@ -267,6 +267,29 @@ describe("編輯這一餐：讀取", () => {
 		);
 	});
 
+	it("改一項：直接輸入的單位用這一項釘住的那一版（食物後來改成 g 也照樣是 ml）", async () => {
+		// 食物 1（RICE）現在的版本是 g；這一項是當初用 ml 的那一版記的。PATCH 不換
+		// 釘住的版本，所以輸入的數字照樣是 ml——單位要跟著這一項，不是跟著食物現在。
+		const milk = {
+			...ITEM,
+			id: 52,
+			food_name: "鮮奶",
+			quantity: "250.00",
+			quantity_g: "250.00",
+			base_unit: "ml",
+		};
+		mockApi(routes({ ...MEAL, items: [milk] }));
+		renderEditMeal();
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "修改鮮奶" }),
+		);
+
+		expect(
+			await screen.findByTestId("item-52-quantity-unit"),
+		).toHaveTextContent(/^ml$/);
+	});
+
 	it("404：找不到這一餐（可能在另一台裝置上刪了）", async () => {
 		mockApi([
 			{
