@@ -11,7 +11,7 @@
 }
 
 /* 兩欄的第一個標題／卡片貼齊上緣，左右兩欄才對得齊。權重 (0,3,0)：蓋過
-   Card 的 margin 與各頁標題自己的 class（例如總覽的 .sectionTitle）。 */
+   Card 的 margin 與各頁標題自己的 class（例如總覽的 .todayTitle）。 */
 :global(.app-desktop) .columns > * > :first-child {
 	margin-top: 0;
 }

@@ -6,6 +6,7 @@ import type { components } from "../api/schema";
 import { useDailyStats } from "../api/stats";
 import { Card } from "../components/Card";
 import { MacroBar } from "../components/MacroBar";
+import ui from "../components/ui.module.css";
 import { formatTime } from "../lib/dates";
 import { formatMacro } from "../lib/decimal";
 import { FriendFeed } from "./FriendFeed";
@@ -210,7 +211,9 @@ export function Today() {
 						</div>
 						<div className={styles.supplements}>
 							<Card>
-								<h2 className={styles.cardTitle}>今日補劑</h2>
+								<h2 className={`${ui.sectionTitle} ${styles.cardTitle}`}>
+									今日補劑
+								</h2>
 								{/* 補劑的新增與「當天吃了就點一份進去」（P3-C Task 2）的入口。
 						    補劑不是 tab（tab bar 固定是 總覽／報表／＋／飲食／我的），
 						    入口放在飲食畫面——這裡是使用者會看到補劑的地方，也是他們

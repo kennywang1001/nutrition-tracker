@@ -1,10 +1,7 @@
-/* 「今日餐點」：同總覽「今天」的區塊標題（Overview.module.css 的 .sectionTitle）
-   與飲食頁卡片裡的「今日補劑」——小字、灰色，標題不搶卡片的內容。 */
+/* 「今日餐點」：字級、顏色是 ui.module.css 的 .sectionTitle（同總覽「今天」
+   與「今日補劑」），這裡只管距離——跟上面的營養素卡片隔開。 */
 .heading {
 	margin: var(--space-4) 0 var(--space-1);
-	font-size: 14px;
-	font-weight: 600;
-	color: var(--color-text-muted);
 }
 
 .meals {

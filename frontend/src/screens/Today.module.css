@@ -158,14 +158,11 @@
 	font-variant-numeric: tabular-nums;
 }
 
-/* 卡片裡的標題：跟其他改版過的卡片（記一餐、編輯這一餐的區塊標題、
-   ui.module.css 的 h2）一樣是小字、灰色、沒有上邊距。瀏覽器預設的 h2
-   上下各有一大截 margin，在卡片裡看起來像空了一行。 */
+/* 卡片裡的標題：字級、顏色是 ui.module.css 的 .sectionTitle。這裡只管距離——
+   在卡片裡沒有上邊距（瀏覽器預設的 h2 上下各一大截，看起來像空了一行），
+   下面緊接「新增補劑」連結，只留一點點。 */
 .cardTitle {
 	margin: 0 0 var(--space-1);
-	font-size: 14px;
-	font-weight: 600;
-	color: var(--color-text-muted);
 }
 
 .cardLink {

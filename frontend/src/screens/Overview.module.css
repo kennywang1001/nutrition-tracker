@@ -39,10 +39,10 @@
 	margin-top: var(--space-2);
 }
 
-.sectionTitle {
+/* 「今天」標題：字級、顏色是 ui.module.css 的 .sectionTitle，這裡只管距離——
+   跟上面的數字卡片隔開；下面的卡片自己有 margin-top，標題底下不用再留。 */
+.todayTitle {
 	margin: var(--space-4) 0 0;
-	font-size: 14px;
-	color: var(--color-text-muted);
 }
 
 .timeline {

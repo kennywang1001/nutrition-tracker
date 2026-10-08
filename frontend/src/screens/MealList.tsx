@@ -7,6 +7,7 @@ import {
 	useUploadMealPhoto,
 } from "../api/photos";
 import { PhotoPickerButton } from "../components/PhotoPickerButton";
+import ui from "../components/ui.module.css";
 import { ZoomablePhoto } from "../components/ZoomablePhoto";
 import { formatTime } from "../lib/dates";
 import { formatMacro } from "../lib/decimal";
@@ -144,7 +145,7 @@ export function MealList() {
 
 	return (
 		<section>
-			<h2 className={styles.heading}>今日餐點</h2>
+			<h2 className={`${ui.sectionTitle} ${styles.heading}`}>今日餐點</h2>
 			{mealsQuery.isLoading && <p>載入中…</p>}
 			{mealsQuery.isError && <p>無法載入餐點清單</p>}
 			<ul className={styles.meals}>

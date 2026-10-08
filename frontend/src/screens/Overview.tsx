@@ -12,6 +12,7 @@ import { Card } from "../components/Card";
 import { CategoryIcon, MealTypeIcon } from "../components/IconBadge";
 import layout from "../components/layout.module.css";
 import { RatioProgress } from "../components/RatioProgress";
+import ui from "../components/ui.module.css";
 import { formatTime } from "../lib/dates";
 import { formatMacro, formatMoney, ratioOf } from "../lib/decimal";
 import { buildTimeline, type TimelineRow } from "../lib/timeline";
@@ -181,7 +182,10 @@ function TodayTimeline() {
 
 	return (
 		<section aria-labelledby="overview-today">
-			<h2 id="overview-today" className={styles.sectionTitle}>
+			<h2
+				id="overview-today"
+				className={`${ui.sectionTitle} ${styles.todayTitle}`}
+			>
 				今天
 			</h2>
 			<Card>{body}</Card>

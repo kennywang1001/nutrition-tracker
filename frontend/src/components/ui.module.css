@@ -28,7 +28,12 @@
 	font-size: 22px;
 }
 
-:where(.screen h2) {
+/* 小字、灰色的區塊標題。.screen 底下的 h2 自動套用；不在 .screen 裡的畫面
+ * （總覽的「今天」、飲食頁的「今日餐點」「今日補劑」）在 h2 上加 .sectionTitle，
+ * 四個地方才長得一樣。.sectionTitle 也包在 :where() 裡（權重 0）：各畫面跟
+ * 上下文的距離不同，自己的 margin class 一定蓋得過這裡的 margin，不看載入順序。 */
+:where(.screen h2),
+:where(.sectionTitle) {
 	margin: 0 0 var(--space-2);
 	font-size: 14px;
 	font-weight: 600;
