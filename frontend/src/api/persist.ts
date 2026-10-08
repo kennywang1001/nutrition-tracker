@@ -86,6 +86,12 @@ const NOT_PERSISTED: ReadonlySet<unknown> = new Set([
 	"friend-photo",
 	"food-search",
 	"supplement-search",
+	// 管理員的清單，全部在 `["admin", …]` 底下（見 `api/queries.ts`）：所有帳號（每個人的
+	// email 與名字）、邀請清單、待審提案。別人的個資不該以明文留在這台裝置的 localStorage
+	// 裡；而這三個畫面本來就只在線上有用（產生連結、撤銷、審核都要打後端，兩份清單還是
+	// `staleTime: 0`、每次掛載都重抓），離線快取對它們沒有好處（帳號設定審查 M4）。
+	// 新增 `["admin", …]` 的 query 時自動比照辦理；要離線可用的請放別的命名空間。
+	"admin",
 ]);
 
 /** 寫進 localStorage 前，把「有資料的失敗查詢」改寫成「有資料、待重抓」。

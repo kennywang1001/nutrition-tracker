@@ -648,4 +648,54 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 			{ timeout: 3000 },
 		);
 	});
+
+	it("管理員的清單（所有帳號、邀請、待審提案）不會被寫進 localStorage", async () => {
+		// 所有帳號是每個人的 email 與名字，邀請清單有被邀請的人——不該以明文留在這台裝置的
+		// localStorage 裡（登出時記憶體的快取會清，但節流寫入前關掉分頁、或別人拿到這台
+		// 裝置的檔案就看得到）。這些畫面本來就只在線上有用（帳號設定審查 M4）。
+		// 做法同上面兩條：先讓 query 真的進到 client，證明 persist 跑過一輪（stats 在），
+		// 再用 queryKeys 產生的 key 做深比對（第 23 種）。
+		mockApi({
+			"/api/stats/daily": () => json(STATS_WITH_TARGET),
+			"/api/supplements/today": () => json([]),
+			"/api/meals": () => json([]),
+		});
+		const client = newTestClient();
+		render(wrap(client, <Today />));
+		await screen.findByText(/1800/);
+
+		const adminKeys = [
+			queryKeys.adminUsers,
+			queryKeys.invites,
+			queryKeys.pendingRevisions,
+		];
+		client.setQueryData(queryKeys.adminUsers, [
+			{ id: 3, email: "ming@example.com", display_name: "小明", role: "user" },
+		]);
+		client.setQueryData(queryKeys.invites, []);
+		client.setQueryData(queryKeys.pendingRevisions, []);
+		const adminKeysJson = adminKeys.map((key) => JSON.stringify(key));
+
+		await waitFor(
+			() => {
+				const raw = localStorage.getItem(OFFLINE_CACHE_STORAGE_KEY);
+				expect(raw).not.toBeNull();
+				const persisted: { queryKey: unknown[] }[] = JSON.parse(raw ?? "{}")
+					.clientState.queries;
+				expect(
+					persisted.some(
+						(query) =>
+							Array.isArray(query.queryKey) && query.queryKey[0] === "stats",
+					),
+				).toBe(true);
+				expect(
+					persisted
+						.map((query) => JSON.stringify(query.queryKey))
+						.filter((key) => adminKeysJson.includes(key)),
+				).toEqual([]);
+				expect(raw).not.toContain("ming@example.com");
+			},
+			{ timeout: 3000 },
+		);
+	});
 });
