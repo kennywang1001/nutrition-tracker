@@ -4,6 +4,7 @@ import { apiFetch } from "../api/client";
 import { useMe } from "../api/me";
 import { logout } from "../auth/session";
 import { AccountCard } from "../components/AccountCard";
+import { AccountsAdmin } from "../components/AccountsAdmin";
 import { Card } from "../components/Card";
 import { FriendsCard } from "../components/FriendsCard";
 import { InviteFriends } from "../components/InviteFriends";
@@ -12,7 +13,7 @@ import styles from "./Me.module.css";
 
 type Props = { onLoggedOut: () => void };
 
-/** 我的：帳號、每日目標、好友、管理員的審核與邀請、登出（介面改版規格 §5.7、帳號設定規格 §5.1）。 */
+/** 我的：帳號、每日目標、好友、管理員的審核、邀請與所有帳號、登出（介面改版規格 §5.7、帳號設定規格 §5.1）。 */
 export function Me({ onLoggedOut }: Props) {
 	// 帳號卡片自己讀 useMe；這裡只剩「是不是管理員」要用它（同一個 query，不會多打一次）。
 	const me = useMe().data;
@@ -50,6 +51,8 @@ export function Me({ onLoggedOut }: Props) {
 			)}
 
 			{isAdmin && <InviteFriends />}
+
+			{isAdmin && <AccountsAdmin />}
 
 			<Card>
 				<button

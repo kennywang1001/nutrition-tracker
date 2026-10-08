@@ -1,0 +1,90 @@
+/* 「所有帳號」：版型照 InviteFriends.module.css（同一張「我的」頁上的兩張管理員卡片要長得一樣）。 */
+
+.title {
+	margin: 0 0 var(--space-2);
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--color-text-muted);
+}
+
+.created {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin-bottom: var(--space-3);
+	padding-bottom: var(--space-3);
+	border-bottom: 1px solid var(--color-border);
+}
+
+.created p {
+	margin: 0;
+}
+
+.createdFor {
+	font-weight: 600;
+}
+
+.created label {
+	font-size: 13px;
+	color: var(--color-text-muted);
+}
+
+.created input {
+	box-sizing: border-box;
+	width: 100%;
+	min-height: 44px;
+	padding: var(--space-2) var(--space-3);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-button);
+	background: var(--color-bg);
+	color: var(--color-text);
+}
+
+.actions {
+	display: flex;
+	gap: var(--space-2);
+}
+
+.list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-2) 0;
+	border-bottom: 1px solid var(--color-border);
+}
+
+.row:last-child {
+	border-bottom: none;
+}
+
+/* 名字（＋管理員標籤）一行、email 一行；吃掉剩下的寬度，按鈕放不下時整顆換到下一行。 */
+.who {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.email {
+	font-size: 13px;
+	color: var(--color-text-muted);
+	/* 長 email 在 390px 寬的手機上不能把整列撐出卡片。 */
+	overflow-wrap: anywhere;
+}
+
+.muted {
+	font-size: 13px;
+	color: var(--color-text-muted);
+}
+
+.error {
+	margin: 0 0 var(--space-2);
+	color: var(--color-danger);
+}

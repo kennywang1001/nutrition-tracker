@@ -101,6 +101,35 @@ describe("我的", () => {
 		).not.toBeInTheDocument();
 	});
 
+	it("管理員有「所有帳號」，一般使用者沒有（也不打帳號清單的端點）", async () => {
+		// 「所有帳號」的行為在 accounts-admin.test.tsx；這裡只守「我的」有沒有把它放進來、只給管理員。
+		mockApi([
+			statsRoute(),
+			{ method: "GET", path: "/api/admin/users", handler: () => json([]) },
+			{ method: "GET", path: "/api/me", handler: () => json(me("admin")) },
+		]);
+		const { unmount } = render(wrap(<Me onLoggedOut={vi.fn()} />));
+		expect(
+			await screen.findByRole("heading", { name: "所有帳號" }),
+		).toBeInTheDocument();
+		unmount();
+
+		vi.restoreAllMocks();
+		const spy = mockApi([
+			statsRoute(),
+			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
+		]);
+		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		// 先等帳號卡片載入完，「沒有」才有意義（第 41 種）。
+		await screen.findByText("kenny@example.com");
+		expect(
+			screen.queryByRole("heading", { name: "所有帳號" }),
+		).not.toBeInTheDocument();
+		expect(
+			spy.mock.calls.some(([url]) => String(url).includes("/api/admin/users")),
+		).toBe(false);
+	});
+
 	it("useMe 還在載入時看不到「審核」——不要先閃一下再消失", () => {
 		vi.spyOn(globalThis, "fetch").mockImplementation(
 			() => new Promise(() => {}),
