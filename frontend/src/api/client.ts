@@ -96,4 +96,41 @@ export async function fetchPhotoBlob(path: string): Promise<Blob> {
 	return response.blob();
 }
 
+export type Download = {
+	blob: Blob;
+	/** `Content-Disposition` 裡的檔名；沒有這個標頭（或讀不出來）是 `null`。 */
+	filename: string | null;
+};
+
+/** `attachment; filename="meals-2026-10-09.csv"` → `meals-2026-10-09.csv`。
+ *  只認後端自己寫的這一種形式（雙引號、ASCII 檔名），不處理 `filename*=`。 */
+function parseFilename(header: string | null): string | null {
+	if (header === null) return null;
+	return /filename="([^"]+)"/.exec(header)?.[1] ?? null;
+}
+
+/** 取一個需要認證、要存成檔案的端點（匯出的 CSV），回內容與後端建議的檔名。
+ *
+ *  **為什麼不是一個 `<a href="/api/export/…">`：** 理由跟照片一樣——那個請求
+ *  帶不了 `Authorization`（token 只在記憶體裡，不是 cookie）。所以先用 `fetch`
+ *  把整份內容拿成 `Blob`，再交給 `lib/save-file.ts` 存檔。順便得到一個好處：
+ *  下載到一半斷線，`response.blob()` 會 reject，使用者看到的是錯誤，不是一個
+ *  被截斷卻看起來正常的檔案。
+ *
+ *  同源，所以 `Content-Disposition` 讀得到（跨來源的話要後端另外開
+ *  `Access-Control-Expose-Headers`）。失敗一律拋 `ApiError`，429 帶
+ *  `retryAfterSeconds`。 */
+export async function fetchDownload(path: string): Promise<Download> {
+	const response = await fetchWithAuthRetry(path, {});
+
+	if (!response.ok) {
+		throw await parseErrorResponse(response);
+	}
+
+	return {
+		blob: await response.blob(),
+		filename: parseFilename(response.headers.get("content-disposition")),
+	};
+}
+
 export { ApiError };

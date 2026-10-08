@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { apiFetch } from "../src/api/client";
+import { apiFetch, fetchDownload } from "../src/api/client";
 import { ApiError } from "../src/api/errors";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
@@ -135,5 +135,88 @@ describe("apiFetch", () => {
 		await expect(
 			apiFetch("/api/auth/logout-all", { method: "POST" }),
 		).resolves.toBeNull();
+	});
+});
+
+describe("fetchDownload", () => {
+	function csv(disposition: string | null) {
+		const headers = new Headers({ "content-type": "text/csv; charset=utf-8" });
+		if (disposition !== null) headers.set("content-disposition", disposition);
+		return new Response("\uFEFF日期\r\n", { status: 200, headers });
+	}
+
+	it("帶上 Authorization，回內容與 Content-Disposition 裡的檔名", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValue(csv('attachment; filename="expenses-2026-10-09.csv"'));
+
+		const download = await fetchDownload("/api/export/expenses.csv");
+
+		expect(download.filename).toBe("expenses-2026-10-09.csv");
+		// 位元組原封不動（開頭的 BOM 還在）。
+		expect([
+			...new Uint8Array(await download.blob.arrayBuffer()).slice(0, 3),
+		]).toEqual([0xef, 0xbb, 0xbf]);
+		const init = fetchMock.mock.calls[0]?.[1];
+		expect(new Headers(init?.headers).get("authorization")).toBe("Bearer a");
+	});
+
+	it.each([[null], ["attachment"], ["inline"]])(
+		"沒有檔名可讀（%s）：filename 是 null，由呼叫端決定叫什麼",
+		async (disposition) => {
+			setTokens({ access_token: "a", refresh_token: "r" });
+			vi.spyOn(globalThis, "fetch").mockResolvedValue(csv(disposition));
+
+			const download = await fetchDownload("/api/export/meals.csv");
+
+			expect(download.filename).toBeNull();
+		},
+	);
+
+	it("401 之後換票並重送一次（跟 apiFetch 同一個內核）", async () => {
+		setTokens({ access_token: "old", refresh_token: "r1" });
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(unauthorized())
+			.mockResolvedValueOnce(
+				ok({ access_token: "new", refresh_token: "r2", token_type: "bearer" }),
+			)
+			.mockResolvedValueOnce(csv('attachment; filename="meals.csv"'));
+
+		const download = await fetchDownload("/api/export/meals.csv");
+
+		expect(download.filename).toBe("meals.csv");
+		expect(fetchMock).toHaveBeenCalledTimes(3);
+	});
+
+	it("失敗拋 ApiError，429 帶著 Retry-After 的秒數", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					error: {
+						code: "TOO_MANY_EXPORTS",
+						message: "匯出太頻繁，請稍後再試",
+						details: {},
+					},
+				}),
+				{
+					status: 429,
+					headers: { "content-type": "application/json", "retry-after": "42" },
+				},
+			),
+		);
+
+		const failure = await fetchDownload("/api/export/meals.csv").catch(
+			(caught: unknown) => caught,
+		);
+
+		expect(failure).toBeInstanceOf(ApiError);
+		expect(failure).toMatchObject({
+			status: 429,
+			code: "TOO_MANY_EXPORTS",
+			retryAfterSeconds: 42,
+		});
 	});
 });
