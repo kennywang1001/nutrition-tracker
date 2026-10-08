@@ -4,20 +4,15 @@ import { ApiError, describeFieldErrors } from "../api/errors";
 import { checkInvite, registerWithInvite } from "../api/invites";
 import { login } from "../auth/session";
 import ui from "../components/ui.module.css";
+import { readLinkToken } from "../lib/link-token";
 
 export const INVITE_INVALID_TEXT =
 	"這個邀請連結已經失效，請跟邀請你的人要一個新的";
 
 const FALLBACK_TIMEZONE = "Asia/Taipei";
 
-/** `#tok` → `tok`。邀請碼在 `#` 後面（規格 §4.1）。
- *
- *  只取 `#` 後面開頭那一段 `[A-Za-z0-9_-]`——邀請碼是 `token_urlsafe`，只會有這些
- *  字元。聊天軟體常在連結後面黏上句號、空白或自己的 `?參數`，整段送去後端只會
- *  得到「失效」。 */
-export function readInviteToken(hash: string): string {
-	return /^#([A-Za-z0-9_-]*)/.exec(hash)?.[1] ?? "";
-}
+// 邀請碼的讀法跟重設密碼連結共用（`lib/link-token.ts`）；舊名字留著，既有的測試與引用不用改。
+export { readLinkToken as readInviteToken } from "../lib/link-token";
 
 function browserTimezone(): string {
 	try {
@@ -49,7 +44,7 @@ type Props = { onSuccess: () => void };
 
 /** 用邀請連結建立帳號（邀請規格 §4.1）。沒登入、網址是 `/join` 時由 `App` 顯示。 */
 export function Join({ onSuccess }: Props) {
-	const [token] = useState(() => readInviteToken(window.location.hash));
+	const [token] = useState(() => readLinkToken(window.location.hash));
 	const [phase, setPhase] = useState<Phase>(
 		token === "" ? "invalid" : "checking",
 	);

@@ -95,6 +95,9 @@ export const queryKeys = {
 	pendingRevisions: ["admin", "food-revisions"] as const,
 	/** 管理員的邀請清單（邀請規格 §4.2）。產生或撤銷之後失效它。 */
 	invites: ["admin", "invites"] as const,
+	/** 管理員的「所有帳號」（帳號設定規格 §5.4）。產生重設連結遇到 404／422 時失效它
+	 *  （帳號被刪了、或剛被升成管理員——清單已經過時）。 */
+	adminUsers: ["admin", "users"] as const,
 	/** 好友（好友規格 §5）。全部在 `["friends", …]` 底下；解除好友時
 	 *  `removeQueries` 那個人的動態、某一天、照片（不只是失效）。 */
 	friendCode: ["friends", "code"] as const,

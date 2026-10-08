@@ -12,6 +12,25 @@ export async function login(email: string, password: string): Promise<void> {
 	setTokens(tokens);
 }
 
+/** 改自己的密碼（帳號設定規格 §3.2、§5.3）。後端撤銷了**所有** refresh session（包括這台
+ *  舊的那條——access token 不帶 family，後端分不出哪條是這台），回一組新的。不換上去的話，
+ *  這台下一次換票就被登出。失敗時（422／429）不碰本地的票。 */
+export async function changePassword(
+	currentPassword: string,
+	newPassword: string,
+): Promise<void> {
+	const tokens = await apiFetch<Tokens>("/api/me/password", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({
+			current_password: currentPassword,
+			new_password: newPassword,
+		}),
+	});
+	if (tokens === null) throw new Error("修改密碼的回應沒有 body");
+	setTokens(tokens);
+}
+
 /** 登出。**不管伺服器怎麼回都清掉本地狀態**（規格 §6.6）。
  *
  *  網路斷線時「登出」不能失敗 —— 使用者的意圖是「這台裝置上不要留著我的

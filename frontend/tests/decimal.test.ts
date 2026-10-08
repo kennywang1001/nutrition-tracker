@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	averageOf,
+	checkTargetInput,
 	formatMacro,
 	formatMoney,
 	isPlainPositiveDecimal,
@@ -192,5 +193,27 @@ describe("averageOf", () => {
 		expect(averageOf(["1000", "1000", "1001"])).toBe("1000.33");
 		expect(averageOf(["0.01", "0.02"])).toBe("0.02");
 		expect(averageOf(["2", "2", "1.99"])).toBe("2");
+	});
+});
+
+describe("checkTargetInput（每日目標的一格，帳號設定規格 §5.2）", () => {
+	it.each([
+		["", null],
+		["   ", null],
+		["1800", null],
+		["12.5", null],
+		[".5", null],
+		["4.", null],
+		["20000", null],
+		["0.01", null],
+		["0", "not-positive-decimal"],
+		["0.00", "not-positive-decimal"],
+		["-1", "not-positive-decimal"],
+		["1e3", "not-positive-decimal"],
+		["abc", "not-positive-decimal"],
+		["12.345", "too-precise"],
+		["20000.01", "too-large"],
+	] as const)("%j → %s", (value, expected) => {
+		expect(checkTargetInput(value, "20000")).toBe(expected);
 	});
 });

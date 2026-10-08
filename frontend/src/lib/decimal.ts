@@ -67,6 +67,29 @@ export function isPlainPositiveDecimal(value: string): boolean {
 	}
 }
 
+/** 每日目標一格的問題（帳號設定規格 §5.2）。`null`＝沒問題（包括空白＝不設定）。 */
+export type TargetInputProblem =
+	| "not-positive-decimal"
+	| "too-precise"
+	| "too-large";
+
+const AT_MOST_TWO_PLACES = /^(\d+(\.\d{0,2})?|\.\d{1,2})$/;
+
+/** 跟後端 `TargetTodayRequest` 同一套規則：> 0、最多兩位小數、不超過上限。空白＝不設定。
+ *  先在前端擋，是為了讓錯誤指名哪一格、用人話說（後端的 422 只有欄位路徑與英文訊息）。
+ *  寫法限制跟 `isPlainPositiveDecimal` 一樣（不收 `1e3`、`+5`）。不丟例外：表單打到一半的值是常態。 */
+export function checkTargetInput(
+	value: string,
+	max: Numeric,
+): TargetInputProblem | null {
+	const v = value.trim();
+	if (v === "") return null;
+	if (!isPlainPositiveDecimal(v)) return "not-positive-decimal";
+	if (!AT_MOST_TWO_PLACES.test(v)) return "too-precise";
+	if (new Decimal(v).greaterThan(max)) return "too-large";
+	return null;
+}
+
 /** 「每一份」的營養素換算成「每 100 單位」（食物份量規格 §4.2）。
  *
  *  結果四捨五入到小數兩位（half-up）——後端的 `NutritionInput` 是

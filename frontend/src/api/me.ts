@@ -20,3 +20,15 @@ export function useMe() {
 		queryFn: () => apiFetch<Me>("/api/me"),
 	});
 }
+
+/** 改顯示名稱（帳號設定規格 §5.1）。**只送 `display_name`**——`PATCH /api/me` 省略的欄位不動；
+ *  順手把快取裡的時區一起送回去，會在另一台裝置剛改過時區時把它蓋回舊值。 */
+export async function updateDisplayName(displayName: string): Promise<Me> {
+	const updated = await apiFetch<Me>("/api/me", {
+		method: "PATCH",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ display_name: displayName }),
+	});
+	if (updated === null) throw new Error("修改名稱的回應沒有 body");
+	return updated;
+}
