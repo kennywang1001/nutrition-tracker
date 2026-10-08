@@ -5,7 +5,12 @@ import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
-import { clearTokens, setTokens } from "../src/auth/store";
+import {
+	clearTokens,
+	getRefreshToken,
+	onLoggedOut,
+	setTokens,
+} from "../src/auth/store";
 import { Me } from "../src/screens/Me";
 import { json, mockApi } from "./helpers/mock-api";
 
@@ -64,7 +69,7 @@ describe("我的", () => {
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
 		]);
 
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 
 		expect(await screen.findByText("kenny@example.com")).toBeInTheDocument();
 	});
@@ -77,7 +82,7 @@ describe("我的", () => {
 			{ method: "GET", path: "/api/me", handler: () => json(me("admin")) },
 		]);
 
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 
 		expect(await screen.findByRole("link", { name: "審核" })).toHaveAttribute(
 			"href",
@@ -91,7 +96,7 @@ describe("我的", () => {
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
 		]);
 
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 
 		// 先等 email 出現，確保 useMe() 已經解析完——否則下面只是在證明
 		// 「還沒 fetch 完」，不是「查完之後仍然沒有」。
@@ -108,7 +113,7 @@ describe("我的", () => {
 			{ method: "GET", path: "/api/admin/users", handler: () => json([]) },
 			{ method: "GET", path: "/api/me", handler: () => json(me("admin")) },
 		]);
-		const { unmount } = render(wrap(<Me onLoggedOut={vi.fn()} />));
+		const { unmount } = render(wrap(<Me />));
 		expect(
 			await screen.findByRole("heading", { name: "所有帳號" }),
 		).toBeInTheDocument();
@@ -119,7 +124,7 @@ describe("我的", () => {
 			statsRoute(),
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
 		]);
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 		// 先等帳號卡片載入完，「沒有」才有意義（第 41 種）。
 		await screen.findByText("kenny@example.com");
 		expect(
@@ -135,7 +140,7 @@ describe("我的", () => {
 			() => new Promise(() => {}),
 		);
 
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 
 		expect(
 			screen.queryByRole("link", { name: "審核" }),
@@ -164,7 +169,7 @@ describe("我的", () => {
 				},
 			},
 		]);
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 		await screen.findByText("kenny@example.com");
 		const before = fetchMock.mock.calls.length;
 
@@ -174,8 +179,11 @@ describe("我的", () => {
 		expect(fetchMock.mock.calls.length).toBe(before + 1);
 	});
 
-	it("登出之後通知外層", async () => {
-		const onLoggedOut = vi.fn();
+	it("登出：清掉這台的票，並透過 store 通知外層（不是強制登出）", async () => {
+		// 外層（App）訂閱 auth/store 的 onLoggedOut 來切回登入畫面——「我的」不再自己
+		// 收一個 callback：登出只有一條通知的路，主動登出與換票被拒走同一條。
+		const listener = vi.fn();
+		const unsubscribe = onLoggedOut(listener);
 		mockApi([
 			statsRoute(),
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
@@ -185,11 +193,14 @@ describe("我的", () => {
 				handler: () => new Response(null, { status: 204 }),
 			},
 		]);
-		render(wrap(<Me onLoggedOut={onLoggedOut} />));
+		render(wrap(<Me />));
 
 		await userEvent.click(screen.getByRole("button", { name: "登出" }));
 
-		await waitFor(() => expect(onLoggedOut).toHaveBeenCalled());
+		await waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
+		expect(listener).toHaveBeenCalledWith({ forced: false });
+		expect(getRefreshToken()).toBeNull();
+		unsubscribe();
 	});
 
 	it("「重新整理」失敗時顯示提示，不丟出未處理的 rejection", async () => {
@@ -207,7 +218,7 @@ describe("我的", () => {
 				},
 			},
 		]);
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 		await screen.findByText("kenny@example.com");
 
 		await userEvent.click(screen.getByRole("button", { name: "重新整理" }));
@@ -223,7 +234,7 @@ describe("我的：帳號卡片", () => {
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
 		]);
 
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 
 		expect(await screen.findByText("Kenny")).toBeInTheDocument();
 		expect(screen.getByText("kenny@example.com")).toBeInTheDocument();
@@ -247,7 +258,7 @@ describe("我的：帳號卡片", () => {
 			},
 			{ method: "GET", path: "/api/me", handler: () => json(current) },
 		]);
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 
 		await userEvent.click(
 			await screen.findByRole("button", { name: "修改名稱" }),
@@ -274,7 +285,7 @@ describe("我的：帳號卡片", () => {
 			statsRoute(),
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
 		]);
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 
 		await userEvent.click(
 			await screen.findByRole("button", { name: "修改名稱" }),
@@ -324,7 +335,7 @@ describe("我的：帳號卡片", () => {
 			},
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
 		]);
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 
 		await userEvent.click(
 			await screen.findByRole("button", { name: "修改名稱" }),
@@ -346,7 +357,7 @@ describe("我的：帳號卡片", () => {
 			},
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
 		]);
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 
 		await userEvent.click(
 			await screen.findByRole("button", { name: "修改名稱" }),
@@ -365,7 +376,7 @@ describe("我的：每日目標卡片", () => {
 			statsRoute(),
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
 		]);
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 
 		const card = await screen.findByTestId("targets-card");
 		expect(
@@ -384,7 +395,7 @@ describe("我的：每日目標卡片", () => {
 			statsRoute({ ...STATS, target: null, ratio: null }),
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
 		]);
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 
 		const card = await screen.findByTestId("targets-card");
 		await waitFor(() =>
@@ -400,7 +411,7 @@ describe("我的：每日目標卡片", () => {
 			),
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
 		]);
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 
 		const card = await screen.findByTestId("targets-card");
 		expect(

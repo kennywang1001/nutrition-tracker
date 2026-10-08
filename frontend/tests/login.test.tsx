@@ -24,6 +24,17 @@ beforeEach(() => {
 });
 
 describe("登入畫面", () => {
+	it("平常沒有任何提示；外層給了提示（被登出）才顯示", () => {
+		const { rerender } = render(<Login onSuccess={vi.fn()} />);
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+		rerender(<Login onSuccess={vi.fn()} notice="已被登出，請重新登入" />);
+
+		expect(screen.getByRole("status")).toHaveTextContent(
+			"已被登出，請重新登入",
+		);
+	});
+
 	it("成功登入後呼叫 onSuccess", async () => {
 		vi.spyOn(globalThis, "fetch").mockResolvedValue(
 			jsonResponse(200, {

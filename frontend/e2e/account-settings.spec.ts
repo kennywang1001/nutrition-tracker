@@ -87,21 +87,43 @@ test.describe("手機尺寸", () => {
 			}),
 		).toBeVisible();
 
-		// B：那張 refresh token 被撤銷了。B 手上的 access token 最多還能用 15 分鐘（刻意的缺口），
-		// 所以不看 B 的畫面，看伺服器。
+		// B：那張 refresh token 被撤銷了。先看伺服器。
 		const replay = await request.post("/api/auth/refresh", {
 			data: { refresh_token: refreshB },
 		});
 		expect(replay.status()).toBe(401);
+
+		// 再看 B 的畫面（帳號設定審查 I2）。B 手上的 access token 最多還能用 15 分鐘（刻意的
+		// 缺口），等不了——把記憶體裡那張換成無效的（同 auth.spec.ts 的後門），模擬它過期。
+		// B 停在總覽沒在動，這時點「我的」：好友卡片第一次掛載一定會發請求 → 401 → 換票 401
+		// → 回到登入畫面，並說明「已被登出」。以前外框會留在原地，每個請求都失敗。
+		const refusedB = pageB.waitForResponse(
+			(response) => new URL(response.url()).pathname === "/api/auth/refresh",
+		);
+		await pageB.evaluate(() => {
+			// biome-ignore lint/suspicious/noExplicitAny: 測試刻意戳進模組狀態
+			(window as any).__forceExpireAccessToken?.();
+		});
+		await pageB.getByRole("link", { name: "我的", exact: true }).click();
+		expect((await refusedB).status()).toBe(401);
+		await expect(
+			pageB.getByRole("heading", { name: "登入", exact: true }),
+		).toBeVisible();
+		await expect(
+			pageB.getByText("已被登出，請重新登入", { exact: true }),
+		).toBeVisible();
+		expect(
+			await pageB.evaluate(() => localStorage.getItem("refresh_token")),
+		).toBeNull();
 		await deviceB.close();
 
 		// A：新的那張是活的。**刻意整頁重新載入**——access token 只在記憶體，重新載入之後第一個
 		// 要認證的請求 401，用 localStorage 的 refresh token 換票。新票沒存好（還是被撤銷的舊票）、
 		// 或新票自己也被撤銷了，換票就是 401。只載入這一次，不會跟別的換票撞在一起。
 		//
-		// **看換票的回應，不看畫面**：換票失敗時 app 不會跳回登入畫面（`loggedIn` 只在開頁時讀
-		// localStorage 一次），「修改密碼」「我的」的標題照樣畫得出來；「我的」的資料又可能來自
-		// 離線快取、根本不發請求。實測：把後端的 start_session 搬到撤銷之前，只看畫面的版本是綠的。
+		// **看換票的回應，不只看畫面**：這條寫的時候，換票失敗 app 不會跳回登入畫面，只看標題的
+		// 版本在「後端的 start_session 搬到撤銷之前」下是綠的。現在換票被拒會切回登入畫面（上面
+		// B 的那一段），下面的「我的」標題也會紅；換票的 200 仍然是最直接的證據，留著。
 		const refreshed = pageA.waitForResponse(
 			(response) => new URL(response.url()).pathname === "/api/auth/refresh",
 		);

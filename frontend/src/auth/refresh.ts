@@ -32,7 +32,9 @@ async function performRefresh(): Promise<boolean> {
 	if (response.status === 401) {
 		// INVALID_TOKEN 可能是「票過期了」，也可能是「重用偵測撤銷了整條鏈」。
 		// 前端分不出來，而處理一律相同（規格 §6.5）：清 token、清 query 快取。
-		clearTokens();
+		// `forced`：不是使用者按的登出——`App` 訂閱了 store 的通知，會切回登入畫面並
+		// 顯示「已被登出，請重新登入」（帳號設定審查 I2）。
+		clearTokens({ forced: true });
 		clearQueryCacheOnForcedLogout(queryClient);
 		return false;
 	}

@@ -4,7 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { queryClient } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
-import { clearTokens, setTokens } from "../src/auth/store";
+import {
+	clearTokens,
+	getAccessToken,
+	getRefreshToken,
+	setTokens,
+} from "../src/auth/store";
 import { PHOTO_UPLOAD_FAILED_NOTICE } from "../src/screens/LogMeal";
 import { setDesktop } from "../src/test/media";
 
@@ -143,6 +148,8 @@ describe("App", () => {
 		expect(
 			await screen.findByRole("heading", { name: "登入" }),
 		).toBeInTheDocument();
+		// 自己按的登出不需要解釋：「已被登出」只給不是自己按的那種。
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
 	});
 
 	it("記帳畫面不顯示分頁列，關閉回到總覽後分頁列回來", async () => {
@@ -248,6 +255,159 @@ describe("App", () => {
 			),
 		);
 		expect(window.location.pathname).toBe("/");
+	});
+});
+
+describe("App：被登出（帳號設定審查 I2）", () => {
+	const NOTICE = "已被登出，請重新登入";
+
+	function unauthorized() {
+		return new Response(
+			JSON.stringify({
+				error: {
+					code: "INVALID_TOKEN",
+					message: "token 無效或已過期",
+					details: {},
+				},
+			}),
+			{ status: 401, headers: { "content-type": "application/json" } },
+		);
+	}
+
+	/** 另一個分頁把票拿掉了。jsdom 跟瀏覽器一樣，不會把 storage 事件送給動手的那個
+	 *  視窗——「另一個分頁」要自己送。 */
+	function tokenRemovedInAnotherTab() {
+		localStorage.removeItem("refresh_token");
+		act(() => {
+			window.dispatchEvent(
+				new StorageEvent("storage", {
+					storageArea: localStorage,
+					key: "refresh_token",
+					oldValue: "r",
+					newValue: null,
+				}),
+			);
+		});
+	}
+
+	it("換票被拒（別的裝置改了密碼）：切回登入畫面並說明；重新登入後提示消失", async () => {
+		// 以前：refresh.ts 清掉票與快取，但 App 的 loggedIn 只在開頁時讀一次——登入後的
+		// 外框留在原地，之後每個請求都失敗，要自己重新整理才看得到登入畫面。改密碼會讓
+		// 其他每一台裝置在 15 分鐘內走到這裡。
+		setTokens({ access_token: "a", refresh_token: "r" });
+		let revoked = false;
+		mockBackend((url, method) => {
+			if (method === "POST" && url.includes("/api/auth/login")) {
+				revoked = false;
+				return jsonResponse({
+					access_token: "a2",
+					refresh_token: "r2",
+					token_type: "bearer",
+				});
+			}
+			// 被撤銷之後：帶舊 access token 的請求 401，換票也 401。
+			return revoked ? unauthorized() : undefined;
+		});
+		render(<App />);
+		await userEvent.click(await screen.findByRole("link", { name: "我的" }));
+		const refreshButton = await screen.findByRole("button", {
+			name: "重新整理",
+		});
+
+		revoked = true;
+		await userEvent.click(refreshButton);
+
+		expect(
+			await screen.findByRole("heading", { name: "登入" }),
+		).toBeInTheDocument();
+		expect(screen.getByRole("status")).toHaveTextContent(NOTICE);
+		expect(
+			screen.queryByRole("navigation", { name: "主要導覽" }),
+		).not.toBeInTheDocument();
+		expect(getRefreshToken()).toBeNull();
+
+		// 重新登入 → 回到 app（登出不換網址，所以是「我的」）。
+		await userEvent.type(screen.getByLabelText("Email"), "kenny@example.com");
+		await userEvent.type(screen.getByLabelText("密碼"), "a-new-password");
+		await userEvent.click(screen.getByRole("button", { name: "登入" }));
+		await userEvent.click(await screen.findByRole("button", { name: "登出" }));
+
+		// 這一次是自己按的：上一次的「已被登出」不能還留著。
+		expect(
+			await screen.findByRole("heading", { name: "登入" }),
+		).toBeInTheDocument();
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+	});
+
+	it("另一個分頁登出（refresh token 從 localStorage 消失）：這個分頁也回到登入畫面", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockBackend();
+		render(<App />);
+		expect(
+			await screen.findByRole("heading", { name: "總覽" }),
+		).toBeInTheDocument();
+		// 下面要斷言快取被清空——先確認它本來有東西。
+		await waitFor(() =>
+			expect(queryClient.getQueryCache().getAll().length).toBeGreaterThan(0),
+		);
+
+		// 跟登出無關的 storage 事件不能把人踢出去：別的鍵、票被換成新的一張（另一個分頁
+		// 換了票或改了密碼）。
+		act(() => {
+			window.dispatchEvent(
+				new StorageEvent("storage", {
+					storageArea: localStorage,
+					key: "nutrition-tracker-offline-cache",
+					oldValue: "{}",
+					newValue: null,
+				}),
+			);
+			window.dispatchEvent(
+				new StorageEvent("storage", {
+					storageArea: localStorage,
+					key: "refresh_token",
+					oldValue: "r",
+					newValue: "r2",
+				}),
+			);
+		});
+		expect(screen.getByRole("heading", { name: "總覽" })).toBeInTheDocument();
+
+		tokenRemovedInAnotherTab();
+
+		expect(screen.getByRole("heading", { name: "登入" })).toBeInTheDocument();
+		// 不是這個分頁按的登出：說明一下畫面為什麼突然變了。
+		expect(screen.getByRole("status")).toHaveTextContent(NOTICE);
+		// 這個分頁記憶體裡的東西也要丟：access token（還能用 15 分鐘）與上一個人的資料。
+		expect(getAccessToken()).toBeNull();
+		expect(queryClient.getQueryCache().getAll()).toEqual([]);
+	});
+
+	it("本來就沒登入的分頁收到同一個事件：不顯示「已被登出」", () => {
+		render(<App />);
+		expect(screen.getByRole("heading", { name: "登入" })).toBeInTheDocument();
+
+		tokenRemovedInAnotherTab();
+
+		expect(screen.getByRole("heading", { name: "登入" })).toBeInTheDocument();
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+	});
+
+	it("被登出時停在 /join 或 /reset-password：顯示登入畫面與說明，不是「連結失效」", async () => {
+		// 已登入的人打開邀請或重設連結，碼會從網址列拿掉、路徑留著。這時被登出，
+		// 未登入的那兩個畫面讀不到碼，會說連結失效——那不是發生的事。
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockBackend();
+		window.history.replaceState(null, "", "/reset-password#tok-1");
+		render(<App />);
+		expect(
+			await screen.findByRole("heading", { name: "重設密碼連結" }),
+		).toBeInTheDocument();
+
+		tokenRemovedInAnotherTab();
+
+		expect(screen.getByRole("heading", { name: "登入" })).toBeInTheDocument();
+		expect(screen.getByRole("status")).toHaveTextContent(NOTICE);
 	});
 });
 

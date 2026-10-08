@@ -3,9 +3,11 @@ import { ApiError } from "../api/errors";
 import { login } from "../auth/session";
 import ui from "../components/ui.module.css";
 
-type Props = { onSuccess: () => void };
+/** `notice`：登入表單上方的一行說明——目前只有「已被登出，請重新登入」（`App` 決定什麼時候給）。
+ *  `role="status"` 而不是 `alert`：不是使用者剛做錯了什麼，也不該用危險色。 */
+type Props = { onSuccess: () => void; notice?: string | null };
 
-export function Login({ onSuccess }: Props) {
+export function Login({ onSuccess, notice = null }: Props) {
 	const [email, setEmail] = useState("");
 	const [password, setPassword] = useState("");
 	// 錯誤的「基礎訊息」與「倒數秒數」分開存──不要把倒數字樣烤進 error
@@ -63,6 +65,7 @@ export function Login({ onSuccess }: Props) {
 	return (
 		<section className={ui.screen}>
 			<h1>登入</h1>
+			{notice !== null && <p role="status">{notice}</p>}
 			<form onSubmit={handleSubmit}>
 				<label htmlFor="email">Email</label>
 				<input

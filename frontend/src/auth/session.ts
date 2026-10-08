@@ -1,6 +1,12 @@
 import { apiFetch } from "../api/client";
 import { clearQueryCacheOnForcedLogout, queryClient } from "../api/queries";
-import { clearTokens, getRefreshToken, setTokens, type Tokens } from "./store";
+import {
+	clearTokens,
+	getRefreshToken,
+	refreshTokenWasRemoved,
+	setTokens,
+	type Tokens,
+} from "./store";
 
 export async function login(email: string, password: string): Promise<void> {
 	const tokens = await apiFetch<Tokens>("/api/auth/login", {
@@ -53,4 +59,26 @@ export async function logout(): Promise<void> {
 		// 今日營養素，然後才被重新 fetch 覆蓋掉。
 		clearQueryCacheOnForcedLogout(queryClient);
 	}
+}
+
+/** 另一個分頁（或加到主畫面的 PWA 視窗——同一份 localStorage）登出了，這個分頁跟著登出。
+ *  回傳停止監聽的函式；`App` 掛著的時候開著。
+ *
+ *  不跟的話：這個分頁的畫面還在，記憶體裡的 access token 最多還能用 15 分鐘，之後換票讀不到
+ *  refresh token（`refreshTokens()` 回 false，但不是 401，不會觸發登出），每個請求都失敗而
+ *  畫面停在原地。
+ *
+ *  **當成強制登出**（會顯示「已被登出，請重新登入」）：`storage` 事件不帶原因，分不出對面是
+ *  使用者按了登出還是換票被拒；對這個分頁來說都是「不是在這裡按的」，畫面突然換掉需要一句話。
+ *
+ *  `clearTokens` 會再 `removeItem` 一次——鍵已經不在了，不會再觸發 `storage` 事件，兩個
+ *  分頁不會互相踢來踢去。query 快取一起清：理由同 `logout()`。 */
+export function followLogoutFromOtherTabs(): () => void {
+	const onStorage = (event: StorageEvent) => {
+		if (!refreshTokenWasRemoved(event)) return;
+		clearTokens({ forced: true });
+		clearQueryCacheOnForcedLogout(queryClient);
+	};
+	window.addEventListener("storage", onStorage);
+	return () => window.removeEventListener("storage", onStorage);
 }

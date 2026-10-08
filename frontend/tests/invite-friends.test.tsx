@@ -103,7 +103,7 @@ describe("邀請朋友", () => {
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
 		]);
 
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 
 		// 先證明畫面載入完了（第 41 種），再斷言「沒有」。
 		expect(await screen.findByText("kenny@example.com")).toBeInTheDocument();
@@ -120,7 +120,7 @@ describe("邀請朋友", () => {
 	it("管理員看到還沒用的與已經用掉的邀請", async () => {
 		adminBackend();
 
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 
 		expect(
 			await screen.findByRole("heading", { name: "邀請朋友" }),
@@ -144,7 +144,7 @@ describe("邀請朋友", () => {
 				handler: () => json(CREATED, 201),
 			},
 		]);
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 		await screen.findByText("給阿華");
 
 		await userEvent.type(screen.getByLabelText("給誰？（選填）"), "  給小華 ");
@@ -167,7 +167,7 @@ describe("邀請朋友", () => {
 				handler: () => json({ ...CREATED, note: null }, 201),
 			},
 		]);
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 		await screen.findByText("給阿華");
 
 		await userEvent.click(screen.getByRole("button", { name: "產生邀請連結" }));
@@ -185,7 +185,7 @@ describe("邀請朋友", () => {
 				handler: () => json(CREATED, 201),
 			},
 		]);
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 		await screen.findByText("給阿華");
 
 		await user.click(screen.getByRole("button", { name: "產生邀請連結" }));
@@ -209,7 +209,7 @@ describe("邀請朋友", () => {
 				},
 			},
 		]);
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 
 		await userEvent.click(
 			await screen.findByRole("button", { name: "撤銷給阿華" }),
@@ -263,7 +263,7 @@ describe("邀請朋友", () => {
 							USED,
 						],
 		);
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 
 		await userEvent.click(
 			await screen.findByRole("button", { name: "撤銷給阿華" }),
@@ -305,7 +305,7 @@ describe("邀請朋友", () => {
 			],
 			() => [justCreated, PENDING, USED],
 		);
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 		await screen.findByText("給阿華");
 
 		await userEvent.click(screen.getByRole("button", { name: "產生邀請連結" }));
@@ -328,7 +328,7 @@ describe("邀請朋友", () => {
 			{ ...PENDING, id: 4, note: null },
 			{ ...PENDING, id: 3, note: null },
 		]);
-		render(wrap(<Me onLoggedOut={vi.fn()} />));
+		render(wrap(<Me />));
 
 		expect(
 			await screen.findByRole("button", { name: "撤銷邀請 #3" }),
@@ -351,7 +351,7 @@ describe("邀請朋友", () => {
 		render(
 			<QueryClientProvider client={client}>
 				<MemoryRouter>
-					<Me onLoggedOut={vi.fn()} />
+					<Me />
 				</MemoryRouter>
 			</QueryClientProvider>,
 		);

@@ -11,10 +11,8 @@ import { InviteFriends } from "../components/InviteFriends";
 import { TargetsCard } from "../components/TargetsCard";
 import styles from "./Me.module.css";
 
-type Props = { onLoggedOut: () => void };
-
 /** 我的：帳號、每日目標、好友、管理員的審核、邀請與所有帳號、登出（介面改版規格 §5.7、帳號設定規格 §5.1）。 */
-export function Me({ onLoggedOut }: Props) {
+export function Me() {
 	// 帳號卡片自己讀 useMe；這裡只剩「是不是管理員」要用它（同一個 query，不會多打一次）。
 	const me = useMe().data;
 	// `me?.role` 而不是先判斷 isPending：useMe() 還在載入時 data 是
@@ -77,10 +75,9 @@ export function Me({ onLoggedOut }: Props) {
 			<button
 				type="button"
 				className={styles.logout}
-				onClick={async () => {
-					await logout();
-					onLoggedOut();
-				}}
+				// 不用自己通知外層：`logout()` 清掉票的時候 `auth/store` 會通知訂閱者，`App`
+				// 據此切回登入畫面——跟換票被拒、另一個分頁登出走同一條路（帳號設定審查 I2）。
+				onClick={() => logout()}
 			>
 				登出
 			</button>

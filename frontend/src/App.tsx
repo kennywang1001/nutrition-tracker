@@ -1,5 +1,5 @@
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import {
 	BrowserRouter,
 	Navigate,
@@ -19,7 +19,8 @@ import { offlinePersistOptions } from "./api/persist";
 // 的 refresh 失敗路徑也能拿到同一個 instance 去清快取（規格 §6.5），
 // 又不必回頭 import 這個檔案（那會兜出循環依賴）。
 import { queryClient } from "./api/queries";
-import { getRefreshToken } from "./auth/store";
+import { followLogoutFromOtherTabs } from "./auth/session";
+import { getRefreshToken, onLoggedOut } from "./auth/store";
 import { SideNav } from "./components/SideNav";
 import { TabBar } from "./components/TabBar";
 import { contentWidthFor } from "./lib/layout";
@@ -131,17 +132,39 @@ const JOIN_PATHS = new Set(["/join", "/join/"]);
 /** 未登入時顯示重設密碼的網址（帳號設定規格 §5.5），斜線的理由同 JOIN_PATHS。 */
 const RESET_PATHS = new Set(["/reset-password", "/reset-password/"]);
 
+/** 登入畫面上的一行說明：不是使用者在這個分頁按的登出（帳號設定審查 I2）。 */
+const FORCED_LOGOUT_NOTICE = "已被登出，請重新登入";
+
+/** `in`：登入中。`out`：沒登入（開頁時沒有票，或自己按了登出）。`forced-out`：被登出——
+ *  換票被拒（別的裝置改了密碼、重設了密碼、票過期）或另一個分頁登出了。 */
+type AuthView = "in" | "out" | "forced-out";
+
 export function App() {
 	// 未登入 → `/join` 是建立帳號、`/reset-password` 是重設密碼，其他一律 <Login>
 	// （不掛 BrowserRouter，沒有路由可以比對）。
-	const [loggedIn, setLoggedIn] = useState(getRefreshToken() !== null);
+	const [view, setView] = useState<AuthView>(() =>
+		getRefreshToken() !== null ? "in" : "out",
+	);
+
+	// **登出由 store 通知，登入由畫面的 onSuccess 通知**（理由在 `auth/store.ts` 的
+	// `onLoggedOut`）。本來就沒登入的分頁不變（另一個分頁登出時，這裡不該冒出「已被登出」）。
+	useEffect(
+		() =>
+			onLoggedOut(({ forced }) =>
+				setView((current) =>
+					current !== "in" ? current : forced ? "forced-out" : "out",
+				),
+			),
+		[],
+	);
+	useEffect(() => followLogoutFromOtherTabs(), []);
 
 	return (
 		<PersistQueryClientProvider
 			client={queryClient}
 			persistOptions={offlinePersistOptions}
 		>
-			{loggedIn ? (
+			{view === "in" ? (
 				<BrowserRouter>
 					<LoggedInShell>
 						<Routes>
@@ -150,10 +173,7 @@ export function App() {
 							<Route path="/" element={<Overview />} />
 							<Route path="/reports" element={<Expenses />} />
 							<Route path="/diet" element={<Today />} />
-							<Route
-								path="/me"
-								element={<Me onLoggedOut={() => setLoggedIn(false)} />}
-							/>
+							<Route path="/me" element={<Me />} />
 							{/* 每日目標（帳號設定規格 §5.2），入口是「我的」的每日目標卡片。 */}
 							<Route path="/me/targets" element={<Targets />} />
 							{/* 修改密碼（帳號設定規格 §5.3），入口是「我的」帳號卡片的「修改密碼」。 */}
@@ -199,23 +219,28 @@ export function App() {
 						</Routes>
 					</LoggedInShell>
 				</BrowserRouter>
-			) : JOIN_PATHS.has(window.location.pathname) ? (
+			) : view === "out" && JOIN_PATHS.has(window.location.pathname) ? (
 				// 邀請連結（邀請規格 §4.1）。其他網址照舊一律登入畫面。
 				// app-auth（index.css）：左右留白、置中、最寬 400px（電腦版版面
 				// 規格 §3）。不用 .app-main：那個的底部留白是為分頁列留的，未登入
 				// 沒有分頁列；電腦版的寬度規則也只看 .app-desktop 底下的 .app-main。
 				<main className="app-auth">
-					<Join onSuccess={() => setLoggedIn(true)} />
+					<Join onSuccess={() => setView("in")} />
 				</main>
-			) : RESET_PATHS.has(window.location.pathname) ? (
+			) : view === "out" && RESET_PATHS.has(window.location.pathname) ? (
 				// 重設密碼連結（帳號設定規格 §5.5）。不收 onSuccess：成功後不自動登入（決定 16），
 				// 「去登入」是整頁的 <a href="/">，重新載入後沒有票，落在下面的登入畫面。
 				<main className="app-auth">
 					<ResetPassword />
 				</main>
 			) : (
+				// 被登出（forced-out）一律是登入畫面，不看網址：已登入的人打開邀請或重設連結時
+				// 碼已經從網址列拿掉、路徑還留著，照路徑走會顯示「連結失效」——那不是發生的事。
 				<main className="app-auth">
-					<Login onSuccess={() => setLoggedIn(true)} />
+					<Login
+						onSuccess={() => setView("in")}
+						notice={view === "forced-out" ? FORCED_LOGOUT_NOTICE : null}
+					/>
 				</main>
 			)}
 		</PersistQueryClientProvider>
