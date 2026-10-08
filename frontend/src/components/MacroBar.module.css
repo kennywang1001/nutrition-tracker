@@ -1,5 +1,5 @@
-/* 飲食頁的營養素列（MacroBar）。進度條的樣式照總覽「今天熱量」卡片
-   （Overview.module.css 的 .progress），兩張卡片的條才長得一樣。 */
+/* 飲食頁的營養素列（MacroBar）。進度條是 components/RatioProgress，
+   跟總覽「今天熱量」卡片同一個元件，兩張卡片的條才長得一樣。 */
 
 .row {
 	padding: var(--space-2) 0;
@@ -43,10 +43,9 @@
 	color: var(--color-text-muted);
 }
 
+/* 進度條在數字那一行下面：block 才不會被行高撐出多餘的空白。總覽的卡片
+   沒設 block、距離也不同，所以這兩個屬性留在呼叫端，不放進 RatioProgress。 */
 .progress {
 	display: block;
-	width: 100%;
-	height: 6px;
 	margin-top: var(--space-1);
-	accent-color: var(--color-accent);
 }

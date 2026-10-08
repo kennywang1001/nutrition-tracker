@@ -1,5 +1,6 @@
 import { formatMacro, type Numeric, ratioOf } from "../lib/decimal";
 import styles from "./MacroBar.module.css";
+import { RatioProgress } from "./RatioProgress";
 
 type MacroField = "kcal" | "protein_g" | "fat_g" | "carb_g";
 
@@ -48,17 +49,13 @@ export function MacroBar({ field, label, actual, target }: Props) {
 					)}
 				</span>
 			</div>
-			{/* 沒有比例（這一項沒設目標，或目標是 0）就不畫條：空條會被讀成「0%」。
-			    超過目標時條畫滿就好，超過多少看上面的百分比——跟總覽的
-			    TodayKcalCard 一樣用 Math.min 夾在 1，比例本身仍然來自 ratioOf()。 */}
-			{ratio !== null && (
-				<progress
-					className={styles.progress}
-					max={1}
-					value={Math.min(ratio, 1)}
-					aria-label={`${label}進度`}
-				/>
-			)}
+			{/* 沒有比例（這一項沒設目標，或目標是 0）就不畫條、超過目標畫滿：
+			    都在 RatioProgress 裡，跟總覽的 TodayKcalCard 同一個元件。 */}
+			<RatioProgress
+				ratio={ratio}
+				label={`${label}進度`}
+				className={styles.progress}
+			/>
 		</div>
 	);
 }

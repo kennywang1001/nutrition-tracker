@@ -1,0 +1,8 @@
+/* 攝取／目標的細進度條（RatioProgress.tsx）。只有外觀；跟上面那行字的
+   距離（margin、display）由呼叫端的 className 給——總覽的卡片與飲食頁的
+   營養素列不一樣。這裡不設那兩個屬性，同權重的 class 才不會打架。 */
+.progress {
+	width: 100%;
+	height: 6px;
+	accent-color: var(--color-accent);
+}

@@ -11,6 +11,7 @@ import { useDailyStats } from "../api/stats";
 import { Card } from "../components/Card";
 import { CategoryIcon, MealTypeIcon } from "../components/IconBadge";
 import layout from "../components/layout.module.css";
+import { RatioProgress } from "../components/RatioProgress";
 import { formatTime } from "../lib/dates";
 import { formatMacro, formatMoney, ratioOf } from "../lib/decimal";
 import { buildTimeline, type TimelineRow } from "../lib/timeline";
@@ -85,14 +86,11 @@ function TodayKcalCard() {
 					{target === null ? " kcal" : ` / ${formatMacro(target)} kcal`}
 				</span>
 			</p>
-			{ratio !== null && (
-				<progress
-					className={styles.progress}
-					max={1}
-					value={Math.min(ratio, 1)}
-					aria-label="熱量進度"
-				/>
-			)}
+			<RatioProgress
+				ratio={ratio}
+				label="熱量進度"
+				className={styles.progress}
+			/>
 		</Card>
 	);
 }
