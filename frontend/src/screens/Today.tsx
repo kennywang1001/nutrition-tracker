@@ -228,8 +228,10 @@ export function Today() {
 											{/* 規格 §5.8：plan_id 為 null 是臨時記錄，一定 done=true，
 									    不該有打卡按鈕——只有「計畫存在但今天還沒打卡」才給打卡。 */}
 											{item.plan_id !== null && !item.done && (
+												// 打卡／取消是次要按鈕（外框、珊瑚橘字），同 ui.module.css 的通用按鈕。
 												<button
 													type="button"
+													className={ui.secondary}
 													disabled={checkIn.isPending}
 													onClick={() => checkIn.mutate(item)}
 												>
@@ -239,6 +241,7 @@ export function Today() {
 											{item.done && (
 												<button
 													type="button"
+													className={ui.secondary}
 													disabled={cancel.isPending}
 													onClick={() => {
 														if (item.intake_id !== null)

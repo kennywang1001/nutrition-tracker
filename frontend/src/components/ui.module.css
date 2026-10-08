@@ -131,7 +131,12 @@
 	color: var(--color-text-muted);
 }
 
-:where(.screen button) {
+/* 通用按鈕＝次要按鈕（外框、珊瑚橘字）。.screen 底下的 button 自動套用；
+ * 不在 .screen 裡的畫面（飲食頁補劑的打卡／取消）在 button 上加 .secondary。
+ * .secondary 跟下面的 .primary／.danger 一樣是一般的 class（權重 0,1,0）：
+ * 明確指定的樣式不該被 type=submit 之類的零權重通用規則改掉。 */
+:where(.screen button),
+.secondary {
 	min-height: 44px;
 	padding: 0 var(--space-4);
 	border: 1px solid var(--color-action);
@@ -149,7 +154,8 @@
 	color: var(--color-on-action);
 }
 
-:where(.screen button:disabled) {
+:where(.screen button:disabled),
+.secondary:disabled {
 	opacity: 0.4;
 }
 
@@ -234,7 +240,9 @@
 }
 
 /* 明確指定的按鈕樣式：管理員審核的「通過」是主要動作、「駁回」是危險動作，
-   不能照「type=submit 就是主要」的通用規則（駁回的按鈕剛好是 submit）。 */
+   不能照「type=submit 就是主要」的通用規則（駁回的按鈕剛好是 submit）。
+   只換顏色與框線，尺寸靠 :where(.screen button)。次要按鈕 .secondary 跟通用
+   按鈕寫在一起（上面），不在 .screen 裡也有完整的尺寸。 */
 .primary {
 	border: none;
 	background: var(--color-action);
