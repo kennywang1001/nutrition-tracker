@@ -9,6 +9,7 @@ from app.api.routes import (
     ai,
     auth,
     expenses,
+    export,
     foods,
     friends,
     health,
@@ -51,3 +52,4 @@ app.include_router(targets.router, prefix="/api")
 app.include_router(stats.router, prefix="/api")
 app.include_router(ai.router, prefix="/api")
 app.include_router(expenses.router, prefix="/api")
+app.include_router(export.router, prefix="/api")

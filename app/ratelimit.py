@@ -239,3 +239,19 @@ session_rate_limiter = KeyedRateLimiter(
     code="TOO_MANY_SESSION_REQUESTS",
     message="操作太頻繁，請稍後再試",
 )
+
+EXPORT_LIMIT = 6
+EXPORT_WINDOW_SECONDS = 60.0
+
+# 匯出（報表月份與匯出規格 §3.6）：三個端點共用，鍵是使用者 id（`str(user.id)`）。
+#
+# 每一次匯出都是把這個人的整段歷史讀一遍、握著一條資料庫連線直到下載完——偷到
+# access token 的人、或一個寫壞的重試迴圈，不該能一直叫它做。**6 次**：三顆按鈕
+# 各按一次是 3 次，手滑再按一輪還在額度內；正常使用碰不到（e2e 一條測試按一次）。
+# 鍵是使用者不是端點：分開算的話，額度實際上是三倍。
+export_rate_limiter = KeyedRateLimiter(
+    limit=EXPORT_LIMIT,
+    window_seconds=EXPORT_WINDOW_SECONDS,
+    code="TOO_MANY_EXPORTS",
+    message="匯出太頻繁，請稍後再試",
+)

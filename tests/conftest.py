@@ -15,7 +15,7 @@ from app.config import settings
 from app.db import get_db
 from app.main import app
 from app.models.user import UserRole
-from app.ratelimit import login_rate_limiter, session_rate_limiter
+from app.ratelimit import export_rate_limiter, login_rate_limiter, session_rate_limiter
 from tests.factories import create_invite, create_user
 
 TEST_DATABASE_URL = os.environ.get(
@@ -78,9 +78,13 @@ def _reset_login_rate_limiter() -> None:
     某個測試在別的測試檔跑過的失敗次數，可能讓下一個測試的第一次登入就變 429。
     每個測試開始前重置一次，讓每個測試都是乾淨的狀態。
     `session_rate_limiter`（/refresh、/logout）同樣是全域單例，同樣要每個測試重置。
+    `export_rate_limiter`（/export/*.csv）也一起重置。它的鍵是使用者 id，而 identity 的
+    sequence 不會跟著 rollback，目前每個測試的使用者 id 都不同、不重置也不會互相影響——
+    重置是讓「全域單例每個測試都從乾淨的狀態開始」這條規矩沒有例外。
     """
     login_rate_limiter.reset()
     session_rate_limiter.reset()
+    export_rate_limiter.reset()
 
 
 @pytest.fixture(scope="session")
