@@ -546,9 +546,10 @@ describe("App 的 /reset-password（帳號設定規格 §5.5）", () => {
 		render(<App />);
 
 		expect(
-			await screen.findByText(
-				"你已經登入了。這個連結是給忘記密碼的人用的；要改自己的密碼，請到「我的」→「修改密碼」。",
-			),
+			await screen.findByRole("heading", { name: "重設密碼連結" }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByText(/忘記密碼的話，先登出，再重新打開這個連結/),
 		).toBeInTheDocument();
 		expect(
 			spy.mock.calls.some(([url]) => String(url).includes("/api/auth/")),

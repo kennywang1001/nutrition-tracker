@@ -273,7 +273,7 @@ function LocationProbe() {
 }
 
 describe("已登入的人打開重設連結", () => {
-	it("說明怎麼改自己的密碼、「回總覽」；不打任何 API；碼從路由的網址拿掉", async () => {
+	it("兩條路都說清楚（記得密碼／忘記密碼）、連到「我的」；不打任何 API；碼從路由的網址拿掉", async () => {
 		const spy = vi.spyOn(globalThis, "fetch");
 
 		render(
@@ -292,11 +292,25 @@ describe("已登入的人打開重設連結", () => {
 			</MemoryRouter>,
 		);
 
+		// 以前只有「要改自己的密碼，請到『我的』→『修改密碼』」——忘記密碼（所以才拿到這條
+		// 連結）但這台剛好還登入著的人，照做會卡在「目前的密碼」那一格（帳號設定審查 M2）。
+		expect(
+			screen.getByText(/你已經登入了。這個連結是給忘記密碼的人用的/),
+		).toBeInTheDocument();
+		expect(
+			screen.getByText(/還記得密碼的話，到「我的」→「修改密碼」/),
+		).toBeInTheDocument();
+		// 碼會從網址列拿掉，所以「重新打開」要講清楚是回到收到連結的地方再點一次。
 		expect(
 			screen.getByText(
-				"你已經登入了。這個連結是給忘記密碼的人用的；要改自己的密碼，請到「我的」→「修改密碼」。",
+				/忘記密碼的話，先登出，再重新打開這個連結.*從收到連結的地方再點一次/,
 			),
 		).toBeInTheDocument();
+		// 「修改密碼」與「登出」都在「我的」。
+		expect(screen.getByRole("link", { name: "到我的" })).toHaveAttribute(
+			"href",
+			"/me",
+		);
 		expect(screen.getByRole("link", { name: "回總覽" })).toHaveAttribute(
 			"href",
 			"/",

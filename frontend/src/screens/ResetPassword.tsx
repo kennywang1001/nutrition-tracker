@@ -140,11 +140,18 @@ export function ResetPassword() {
 	);
 }
 
-/** 已登入的人打開重設連結：不打任何重設端點，連結不被用掉（帳號設定規格 §5.5）。 */
+/** 已登入的人打開重設連結：不打任何重設端點，連結不被用掉（帳號設定規格 §5.5）。
+ *
+ *  **兩種人會走到這裡，說明要兩種都顧到**（帳號設定審查 M2）：記得密碼、只是點了連結的
+ *  （去「修改密碼」）；以及**真的忘了密碼、但這台剛好還登入著**的——他要用的正是這條
+ *  連結，「修改密碼」會卡在「目前的密碼」那一格。後者要先登出，再把連結重新打開。 */
 export function ResetPasswordWhileLoggedIn() {
 	// 連結還能用：不留在網址列（歷史紀錄、截圖、分享目前頁面）。同 JoinWhileLoggedIn：
 	// 走 navigate 而不是直接 history.replaceState——這裡在 BrowserRouter 裡面，直接改會蓋掉
 	// react-router 記在 history.state 的 key/idx，路由的 location 也還帶著舊的 hash。
+	//
+	// 拿掉之後「重新打開這個連結」不能靠重新整理或上一頁——但連結是別人傳來的（聊天訊息），
+	// 回去再點一次就好，所以說明裡把這件事寫明，而不是為了它把碼留在歷史紀錄裡。
 	const navigate = useNavigate();
 	useEffect(() => {
 		navigate("/reset-password", { replace: true });
@@ -153,9 +160,12 @@ export function ResetPasswordWhileLoggedIn() {
 	return (
 		<section className={ui.screen}>
 			<h1>重設密碼連結</h1>
+			<p>你已經登入了。這個連結是給忘記密碼的人用的，登入著的時候不能用。</p>
+			<p>還記得密碼的話，到「我的」→「修改密碼」就能改。</p>
 			<p>
-				你已經登入了。這個連結是給忘記密碼的人用的；要改自己的密碼，請到「我的」→「修改密碼」。
+				忘記密碼的話，先登出，再重新打開這個連結——網址列上的已經拿掉了，請從收到連結的地方再點一次。登出在「我的」的最下面。
 			</p>
+			<Link to="/me">到我的</Link>
 			<Link to="/">回總覽</Link>
 		</section>
 	);
