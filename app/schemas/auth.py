@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.models.user import UserRole
 from app.schemas.validators import DisplayName, IanaTimezone
+from app.security.password import MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH
 
 
 class RegisterRequest(BaseModel):
@@ -11,7 +12,7 @@ class RegisterRequest(BaseModel):
     # 上限跟 Argon2 無關 —— 實測雜湊耗時與輸入長度無關（8 字元與 100 萬字元都約 70ms），
     # 因為 Argon2 會先把輸入吸收成固定大小再進記憶體硬化階段。
     # 這個上限單純是請求體衛生：限制客戶端能讓伺服器解析與複製多少資料。
-    password: str = Field(min_length=8, max_length=128)
+    password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH)
     # 控制字元檢查與 IANA 時區檢查抽在 app/schemas/validators.py，
     # PATCH /api/me（計畫 3 Task 3）重用同一套邏輯，不重寫。
     display_name: Annotated[DisplayName, Field(min_length=1, max_length=50)]

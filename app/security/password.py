@@ -3,6 +3,12 @@ import threading
 from argon2 import PasswordHasher
 from argon2.exceptions import Argon2Error, InvalidHashError
 
+# 密碼長度（帳號設定規格決定 20）。CLI、註冊、改密碼、重設密碼共用這一份。
+# 原本只定義在 app/cli.py；schema 要用它，而 schema 不該 import app.cli（會帶進資料庫連線
+# 與照片儲存）。上限跟 Argon2 無關（見 RegisterRequest 的說明），是請求體衛生。
+MIN_PASSWORD_LENGTH = 8
+MAX_PASSWORD_LENGTH = 128
+
 _hasher = PasswordHasher()
 
 # Argon2 的預設參數（實測 argon2-cffi）：time_cost=3、memory_cost=64 MiB、

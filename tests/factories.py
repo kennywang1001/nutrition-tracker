@@ -11,9 +11,11 @@ from app.models.food import BaseUnit, Food, FoodPortion, FoodRevision, RevisionS
 from app.models.friendship import Friendship, FriendshipStatus
 from app.models.invite import Invite
 from app.models.meal import Meal, MealItem, MealType
+from app.models.password_reset import PasswordResetToken
 from app.models.supplement import Supplement, SupplementIntake, SupplementPlan, TimeOfDay
 from app.models.target import UserTarget
 from app.models.user import User, UserRole
+from app.password_resets import RESET_LIFETIME, hash_reset_token, new_reset_token
 from app.security.password import hash_password
 
 DEFAULT_PASSWORD = "correct-horse-battery"
@@ -410,6 +412,36 @@ async def create_invite(
     await db_session.commit()
     await db_session.refresh(invite)
     return invite, token
+
+
+async def create_password_reset(
+    db_session: AsyncSession,
+    *,
+    user: User,
+    created_by: User,
+    created_at: datetime | None = None,
+    expires_at: datetime | None = None,
+    used: bool = False,
+    revoked: bool = False,
+) -> tuple[PasswordResetToken, str]:
+    """建立一條重設連結，回傳（連結, 明碼）——同 `create_invite`，明碼只存在回傳值裡。
+
+    過期的連結要連 `created_at` 一起往前推：`CHECK (expires_at > created_at)`。"""
+    token = new_reset_token()
+    created = created_at or datetime.now(UTC)
+    reset = PasswordResetToken(
+        user_id=user.id,
+        token_hash=hash_reset_token(token),
+        created_by=created_by.id,
+        created_at=created,
+        expires_at=expires_at or created + RESET_LIFETIME,
+        used_at=created if used else None,
+        revoked_at=created if revoked else None,
+    )
+    db_session.add(reset)
+    await db_session.commit()
+    await db_session.refresh(reset)
+    return reset, token
 
 
 async def create_friendship(

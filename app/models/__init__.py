@@ -5,6 +5,7 @@ from app.models.food import BaseUnit, Food, FoodPortion, FoodRevision, RevisionS
 from app.models.friendship import Friendship, FriendshipStatus
 from app.models.invite import Invite
 from app.models.meal import Meal, MealItem, MealType
+from app.models.password_reset import PasswordResetToken
 from app.models.session import RefreshSession
 from app.models.supplement import Supplement, SupplementIntake, SupplementPlan, TimeOfDay
 from app.models.target import UserTarget
@@ -26,6 +27,7 @@ __all__ = [
     "Meal",
     "MealItem",
     "MealType",
+    "PasswordResetToken",
     "RefreshSession",
     "RevisionStatus",
     "Supplement",

@@ -14,10 +14,8 @@ from app.db import SessionLocal
 from app.models.meal import Meal
 from app.models.session import RefreshSession
 from app.models.user import User, UserRole
-from app.security.password import hash_password
+from app.security.password import MIN_PASSWORD_LENGTH, hash_password
 from app.storage.photos import thumbnail_path
-
-MIN_PASSWORD_LENGTH = 8
 
 # P4 計畫 Task 6、陷阱 5：一張剛寫入、DB 還沒 commit 的照片，在掃描眼中就是
 # 孤兒。上傳與 commit 之間的間隔是毫秒級，24 小時的緩衝遠遠足夠。
