@@ -52,6 +52,7 @@
 | 開帳號的路（社群第一步） | 管理員在「我的」產生一次性邀請連結（7 天、只能用一次、可撤銷，資料庫只存 SHA-256）；朋友打開 `/join#<碼>` 自己建帳號。**註冊一定要有邀請**（規格 `docs/superpowers/specs/2026-10-06-invites-design.md`、計畫 `docs/superpowers/plans/2026-10-06-invites.md`） | ✅ |
 | 好友關係（社群第二步） | 好友碼（`XXXX-XXXX`，可重設）送邀請、對方接受；飲食頁「我的｜好友」看好友動態，點名字看他的某一天（照他的時區）；好友看得到吃了什麼、照片、熱量與營養素，**看不到餐費與備註**；每一餐可設「只有我看得到」（規格 `docs/superpowers/specs/2026-10-07-friends-design.md`、計畫 `docs/superpowers/plans/2026-10-07-friends.md`） | ✅ |
 | 部署改成 CI 做映像 | CI 的 `publish` job 把兩個映像推到 GHCR（多架構）；NAS 上 `sudo ./scripts/deploy.sh` 拉映像、備份、migration、等 healthy、起不來自動退版（規格 `docs/superpowers/specs/2026-10-08-image-deploy-design.md`；部署手冊「二、更新」） | ✅（`publish` job 要等第一次 push 到 master 才驗得到） |
+| 電腦版版面 | 寬度 ≥ 1024px 左側導覽＋總覽／報表／飲食兩欄；比較窄維持手機版、內容最寬 600px 置中。只改版面，不動後端（規格 `docs/superpowers/specs/2026-10-08-desktop-layout-design.md`、計畫 `docs/superpowers/plans/2026-10-08-desktop-layout.md`；見第 10 節「電腦版版面」） | ✅（`feat/desktop-layout`） |
 | UI 改版 第三階段 | 社群（P7）：第一步「開帳號的路」、第二步「好友關係」已完成。按讚、留言、通知刻意沒做——等真的用過再說 | 🟡 |
 
 > **P4 早於 P2/P3 完成是刻意的，但當初的理由有瑕疵。**
@@ -1248,6 +1249,39 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
 - (b) **已完成**：只在 `/expenses/new` 隱藏分頁列（`App.tsx` 的 `LoggedInShell`，`.app-main-no-tab-bar` 拿掉底部留白）；記一餐沒有關閉鈕，不隱藏。
 - (c) **已完成**：記帳數字鍵盤接受實體鍵盤（數字、`.`／`,`、Backspace、Enter 送出），焦點在備註欄、有 Ctrl／Meta／Alt、或輸入法組字中時不攔（`MoneyKeypad.tsx`）。Enter 的規則：焦點在任何按鈕或連結上（包括 Tab 走到的數字鍵）時屬於那個控制項；鍵盤上的按鍵滑鼠／觸控點了不拿焦點（mousedown 擋預設動作，焦點在備註時把備註 blur 掉），所以點過數字之後按 Enter 是送出；按住 Enter 的自動重複不算。已知限制：螢幕閱讀器的瀏覽模式會吃掉數字鍵，要切到焦點模式才打得進金額。
   - 審查提過、刻意不改：監聽器每次金額改變就重新掛一次（行得通、有測試）；Enter 分支裡 `!submitDisabled` 跟 ✓ 的 `disabled` 重複；(b) 的版面沒有 e2e。
+
+### 電腦版版面
+
+寬度 ≥ 1024px：左側導覽＋總覽／報表／飲食排兩欄；比較窄：原本的手機版，內容最寬 600px 置中
+（規格 `docs/superpowers/specs/2026-10-08-desktop-layout-design.md`、計畫 `docs/superpowers/plans/2026-10-08-desktop-layout.md`）。
+
+- **斷點只寫在一個地方**：`src/lib/layout.ts` 的 `DESKTOP_MEDIA_QUERY`。`useIsDesktop()`（`matchMedia`＋
+  `useSyncExternalStore`）讀它，`App.tsx` 的 `LoggedInShell` 依結果畫 `SideNav` 或 `TabBar`，電腦版在最外層加
+  `app-desktop` class。
+- **頁面的電腦版 CSS 一律寫 `:global(.app-desktop) .x { … }`，不要寫 media query**——寫了 1024 就有兩份，遲早漂移；
+  而且 jsdom 不跑 media query，class 至少測得到結構。共用的兩欄是 `components/layout.module.css` 的 `.columns`
+  （總覽、報表）；飲食頁要保住 DOM 順序（營養素 → 餐點 → 補劑），用 `Today.module.css` 自己的 `grid-template-areas`。
+- **內容寬度依路由**（`contentWidthFor`，外框決定）：`/`、`/reports`、`/diet` 1100px；`/expenses/new`、`/meals/new`
+  480px；其他 640px。新增路由不用改這張表，預設就是 640。
+- `SideNav` 與 `TabBar` 共用 `components/nav-tabs.ts`（四個目的地）與 `components/use-add-sheet.ts`（「新增」選單的開關，
+  換頁自動關、返回不會再跳出來）。兩個導覽的可及名稱一模一樣（「主要導覽」「新增紀錄」、四個連結），既有測試兩種版面都找得到。
+  「新增」在 `SideNav` 的最上面——DOM 順序就是 Tab 順序，所以不能共用一份 JSX 再用 CSS 換位置。
+- **視窗拉寬拉窄跨過斷點會重新掛載整頁**（兩種外框的 `children` 在不同父元素底下），表單打到一半會不見、「新增」選單會關。
+  刻意接受。
+- **測試環境預設是手機版**：`src/test/setup.ts` 裝了 `src/test/media.ts` 的假 `matchMedia`；要測電腦版就
+  `act(() => setDesktop(true))`。幾何（誰在誰右邊、寬度）jsdom 量不到，在 `e2e/desktop-layout.spec.ts`（1280×800 與
+  390×844 各一組）。**Playwright 預設的 1280×720 是電腦版**：沒有 `test.use({ viewport })` 的既有 e2e 現在都跑在電腦版上，
+  等於電腦版的回歸測試；`touch-targets`、`mobile-form-zoom`、`friends`、`invites` 固定手機尺寸，守手機版。
+  新寫的 e2e 如果依賴「導覽在底部」之類的手機版假設，要自己釘手機尺寸。
+- e2e 順便補上了 (b) 的一部分：手機尺寸的記帳頁沒有分頁列。
+
+實作時量出來的兩件事：
+
+- 計畫原本的「新增選單是置中對話框」只量了寬度與上下留白。拿掉 `.layer` 的 `align-items: center`（左右置中）照樣綠——
+  `.layer` 是 `flex-direction: column`，上下置中靠的是 `justify-content`，左右才是 `align-items`。補了一條「水平中心 = 視窗中心」。
+- 拿掉飲食頁補劑的 `grid-area: supplements` **不是**有效的突變：grid 的自動擺放剛好把它放進左欄第二列，跟寫了一樣。
+  有效的是把第二列的 `1fr` 改成 `auto`（補劑跟營養素中間空一大截）——e2e 量「補劑緊貼在營養素卡片下面」。
+  這條只在今天的餐點比左欄長時有鑑別力；本機 dev 資料庫的示範帳號今天的餐點右欄有六萬多 px 高（e2e 一直在記），所以量得到；乾淨的 CI 資料庫上這條大概量不出差別。
 
 ---
 
