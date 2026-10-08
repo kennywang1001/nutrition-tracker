@@ -1143,13 +1143,21 @@ sudo ./scripts/deploy.sh          # git pull --ff-only，部署 HEAD 的映像
 sudo ./scripts/deploy.sh <sha>    # 部署指定版本（退版用；不動 git）
 ```
 
-腳本：拉映像 → 目前在跑的映像標成 `:rollback` → 備份 → 用新映像跑 migration（失敗就停在舊版）→
-`up -d --no-build`、等 api 與 caddy `healthy`（等不到就自動退回 `:rollback`、非零結束）→ 寫 `deployed-version`。
-用到的疊加檔是 `docker-compose.yml`＋`docker-compose.prod.yml`＋`docker-compose.release.yml`
-（最後這個把 `build` 拿掉、`image` 換成 GHCR 的 `${APP_VERSION}`）。
+腳本：部署鎖＋檢查 compose 版本（≥ v2.20）＋擋開發環境 → 拉映像 → 目前的映像標成 `:rollback` →
+備份（資料庫停著就先起來再備份；只有沒有資料庫容器也沒有資料 volume 才跳過）→ 用新映像跑 migration
+（失敗就停在舊版）→ `up -d --no-build`、等 api 與 caddy `healthy`（等不到就自動退回 `:rollback`、非零結束）→
+寫 `deployed-version`。用到的疊加檔是 `docker-compose.yml`＋`docker-compose.prod.yml`＋`docker-compose.release.yml`
+（最後這個把 `image` 換成 GHCR 的 `${APP_VERSION}`；`build` **沒有**拿掉——`!reset` 在 v2.18 之前的 Compose
+會被安靜忽略（實測 v2.15、v2.17）——不 build 靠的是 `deploy.sh` 每個指令都帶 `--no-build`）。
 規格 `docs/superpowers/specs/2026-10-08-image-deploy-design.md`。
 
-- **退版不倒回 migration**（migration 都是加法）。退到舊版時資料庫比映像新，腳本會認出來、跳過 migration。
+- **退版不倒回 migration**。退到舊版時資料庫比映像新，腳本會認出來、跳過 migration。退得回去的條件是
+  「新版的 migration 不會讓舊程式壞掉」：加可為 null／有預設值的欄位、加表、加索引是安全的；
+  **`0012` 不是**（`users.friend_code` NOT NULL 沒有 server default，0012 之前的程式建立使用者會失敗）。
+  這種 revision 列在 `deploy.sh` 的 `ROLLBACK_UNSAFE_REVISIONS`，部署跨過時印警告、照樣繼續。
+  **新增 NOT NULL 欄位的 migration 要給 server default**，不然就要把它加進那個清單。
+- CI：push 到 master **一律全跑**測試（不看路徑過濾——paths-filter 比的是上一次 push，不是上一個綠的 commit），
+  publish 才能放心用 `!failure()`；publish 有 `concurrency`，一次只推一組映像。
 - **本機試 `deploy.sh` 一定要設 `COMPOSE_PROJECT_NAME`**（例如 `nt-deploy-test`），否則專案名稱是
   `wallet`、會接管 dev（§7）。腳本看到 dev 的容器（override 起的）會拒絕，但不要靠這個。
   本機實測的做法：`SKIP_PULL=1`、本機 build 並打上 GHCR 名稱的映像、`ENV_FILE`／`BACKUP_DIR`／

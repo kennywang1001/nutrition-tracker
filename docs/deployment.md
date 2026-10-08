@@ -9,10 +9,28 @@
 
 ## 前提
 
-- NAS 已安裝 **Container Manager**（提供 Docker 與 `docker compose`）
+- NAS 已安裝 **Container Manager**（提供 Docker 與 `docker compose`），而且 **Docker Compose 是 v2.20 以上**：
+
+  ```bash
+  sudo docker compose version
+  ```
+
+  預期輸出像 `Docker Compose version v2.20.x`（或更新）。`scripts/deploy.sh` 一開始也會印出這一行，
+  低於 v2.20 就停下來、什麼都不動——到套件中心更新 Container Manager。
+  （v2.20.3 實測過 `deploy.sh` 用到的每個子指令與參數都有；更舊的版本沒有驗過。）
+
+  > `docker-compose.prod.yml` 的 `ports: !reset []` 已經在 production 跑過，但那**不代表**
+  > NAS 的 Compose 認得 `!reset`：實測 v2.15.1、v2.17.3 會**安靜地忽略** `!reset`（不報錯），v2.18.1 起才有作用。
+  > 那一行在舊版上只是剛好無害（共用的 `docker-compose.yml` 本來就沒有 api 的 ports）。
+  > 所以 `docker-compose.release.yml` 不用 `!reset`，「不在 NAS 上 build」改靠 `deploy.sh` 的 `--no-build`。
 - NAS 已開啟 **SSH**（控制台 → 終端機和 SNMP → 啟動 SSH 功能）
 - NAS 已加入你的 **tailnet**（Synology 有 Tailscale 套件）
 - 手機也在同一個 tailnet 裡
+
+> **Synology 上 docker 要 root。** 一般使用者沒有 docker 的權限，所以這份手冊裡**每一個**
+> `docker`／`docker compose` 指令都寫成 `sudo docker …`，會呼叫 docker 的腳本也是
+> `sudo ./scripts/deploy.sh`、`sudo bash scripts/backup.sh`；排程的任務一律用 **root** 跑
+> （「三、備份與還原」的排程）。不想每次打 `sudo` 可以先 `sudo -i` 切成 root，但之後 `cd` 要用絕對路徑。
 
 ---
 
@@ -105,7 +123,7 @@ BIND_ADDR=127.0.0.1
 **先確認設定解析得出來，再啟動：**
 
 ```bash
-docker compose --env-file .env.production \
+sudo docker compose --env-file .env.production \
   -f docker-compose.yml -f docker-compose.prod.yml config >/dev/null && echo OK
 ```
 
@@ -128,8 +146,8 @@ production. Generate one with: openssl rand -hex 32
 sudo ./scripts/deploy.sh
 ```
 
-第一次部署時資料庫還不存在：腳本會跳過備份、先起資料庫、跑完所有 migration，
-再起 api 與 caddy、等兩個都 `healthy`。最後一行是 `✓ 部署完成：<commit SHA>`。
+第一次部署時資料庫還不存在（沒有資料庫容器、也沒有資料 volume）：腳本會跳過備份、先起資料庫、
+跑完所有 migration，再起 api 與 caddy、等兩個都 `healthy`。最後一行是 `✓ 部署完成：<commit SHA>`。
 
 > 拉不到映像（`denied`／`manifest unknown`）：套件還是私人的、或 CI 還沒做好
 > 這個 commit 的映像（GitHub → Actions，看那個 commit 的 `publish` job）。
@@ -137,7 +155,7 @@ sudo ./scripts/deploy.sh
 ### 6. 確認容器都健康
 
 ```bash
-docker compose --env-file .env.production \
+sudo docker compose --env-file .env.production \
   -f docker-compose.yml -f docker-compose.prod.yml ps
 ```
 
@@ -156,14 +174,14 @@ nutrition-tracker-db-1     db        Up 40 seconds (healthy)
 > `deploy.sh` 自己也是等到兩個都 `(healthy)` 才算部署成功。
 >
 > 變成 `(unhealthy)` 的話直接看 log：
-> `docker compose ... logs api --tail 50`
+> `sudo docker compose ... logs api --tail 50`
 
 ### 7. 確認資料庫 migration
 
 `deploy.sh` 已經跑過 `alembic upgrade head`。確認：
 
 ```bash
-docker compose --env-file .env.production \
+sudo docker compose --env-file .env.production \
   -f docker-compose.yml -f docker-compose.prod.yml \
   exec api python -m alembic current
 ```
@@ -173,7 +191,7 @@ docker compose --env-file .env.production \
 ### 8. 建立管理員帳號
 
 ```bash
-docker compose --env-file .env.production \
+sudo docker compose --env-file .env.production \
   -f docker-compose.yml -f docker-compose.prod.yml \
   exec api python -m app.cli create-admin you@example.com '你的密碼' '你的名字'
 ```
@@ -186,7 +204,7 @@ docker compose --env-file .env.production \
 #### 建立一般使用者帳號
 
 ```bash
-docker compose --env-file .env.production \
+sudo docker compose --env-file .env.production \
   -f docker-compose.yml -f docker-compose.prod.yml \
   exec api python -m app.cli create-user you@example.com '密碼' '名字'
 ```
@@ -299,13 +317,21 @@ sudo ./scripts/deploy.sh
 
 | 步驟 | 做什麼 | 失敗時 |
 |---|---|---|
+| 開始前 | 拿部署鎖；印出並檢查 `docker compose version`（v2.20 以上）；檢查這個 compose 專案裡沒有開發環境的容器 | 停，什麼都沒動 |
 | 1 | `git pull --ff-only`，版本＝`HEAD` 的 SHA；檢查 `.env.production` | 停，什麼都沒動 |
 | 2 | 拉那個 SHA 的兩個映像 | 「CI 還沒做好這個版本的映像（或測試沒過）」，停 |
-| 3 | 把**目前正在跑**的兩個映像標成本機的 `:rollback` | — |
-| 4 | 備份資料庫（`scripts/backup.sh`，到 `backups/`） | 停 |
-| 5 | 用**新映像**跑 `alembic upgrade head` | 停，還沒切換；整次 upgrade 是一個交易，資料庫沒動 |
+| 3 | 把目前的 api、caddy 映像標成本機的 `:rollback`（在跑的容器；沒在跑就用停著的容器） | 停 |
+| 4 | 備份資料庫（`scripts/backup.sh`，到 `backups/`）。資料庫停著就先起來再備份；只有「沒有資料庫容器、也沒有資料 volume」才跳過 | 停 |
+| 5 | 用**新映像**跑 `alembic upgrade head`；會跨過不能退版的 migration（目前是 `0012`）時印警告、照樣繼續 | 停，還沒切換；整次 upgrade 是一個交易，資料庫沒動 |
 | 6 | `up -d --no-build`，等 `api` 與 `caddy` 都 `healthy`（最多 120 秒） | **自動換回 `:rollback`**、印「已退回上一版」、以非零結束 |
 | 7 | 把版本寫進 `deployed-version` | — |
+
+> **同一時間只能有一個部署。** 第二個會馬上結束：「另一個部署正在跑」，什麼都不動。
+> 鎖是 `flock`（`.deploy.lock`），腳本結束（含被 kill）就自動放掉。沒有 `flock` 的機器
+> 改用 `.deploy.lock.d` 資料夾，只有被 `kill -9` 時會留下來——訊息會說怎麼清。
+
+> **第 3 步只有一邊有容器時**（例如 caddy 的容器被刪掉了）：有容器的那一邊照樣標成 `:rollback`，
+> 但這次失敗**不會自動退回**——另一邊沒有上一版的映像。腳本會明白說出是哪一邊。
 
 成功時最後幾行長這樣：
 
@@ -318,14 +344,14 @@ deployed_at=2026-10-08T02:31:51Z
 ✓ 部署完成：<這次的 SHA>（要退回上一版：sudo ./scripts/deploy.sh <上一版的 SHA>）
 ```
 
-可以覆寫的環境變數（`sudo VAR=值 ./scripts/deploy.sh`）：`HEALTH_TIMEOUT`（秒，預設 120）、
+可以覆寫的環境變數（`sudo VAR=值 ./scripts/deploy.sh`）：`HEALTH_TIMEOUT`（秒，正整數，預設 120）、
 `ENV_FILE`（預設 `.env.production`）、`COMPOSE_PROJECT_NAME`（預設是目錄名稱）。
 
 > **`0015`（一餐最多一筆餐費）不用再手動先查。** 有重複的餐費時 migration 會失敗，
 > 腳本停在第 5 步、舊版照常運作，訊息會列出是哪幾餐。想先看一眼也可以（選配）：
 >
 > ```bash
-> docker compose --env-file .env.production \
+> sudo docker compose --env-file .env.production \
 >   -f docker-compose.yml -f docker-compose.prod.yml \
 >   exec -T db psql -U wallet -d wallet -c \
 >   "SELECT meal_id, count(*) FROM expenses WHERE meal_id IS NOT NULL GROUP BY meal_id HAVING count(*) > 1;"
@@ -358,10 +384,25 @@ cat deployed-version                     # previous= 那一行就是上一版
 sudo ./scripts/deploy.sh <上一版的 SHA>   # 給 SHA 時不動 git，只換映像
 ```
 
-> **退版不會倒回 migration。** 新版的 migration 已經套用，舊程式跟新的資料表一起跑——本專案的
-> migration 都是加法（加欄位、加表、加索引），舊程式不會碰到它們。資料庫比要部署的版本新時
-> （舊映像不認得資料庫目前的 migration），腳本會說「這是退到舊版，跳過 migration」，不會失敗。
-> 哪天出現「刪欄位、改名」這種 migration，那一版就不能這樣退，要另外想辦法（還原備份）。
+> **退版不會倒回 migration。** 新版的 migration 已經套用，舊程式跟新的資料表一起跑。資料庫比要部署的
+> 版本新時（舊映像不認得資料庫目前的 migration），腳本會說「這是退到舊版，跳過 migration」，不會失敗。
+>
+> 所以**退得回去的條件是：新版套用的 migration 不會讓舊程式壞掉**。
+>
+> - **安全**：加「可為 null 或有預設值（server default）」的欄位、加表、加索引——舊程式不知道它們，
+>   INSERT 時不給值也沒關係。例：`0014`（`meals.is_private` 有預設值 false）、`0011`、`0013`（新的表）。
+> - **不安全**：加 NOT NULL 又沒有 server default 的欄位、刪欄位、改名。
+>   例：**`0012`**——`users.friend_code` 是 NOT NULL、沒有預設值，`0012` 之前的程式建立使用者
+>   （註冊、`create-admin`、`create-user`）會失敗。退到 `0012` 之前的版本，app 起得來、登入照常，
+>   但**沒辦法建立新帳號**。
+> - 介於中間：`0015`（一餐最多一筆餐費的唯一索引）收緊了限制——舊程式替同一餐記第二筆餐費時會出錯，
+>   而不是安靜地多一筆。那本來就是要擋的情況，可以接受。
+>
+> 腳本在第 5 步會比對「這次要套用的 migration」與 `deploy.sh` 裡的 `ROLLBACK_UNSAFE_REVISIONS`
+> （目前是 `0012`），會跨過時印「⚠️ 跨過 0012：如果新版起不來被自動退回，舊版無法建立新帳號（好友碼欄位）。」
+> ——**照樣繼續**（腳本要能無人值守地跑），自動退回時也會再提醒一次。真的需要退到那之前，
+> 只能還原備份（第 4 步剛做的那份，見「三、備份與還原」），會失去部署之後寫入的資料。
+> 以後新增這類 migration，記得把它的 revision 加進 `ROLLBACK_UNSAFE_REVISIONS`。
 
 > **退版之後 git 還停在新的 commit 上。** 下一次不帶參數的 `sudo ./scripts/deploy.sh` 會 `git pull`
 > 然後部署 `HEAD`——如果 master 上還是那個有問題的 commit，就會再部署它一次。
@@ -389,6 +430,10 @@ sudo ./scripts/deploy.sh <上一版的 SHA>   # 給 SHA 時不動 git，只換�
 要部署時：在任務排程表選這個任務 →「**執行**」。跑完看 `backups/deploy.log` 的最後幾行
 （或「動作 → 檢視結果」）。退到指定版本這種一次性的事還是用 SSH。
 
+> 任務排程表給的 `PATH` 可能沒有 `/usr/local/bin`（Container Manager 的 `docker` 在那裡）。
+> `deploy.sh` 自己會補上，所以這個任務不用另外設；直接呼叫 `docker` 的任務（「三、備份與還原」的排程、
+> 「四、清理孤兒照片」）要自己在指令最前面加 `export PATH="$PATH:/usr/local/bin";`。
+
 ### 備案：在 NAS 上 build（舊的做法）
 
 GHCR 或 CI 出問題、又急著上線時，還是可以用原始碼在 NAS 上 build（慢；沒有自動退版，
@@ -405,13 +450,19 @@ sudo docker compose --env-file .env.production \
   exec api python -m alembic upgrade head
 ```
 
-> 這條路**不帶** `-f docker-compose.release.yml`——那個檔案把 `build` 拿掉了，帶了它就不會 build。
+> 這條路**不帶** `-f docker-compose.release.yml`——那個檔案把 `image` 換成 GHCR 的名字、而且要 `APP_VERSION`；
+> 帶著它 build 會做出一個掛著 GHCR 名字、其實是 NAS 上原始碼的映像，之後分不清楚。
 > 改依賴、加 migration 都要重新 build（`Dockerfile` 是 `COPY . .`，migration 是烤進映像的）。
 > CI 恢復之後，下一次照常 `sudo ./scripts/deploy.sh` 就回到正常的路（這次 build 的映像會被標成 `:rollback`）。
 
 ### 各版本的升級備註
 
-`deploy.sh` 會跑所有還沒套用的 migration，下面這些不用再各自手動跑 `alembic`：
+`deploy.sh` 會跑所有還沒套用的 migration，下面這些不用再各自手動跑 `alembic`。
+
+> **第一次改用映像部署時，可能一次跨過 `0011`～`0015`**（看 NAS 目前在哪個 migration：
+> `sudo docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml exec -T db psql -U wallet -d wallet -tAc "SELECT version_num FROM alembic_version"`）。
+> 跨過 `0012` 時腳本會印退版警告（見「退版」）：這次如果新版起不來、被自動退回到 NAS 上原本那一版，
+> 舊版**無法建立新帳號**——修好新版再部署一次就好，不用還原。`0015` 有重複餐費時會停在第 5 步。
 
 - **`0015`（一餐最多一筆餐費）**：有重複的餐費時 migration 會失敗、部署停住——見上面「每次部署」的備註。
 - **`0012`～`0014`（好友關係）**：`0012` 會替既有使用者補好友碼。
@@ -428,7 +479,7 @@ sudo docker compose --env-file .env.production \
 
 ```bash
 cd ~/apps/nutrition-tracker
-bash scripts/backup.sh
+sudo bash scripts/backup.sh
 ```
 
 預期輸出是一個 `backups/wallet-YYYYmmdd-HHMMSS.dump` 檔案路徑。
@@ -438,19 +489,26 @@ bash scripts/backup.sh
 交給 Synology 的 Hyper Backup 備份 `/volume1/@docker/volumes/` 即可。
 （這正是規格第 8 節選擇檔案系統而非存進資料庫的理由之一。）
 
-### 排程（cron）
+> **`backups/` 裡的檔案是 root 的**（備份要 root 才叫得動 docker，`deploy.sh` 的備份也是 root 做的）。
+> 權限是一般的 644，自己的帳號讀得到、複製得走；要刪要 `sudo rm`。`backups/` 這個資料夾本身誰建的都行
+> （root 寫得進任何人的資料夾）——建議第一次部署前自己先 `mkdir -p backups`，資料夾就是你的。
+> 一般帳號跑不了備份（沒有 docker 權限），所以不用為它把檔案 `chown` 回自己。
+
+### 排程
+
+用 **DSM 的任務排程表**、使用者選 **root**——一般帳號的 `crontab` 沒有 docker 權限，排了也會每天失敗
+（而且 DSM 會管 `/etc/crontab`，手改的可能被蓋掉）。
+
+**控制台 → 任務排程表 → 新增 → 排定的任務 → 使用者定義的指令碼**：使用者 **root**、
+排程每天 03:00，指令碼（`YOUR_USER` 換成自己的帳號）：
 
 ```bash
-crontab -e
+export PATH="$PATH:/usr/local/bin"; cd /var/services/homes/YOUR_USER/apps/nutrition-tracker && bash scripts/backup.sh >> backups/backup.log 2>&1
 ```
 
-加入（每天凌晨 3 點）：
-
-```
-0 3 * * * cd /var/services/homes/YOUR_USER/apps/nutrition-tracker && bash scripts/backup.sh >> backups/backup.log 2>&1
-```
-
-> 路徑要用**絕對路徑**。cron 的工作目錄通常是 `$HOME`，不是 repo。
+> 路徑要用**絕對路徑**：任務的工作目錄不是 repo。`export PATH` 是因為任務排程表給的 `PATH`
+> 可能沒有 `/usr/local/bin`（`docker` 在那裡），沒有它會出現 `docker: command not found`。
+> 勾「透過電子郵件傳送執行詳細資訊 → 只在指令碼異常終止時傳送」，備份失敗才會知道。
 
 ### 還原
 
@@ -459,23 +517,23 @@ crontab -e
 ls -lh backups/
 
 # 2. 還原到一個「新的」資料庫先驗證，不要直接蓋掉正在用的
-docker compose --env-file .env.production \
+sudo docker compose --env-file .env.production \
   -f docker-compose.yml -f docker-compose.prod.yml \
   exec -T db psql -U wallet -d postgres -c "CREATE DATABASE wallet_restore_check"
 
-docker compose --env-file .env.production \
+sudo docker compose --env-file .env.production \
   -f docker-compose.yml -f docker-compose.prod.yml \
   exec -T db pg_restore --no-owner -U wallet -d wallet_restore_check \
   < backups/wallet-YYYYmmdd-HHMMSS.dump
 
 # 3. 比對筆數
-docker compose --env-file .env.production \
+sudo docker compose --env-file .env.production \
   -f docker-compose.yml -f docker-compose.prod.yml \
   exec -T db psql -U wallet -d wallet_restore_check \
   -c "select count(*) from users; select count(*) from meals;"
 
 # 4. 確認沒問題之後才丟掉檢查用的
-docker compose --env-file .env.production \
+sudo docker compose --env-file .env.production \
   -f docker-compose.yml -f docker-compose.prod.yml \
   exec -T db psql -U wallet -d postgres -c "DROP DATABASE wallet_restore_check"
 ```
@@ -494,12 +552,12 @@ docker compose --env-file .env.production \
 
 ```bash
 # 先看會刪什麼
-docker compose --env-file .env.production \
+sudo docker compose --env-file .env.production \
   -f docker-compose.yml -f docker-compose.prod.yml \
   exec api python -m app.cli cleanup-photos --dry-run
 
 # 確認之後才真的刪
-docker compose --env-file .env.production \
+sudo docker compose --env-file .env.production \
   -f docker-compose.yml -f docker-compose.prod.yml \
   exec api python -m app.cli cleanup-photos
 ```
@@ -511,10 +569,10 @@ docker compose --env-file .env.production \
 > 預設只刪修改時間超過 24 小時的檔案，避免刪到一張剛寫入、
 > 資料庫還沒 commit 的照片。
 
-排程（每週日凌晨 4 點）：
+排程（每週日凌晨 4 點）：跟備份一樣用任務排程表、使用者 **root**，指令碼：
 
-```
-0 4 * * 0 cd /var/services/homes/YOUR_USER/apps/nutrition-tracker && docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml exec -T api python -m app.cli cleanup-photos >> backups/cleanup.log 2>&1
+```bash
+export PATH="$PATH:/usr/local/bin"; cd /var/services/homes/YOUR_USER/apps/nutrition-tracker && docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml exec -T api python -m app.cli cleanup-photos >> backups/cleanup.log 2>&1
 ```
 
 ---
@@ -558,14 +616,16 @@ sudo ./scripts/deploy.sh "$(sed -n 's/^version=//p' deployed-version)"
 跟清理孤兒照片一樣**必須在容器內執行**：
 
 ```bash
-docker compose exec -T api python -m app.cli cleanup-sessions --dry-run   # 先看筆數
-docker compose exec -T api python -m app.cli cleanup-sessions
+sudo docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml \
+  exec -T api python -m app.cli cleanup-sessions --dry-run   # 先看筆數
+sudo docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml \
+  exec -T api python -m app.cli cleanup-sessions
 ```
 
-建議的 cron（每天一次就夠，過期的列不影響任何功能，只是佔空間）：
+建議的排程（每天一次就夠，過期的列不影響任何功能，只是佔空間）：任務排程表、使用者 **root**，指令碼：
 
-```
-30 4 * * * cd /volume1/docker/nutrition-tracker && docker compose exec -T api python -m app.cli cleanup-sessions
+```bash
+export PATH="$PATH:/usr/local/bin"; cd /var/services/homes/YOUR_USER/apps/nutrition-tracker && docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml exec -T api python -m app.cli cleanup-sessions >> backups/cleanup.log 2>&1
 ```
 
 > **只刪 `expires_at` 已過的列，不刪「已撤銷但還沒過期」的。** 那一列是
@@ -594,7 +654,7 @@ docker compose exec -T api python -m app.cli cleanup-sessions
 ### 容器顯示 `Up` 但連不上
 
 ```bash
-docker compose --env-file .env.production \
+sudo docker compose --env-file .env.production \
   -f docker-compose.yml -f docker-compose.prod.yml logs api --tail 50
 ```
 
@@ -656,7 +716,7 @@ curl http://100.x.y.z:8000/api/health/ready
       > 而它正是「Tailscale 是邊界」這個前提唯一的實證。
 
 - [ ] 從 tailnet 上的手機連 `http://100.x.y.z:8000/docs` —— 打得開
-- [ ] `docker compose ... ps` 兩個容器都是 `(healthy)`
+- [ ] `sudo docker compose ... ps` 三個容器都是 `(healthy)`
 - [ ] **重開 NAS，容器自己回來**（驗證 `restart: unless-stopped`）
 - [ ] 用手機真的記一餐、上傳一張照片、查當日統計
 - [ ] 把那張照片下載回來，確認 EXIF 是空的
