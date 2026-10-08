@@ -1,0 +1,27 @@
+# NAS 用 CI 做好的映像跑（規格 docs/superpowers/specs/2026-10-08-image-deploy-design.md §2.2）：
+#
+#   APP_VERSION=<commit 完整 SHA> docker compose --env-file .env.production \
+#     -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml \
+#     up -d --no-build
+#
+# 平常不用自己打這串：scripts/deploy.sh 會決定版本、拉映像、備份、跑 migration、
+# 等 healthy、失敗就退回上一版。
+#
+# 映像由 CI 的 publish job 推到 GHCR，標籤是 commit 的完整 SHA 與 latest；
+# deploy.sh 退版時用的 `rollback` 也是一個標籤（本機打的，不在 GHCR 上）。
+#
+# APP_VERSION 用 `:?` 必填：沒有版本就不知道要跑哪個映像，與其默默退回 latest，
+# 不如當場說清楚。變數代換是「每個檔案各自解析」（docker-compose.yml 的註解），
+# 所以這個必填只寫在這個檔案，不影響沒帶 -f docker-compose.release.yml 的指令。
+#
+# `build: !reset null` 把 docker-compose.yml／docker-compose.prod.yml 的 build 拿掉：
+# 這個組合**不可能**在 NAS 上 build——就算忘了 --no-build，映像不存在也只會拉不到、
+# 大聲失敗，而不是安靜地用 NAS 上的原始碼建一個「看起來是那個版本」的映像。
+services:
+  api:
+    image: "ghcr.io/kennywang1001/nutrition-tracker-api:${APP_VERSION:?APP_VERSION is required: the commit SHA (or tag) of the image to run. Use scripts/deploy.sh}"
+    build: !reset null
+
+  caddy:
+    image: "ghcr.io/kennywang1001/nutrition-tracker-web:${APP_VERSION:?APP_VERSION is required: the commit SHA (or tag) of the image to run. Use scripts/deploy.sh}"
+    build: !reset null

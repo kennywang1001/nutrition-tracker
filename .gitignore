@@ -22,6 +22,9 @@ data/photos/
 # scripts/backup.sh 的預設輸出目錄：資料庫備份檔，不進版控
 backups/
 
+# scripts/deploy.sh 寫的版本紀錄（這台機器目前跑哪個 commit 的映像），不進版控
+deployed-version
+
 # 編輯器與作業系統
 .vscode/
 .idea/
