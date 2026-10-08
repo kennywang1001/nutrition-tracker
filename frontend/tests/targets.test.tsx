@@ -1,5 +1,9 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import {
+	onlineManager,
+	QueryClient,
+	QueryClientProvider,
+} from "@tanstack/react-query";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -79,7 +83,7 @@ function statsGets(spy: ReturnType<typeof mockApi>): number {
 }
 
 /** 斷言「沒有送出」之前先等一下：mutate 是非同步的，立刻斷言在守衛壞掉時也成立（第 41 種）。 */
-function settle() {
+function settle(): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, 50));
 }
 
@@ -198,6 +202,124 @@ describe("/me/targets", () => {
 			screen.queryByRole("button", { name: "儲存" }),
 		).not.toBeInTheDocument();
 		expect(screen.queryByLabelText("熱量（kcal）")).not.toBeInTheDocument();
+	});
+
+	// 快取裡的目標可能是舊的（另一台裝置改過、離線快取還原的）。表單從快取預填的話，
+	// 使用者只改一格按儲存，其他三格就被悄悄改回舊的值（帳號設定審查 M5）。
+	const CACHED = {
+		...STATS,
+		target: {
+			kcal: "1500.00",
+			protein_g: "90.00",
+			fat_g: "50.00",
+			carb_g: null,
+		},
+	};
+
+	/** 跟 `renderScreen` 一樣，但快取裡先有一份**還新鮮**的統計（staleTime 60 秒內）——
+	 *  沒有特別要求的話，掛載不會重抓。 */
+	function renderScreenWithCache() {
+		const client = new QueryClient({
+			defaultOptions: { queries: { retry: false, staleTime: 60_000 } },
+		});
+		client.setQueryData(queryKeys.dailyStats, CACHED);
+		render(
+			<QueryClientProvider client={client}>
+				<MemoryRouter initialEntries={["/me/targets"]}>
+					<Routes>
+						<Route path="/me/targets" element={<Targets />} />
+					</Routes>
+				</MemoryRouter>
+			</QueryClientProvider>,
+		);
+		return client;
+	}
+
+	it("快取裡是舊的目標：等重抓回來才顯示表單，預填的是新的值", async () => {
+		let respond: (response: Response) => void = () => undefined;
+		const spy = mockApi([
+			{
+				method: "GET",
+				path: "/api/stats/daily",
+				handler: () =>
+					new Promise<Response>((resolve) => {
+						respond = resolve;
+					}),
+			},
+		]);
+		renderScreenWithCache();
+
+		// 重抓還在路上：不能已經拿快取的值畫出表單。
+		await waitFor(() => expect(statsGets(spy)).toBe(1));
+		expect(screen.getByText("載入中…")).toBeInTheDocument();
+		expect(screen.queryByLabelText("熱量（kcal）")).not.toBeInTheDocument();
+
+		respond(json(STATS));
+
+		expect(await screen.findByLabelText("熱量（kcal）")).toHaveValue("1800");
+		expect(screen.getByLabelText("蛋白質（g）")).toHaveValue("120");
+		// 快取裡有、伺服器上已經清掉的那一格是空白，不是舊的 50。
+		expect(screen.getByLabelText("脂肪（g）")).toHaveValue("");
+	});
+
+	it("快取裡有舊的目標、重抓失敗：顯示「無法載入目前的目標」，不顯示帶著舊值的表單", async () => {
+		mockApi([
+			statsRoute(
+				{ error: { code: "INTERNAL_ERROR", message: "壞了", details: {} } },
+				500,
+			),
+		]);
+		renderScreenWithCache();
+
+		expect(await screen.findByText("無法載入目前的目標")).toBeInTheDocument();
+		expect(screen.queryByLabelText("熱量（kcal）")).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "儲存" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("離線（重抓被暫停、不會自己結束）：顯示讀不到，不是一直「載入中」", async () => {
+		const spy = mockApi([statsRoute()]);
+		onlineManager.setOnline(false);
+		try {
+			renderScreenWithCache();
+
+			expect(await screen.findByText("無法載入目前的目標")).toBeInTheDocument();
+			expect(screen.queryByLabelText("熱量（kcal）")).not.toBeInTheDocument();
+			expect(statsGets(spy)).toBe(0);
+		} finally {
+			onlineManager.setOnline(true);
+		}
+	});
+
+	it("表單出來之後的背景重抓（失敗或帶回別的值）不動使用者正在打的字", async () => {
+		let stats: () => Response = () => json(STATS);
+		mockApi([
+			{ method: "GET", path: "/api/stats/daily", handler: () => stats() },
+		]);
+		const client = renderScreen();
+		const kcal = await screen.findByLabelText("熱量（kcal）");
+		await userEvent.clear(kcal);
+		await userEvent.type(kcal, "1950");
+
+		// 帶回別的值（另一台裝置剛改過）：不覆蓋打到一半的。
+		stats = () => json(CACHED);
+		await client.refetchQueries({ queryKey: queryKeys.dailyStats });
+		expect(screen.getByLabelText("熱量（kcal）")).toHaveValue("1950");
+
+		// 失敗（切回分頁時剛好斷線）：表單不能換成錯誤訊息——打的字會不見。
+		stats = () =>
+			json(
+				{ error: { code: "INTERNAL_ERROR", message: "壞了", details: {} } },
+				500,
+			);
+		await client.refetchQueries({ queryKey: queryKeys.dailyStats });
+		expect(client.getQueryState(queryKeys.dailyStats)?.status).toBe("error");
+		// query 的結果是排程之後才通知畫面的：不等這一下，下面的斷言看到的還是重抓之前的
+		// 畫面，表單被換掉了也是綠的（第 41 種）。
+		await act(() => settle());
+		expect(screen.getByLabelText("熱量（kcal）")).toHaveValue("1950");
+		expect(screen.queryByText("無法載入目前的目標")).not.toBeInTheDocument();
 	});
 
 	it("409：顯示後端的訊息，留在這一頁", async () => {

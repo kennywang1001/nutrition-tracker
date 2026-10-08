@@ -3,7 +3,7 @@ import { type FormEvent, useState } from "react";
 import { useNavigate } from "react-router";
 import { ApiError, describeFieldErrors } from "../api/errors";
 import { queryKeys } from "../api/queries";
-import { type DailyStats, useDailyStats } from "../api/stats";
+import { type DailyStats, useFreshDailyStats } from "../api/stats";
 import { setTargetFromToday, type TargetToday } from "../api/targets";
 import ui from "../components/ui.module.css";
 import {
@@ -31,19 +31,38 @@ function problemText(
 }
 
 /** `/me/targets`（帳號設定規格 §5.2）：從今天起的每日目標。目前的值讀 `stats/daily` 的
- *  `target`（後端用使用者的今天算的），不另外加讀取端點。 */
+ *  `target`（後端用使用者的今天算的），不另外加讀取端點。
+ *
+ *  **表單只用掛載之後才抓回來的那一份預填**（帳號設定審查 M5）。存的是整組四個值，
+ *  拿快取裡的舊值預填，沒動的那幾格會被悄悄改回去——快取可能是另一台裝置改之前的、
+ *  或離線還原的。重抓失敗就顯示錯誤，不拿舊值湊一張表單。 */
 export function Targets() {
-	const stats = useDailyStats();
+	const stats = useFreshDailyStats();
+	// 第一份新鮮的資料**記下來就不再換**：表單出來之後，背景重抓（切回分頁）失敗不能把
+	// 表單換成錯誤訊息、帶回別的值也不能蓋掉使用者打到一半的字。render 期間設 state 是
+	// React 允許的「依 props／外部狀態調整 state」寫法，只會多 render 一次。
+	const [prefill, setPrefill] = useState<{
+		target: DailyStats["target"];
+	} | null>(null);
+	const fresh =
+		stats.isFetchedAfterMount && stats.isSuccess ? stats.data : null;
+	if (prefill === null && fresh != null) {
+		setPrefill({ target: fresh.target });
+	}
+	// 還沒有結果、而且真的還在抓。離線時 query 是 paused，不會自己結束——那算讀不到。
+	const waiting = !stats.isFetchedAfterMount && stats.fetchStatus !== "paused";
+
 	return (
 		<section className={ui.screen}>
 			<h1>每日目標</h1>
-			{stats.isPending ? (
+			{prefill !== null ? (
+				<TargetsForm current={prefill.target} />
+			) : waiting || fresh != null ? (
 				<p>載入中…</p>
-			) : stats.data == null ? (
-				// 不顯示空白表單：四格空白存下去＝今天起沒有目標，等於把目標清掉。
-				<p role="alert">無法載入目前的目標</p>
 			) : (
-				<TargetsForm current={stats.data.target} />
+				// 不顯示空白表單：四格空白存下去＝今天起沒有目標，等於把目標清掉。
+				// 也不顯示帶著快取舊值的表單（見上面）。
+				<p role="alert">無法載入目前的目標</p>
 			)}
 		</section>
 	);

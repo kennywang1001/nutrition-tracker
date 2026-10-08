@@ -17,6 +17,24 @@ export type DailyStats = components["schemas"]["DailyStatsResponse"];
 export function useDailyStats() {
 	return useQuery({
 		queryKey: queryKeys.dailyStats,
-		queryFn: () => apiFetch<DailyStats>("/api/stats/daily"),
+		queryFn: fetchDailyStats,
+	});
+}
+
+function fetchDailyStats() {
+	return apiFetch<DailyStats>("/api/stats/daily");
+}
+
+/** 同一份統計（同一個 key、同一個快取），但**掛載時一定重抓**——給「拿目前的值預填表單，
+ *  存的時候整組送回去」的畫面用（`/me/targets`）。
+ *
+ *  `useDailyStats` 在 `staleTime`（60 秒）內掛載不會重抓，離線快取還原的更舊。拿那份預填，
+ *  使用者只改一格按儲存，其他格就被悄悄改回快取裡的舊值（帳號設定審查 M5）。呼叫端用
+ *  `isFetchedAfterMount` 判斷「這一份是掛載之後才拿到的」。 */
+export function useFreshDailyStats() {
+	return useQuery({
+		queryKey: queryKeys.dailyStats,
+		queryFn: fetchDailyStats,
+		refetchOnMount: "always",
 	});
 }
