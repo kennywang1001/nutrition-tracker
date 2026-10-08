@@ -30,6 +30,7 @@ from app.schemas.password_reset import (
 from app.security.password import DUMMY_PASSWORD_HASH, hash_password, verify_password
 from app.security.sessions import (
     ReuseDetectedError,
+    lock_user_sessions,
     revoke_all_for_user,
     revoke_session,
     rotate_session,
@@ -169,6 +170,37 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> To
     # 同步 path operation 就是走這個執行緒池）搬到另一個執行緒跑，
     # event loop 才能繼續處理其他 request。
     password_ok = await run_in_threadpool(verify_password, payload.password, password_hash)
+
+    # **驗完之後、開 session 之前，取鎖再確認一次雜湊沒有被換掉**（帳號設定審查 I1）。
+    #
+    # 上面讀雜湊到這裡隔著一次 Argon2（幾十毫秒，排隊時更久）。改密碼、重設連結、CLI 重設
+    # 都是「換雜湊＋`revoke_all_for_user`」，而撤銷只碰得到**當下存在**的列：這個請求如果在
+    # 那之前就驗完了**舊**密碼、之後才插入 session，舊密碼就換到一張沒有人會撤銷的活票——
+    # 正好是改密碼要趕走的那個人。
+    #
+    # 兩邊共用每使用者的 advisory lock（對面在 `revoke_all_for_user` 裡取，握到換雜湊的那個
+    # 交易 commit），所以只剩兩種先後：
+    #   - 對面先 commit → 這裡取到鎖之後重讀，看到新的雜湊 → 401；
+    #   - 這裡先取到鎖 → 重讀還是舊的，`start_session` commit 之後才放鎖 → 對面的撤銷在鎖上
+    #     等到那時候，看得見這一列，一起撤銷。
+    # **順序不能反**（先重讀再取鎖：重讀之後對面整個做完，鎖才拿到）；重讀到 `start_session`
+    # 的 commit 之間也**不能有別的 commit／rollback**（鎖是交易層級的，會提早放掉）。
+    # 三種寫壞的方式各有一條測試：`tests/test_login_password_race.py`。
+    #
+    # **重讀必須是一條新的欄位查詢**，不是 `user.password_hash`：那是這個 session 一開始
+    # 載入的物件，identity map 不會替它更新，讀到的永遠是驗證時的那個值。
+    if user is not None and password_ok:
+        await lock_user_sessions(db, user.id)
+        current_hash = await db.scalar(select(User.password_hash).where(User.id == user.id))
+        if current_hash != password_hash:
+            # 鎖不用握到請求結束（`get_db` 關 session 才 rollback）；這個交易沒有寫入。
+            await db.rollback()
+            # 當成密碼錯誤，走下面**同一個**分支（同一個 401、同一次失敗計數）。算失敗是
+            # 刻意的：這個請求送的密碼在回應的這一刻已經不是這個帳號的密碼；不算的話，
+            # 「401 卻沒有扣額度」本身就是訊號（剛才那個舊密碼是對的），而拿著外洩的舊密碼
+            # 跟改密碼搶時間的人，正好不該多拿到猜的額度。對本人沒有代價：新密碼登入成功
+            # 就把計數清掉。
+            password_ok = False
 
     # 帳號不存在與密碼錯誤回相同的錯誤，避免洩漏哪些 email 註冊過
     if user is None or not password_ok:

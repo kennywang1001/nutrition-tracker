@@ -76,7 +76,8 @@ async def start_session(db: AsyncSession, user_id: int) -> IssuedTokens:
 
     **代價：呼叫端不可以在呼叫這裡之前留下不相關的待寫入資料**，
     那些東西會被這裡的 commit 一起帶進去。今天的 `login()` 在這之前
-    只有一次 SELECT，沒有寫入。
+    只有 SELECT 與每使用者的 advisory lock（`lock_user_sessions`），沒有寫入；
+    那把鎖就是靠這裡的 commit 放掉的。
     """
     issued = _issue(db, user_id=user_id, family_id=uuid.uuid4())
     await db.commit()
@@ -128,6 +129,19 @@ async def _lock_user_sessions(db: AsyncSession, user_id: int) -> None:
     ——而且撞到的不只是登出，換發、登入全部共用這個函式，會一起壞掉。
     """
     await db.execute(select(func.pg_advisory_xact_lock(cast(user_id, BigInteger))))
+
+
+async def lock_user_sessions(db: AsyncSession, user_id: int) -> None:
+    """給這個模組**外面**、要跟「撤銷這個人所有 session」互斥的呼叫者——目前只有 `login`。
+
+    鎖是交易層級的（`pg_advisory_xact_lock`）：握到呼叫端的交易 commit 或 rollback 為止。
+    `login` 靠它把「重讀密碼雜湊 → `start_session`」跟改密碼／重設那一邊的「換雜湊 →
+    `revoke_all_for_user`」排成先後（帳號設定審查 I1，理由在 `app/api/routes/auth.py`）。
+
+    **`user_id` 必須是呼叫端已經確認過的**（`login`：密碼驗過的那個帳號）。拿使用者送進來
+    的值取鎖，等於讓沒通過驗證的人替別人排隊——見 `revoke_session` 為什麼先 SELECT 再取鎖。
+    """
+    await _lock_user_sessions(db, user_id)
 
 
 async def _revoke_family(db: AsyncSession, family_id: uuid.UUID) -> None:
