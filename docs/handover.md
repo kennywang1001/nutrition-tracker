@@ -229,6 +229,16 @@ userland proxy 對發佈的埠做 SNAT）。按 IP 限速會把 tailnet 上所�
 否則送 11 次就能問出「這個 email 有沒有註冊」，等於把時序側通道
 用另一種形式加回來。
 
+**已知的代價：知道 email 的人可以拖住那個人的登入**（帳號設定審查 M8）。鍵只有 email 與
+全域兩層、沒有「是誰送的」：任何連得到 API 的人，每分鐘對某個 email 送 5 次錯的密碼，那個
+email 就一直停在 429——本人用對的密碼也進不來（被擋的請求不驗密碼）；每分鐘送 20 次（隨便
+什麼 email）則是所有人都登不進來。**改密碼共用同一個限速器**（鍵是帳號的 email），所以同一招
+也讓那個人改不了密碼。已經登入的裝置不受影響（換票走 `session_rate_limiter`，鍵是 `jti`）。
+今天能打到 API 的只有 tailnet 上的幾個人，這是「只延遲、不鎖帳號」換來的、可以接受的代價；
+**開放到網際網路之前要重新檢討**：加一層按來源 IP 的限速（要先讓容器看得到真的 client IP——
+Caddy 的 `X-Forwarded-For` 加上只信任它，上面那段 SNAT 的問題還在），讓 email 這一層只擋
+「同一個來源」的猜測。
+
 ### 5.3 Argon2 移出 event loop，並限制並發數
 
 兩件事**必須一起做**：阻塞是一道意外的全域速率上限（並發完全不提升
@@ -846,6 +856,27 @@ app 的 `queryClient` 預設 `staleTime` 60 秒、快取會持久化，reload �
 「重新整理」（直接打 `/api/me`，記憶體裡沒有 access token → 401 → 換票），斷言**換票的回應是 200**；兩個突變都在這一行紅。
 **要證明「還登入著」，看換票或一個要認證的請求的回應，不要看畫面。**
 
+**審查之後（I2）那個前提成立了**：換票 401 現在會切回登入畫面（見第 10 節「帳號與目標設定」）。
+e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點「我的」，換票 401、落在登入畫面、
+看到「已被登出，請重新登入」；A 那一段「換票是 200」留著，它仍然是最直接的證據。
+
+**審查修正時又踩到的三種：**
+
+- **第 30 種（identity map 蓋住資料庫）換了個方向。** 「登入驗完密碼之後重讀雜湊」的迴歸測試
+  如果用共用的 `client`／`db_session`：登入手上的 `user` 跟改密碼那個請求改的是 identity map 裡的
+  **同一個物件**，把重讀寫成 `user.password_hash`（正式環境永遠讀到舊值）也是綠的。那幾條測試
+  每個請求開一條真的連線（`tests/test_login_password_race.py` 的 `real_client`）；突變實測，
+  共用 session 的版本抓不到。
+- **第 14、15 種。** 同一個修正的另外兩半——「取鎖要在重讀之前」「鎖要握到 session commit」——
+  在共用交易裡不存在。用事件把登入停在指定的位置（取鎖之前、開 session 之前），另一側做完或
+  從 `pg_stat_activity` 看到它卡在鎖上才放行。重設密碼的鎖順序（M3）同理，而且**不等死結真的
+  發生**（那要賭 `deadlock_timeout`）：等重設卡在使用者列上，用 `FOR UPDATE NOWAIT` 直接問
+  「連結列現在有人握著嗎」。
+- **第 41 種。** 「表單出來之後，背景重抓失敗不會把表單換掉」：`await client.refetchQueries()`
+  回來時 query 的狀態已經是 error，但 TanStack 是排程之後才通知畫面的——緊接著斷言「輸入框還在」
+  看到的是重抓之前的畫面，把表單直接綁在 query 上的突變是綠的。等一下（`act(() => settle())`）
+  才紅。
+
 ---
 
 ## 7. 踩過的技術坑（節錄，完整版在各計畫文件）
@@ -888,7 +919,8 @@ app 的 `queryClient` 預設 `staleTime` 60 秒、快取會持久化，reload �
 | `tsBuildInfoFile` | 要放在**被 gitignore 蓋到的目錄**（這個 repo 是 `./node_modules/.tmp/`）。`tsconfig.e2e.json` 原本指向 `./e2e_modules/.tmp/`，於是那個 build cache 一直被 git 追蹤，每跑一次 typecheck 就多一個 modified |
 | 改了後端的 request/response schema | **一定要 `npm run gen:api` 重新產生 `frontend/src/api/schema.d.ts`**，而**本機沒有任何東西會提醒你**。**連 docstring 也算**——端點的說明文字會進 OpenAPI 的 `description`。2026-10 連續三次漏（安全補強、改吃的時間各改了一段 docstring 沒重新產生，都是下一個分支才補上）：**任何動到 `app/api/routes/*.py` 或 `app/schemas/*.py` 的 commit 都重新產生一次**。唯一的守衛是 CI 的 `contract` job（它起後端、重新產生、`git diff --exit-code`）。P3-B 計畫二 Task 8 加了 `FoodCreateRequest.is_global` 卻沒重新產生，backend / frontend / e2e 三個 job 全過，只有 contract 紅 |
 | react-router 的路由順序 | **依片段具體程度排名，不依宣告順序** —— 跟 FastAPI 完全不是同一種機制。`/foods/:id` 排在 `/foods/new` 前面，`/foods/new` 仍然命中靜態路徑（用 `matchRoutes` 實測過） |
-| 換票失敗之後的畫面 | **不會切回登入畫面**。`refresh.ts` 收到 401 清掉 token 與 query 快取，但 `App` 的 `loggedIn` 是開頁時讀一次 localStorage 的 `useState`，只有「我的」的登出按鈕會把它設回 false；之後每個請求都失敗，畫面停在原地，重新整理才會落到登入。e2e 要證明「還登入著」看 `/api/auth/refresh` 的回應（帳號設定 Task 12） |
+| 換票失敗之後的畫面 | ~~不會切回登入畫面~~——**帳號設定審查 I2 之後會**：`clearTokens()` 真的清掉儲存時通知 `auth/store.ts` 的 `onLoggedOut` 訂閱者，`App` 切回登入畫面；不是自己按的登出（換票 401、另一個分頁登出）顯示「已被登出，請重新登入」。**登入的方向仍然不是 store 驅動的**（`Join` 要先換網址再 `onSuccess`）。e2e 要證明「還登入著」仍然先看 `/api/auth/refresh` 的回應——401、429、5xx、斷線裡只有 401 會登出 |
+| Web Locks 不能重入 | 握著 `token-refresh` 的程式碼裡再呼叫 `refreshTokens()`（它會要同一把鎖）會永遠等不到自己放手。改密碼握著鎖送請求，access token 過期時會先 401、要換票——所以 `withTokenLock` 交給 task 一個「已經在鎖裡」的換票函式，`apiFetch` 的第三個參數收它（帳號設定審查 M6） |
 | e2e 開一次性連結 | `/join#…`、`/reset-password#…` 的碼只在第一次 render 讀。同一個 page 再 `goto` 一條只有 `#` 後面不同的連結，瀏覽器不重新載入、畫面停在上一條的結果——**每條連結開新的 context**。登出之後的登入也不換網址：登出前在 `/me`，登入後就在「我的」，不是總覽 |
 
 ---
@@ -908,7 +940,9 @@ app 的 `queryClient` 預設 `staleTime` 60 秒、快取會持久化，reload �
 
 **並行安全靠一把每使用者的 advisory lock。** 沒有它，重用偵測在並行下有
 極高機率留下一張活票（見上面第 14 種）。`rotate_session`、`revoke_session`、
-`revoke_all_for_user` 三條路徑都要取那把鎖。
+`revoke_all_for_user` 三條路徑都要取那把鎖。**`login` 是第四條**（帳號設定審查 I1）：
+驗完密碼之後取鎖（`lock_user_sessions`）、重讀雜湊、才開 session——不然在改密碼之前就驗完
+舊密碼的登入，會在撤銷之後才插入它的 session（見第 10 節「帳號與目標設定」）。
 
 規格：[session 撤銷設計](superpowers/specs/2026-09-11-session-revocation-design.md)
 計畫：[實作計畫](superpowers/plans/2026-09-11-session-revocation.md)（含 20 條突變的實測結果）
@@ -1339,13 +1373,34 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
 - **`POST /api/me/password`**：先比字串（新＝目前 → `422 PASSWORD_UNCHANGED`，不跑 Argon2），再查**登入的限速器**（鍵是這個帳號的
   email，跟登入共用每 email 5 次／60 秒），Argon2 在執行緒池。錯誤**一律 422 不用 401**——`client.ts` 對 401 會換票重送，錯的
   密碼會被驗兩次。成功：同一個交易改雜湊、撤銷還沒用的重設連結、`revoke_all_for_user`（它的 commit 就是這個交易的 commit），
-  **撤銷之後**才 `start_session` 開新的一條（順序反過來，這一條也會被撤銷）；前端 `changePassword()` 用 `setTokens` 換上。
+  **撤銷之後**才 `start_session` 開新的一條（順序反過來，這一條也會被撤銷）；前端 `changePassword()` 用 `setTokens` 換上，
+  **從送出到 `setTokens` 都握著換票的那把 Web Lock**（`auth/refresh.ts` 的 `withTokenLock`）——不然這段期間拿舊票去換的
+  另一個請求或分頁，會把換到的（已被撤銷的）票蓋在新票上，或直接 401，把剛改完密碼的這台登出。
 - **重設連結**的形狀跟邀請（`app/invites.py`）一樣：`app/password_resets.py`、`secrets.token_urlsafe(32)`、資料庫只存 SHA-256、
   24 小時、條件式 `UPDATE … RETURNING` 兌換、部分唯一索引保證一個人最多一條活連結（產生新的會撤銷舊的）。**只給一般使用者**：
   管理員帳號（含自己）→ `422 RESET_NOT_FOR_ADMINS`。公開的 `POST /api/auth/password-reset` 在 Argon2 之前先查碼，四種失效
-  （不存在、用過、過期、撤銷）同一個 `403 RESET_LINK_INVALID`；兌換 → 改雜湊 → `revoke_all_for_user`，**它的 commit 就是重設
-  交易的 commit**，中間不要加 commit（有測試：兌換之後、撤銷之前失敗 → 密碼沒變、連結沒用掉）。成功回 204、不自動登入，清掉那個
+  （不存在、用過、過期、撤銷，**加上「對象現在是管理員」**——產生之後才被提升的）同一個 `403 RESET_LINK_INVALID`；
+  **改雜湊 → 兌換 → `revoke_all_for_user`**，**它的 commit 就是重設交易的 commit**，中間不要加 commit（有測試：兌換之後、
+  撤銷之前失敗 → 密碼沒變、連結沒用掉）。贏家仍然由條件式兌換決定，落空就整筆 rollback。成功回 204、不自動登入，清掉那個
   email 的登入失敗計數。
+- **鎖的順序（所有會換密碼的路徑都一樣）：`users` 列 → `password_reset_tokens` 列 → 每使用者的 advisory lock →
+  `refresh_sessions` 列。** 改密碼、重設連結、管理員產生連結（`FOR UPDATE` 使用者列）、CLI 重設都照這個順序；重設原本是
+  先兌換再改 `users`，跟同一個人的改密碼同時發生會死結（PostgreSQL 砍掉一個 → 500）。新增會碰這幾種列的路徑時照這個順序取
+  （註解在 `auth.reset_password`；測試 `tests/test_password_reset_concurrency.py`）。
+- **`login` 驗完密碼之後取鎖、重讀雜湊**：`login` 讀雜湊 → Argon2（幾十毫秒）→ 開 session，而撤銷只碰得到當下存在的列。
+  現在驗證通過之後先取每使用者的 advisory lock（`lock_user_sessions`），再用一條新的欄位查詢重讀 `users.password_hash`
+  （不是 identity map 裡的物件）；跟剛才驗的不一樣 → 跟密碼錯誤同一個 `401 INVALID_CREDENTIALS`、**算一次失敗**（不算的話
+  「401 卻沒扣額度」本身就是訊號）。兩邊共用那把鎖，所以不是「換雜湊的那邊先 commit、登入重讀到新的」，就是「登入先拿到鎖、
+  它的 session commit 之後才被排在後面的撤銷看見」。順序（取鎖 → 重讀 → 開 session，中間不能有 commit／rollback）寫在
+  `login` 的註解裡，三種寫壞的方式各有一條測試（`tests/test_login_password_race.py`，每個請求一條真的連線）。
+- **CLI 的 `create-user`／`create-admin` 對既有帳號就是重設密碼**：同一個交易裡撤銷那個人還沒用的重設連結、撤銷所有
+  refresh session（`revoke_all_for_user` 的 commit 就是它的 commit）。**在 dev 重跑種子指令會把示範帳號在瀏覽器裡登出**
+  （15 分鐘內），這是預期的。
+- **被登出就回到登入畫面**（前端）：`auth/store.ts` 的 `clearTokens()` 真的清掉儲存時通知 `onLoggedOut` 的訂閱者，`App`
+  據此切回登入畫面——**只有登出的方向**，登入仍由畫面的 `onSuccess` 通知（`Join` 是 `login()` → 把網址換成 `/` →
+  `onSuccess()`，在 `setTokens` 就切過去會把路由掛在 `/join#碼` 上）。不是在這個分頁按的登出——換票 401、或另一個分頁
+  登出了（`storage` 事件裡 refresh token 的鍵被拿掉，`auth/session.ts` 的 `followLogoutFromOtherTabs`）——登入畫面多一行
+  「已被登出，請重新登入」；自己按的沒有；本來就沒登入的分頁不顯示。`Me` 不再收 `onLoggedOut`，登出只有這一條通知的路。
 - **稽核紀錄**：產生連結、用連結重設、改密碼各寫一行 INFO（只有 id，不寫碼、密碼、email）。`app/main.py` 讓 `app.*` 的 INFO
   真的輸出（uvicorn 的預設設定只替 `uvicorn.*` 掛 handler）：`docker compose logs api | grep -E "修改了密碼|產生了使用者|用重設連結"`。
 
@@ -1359,6 +1414,9 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
   畫面 `screens/Targets.tsx`（`/me/targets`）、`ChangePassword.tsx`（`/me/password`）、`ResetPassword.tsx`（沒登入的
   `/reset-password#<碼>`，已登入打開是說明頁）；API 層 `api/targets.ts`、`admin-users.ts`、`password-reset.ts`；
   `lib/link-token.ts`（`#` 後面的碼，`/join` 共用）、`lib/targets.ts`（四個欄位的標籤、單位、上限）、`lib/decimal.ts` 的 `checkTargetInput`。
+  `/me/targets` 的表單用 `api/stats.ts` 的 `useFreshDailyStats()`（掛載時一定重抓）、等 `isFetchedAfterMount` 才預填——存的是
+  整組四個值，拿快取的舊值預填會把沒動的幾格悄悄改回去；重抓失敗或離線就是「無法載入目前的目標」。「所有帳號」產生連結後
+  焦點移到連結那一區（連結在卡片最上面，按鈕可能在一長串帳號的最下面）。
 - e2e：`e2e/account-settings.spec.ts`（目標、改密碼、重設連結三條）、`e2e/new-account.ts`（`newAccount()`：用 API 邀請＋註冊開一個
   新帳號；`loginAs()`）。**會改密碼或目標的 e2e 一律自己開帳號**，不要動 `kenny.demo@example.com`、`e2e.member@example.com`。
 
@@ -1366,10 +1424,13 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
 
 1. **改密碼與重設之後，其他裝置的 access token 最多還能用 15 分鐘**（§8.1 的既有缺口：access token 不查資料庫）。要的是
    「再也換不到新票」，不是「立刻斷線」。
-2. **「其他裝置」指其他瀏覽器。** 同一個瀏覽器的其他分頁共用 localStorage，之後換票會直接用新的票。極少見的競態：另一個分頁
-   剛好在改密碼的那一刻**用舊票換票** → 401 → 清掉 localStorage → 這個瀏覽器（包括剛改完密碼的那個分頁）也被登出，再登入一次就好。
+2. **「其他裝置」指其他瀏覽器。** 同一個瀏覽器的其他分頁共用 localStorage，之後換票會直接用新的票；改密碼握著換票的
+   Web Lock，其他分頁的換票會等它做完。**沒有 `navigator.locks` 的環境**（非 secure context）沒有鎖可握，原本的競態還在：
+   另一個分頁剛好在改密碼的那一刻用舊票換票 → 401 → 這個瀏覽器的每個分頁都回到登入畫面，再登入一次就好。
 3. 公開的兩個重設端點**不限速**（同 `invite-status`）：碼是 256 位元，無效的碼在 Argon2 之前就回 403。
-4. **管理員帳號不能用重設連結**；管理員忘記密碼仍要 SSH 跑 `create-admin`（知道密碼的話用「修改密碼」）。
+4. **管理員帳號不能用重設連結**；管理員忘記密碼仍要 SSH 跑 `create-admin`（知道密碼的話用「修改密碼」）。連結產生之後
+   對象才變成管理員的，那條連結跟著失效。**已登入的人打開重設連結**只看到說明：記得密碼去「修改密碼」，忘記了就先登出、
+   再從收到連結的地方重新點一次（碼已經從網址列拿掉，重新整理沒有用）。
 5. 「所有帳號」看不到「這個人有沒有一條還沒用的連結」；再產生一次，舊的就失效。
 6. 「所有帳號」**沒有分頁也沒有搜尋**。正式環境只有個位數帳號沒差；**dev 資料庫會一直長**——每次跑 e2e 都會開新帳號
    （邀請、好友、帳號設定的 spec），從來不刪（2026-10-08 已經一百多個）。管理員的「我的」因此很長，`account-settings.spec.ts`
@@ -1379,7 +1440,13 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
 8. 目標只能「從今天起」：不能設未來的期間、不能編 `label`；新端點不收 0，舊的 `POST`／`PATCH /api/targets` 仍收 0。
 9. 兩台裝置同時存目標 → 後到的 409「目標剛被另一台裝置改過，請重新整理再試」，重存一次就好（第二次走原地改）。
 10. `app.*` 的 INFO 現在會輸出。之前沒有任何 `app.*` 的 `logger.info`，所以目前只多了上面三種稽核紀錄。
-11. 「所有帳號」的清單跟「邀請朋友」一樣會進離線快取（只在管理員的裝置上；`staleTime: 0`，線上時每次重抓）。
+11. ~~「所有帳號」的清單會進離線快取~~——審查之後整個 `["admin", …]` 命名空間（所有帳號、邀請清單、待審提案）都**不進
+    離線快取**（`api/persist.ts` 的 `NOT_PERSISTED`）：別人的 email 不該以明文留在 localStorage，這三個畫面也只在線上有用。
+    代價：管理員離線時這三份清單是空的（「無法載入…」），不是上一次的內容。
+12. **登入的限速可以被拿來拖住別人**（知道 email 就行），改密碼共用同一個限速器——見 §5.2 的說明；開放到網際網路之前要加
+    按來源 IP 的一層。
+13. **目標表單打開之後**別台裝置又改了目標：這台存下去仍然會蓋掉（後端沒有樂觀鎖）。表單只保證「打開的那一刻」是伺服器上的值。
+14. 另一個分頁登出時，這個分頁也顯示「已被登出，請重新登入」——`storage` 事件不帶原因，分不出對面是自己按的還是換票被拒。
 
 ---
 

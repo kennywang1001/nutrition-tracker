@@ -70,8 +70,8 @@
 4. **`MIN_PASSWORD_LENGTH` 換位置**（決定 20），值與 CLI 的行為不變。
 5. **重設連結不能給任何管理員**，不只是自己（決定 12）。
 6. **「改密碼、兌換連結、撤銷 session 在同一個交易」的寫法。** 撤銷用既有的 `revoke_all_for_user`，它取 advisory lock
-   之後**自己 commit**。所以順序是：條件式 `UPDATE … RETURNING`（兌換）→ `UPDATE users`（新雜湊）→ `revoke_all_for_user`
-   （它的 commit 就是這個交易的 commit）。之前兩個寫入都沒 commit，一起進去或一起不進去。規則寫進註解，並有測試
+   之後**自己 commit**。所以順序是：`UPDATE users`（新雜湊）→ 條件式 `UPDATE … RETURNING`（兌換）→ `revoke_all_for_user`
+   （它的 commit 就是這個交易的 commit；前兩步原本相反，見「審查後的修正」第 17 點）。之前兩個寫入都沒 commit，一起進去或一起不進去。規則寫進註解，並有測試
    證明（「兌換之後撤銷之前失敗 → 密碼沒變、連結沒用掉」）。
 7. **目前的目標讀 `stats/daily`**，不新增讀取端點（決定 6）。
 
@@ -88,6 +88,24 @@
 13. **e2e 的改密碼那條**（§7.3 第 2 條）：「A 還能換頁」改成斷言 A 整頁重新載入之後**換票的回應是 200**——換票失敗時
     app 不會切回登入畫面，只看畫面的版本在「新 session 開在撤銷之前」「前端沒存新票」兩個缺陷下都是綠的。
     「新密碼進總覽」實際上是回到「我的」（登出不換網址）。
+
+### 審查後的修正（2026-10-09）
+
+合併前的審查找到兩個重要問題與八個小問題；下面是**行為上的改變**，對應的章節已經一起改了。機制與測試的細節在
+`docs/handover.md` 第 10 節「帳號與目標設定」。
+
+14. **登入驗完密碼之後取鎖、重讀雜湊**（§3.7，新增）。在改密碼／重設之前就驗完舊密碼的登入，原本會在撤銷之後才插入
+    session——舊密碼換到一張活票。
+15. **被登出就回到登入畫面，並說明**（§5.7，新增）。換票 401 之後登入後的外框原本留在原地；改密碼會讓其他每一台裝置
+    15 分鐘內走到那裡。第 13 點的 e2e 因此多了 B 裝置的畫面斷言。
+16. **CLI 的 `create-user`／`create-admin` 對既有帳號**也撤銷還沒用的重設連結與所有 session（§3.8，新增）；
+    **對象變成管理員的連結失效**（§3.6 步驟 1）。
+17. **重設的順序改成「改雜湊 → 兌換 → 撤銷」**（§3.6 步驟 3，差異第 6 點的順序跟著改）：所有路徑的鎖順序一致
+    （`users` 列 → 連結列 → advisory lock → session 列），不然跟同一個人的改密碼會死結。
+18. **`/me/targets` 的表單等重抓回來才預填**（§5.2），不拿快取的舊值。
+19. **改密碼握著換票的 Web Lock**（§5.3）；**「所有帳號」產生連結後焦點移到連結那一區**（§5.4）；
+    **已登入打開重設連結的說明**多了「忘記密碼就先登出，再重新打開」（§5.5）；**管理員的清單不進離線快取**（§6）。
+20. **限速的已知代價**寫進 handover §5.2：知道 email 的人可以拖住那個人的登入與改密碼；開放到網際網路之前要加按來源的一層。
 
 ---
 
@@ -119,7 +137,7 @@
 2. `login_rate_limiter.check(email)` → 超過 → `429 TOO_MANY_LOGIN_ATTEMPTS`（帶 `Retry-After`）。
 3. `run_in_threadpool(verify_password, …)` 失敗 → `record_failure(email)` → `422 CURRENT_PASSWORD_INCORRECT`「目前的密碼不正確」。
 4. `record_success(email)`；`run_in_threadpool(hash_password, new)`。
-5. 同一個交易：設 `password_hash`、撤銷這個人還沒用的重設連結、`revoke_all_for_user`（commit）。
+5. 同一個交易：設 `password_hash`（flush：先鎖 `users` 列）、撤銷這個人還沒用的重設連結、`revoke_all_for_user`（commit）。
 6. `start_session` → `200 TokenResponse`。log INFO「使用者 {id} 修改了密碼」。
 
 ### 3.3 `GET /api/admin/users`（管理員）
@@ -142,15 +160,37 @@
 
 請求 `{ token（1–100）, new_password（MIN_PASSWORD_LENGTH–128）}`。
 
-1. **先查連結，在 Argon2 之前**：`token_hash = sha256(token)`、沒用、沒撤銷、`expires_at > now()`。找不到 →
-   `403 RESET_LINK_INVALID`「這個重設密碼連結已經失效，請跟管理員要一個新的」。四種失效（不存在、用過、過期、撤銷）同一個錯誤。
+1. **先查連結，在 Argon2 之前**：`token_hash = sha256(token)`、沒用、沒撤銷、`expires_at > now()`、**對象現在不是管理員**。
+   找不到 → `403 RESET_LINK_INVALID`「這個重設密碼連結已經失效，請跟管理員要一個新的」。五種失效（不存在、用過、過期、
+   撤銷、對象在產生之後變成了管理員）同一個錯誤。
 2. `run_in_threadpool(hash_password, new_password)`。
-3. 同一個交易：條件式 `UPDATE password_reset_tokens SET used_at = now() WHERE id = :id AND <還能用> RETURNING user_id`
-   （沒有列 → rollback → 同一個 403）→ `UPDATE users SET password_hash = … WHERE id = :uid RETURNING email`
-   → `revoke_all_for_user`（commit）。
+3. 同一個交易，**先使用者列、再連結列**：`UPDATE users SET password_hash = … WHERE id = :uid RETURNING email`
+   （`:uid` 是步驟 1 查到的那條連結的 `user_id`）→ 條件式
+   `UPDATE password_reset_tokens SET used_at = now() WHERE id = :id AND <還能用> RETURNING user_id`
+   （沒有列 → rollback，前面那個 UPDATE 一起消失 → 同一個 403）→ `revoke_all_for_user`（commit）。
 4. `login_rate_limiter.record_success(email)`；log INFO「使用者 {uid} 用重設連結重設了密碼（reset_id={id}）」；`204`。
 
-兩個請求同時用同一條連結：第二個的條件式 UPDATE 等第一個的列鎖，第一個 commit 後條件不成立 → 0 列 → 403。
+兩個請求同時用同一條連結：第二個在 `UPDATE users` 等第一個的列鎖，第一個 commit 後它的條件式兌換不成立 → 0 列 → 403。
+
+**鎖的順序**（所有會換密碼的路徑）：`users` 列 → `password_reset_tokens` 列 → 每使用者的 advisory lock → `refresh_sessions` 列。
+原本這裡是先兌換再改 `users`，跟 3.2（先 `users`、再撤銷連結）相反，兩者同時發生會死結。
+
+### 3.7 `POST /api/auth/login` 的補充：驗完密碼之後重讀雜湊
+
+`login` 讀雜湊 → Argon2（執行緒池）→ `start_session`。3.2、3.6、3.8 都是「換雜湊＋撤銷所有 session」，而撤銷只碰得到
+當下存在的列。所以驗證通過之後：
+
+1. 取每使用者的 advisory lock（`lock_user_sessions`，跟 `revoke_all_for_user` 同一把）。
+2. 用一條新的查詢重讀 `users.password_hash`。跟剛才驗的不一樣（或帳號不在了）→ rollback（放掉鎖）→ 跟密碼錯誤同一個
+   `401 INVALID_CREDENTIALS`，**`record_failure(email)`**。
+3. 一樣 → `record_success`、`start_session`（它的 commit 放掉鎖）。
+
+算失敗是刻意的：那個密碼在回應的那一刻已經不是這個帳號的密碼；不算的話「401 卻沒有扣額度」本身就是訊號。
+
+### 3.8 CLI：`create-user`／`create-admin` 對既有帳號
+
+對既有 email 是重設密碼（`create-admin` 另外提升角色）。同一個交易：新雜湊（flush）→ 撤銷這個人還沒用的重設連結 →
+`revoke_all_for_user`（commit）。新帳號沒有東西可撤銷，直接 commit。
 
 ---
 
@@ -204,8 +244,11 @@
 ### 5.2 `/me/targets`
 
 `ui.screen`；h1「每日目標」；說明「留空＝不設定。從今天開始生效，之前的日子維持原本的目標。」；四個
-`inputMode="decimal"` 欄位（標籤同 5.1），預填目前的值。`stats/daily` 還沒載入 → 「載入中…」；沒有資料 →
-「無法載入目前的目標」**不顯示表單**（空白表單存下去會把目標清掉）。
+`inputMode="decimal"` 欄位（標籤同 5.1），預填目前的值。**預填只用這一頁掛載之後才抓回來的那一份**
+（`useFreshDailyStats`：`refetchOnMount: "always"`，等 `isFetchedAfterMount`）：存的是整組四個值，拿快取的舊值預填會把
+沒動的幾格悄悄改回去。重抓還沒回來 → 「載入中…」；重抓失敗、離線、沒有資料 → 「無法載入目前的目標」**不顯示表單**
+（空白表單存下去會把目標清掉；帶著舊值的表單會把別台裝置的修改蓋掉）。表單出來之後不再跟著 query 變
+（背景重抓失敗不會把打到一半的字清掉）。
 
 前端檢查（`lib/decimal.ts` 新增 `checkTargetInput(value, max)`；畫面不碰 `decimal.js`）：空白＝null；否則要是一般的
 正小數（`isPlainPositiveDecimal` 同一條規則）、最多兩位小數、不超過上限。錯誤列在送出鈕上方的 `role="alert"`，
@@ -219,7 +262,8 @@
 
 `ui.screen`；h1「修改密碼」；「目前的密碼」（`current-password`）、「新密碼」、「再輸入一次新密碼」（`new-password`）。
 前端檢查：新密碼至少 8 字（「新密碼至少要 8 個字」）、兩次一樣（「兩次輸入的新密碼不一樣」）、跟目前的不同
-（「新密碼不能跟目前的密碼一樣」）。送出鈕「更新密碼」→ `auth/session.ts` 的 `changePassword()`（打端點、`setTokens(新的一組)`）。
+（「新密碼不能跟目前的密碼一樣」）。送出鈕「更新密碼」→ `auth/session.ts` 的 `changePassword()`（打端點、`setTokens(新的一組)`，
+整段握著換票的 Web Lock `token-refresh`——這段期間別的請求或分頁不能拿舊票去換）。
 
 - 成功：表單換成 `role="status"` 的「密碼已更新。其他裝置都已登出，這台不用重新登入。」（`tabIndex=-1`，焦點移過去）
   ＋連結「回我的」。
@@ -236,7 +280,8 @@
 
 產生後在卡片上方顯示「給 {名字} 的重設密碼連結」：唯讀輸入框（標籤「重設密碼連結」，`${origin}/reset-password#${token}`）、
 「分享」（有 `navigator.share` 時）、「複製」、「這個連結只會顯示這一次，24 小時內有效、只能用一次。再產生一次，舊的就不能用了。」
-再產生別人的就換掉。`404`／`422` → 後端訊息顯示在卡片層並失效清單；其他 → 「產生失敗，請再試一次」。
+再產生別人的就換掉。每次產生之後**焦點移到連結那一區**（有名字的 `<section>`，`tabIndex=-1`）：連結在卡片最上面，
+按鈕可能在一長串帳號的最下面。`404`／`422` → 後端訊息顯示在卡片層並失效清單；其他 → 「產生失敗，請再試一次」。
 清單 `useAdminUsers`（`["admin", "users"]`，`staleTime: 0`，理由同 `useInvites`）。
 
 ### 5.5 `/reset-password#<碼>`
@@ -253,8 +298,23 @@
 - 成功（204）→ `history.replaceState(null, "", "/")`（碼從網址列消失）→ `role="status"`「密碼已重設，請登入」（焦點移過去）
   ＋「去登入」（`<a href="/">`）。**不自動登入。**
 - `403 RESET_LINK_INVALID` → 失效畫面；`422` → `describeFieldErrors`；其他 → 「重設失敗，請再試一次」。
-- **已登入的人打開**：「你已經登入了。這個連結是給忘記密碼的人用的；要改自己的密碼，請到「我的」→「修改密碼」。」
-  ＋「回總覽」；不打任何重設端點；`navigate("/reset-password", { replace: true })` 把碼從網址列拿掉（同 `JoinWhileLoggedIn`）。
+- **已登入的人打開**：三段說明——「你已經登入了。這個連結是給忘記密碼的人用的，登入著的時候不能用。」「還記得密碼的話，
+  到「我的」→「修改密碼」就能改。」「忘記密碼的話，先登出，再重新打開這個連結——網址列上的已經拿掉了，請從收到連結的
+  地方再點一次。登出在「我的」的最下面。」＋「到我的」「回總覽」；不打任何重設端點；
+  `navigate("/reset-password", { replace: true })` 把碼從網址列拿掉（同 `JoinWhileLoggedIn`）。第三段是審查後加的：
+  忘了密碼但這台還登入著的人，原本的說明沒有給他下一步。
+
+### 5.7 被登出（審查後新增）
+
+`auth/store.ts` 的 `clearTokens()` 真的清掉儲存時通知 `onLoggedOut(listener)` 的訂閱者（帶 `forced`）；`App` 訂閱它，
+狀態是 `in`／`out`／`forced-out`。
+
+- 自己按「登出」→ 登入畫面，沒有說明。
+- 換票 `401`（`refresh.ts` → `clearTokens({ forced: true })`）→ 登入畫面＋`role="status"` 的「已被登出，請重新登入」。
+- 另一個分頁登出（`storage` 事件：refresh token 的鍵被拿掉，或 `localStorage.clear()`）→ 這個分頁清掉 access token 與
+  query 快取，同上。票被換成另一張（換票、改密碼）不算。本來就沒登入的分頁不顯示說明。
+- `forced-out` 一律是登入畫面，不看 `/join`、`/reset-password` 的路徑。
+- **登入的方向不由 store 通知**：仍然是 `Login`／`Join` 的 `onSuccess`（`Join` 要先把網址換成 `/`）。
 
 ### 5.6 共通
 
@@ -278,7 +338,8 @@
 - **管理員權限的邊界**：偷到管理員 access token 的人可以替一般使用者產生重設連結（＝接管那個帳號）——這是「管理員能
   重設密碼」本身的代價，跟今天 SSH 跑 `create-user` 等價；每次產生都有 INFO 稽核紀錄，而且不能拿來接管管理員帳號（決定 12）。
 - **前端**：改密碼的新票走 `setTokens`（refresh token 在 localStorage，同分頁與同瀏覽器的其他分頁都用新的）；
-  admin 帳號清單與邀請清單一樣會進離線快取（只在管理員自己的裝置上）。
+  管理員的清單（所有帳號、邀請、待審提案，`["admin", …]`）**不進離線快取**——別人的 email 不以明文留在 localStorage。
+- **限速的代價**：登入與改密碼的限速鍵是 email（加全域），知道 email 的人可以拖住那個人——handover §5.2。
 
 ---
 
@@ -329,6 +390,7 @@
 1. **目標**（電腦版尺寸）：新帳號 → 總覽沒有分母 → 我的 → 修改每日目標 → 1800／120 → 存 → 我的顯示 → 總覽「/ 1800 kcal」→
    同一天再改成 1900 → 總覽「/ 1900 kcal」（走原地改那條）。
 2. **改密碼**（手機尺寸）：新帳號在 A、B 兩個 context 登入 → A 改密碼 → 確認文字 → B 的 refresh token 換票 401 →
+   **B 的 access token 過期後點「我的」→ 換票 401 → 登入畫面與「已被登出，請重新登入」**（審查後加的）→
    A 還能換頁 → A 登出 → 舊密碼「email 或密碼不正確」→ 新密碼進總覽。觸控目標 ≥ 44px。
 3. **重設連結**（手機尺寸）：新帳號先用 API 登入留一張 refresh token → 管理員在「所有帳號」產生連結 → 沒登入的 context 打開
    → 設新密碼 → 「密碼已重設，請登入」、網址沒有碼 → 去登入 → 新密碼進總覽；那張舊 refresh token 401；同一條連結再開 → 失效。
