@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+# 預設只給讀 repo 的權限；需要更多的 job 自己宣告（changes 要讀 PR、publish 要寫 GHCR）。
+permissions:
+  contents: read
+
 jobs:
   changes:
     # 用 dorny/paths-filter 算出這次變更碰到前端還是後端（或兩者），下面
@@ -18,14 +22,20 @@ jobs:
     # 就是「只改後端但 contract 沒跑」這個最常見的漂移路徑本身。單一
     # workflow + 一個 `changes` job，路徑清單只在這裡出現一次。
     runs-on: ubuntu-latest
+    # paths-filter 在 pull_request 上是用 GitHub API 列出 PR 改了哪些檔案，要能讀 PR。
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
-      backend: ${{ steps.filter.outputs.backend }}
-      frontend: ${{ steps.filter.outputs.frontend }}
+      backend: ${{ steps.decide.outputs.backend }}
+      frontend: ${{ steps.decide.outputs.frontend }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v3
         id: filter
         with:
+          # 映像相關的檔案（Dockerfile、compose、caddy/、scripts/）也算：測試 job 不 build 映像，
+          # 但改了它們的 PR 至少要跑過一輪測試，不能整個被當成「純文件」跳過。
           filters: |
             backend:
               - 'app/**'
@@ -35,10 +45,38 @@ jobs:
               - 'alembic.ini'
               - 'pyproject.toml'
               - 'requirements-lock.txt'
+              - 'Dockerfile'
+              - '.dockerignore'
+              - 'docker-compose*.yml'
+              - 'scripts/**'
               - '.github/workflows/ci.yml'
             frontend:
               - 'frontend/**'
+              - 'caddy/**'
+              - '.dockerignore'
               - '.github/workflows/ci.yml'
+
+      # push 到 master 一律全跑，不看路徑過濾——publish 靠「測試 job 都沒失敗」決定要不要做映像，
+      # 而 paths-filter 在 push 上比的是**上一次 push**（github.event.before），不是上一個測試全綠的
+      # commit。上一次 push 改了後端、測試紅了（沒有映像）；下一個 commit 只改文件 → 過濾說
+      # 「後端沒變」→ 測試全被跳過 → 跳過算過 → publish 用那份紅的程式碼做出映像。
+      # 全跑之後，publish 的 !failure() 才真的代表「這個 commit 的每一個測試都跑過、都過了」。
+      # PR 與其他分支照常用路徑過濾（省時間；它們不會做映像）。
+      - name: 決定要跑哪些測試
+        id: decide
+        env:
+          RUN_ALL: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          BACKEND: ${{ steps.filter.outputs.backend }}
+          FRONTEND: ${{ steps.filter.outputs.frontend }}
+        run: |
+          if [ "$RUN_ALL" = "true" ]; then
+            echo "push 到 master：全部的測試都跑"
+            BACKEND=true
+            FRONTEND=true
+          fi
+          echo "backend=$BACKEND" >> "$GITHUB_OUTPUT"
+          echo "frontend=$FRONTEND" >> "$GITHUB_OUTPUT"
+          echo "backend=$BACKEND frontend=$FRONTEND"
 
   backend:
     # 原本的 `test` job。**內容原封不動**，只改了兩件事：
@@ -233,14 +271,23 @@ jobs:
     # 規格 docs/superpowers/specs/2026-10-08-image-deploy-design.md §2.1：
     # 測試全過才做映像，NAS 只拉映像、不在 NAS 上 build。
     #
-    # if 的寫法：上面四個測試 job 會被路徑過濾**跳過**，跳過算過——
-    # 預設的 success() 會把「有 needs 被跳過」當成不成立而連這個 job 一起跳過，
-    # 所以改用 !failure() && !cancelled()：純文件的 commit 也做映像，
-    # 每個 master commit 都有對應的映像（deploy.sh 用 commit SHA 找映像）；
-    # 任何一個測試**失敗**或被取消就不做。
+    # if 的寫法：push 到 master 時 changes 會讓四個測試 job **全部**跑（見 changes 的「決定要跑
+    # 哪些測試」），所以這裡的 !failure() && !cancelled() 等於「四個測試都跑了、都過了」——
+    # 純文件的 commit 也照樣全跑、照樣做映像，每個 master commit 都有對應的映像
+    # （deploy.sh 用 commit SHA 找映像）。任何一個測試**失敗**或被取消就不做。
+    # （不用預設的 success()：萬一哪天又讓測試在 master 上被跳過，success() 會連 publish
+    # 一起安靜地跳過；!failure() 至少不會因為「跳過」而少做映像——但跳過的測試就沒有把關，
+    # 所以 master 上一定要全跑。）
     needs: [changes, backend, frontend, contract, e2e]
     if: github.event_name == 'push' && github.ref == 'refs/heads/master' && !failure() && !cancelled()
     runs-on: ubuntu-latest
+    # 一次只做一組映像：兩個 push 很接近時，舊的那次不會晚一步完成、把 latest 蓋回舊版。
+    # cancel-in-progress: false＝正在推的不中斷（推到一半的映像沒有用）。GitHub 只保留一個
+    # 排隊中的 run：連續三個 push 時，中間那個的 publish 會被取消、沒有映像——
+    # 那個 commit 要部署的話，在 Actions 重跑它的 publish。
+    concurrency:
+      group: publish-master
+      cancel-in-progress: false
     # 只有這個 job 能寫 GHCR；用內建的 GITHUB_TOKEN，不新增任何 secret。
     permissions:
       contents: read
