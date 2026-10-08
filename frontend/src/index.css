@@ -91,8 +91,15 @@ a {
 
 /* tab bar 是 position: fixed，會蓋住內容的最後一行。這裡補回等高的空間，
    加上「＋」凸出 tab bar 上緣的那一截（規格 §4.4）——少算那一截，
-   最後一列內容的中間會被「＋」的圓蓋住。 */
+   最後一列內容的中間會被「＋」的圓蓋住。
+
+   手機版的內容最寬 600px、置中（電腦版版面規格 §1）：直立的平板不再拉滿。
+   border-box：600 是含左右留白的寬度，e2e 量得到的就是這個數字。
+   電腦版的寬度與留白由下面的 .app-desktop .app-main 整個蓋掉。 */
 .app-main {
+	box-sizing: border-box;
+	max-width: 600px;
+	margin-inline: auto;
 	padding: 0 var(--space-3)
 		calc(
 			var(--tab-bar-height) +
@@ -106,6 +113,42 @@ a {
    權重跟 .app-main 一樣，靠的是寫在它後面。 */
 .app-main-no-tab-bar {
 	padding-bottom: calc(var(--safe-bottom) + var(--space-3));
+}
+
+/* 電腦版外框（≥ 1024px，App.tsx 的 LoggedInShell 加 app-desktop）。
+   讓出左側導覽的寬度；沒有分頁列，底部只要一般留白。權重 (0,2,0)：蓋過上面
+   兩條 (0,1,0) 的 .app-main 與 .app-main-no-tab-bar，跟寫在哪裡無關。
+   左右留白在這裡，內容寬度在裡面的 .app-content——max-width 寫在 main 上的話，
+   main 會貼著導覽、不會在右邊的空間裡置中。 */
+.app-desktop .app-main {
+	max-width: none;
+	margin: 0 0 0 var(--side-nav-width);
+	padding: var(--space-4) var(--space-6) var(--space-6);
+}
+
+/* 內容區在導覽右邊的空間裡置中；最寬依路由（lib/layout.ts 的 contentWidthFor）。 */
+.app-content {
+	margin-inline: auto;
+}
+
+.app-content-wide {
+	max-width: 1100px;
+}
+
+.app-content-narrow {
+	max-width: 640px;
+}
+
+.app-content-form {
+	max-width: 480px;
+}
+
+/* 登入、建立帳號（未登入，沒有導覽）：兩種寬度都一樣。 */
+.app-auth {
+	box-sizing: border-box;
+	max-width: 400px;
+	margin-inline: auto;
+	padding: 0 var(--space-3) var(--space-6);
 }
 
 /* 圖的「大小」由 CSS 決定，但每一根柱子的「高度」不是——那是在

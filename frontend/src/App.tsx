@@ -5,6 +5,7 @@ import {
 	Navigate,
 	Route,
 	Routes,
+	useLocation,
 	useMatch,
 	useNavigate,
 } from "react-router";
@@ -19,7 +20,10 @@ import { offlinePersistOptions } from "./api/persist";
 // 又不必回頭 import 這個檔案（那會兜出循環依賴）。
 import { queryClient } from "./api/queries";
 import { getRefreshToken } from "./auth/store";
+import { SideNav } from "./components/SideNav";
 import { TabBar } from "./components/TabBar";
+import { contentWidthFor } from "./lib/layout";
+import { useIsDesktop } from "./lib/use-is-desktop";
 import { AddExpense } from "./screens/AddExpense";
 import { AdminRevisions } from "./screens/AdminRevisions";
 import { EditMeal } from "./screens/EditMeal";
@@ -64,25 +68,52 @@ function AddExpenseRoute() {
 	return <AddExpense onDone={() => navigate("/")} />;
 }
 
-/** 登入後的外框：頁面內容＋分頁列。
+/** 登入後的外框（電腦版版面規格 §3）。
  *
- *  **記帳（`/expenses/new`）不顯示分頁列**（記帳與離線規格 §2 (b)）：矮螢幕
- *  （iPhone SE）上分頁列會蓋住數字鍵盤的最下面幾列。那一頁是全螢幕的記帳流程，
- *  有自己的「關閉」。記一餐不隱藏——它沒有關閉鈕，在 iOS 主畫面模式下隱藏就
- *  出不去了，而且沒有數字鍵盤。
+ *  **電腦版（≥ 1024px）**：最外層 `app-desktop`，左側 `SideNav`，每一頁都有
+ *  （包括記帳——寬螢幕上沒有「導覽蓋住鍵盤」的問題）。內容區的最寬寬度依路由
+ *  決定（`contentWidthFor`）。頁面的兩欄 CSS 看 `app-desktop` 這個 class，
+ *  不自己寫 media query——斷點只在 `lib/layout.ts`。
  *
- *  `.app-main` 的底部留白是為分頁列留的，隱藏時一起拿掉（`index.css`）。
- *  `useMatch` 而不是比 `pathname` 字串：`/expenses/new/` 也命中同一個路由。 */
+ *  **手機版**：跟以前一樣。記帳（`/expenses/new`）不顯示分頁列（記帳與離線
+ *  規格 §2 (b)）：矮螢幕（iPhone SE）上分頁列會蓋住數字鍵盤的最下面幾列。
+ *  那一頁是全螢幕的記帳流程，有自己的「關閉」。記一餐不隱藏——它沒有關閉鈕，
+ *  在 iOS 主畫面模式下隱藏就出不去了，而且沒有數字鍵盤。`.app-main` 的底部
+ *  留白是為分頁列留的，隱藏時一起拿掉（`index.css`）。`useMatch` 而不是比
+ *  `pathname` 字串：`/expenses/new/` 也命中同一個路由。
+ *
+ *  **兩個分支的 `children` 掛在不同的父元素底下**：視窗拉寬拉窄跨過斷點時，
+ *  React 會把整頁卸載再重新掛載，表單裡打到一半的字會不見。這是刻意接受的
+ *  取捨（規格 §5 已接受「新增」選單會關）——平常不會有人一邊記帳一邊拉視窗，
+ *  為了保住它把兩種外框硬湊成同一棵樹不划算。 */
 function LoggedInShell({ children }: { children: ReactNode }) {
-	const tabBarHidden = useMatch("/expenses/new") !== null;
+	const isDesktop = useIsDesktop();
+	const { pathname } = useLocation();
+	const onAddExpense = useMatch("/expenses/new") !== null;
+
+	if (isDesktop) {
+		return (
+			<div className="app-desktop">
+				<SideNav />
+				<main className="app-main">
+					<div
+						className={`app-content app-content-${contentWidthFor(pathname)}`}
+					>
+						{children}
+					</div>
+				</main>
+			</div>
+		);
+	}
+
 	return (
 		<>
 			<main
-				className={tabBarHidden ? "app-main app-main-no-tab-bar" : "app-main"}
+				className={onAddExpense ? "app-main app-main-no-tab-bar" : "app-main"}
 			>
 				{children}
 			</main>
-			{!tabBarHidden && <TabBar />}
+			{!onAddExpense && <TabBar />}
 		</>
 	);
 }
@@ -153,12 +184,16 @@ export function App() {
 				</BrowserRouter>
 			) : JOIN_PATHS.has(window.location.pathname) ? (
 				// 邀請連結（邀請規格 §4.1）。其他網址照舊一律登入畫面。
-				// 包在 .app-main 裡：頁面的左右留白來自它，少了它卡片會貼著螢幕邊緣。
-				<main className="app-main">
+				// app-auth（index.css）：左右留白、置中、最寬 400px（電腦版版面
+				// 規格 §3）。不用 .app-main：那個的底部留白是為分頁列留的，未登入
+				// 沒有分頁列；電腦版的寬度規則也只看 .app-desktop 底下的 .app-main。
+				<main className="app-auth">
 					<Join onSuccess={() => setLoggedIn(true)} />
 				</main>
 			) : (
-				<Login onSuccess={() => setLoggedIn(true)} />
+				<main className="app-auth">
+					<Login onSuccess={() => setLoggedIn(true)} />
+				</main>
 			)}
 		</PersistQueryClientProvider>
 	);

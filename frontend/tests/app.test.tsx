@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
@@ -6,6 +6,7 @@ import { queryClient } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { PHOTO_UPLOAD_FAILED_NOTICE } from "../src/screens/LogMeal";
+import { setDesktop } from "../src/test/media";
 
 // 上傳會呼叫 shrinkToLongestEdge（用 canvas，jsdom 沒有）。
 vi.mock("../src/lib/resize-image", () => ({
@@ -335,5 +336,125 @@ describe("App 的 /join（邀請規格 §4.1）", () => {
 		// 邀請還能用：留在網址列（歷史紀錄、螢幕截圖）就是一條能開帳號的連結。
 		expect(window.location.pathname).toBe("/join");
 		expect(window.location.hash).toBe("");
+	});
+});
+
+describe("App 的電腦版外框（電腦版版面規格 §3）", () => {
+	// 路徑、token、fetch mock 由檔案最上面的 beforeEach 重設；寬度由
+	// src/test/setup.ts 的 beforeEach 重設回手機版。
+	beforeEach(() => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+	});
+
+	it("寬螢幕：左側導覽在外框裡、第一個控制項是「新增紀錄」，外框有 app-desktop", async () => {
+		setDesktop(true);
+		mockBackend();
+		render(<App />);
+
+		expect(
+			await screen.findByRole("heading", { name: "總覽" }),
+		).toBeInTheDocument();
+		const nav = screen.getByRole("navigation", { name: "主要導覽" });
+		expect(nav.closest(".app-desktop")).not.toBeNull();
+		// DOM 順序就是 Tab 順序：左側導覽的「新增」在最上面（規格 §2）。
+		expect(
+			nav.querySelector("a[href], button")?.getAttribute("aria-label"),
+		).toBe("新增紀錄");
+		const main = screen.getByRole("main");
+		expect(main.closest(".app-desktop")).not.toBeNull();
+		expect(main).not.toHaveClass("app-main-no-tab-bar");
+		expect(main.querySelector(".app-content-wide")).not.toBeNull();
+		// 只有一個導覽（不是 SideNav＋TabBar 都在）。
+		expect(
+			screen.getAllByRole("navigation", { name: "主要導覽" }),
+		).toHaveLength(1);
+	});
+
+	it("寬螢幕的記帳頁：照樣有左側導覽，內容是表單寬度", async () => {
+		setDesktop(true);
+		mockBackend();
+		window.history.replaceState(null, "", "/expenses/new");
+		render(<App />);
+
+		expect(
+			await screen.findByRole("button", { name: "記一筆" }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("navigation", { name: "主要導覽" }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("main").querySelector(".app-content-form"),
+		).not.toBeNull();
+	});
+
+	it("其他頁（我的）是窄的內容寬度", async () => {
+		setDesktop(true);
+		mockBackend();
+		window.history.replaceState(null, "", "/me");
+		render(<App />);
+
+		expect(
+			await screen.findByRole("heading", { name: "我的" }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("main").querySelector(".app-content-narrow"),
+		).not.toBeNull();
+	});
+
+	it("視窗從寬拉窄：換回手機版（沒有 app-desktop，記帳頁沒有導覽）", async () => {
+		setDesktop(true);
+		mockBackend();
+		window.history.replaceState(null, "", "/expenses/new");
+		render(<App />);
+		expect(
+			await screen.findByRole("button", { name: "記一筆" }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("navigation", { name: "主要導覽" }),
+		).toBeInTheDocument();
+
+		act(() => setDesktop(false));
+
+		expect(
+			screen.queryByRole("navigation", { name: "主要導覽" }),
+		).not.toBeInTheDocument();
+		expect(document.querySelector(".app-desktop")).toBeNull();
+		expect(screen.getByRole("main")).toHaveClass("app-main-no-tab-bar");
+	});
+
+	it("手機版（預設）：沒有 app-desktop，也沒有內容寬度的外層", async () => {
+		mockBackend();
+		render(<App />);
+
+		expect(
+			await screen.findByRole("heading", { name: "總覽" }),
+		).toBeInTheDocument();
+		expect(document.querySelector(".app-desktop")).toBeNull();
+		expect(document.querySelector(".app-content")).toBeNull();
+	});
+});
+
+describe("App 的未登入畫面（電腦版版面規格 §3）", () => {
+	it("登入畫面包在 app-auth 的 main 裡（置中、最寬 400px）", () => {
+		render(<App />);
+		const main = screen.getByRole("main");
+		expect(main).toHaveClass("app-auth");
+		expect(main).toContainElement(
+			screen.getByRole("heading", { name: "登入" }),
+		);
+	});
+
+	it("建立帳號畫面也是 app-auth，只有一個 main", async () => {
+		window.history.replaceState(null, "", "/join#tok-1");
+		mockBackend((url) =>
+			url.includes("/api/auth/invite-status")
+				? jsonResponse({ valid: true })
+				: undefined,
+		);
+		render(<App />);
+
+		expect(await screen.findByLabelText("再輸入一次密碼")).toBeInTheDocument();
+		expect(screen.getAllByRole("main")).toHaveLength(1);
+		expect(screen.getByRole("main")).toHaveClass("app-auth");
 	});
 });
