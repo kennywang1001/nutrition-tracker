@@ -55,3 +55,18 @@
 	color: var(--color-text-muted);
 	font-size: 16px;
 }
+
+/* 電腦版（外框有 app-desktop，電腦版版面規格 §2）：不是從底部滑上來的面板，
+   是畫面中間、最寬 400px 的對話框。AddSheet 沒有用 portal，渲染在外框裡面，
+   所以這個祖先選擇器碰得到。 */
+:global(.app-desktop) .layer {
+	justify-content: center;
+	align-items: center;
+}
+
+:global(.app-desktop) .sheet {
+	box-sizing: border-box;
+	width: min(400px, calc(100% - 2 * var(--space-4)));
+	border-radius: var(--radius-card);
+	padding-bottom: var(--space-4);
+}

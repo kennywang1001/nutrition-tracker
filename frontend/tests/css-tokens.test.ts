@@ -58,7 +58,8 @@ const PAIRS: ReadonlyArray<readonly [string, string]> = [
 	["--color-on-action", "--color-action"],
 	["--color-danger", "--color-bg"],
 	["--color-danger", "--color-surface"],
-	// accent-soft 是「選取中」晶片的底色（記帳的分類、鍵盤退格鍵）；淺色的
+	// accent-soft 是「選取中」晶片的底色（記帳的分類、鍵盤退格鍵），也是電腦版
+	// 左側導覽「目前那一頁」的底色（上面是 action 色的字）；淺色的
 	// muted / action 壓在上面只有約 4.57 / 4.65，餘裕很薄，值得守。
 	["--color-text", "--color-accent-soft"],
 	["--color-text-muted", "--color-accent-soft"],

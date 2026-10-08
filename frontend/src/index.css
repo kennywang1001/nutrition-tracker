@@ -17,6 +17,8 @@
 	--safe-bottom: env(safe-area-inset-bottom, 0px);
 	/* 中間「＋」凸出 tab bar 上緣的高度（規格 §4.4）。 */
 	--add-button-overhang: 20px;
+	/* 電腦版左側導覽的寬度（電腦版版面規格 §3）。SideNav 與 .app-main 共用。 */
+	--side-nav-width: 200px;
 
 	/* 珊瑚橘拆成兩個（計畫「與規格的差異」第 1 點）：
 	   accent 只給沒有文字壓在上面的裝飾；action 給按鈕底色與連結文字。
