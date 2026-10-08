@@ -1,4 +1,6 @@
 import "@testing-library/jest-dom/vitest";
+import { beforeEach } from "vitest";
+import { installMatchMedia, resetDesktop } from "./media";
 
 // jsdom（目前鎖的版本，29.x）沒有實作 URL.createObjectURL /
 // URL.revokeObjectURL —— 它有 Blob/File，但沒有「object URL 註冊表」
@@ -22,3 +24,9 @@ if (typeof URL.revokeObjectURL !== "function") {
 		// 沒有真的物件 URL 註冊表可以清——見上面的說明。
 	};
 }
+
+// 電腦版版面（規格 §6）：jsdom 沒有 matchMedia；預設是手機版。
+installMatchMedia();
+beforeEach(() => {
+	resetDesktop();
+});
