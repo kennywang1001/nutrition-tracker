@@ -116,26 +116,38 @@ async def reset_password(payload: PasswordResetRequest, db: AsyncSession = Depen
     reset = await find_usable_reset(db, payload.token)
     if reset is None:
         raise ForbiddenError("RESET_LINK_INVALID", RESET_INVALID_MESSAGE)
-    reset_id = reset.id
+    # 連結的對象不會變（沒有任何程式碼改 `user_id`），所以可以在兌換之前就知道要鎖誰。
+    reset_id, user_id = reset.id, reset.user_id
 
     password_hash = await run_in_threadpool(hash_password, payload.new_password)
 
-    # 2. 同一個交易：兌換（條件式 UPDATE）→ 新雜湊 → 撤銷所有 session。
+    # 2. 同一個交易：新雜湊 → 兌換（條件式 UPDATE）→ 撤銷所有 session。
     #    revoke_all_for_user 取 advisory lock 之後**自己 commit**——它的 commit 就是這個
     #    交易的 commit；前兩個寫入都還沒 commit，所以三件事一起進去或一起不進去
     #    （test_a_failure_after_redeeming_rolls_back_the_password_and_the_link）。
     #    不要在中間加 commit。
-    user_id = await redeem_reset(db, reset_id)
-    if user_id is None:
-        # 查的時候還能用、兌換時已經被別人用掉或撤銷（兩個請求同時用同一條連結）。
-        await db.rollback()
-        raise ForbiddenError("RESET_LINK_INVALID", RESET_INVALID_MESSAGE)
+    #
+    #    **鎖的順序：`users` 列 → `password_reset_tokens` 列 → 每使用者的 advisory lock
+    #    → `refresh_sessions` 列。**改密碼（`me.change_password`）、管理員產生連結
+    #    （`FOR UPDATE` 使用者列）、CLI 重設都是這個順序。這裡原本是先兌換再改 `users`
+    #    （連結列 → 使用者列）：跟同一個人的改密碼同時發生時兩邊互等，PostgreSQL 砍掉
+    #    其中一個，那個請求變成 500（審查 M3；
+    #    test_a_reset_waiting_for_the_user_row_is_not_holding_the_link_row）。
+    #    新增會同時碰這幾種列的路徑時，照這個順序取。
+    #
+    #    先改 `users` 不改變「誰贏」：贏家仍然由 redeem_reset 的條件式 UPDATE 決定；兌換
+    #    落空就整個 rollback，剛才那個 UPDATE 一起消失。
     email = await db.scalar(
         update(User)
         .where(User.id == user_id)
         .values(password_hash=password_hash)
         .returning(User.email)
     )
+    if await redeem_reset(db, reset_id) != user_id:
+        # 查的時候還能用、兌換時已經不行了：被別人用掉（兩個請求同時用同一條連結）、
+        # 剛被撤銷（本人同時改了密碼、管理員又產生了一條）、或對象剛變成管理員。
+        await db.rollback()
+        raise ForbiddenError("RESET_LINK_INVALID", RESET_INVALID_MESSAGE)
     await revoke_all_for_user(db, user_id)
 
     # 3. 之前猜錯被限速的人，不用再等一分鐘才能用新密碼登入。鍵要跟 login 的一樣

@@ -80,8 +80,12 @@ async def change_password(
     # 4. 同一個交易：新雜湊、撤銷還沒用的重設連結、撤銷所有 refresh session。
     #    revoke_all_for_user 會取 advisory lock 並 **commit**——前兩個寫入在它之前、
     #    都還沒 commit，所以三件事一起進去。
+    #
+    #    鎖的順序跟 `auth.reset_password` 一樣：`users` 列 → 連結列 → advisory lock
+    #    （理由在那邊）。明確 flush，不靠「下一個 execute 會 autoflush」來排這個順序。
     user_id = user.id
     user.password_hash = new_hash
+    await db.flush()
     await revoke_live_resets(db, user_id)
     await revoke_all_for_user(db, user_id)
 
