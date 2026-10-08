@@ -2,7 +2,8 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { queryClient } from "../src/api/queries";
+import { OFFLINE_CACHE_STORAGE_KEY } from "../src/api/persist";
+import { queryClient, queryKeys } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import {
 	clearTokens,
@@ -48,8 +49,11 @@ function jsonResponse(body: unknown) {
  *  **每個端點都回正確的形狀**：舊版「所有請求都回 `[]`」會讓總覽拿到
  *  `[]` 當月報表，`formatMoney(undefined)` 直接把 render 炸掉。 */
 function mockBackend(
-	extra: (url: string, method: string) => Response | undefined = () =>
-		undefined,
+	extra: (
+		url: string,
+		method: string,
+		body: unknown,
+	) => Response | Promise<Response> | undefined = () => undefined,
 ) {
 	return vi
 		.spyOn(globalThis, "fetch")
@@ -61,7 +65,11 @@ function mockBackend(
 			}
 			// 個別測試的客製回應排在最前面（例如 `/api/meals/99/photo` 必須在
 			// `/api/meals` 之前）。
-			const custom = extra(url, method);
+			const custom = extra(
+				url,
+				method,
+				typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+			);
 			if (custom !== undefined) return custom;
 			// **`/api/meals` 必須在 `/api/me` 之前**："/api/meals".includes("/api/me")
 			// 為真——順序反過來，總覽的餐點清單會拿到使用者物件然後當掉。
@@ -393,8 +401,8 @@ describe("App：被登出（帳號設定審查 I2）", () => {
 		expect(screen.queryByRole("status")).not.toBeInTheDocument();
 	});
 
-	it("被登出時停在 /join 或 /reset-password：顯示登入畫面與說明，不是「連結失效」", async () => {
-		// 已登入的人打開邀請或重設連結，碼會從網址列拿掉、路徑留著。這時被登出，
+	it("登入確認過、碼已經從網址列拿掉之後才被登出（停在 /reset-password）：登入畫面與說明，不是「連結失效」", async () => {
+		// 已登入的人打開邀請或重設連結，確認登入還有效之後碼會從網址列拿掉、路徑留著。這時被登出，
 		// 未登入的那兩個畫面讀不到碼，會說連結失效——那不是發生的事。
 		setTokens({ access_token: "a", refresh_token: "r" });
 		mockBackend();
@@ -403,11 +411,303 @@ describe("App：被登出（帳號設定審查 I2）", () => {
 		expect(
 			await screen.findByRole("heading", { name: "重設密碼連結" }),
 		).toBeInTheDocument();
+		await waitFor(() => expect(window.location.hash).toBe(""));
 
 		tokenRemovedInAnotherTab();
 
 		expect(screen.getByRole("heading", { name: "登入" })).toBeInTheDocument();
 		expect(screen.getByRole("status")).toHaveTextContent(NOTICE);
+	});
+});
+
+// 忘記密碼的人手上的裝置，常常還留著一張早就過期或被撤銷的 refresh token。`App` 開頁時只看
+// 「localStorage 裡有沒有票」，會先當成登入中——以前「已登入打開連結」的畫面一掛上去就把碼從網址列
+// 拿掉，接著第一個請求 401、換票 401、被登出，落在登入畫面：碼沒了，也沒有任何說明。拿到重設連結的
+// 人最常走的就是這條路。
+describe("App：票已經失效的裝置打開邀請或重設連結", () => {
+	const NOTICE = "已被登出，請重新登入";
+
+	function unauthorized() {
+		return new Response(
+			JSON.stringify({
+				error: {
+					code: "INVALID_TOKEN",
+					message: "token 無效或已過期",
+					details: {},
+				},
+			}),
+			{ status: 401, headers: { "content-type": "application/json" } },
+		);
+	}
+
+	/** 整頁載入：localStorage 裡有票，記憶體裡沒有 access token。 */
+	function reloadedWithRefreshToken() {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		clearTokens({ keepStorage: true });
+	}
+
+	/** 票已經失效的後端：公開的確認端點照常回，其他（含換票）一律 401。記下確認端點收到的 body。 */
+	function backendWithDeadSession(statusPath: string) {
+		const statusBodies: unknown[] = [];
+		const spy = mockBackend((url, _method, body) => {
+			if (url.endsWith(statusPath)) {
+				statusBodies.push(body);
+				return jsonResponse({ valid: true });
+			}
+			return unauthorized();
+		});
+		return { spy, statusBodies };
+	}
+
+	function refreshWasTried(spy: ReturnType<typeof mockBackend>): boolean {
+		return spy.mock.calls.some(([url]) =>
+			String(url).includes("/api/auth/refresh"),
+		);
+	}
+
+	function meWasRequested(spy: ReturnType<typeof mockBackend>): boolean {
+		return spy.mock.calls.some(([url]) => String(url).endsWith("/api/me"));
+	}
+
+	/** 等過一輪再斷言「沒有發生」：立刻斷言在 effect 還沒跑的時候也成立（第 41 種）。 */
+	function settle() {
+		return act(() => new Promise<void>((resolve) => setTimeout(resolve, 50)));
+	}
+
+	it("/reset-password#碼：直接是重設密碼的表單（碼還在、拿去確認），沒有「已被登出」", async () => {
+		reloadedWithRefreshToken();
+		const { spy, statusBodies } = backendWithDeadSession(
+			"/api/auth/password-reset-status",
+		);
+		window.history.replaceState(null, "", "/reset-password#tok-1");
+
+		render(<App />);
+
+		expect(
+			await screen.findByLabelText("再輸入一次新密碼"),
+		).toBeInTheDocument();
+		// 可及名稱是整個字串比對：「重設密碼連結」（已登入的說明頁）不算。
+		expect(
+			screen.getByRole("heading", { name: "重設密碼" }),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByRole("heading", { name: "重設密碼連結" }),
+		).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole("heading", { name: "登入" }),
+		).not.toBeInTheDocument();
+		expect(statusBodies).toEqual([{ token: "tok-1" }]);
+		// 「已被登出」跟眼前這張表單無關：他本來就是來設新密碼的。
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+		expect(screen.queryByText(NOTICE)).not.toBeInTheDocument();
+		// 真的是被登出之後走到這裡的（不是 mock 剛好讓它一開始就沒登入）。
+		expect(refreshWasTried(spy)).toBe(true);
+		expect(getRefreshToken()).toBeNull();
+		expect(screen.getAllByRole("main")).toHaveLength(1);
+		expect(screen.getByRole("main")).toHaveClass("app-auth");
+	});
+
+	it("離線快取裡還留著上一次的 `me`：那不算「登入還有效」，一樣是重設密碼的表單", async () => {
+		// 「確認登入」如果讀的是 query 快取（`useMe().isSuccess`），離線快取還原回來的那一份就會
+		// 被當成確認：碼被拿掉，而且 60 秒內的快取不重抓，連被登出都不會發生——停在「你已經登入了」。
+		// 同 /me/targets 踩過的那一種（帳號設定審查 M5）：快取裡有，不等於剛剛問過後端。
+		const now = Date.now();
+		localStorage.setItem(
+			OFFLINE_CACHE_STORAGE_KEY,
+			JSON.stringify({
+				buster: "",
+				timestamp: now,
+				clientState: {
+					mutations: [],
+					queries: [
+						{
+							queryKey: queryKeys.me,
+							queryHash: JSON.stringify(queryKeys.me),
+							state: {
+								data: ME,
+								dataUpdateCount: 1,
+								dataUpdatedAt: now,
+								error: null,
+								errorUpdateCount: 0,
+								errorUpdatedAt: 0,
+								fetchFailureCount: 0,
+								fetchFailureReason: null,
+								fetchMeta: null,
+								isInvalidated: false,
+								status: "success",
+								fetchStatus: "idle",
+							},
+						},
+					],
+				},
+			}),
+		);
+		reloadedWithRefreshToken();
+		const { statusBodies } = backendWithDeadSession(
+			"/api/auth/password-reset-status",
+		);
+		window.history.replaceState(null, "", "/reset-password#tok-1");
+
+		render(<App />);
+
+		expect(
+			await screen.findByLabelText("再輸入一次新密碼"),
+		).toBeInTheDocument();
+		expect(statusBodies).toEqual([{ token: "tok-1" }]);
+		expect(screen.queryByText(NOTICE)).not.toBeInTheDocument();
+	});
+
+	it("/join#碼：直接是建立帳號的表單（碼還在、拿去確認），沒有「已被登出」", async () => {
+		reloadedWithRefreshToken();
+		const { spy, statusBodies } = backendWithDeadSession(
+			"/api/auth/invite-status",
+		);
+		window.history.replaceState(null, "", "/join#tok-1");
+
+		render(<App />);
+
+		expect(await screen.findByLabelText("再輸入一次密碼")).toBeInTheDocument();
+		expect(
+			screen.getByRole("heading", { name: "建立帳號" }),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByRole("heading", { name: "邀請連結" }),
+		).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole("heading", { name: "登入" }),
+		).not.toBeInTheDocument();
+		expect(statusBodies).toEqual([{ token: "tok-1" }]);
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+		expect(screen.queryByText(NOTICE)).not.toBeInTheDocument();
+		expect(refreshWasTried(spy)).toBe(true);
+		expect(getRefreshToken()).toBeNull();
+	});
+
+	it.each([
+		// 路徑是連結的路徑，但 # 後面沒有碼：照路徑走只會顯示「連結失效」。
+		"/reset-password",
+		"/join",
+		// 有 # 但不是連結的路徑。
+		"/me#tok-1",
+		"/",
+	])("%s（不是帶著碼的連結）：照舊是登入畫面與「已被登出」", async (path) => {
+		reloadedWithRefreshToken();
+		mockBackend(() => unauthorized());
+		window.history.replaceState(null, "", path);
+
+		render(<App />);
+
+		expect(
+			await screen.findByRole("heading", { name: "登入" }),
+		).toBeInTheDocument();
+		expect(screen.getByRole("status")).toHaveTextContent(NOTICE);
+		expect(screen.queryByText(/連結已經失效/)).not.toBeInTheDocument();
+		expect(getRefreshToken()).toBeNull();
+	});
+
+	it.each([
+		["/reset-password#tok-1", "重設密碼連結"],
+		["/join#tok-1", "邀請連結"],
+	])(
+		"登入還有效，打開 %s：`/api/me` 回來之前碼留在網址列，回來之後才拿掉",
+		async (path, heading) => {
+			reloadedWithRefreshToken();
+			let respondMe: (response: Response) => void = () => undefined;
+			let refreshed = false;
+			const spy = mockBackend((url, method) => {
+				if (method === "POST" && url.includes("/api/auth/refresh")) {
+					refreshed = true;
+					return jsonResponse({ access_token: "a2", refresh_token: "r2" });
+				}
+				// 整頁載入之後沒有 access token：第一次 401，換票之後重送的那一次掛著不回。
+				if (url.endsWith("/api/me")) {
+					if (!refreshed) return unauthorized();
+					return new Promise<Response>((resolve) => {
+						respondMe = resolve;
+					});
+				}
+				return undefined;
+			});
+			window.history.replaceState(null, "", path);
+
+			render(<App />);
+
+			expect(
+				await screen.findByRole("heading", { name: heading }),
+			).toBeInTheDocument();
+			await waitFor(() => expect(getRefreshToken()).toBe("r2"));
+			await settle();
+			expect(window.location.hash).toBe("#tok-1");
+
+			respondMe(jsonResponse(ME));
+
+			await waitFor(() => expect(window.location.hash).toBe(""));
+			expect(window.location.pathname).toBe(path.replace("#tok-1", ""));
+			expect(
+				screen.getByRole("heading", { name: heading }),
+			).toBeInTheDocument();
+			expect(meWasRequested(spy)).toBe(true);
+		},
+	);
+
+	it("連不上（`/api/me` 沒有回應）：不知道登入還有沒有效——碼留著、說明照舊、不登出", async () => {
+		reloadedWithRefreshToken();
+		const spy = mockBackend((url) => {
+			// 斷線時 fetch 是直接 reject，連 Response 都沒有。
+			if (url.includes("/api/")) throw new TypeError("network request failed");
+			return undefined;
+		});
+		window.history.replaceState(null, "", "/reset-password#tok-1");
+
+		render(<App />);
+
+		expect(
+			await screen.findByRole("heading", { name: "重設密碼連結" }),
+		).toBeInTheDocument();
+		await waitFor(() => expect(meWasRequested(spy)).toBe(true));
+		await settle();
+		expect(window.location.hash).toBe("#tok-1");
+		expect(screen.getByRole("heading", { name: "重設密碼連結" })).toBeVisible();
+		expect(getRefreshToken()).toBe("r");
+	});
+
+	it("還沒確認登入（碼還在網址列）時另一個分頁登出了：這個分頁直接變成重設密碼的表單", async () => {
+		// 說明頁叫忘記密碼的人「先登出，再重新打開這個連結」；碼還在的話，登出之後不用再點一次。
+		reloadedWithRefreshToken();
+		const statusBodies: unknown[] = [];
+		const spy = mockBackend((url, _method, body) => {
+			if (url.endsWith("/api/auth/password-reset-status")) {
+				statusBodies.push(body);
+				return jsonResponse({ valid: true });
+			}
+			if (url.includes("/api/")) throw new TypeError("network request failed");
+			return undefined;
+		});
+		window.history.replaceState(null, "", "/reset-password#tok-1");
+		render(<App />);
+		expect(
+			await screen.findByRole("heading", { name: "重設密碼連結" }),
+		).toBeInTheDocument();
+		await waitFor(() => expect(meWasRequested(spy)).toBe(true));
+		await settle();
+
+		localStorage.removeItem("refresh_token");
+		act(() => {
+			window.dispatchEvent(
+				new StorageEvent("storage", {
+					storageArea: localStorage,
+					key: "refresh_token",
+					oldValue: "r",
+					newValue: null,
+				}),
+			);
+		});
+
+		expect(
+			await screen.findByLabelText("再輸入一次新密碼"),
+		).toBeInTheDocument();
+		expect(statusBodies).toEqual([{ token: "tok-1" }]);
+		expect(screen.queryByText(NOTICE)).not.toBeInTheDocument();
 	});
 });
 
@@ -494,8 +794,12 @@ describe("App 的 /join（邀請規格 §4.1）", () => {
 			spy.mock.calls.some(([url]) => String(url).includes("/api/auth/")),
 		).toBe(false);
 		// 邀請還能用：留在網址列（歷史紀錄、螢幕截圖）就是一條能開帳號的連結。
+		// 確認這台真的還登入著（`/api/me` 回來）之後才拿掉，所以要等。
+		await waitFor(() => expect(window.location.hash).toBe(""));
 		expect(window.location.pathname).toBe("/join");
-		expect(window.location.hash).toBe("");
+		expect(
+			spy.mock.calls.some(([url]) => String(url).includes("/api/auth/")),
+		).toBe(false);
 	});
 });
 
@@ -555,8 +859,12 @@ describe("App 的 /reset-password（帳號設定規格 §5.5）", () => {
 			spy.mock.calls.some(([url]) => String(url).includes("/api/auth/")),
 		).toBe(false);
 		// 連結還能用：留在網址列（歷史紀錄、螢幕截圖）就是一條能改別人密碼的連結。
+		// 確認這台真的還登入著（`/api/me` 回來）之後才拿掉，所以要等。
+		await waitFor(() => expect(window.location.hash).toBe(""));
 		expect(window.location.pathname).toBe("/reset-password");
-		expect(window.location.hash).toBe("");
+		expect(
+			spy.mock.calls.some(([url]) => String(url).includes("/api/auth/")),
+		).toBe(false);
 	});
 });
 

@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { ApiError, describeFieldErrors } from "../api/errors";
 import { checkResetLink, resetPassword } from "../api/password-reset";
+import { useSessionConfirmed } from "../auth/use-session-confirmed";
 import ui from "../components/ui.module.css";
 import { readLinkToken } from "../lib/link-token";
 
@@ -144,7 +145,12 @@ export function ResetPassword() {
  *
  *  **兩種人會走到這裡，說明要兩種都顧到**（帳號設定審查 M2）：記得密碼、只是點了連結的
  *  （去「修改密碼」）；以及**真的忘了密碼、但這台剛好還登入著**的——他要用的正是這條
- *  連結，「修改密碼」會卡在「目前的密碼」那一格。後者要先登出，再把連結重新打開。 */
+ *  連結，「修改密碼」會卡在「目前的密碼」那一格。後者要先登出，再把連結重新打開。
+ *
+ *  **還有第三種人：其實沒登入，只是這台還留著一張過期或被撤銷的 refresh token**——`App` 開頁時
+ *  只看 localStorage 裡有沒有票，會先把他帶到這裡。忘記密碼的人多半就是這種。所以碼要等
+ *  **確認這台真的還登入著**才從網址列拿掉（見下面）；票無效的話 `App` 會被通知登出，看到碼還在
+ *  網址列，就直接換成真的 `ResetPassword`。 */
 export function ResetPasswordWhileLoggedIn() {
 	// 連結還能用：不留在網址列（歷史紀錄、截圖、分享目前頁面）。同 JoinWhileLoggedIn：
 	// 走 navigate 而不是直接 history.replaceState——這裡在 BrowserRouter 裡面，直接改會蓋掉
@@ -152,10 +158,15 @@ export function ResetPasswordWhileLoggedIn() {
 	//
 	// 拿掉之後「重新打開這個連結」不能靠重新整理或上一頁——但連結是別人傳來的（聊天訊息），
 	// 回去再點一次就好，所以說明裡把這件事寫明，而不是為了它把碼留在歷史紀錄裡。
+	//
+	// **確認登入還有效之後才拿**（`useSessionConfirmed`：一次真的打到後端的 `/api/me`）。一掛上來
+	// 就拿的話，票其實已經失效的人接著被登出、落在登入畫面，碼沒了也沒有任何說明——他得自己
+	// 想到要回去再點一次連結。連不上的時候確認不了：碼留著，下面的說明照舊顯示。
 	const navigate = useNavigate();
+	const sessionConfirmed = useSessionConfirmed();
 	useEffect(() => {
-		navigate("/reset-password", { replace: true });
-	}, [navigate]);
+		if (sessionConfirmed) navigate("/reset-password", { replace: true });
+	}, [sessionConfirmed, navigate]);
 
 	return (
 		<section className={ui.screen}>

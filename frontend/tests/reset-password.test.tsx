@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -273,9 +273,7 @@ function LocationProbe() {
 }
 
 describe("已登入的人打開重設連結", () => {
-	it("兩條路都說清楚（記得密碼／忘記密碼）、連到「我的」；不打任何 API；碼從路由的網址拿掉", async () => {
-		const spy = vi.spyOn(globalThis, "fetch");
-
+	function renderWhileLoggedIn() {
 		render(
 			<MemoryRouter initialEntries={["/reset-password#tok-1"]}>
 				<Routes>
@@ -291,6 +289,32 @@ describe("已登入的人打開重設連結", () => {
 				</Routes>
 			</MemoryRouter>,
 		);
+	}
+
+	const ME = {
+		id: 1,
+		email: "kenny@example.com",
+		display_name: "Kenny",
+		role: "user",
+		timezone: "Asia/Taipei",
+	};
+
+	/** 等過一輪再斷言「碼還在」：立刻斷言在 effect 還沒跑的時候也成立（第 41 種）。 */
+	function settle() {
+		return act(() => new Promise<void>((resolve) => setTimeout(resolve, 50)));
+	}
+
+	it("兩條路都說清楚（記得密碼／忘記密碼）、連到「我的」；不打任何重設端點；確認登入還有效之後碼才從路由的網址拿掉", async () => {
+		// 確認登入的那個請求（`GET /api/me`）掛著不回：這段期間碼要留著。
+		let respondMe: (response: Response) => void = () => undefined;
+		const spy = vi.spyOn(globalThis, "fetch").mockImplementation(
+			() =>
+				new Promise<Response>((resolve) => {
+					respondMe = resolve;
+				}),
+		);
+
+		renderWhileLoggedIn();
 
 		// 以前只有「要改自己的密碼，請到『我的』→『修改密碼』」——忘記密碼（所以才拿到這條
 		// 連結）但這台剛好還登入著的人，照做會卡在「目前的密碼」那一格（帳號設定審查 M2）。
@@ -315,11 +339,39 @@ describe("已登入的人打開重設連結", () => {
 			"href",
 			"/",
 		);
+
+		// 還不知道這台的登入有沒有效（可能只是留著一張過期的票）：碼不能先拿掉。
+		await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+		await settle();
+		expect(screen.getByTestId("location")).toHaveTextContent(
+			/^\/reset-password#tok-1$/,
+		);
+
+		respondMe(jsonResponse(200, ME));
+
 		await waitFor(() =>
 			expect(screen.getByTestId("location")).toHaveTextContent(
 				/^\/reset-password$/,
 			),
 		);
-		expect(spy).not.toHaveBeenCalled();
+		// 唯一的請求是確認登入的那一個；重設的端點一個都沒碰（連結不被用掉）。
+		expect(spy.mock.calls.map(([url]) => String(url))).toEqual(["/api/me"]);
+	});
+
+	it("確認不了登入（連不上）：碼留著，說明照舊", async () => {
+		const spy = vi
+			.spyOn(globalThis, "fetch")
+			.mockRejectedValue(new TypeError("network request failed"));
+
+		renderWhileLoggedIn();
+
+		await waitFor(() => expect(spy).toHaveBeenCalled());
+		await settle();
+		expect(screen.getByTestId("location")).toHaveTextContent(
+			/^\/reset-password#tok-1$/,
+		);
+		expect(
+			screen.getByText(/你已經登入了。這個連結是給忘記密碼的人用的/),
+		).toBeInTheDocument();
 	});
 });

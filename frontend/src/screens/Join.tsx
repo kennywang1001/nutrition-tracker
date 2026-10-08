@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router";
 import { ApiError, describeFieldErrors } from "../api/errors";
 import { checkInvite, registerWithInvite } from "../api/invites";
 import { login } from "../auth/session";
+import { useSessionConfirmed } from "../auth/use-session-confirmed";
 import ui from "../components/ui.module.css";
 import { readLinkToken } from "../lib/link-token";
 
@@ -207,10 +208,15 @@ export function JoinWhileLoggedIn() {
 	// 邀請沒被用掉、還能開帳號：不留在網址列（歷史紀錄、截圖、分享目前頁面）。
 	// 走 navigate 而不是直接 history.replaceState：這裡在 BrowserRouter 裡面，
 	// 直接改會蓋掉 react-router 記在 history.state 的 key/idx，路由的 location 也還帶著舊的 hash。
+	//
+	// **確認登入還有效之後才拿**（`useSessionConfirmed`，理由同 `ResetPasswordWhileLoggedIn`）：
+	// 這台可能只是還留著一張過期的票。那種情況 `App` 會被通知登出，看到碼還在網址列，就直接換成
+	// 真的 `Join`；先拿掉的話他只會落在登入畫面，而他根本還沒有帳號。
 	const navigate = useNavigate();
+	const sessionConfirmed = useSessionConfirmed();
 	useEffect(() => {
-		navigate("/join", { replace: true });
-	}, [navigate]);
+		if (sessionConfirmed) navigate("/join", { replace: true });
+	}, [sessionConfirmed, navigate]);
 
 	return (
 		<section className={ui.screen}>

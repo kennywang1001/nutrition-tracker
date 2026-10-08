@@ -24,6 +24,7 @@ import { getRefreshToken, onLoggedOut } from "./auth/store";
 import { SideNav } from "./components/SideNav";
 import { TabBar } from "./components/TabBar";
 import { contentWidthFor } from "./lib/layout";
+import { readLinkToken } from "./lib/link-token";
 import { useIsDesktop } from "./lib/use-is-desktop";
 import { AddExpense } from "./screens/AddExpense";
 import { AdminRevisions } from "./screens/AdminRevisions";
@@ -135,8 +136,22 @@ const RESET_PATHS = new Set(["/reset-password", "/reset-password/"]);
 /** 登入畫面上的一行說明：不是使用者在這個分頁按的登出（帳號設定審查 I2）。 */
 const FORCED_LOGOUT_NOTICE = "已被登出，請重新登入";
 
-/** `in`：登入中。`out`：沒登入（開頁時沒有票，或自己按了登出）。`forced-out`：被登出——
- *  換票被拒（別的裝置改了密碼、重設了密碼、票過期）或另一個分頁登出了。 */
+/** 網址是不是一條**還帶著碼**的邀請或重設連結（`/join#碼`、`/reset-password#碼`）。
+ *
+ *  登入中打開這種連結，碼要等確認登入還有效才從網址列拿掉（`useSessionConfirmed`）。所以
+ *  「被登出的當下碼還在」只有一種意思：這台的登入從來沒被確認過——票早就過期或被撤銷了，
+ *  或還來不及確認就在別的分頁登出了。這個人就是來用這條連結的。 */
+function isOnLinkWithToken(): boolean {
+	const { pathname, hash } = window.location;
+	return (
+		(JOIN_PATHS.has(pathname) || RESET_PATHS.has(pathname)) &&
+		readLinkToken(hash) !== ""
+	);
+}
+
+/** `in`：登入中。`out`：沒登入（開頁時沒有票、自己按了登出，或被登出時正開著一條還帶著碼的
+ *  連結——見 `isOnLinkWithToken`）。`forced-out`：被登出——換票被拒（別的裝置改了密碼、重設了
+ *  密碼、票過期）或另一個分頁登出了。 */
 type AuthView = "in" | "out" | "forced-out";
 
 export function App() {
@@ -148,13 +163,18 @@ export function App() {
 
 	// **登出由 store 通知，登入由畫面的 onSuccess 通知**（理由在 `auth/store.ts` 的
 	// `onLoggedOut`）。本來就沒登入的分頁不變（另一個分頁登出時，這裡不該冒出「已被登出」）。
+	//
+	// **被登出時正開著一條還帶著碼的連結 → 當成沒登入的人打開它**（`out`，不是 `forced-out`）：
+	// 下面照路徑顯示真的 `Join`／`ResetPassword`，連結直接能用，也不顯示「已被登出」——那句話
+	// 跟眼前的表單無關。在通知的當下就決定、記進 state，不在 render 時看網址：那兩個畫面成功
+	// 之後會自己把網址換成 `/`。
 	useEffect(
 		() =>
-			onLoggedOut(({ forced }) =>
-				setView((current) =>
-					current !== "in" ? current : forced ? "forced-out" : "out",
-				),
-			),
+			onLoggedOut(({ forced }) => {
+				const next: AuthView =
+					forced && !isOnLinkWithToken() ? "forced-out" : "out";
+				setView((current) => (current !== "in" ? current : next));
+			}),
 		[],
 	);
 	useEffect(() => followLogoutFromOtherTabs(), []);
@@ -234,8 +254,9 @@ export function App() {
 					<ResetPassword />
 				</main>
 			) : (
-				// 被登出（forced-out）一律是登入畫面，不看網址：已登入的人打開邀請或重設連結時
-				// 碼已經從網址列拿掉、路徑還留著，照路徑走會顯示「連結失效」——那不是發生的事。
+				// 被登出（forced-out）一律是登入畫面，不看路徑：走到這裡的 `/join`、`/reset-password`
+				// 網址上已經沒有碼了（確認登入之後拿掉的；還有碼的在通知登出時就歸到 `out`），
+				// 照路徑走會顯示「連結失效」——那不是發生的事。
 				<main className="app-auth">
 					<Login
 						onSuccess={() => setView("in")}
