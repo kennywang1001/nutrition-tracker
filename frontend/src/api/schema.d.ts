@@ -208,6 +208,29 @@ export interface paths {
         patch: operations["update_me_api_me_patch"];
         trace?: never;
     };
+    "/api/me/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change Password
+         * @description 改自己的密碼（帳號設定規格 §3.2）。成功後**所有**裝置的 refresh token 失效，
+         *     這台拿到一組新的——已經發出去的 access token 最多還能用 15 分鐘（handover §8.1）。
+         *
+         *     錯誤一律不是 401：前端對 401 會換票並重送一次，錯的密碼會被驗兩次、算兩次失敗。
+         */
+        post: operations["change_password_api_me_password_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/foods": {
         parameters: {
             query?: never;
@@ -1358,6 +1381,19 @@ export interface components {
             total: string;
             /** Count */
             count: number;
+        };
+        /**
+         * ChangePasswordRequest
+         * @description `POST /api/me/password`（帳號設定規格 §3.2）。
+         *
+         *     `current_password` 只擋空字串與過長：CLI 建的密碼沒有上限，這裡給寬一點（1024），
+         *     驗證交給 Argon2；不要套新密碼的規則，否則規則改了之後舊密碼連「目前的密碼」都填不進來。
+         */
+        ChangePasswordRequest: {
+            /** Current Password */
+            current_password: string;
+            /** New Password */
+            new_password: string;
         };
         /**
          * ConsistencyResult
@@ -2765,6 +2801,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    change_password_api_me_password_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenResponse"];
                 };
             };
             /** @description Validation Error */

@@ -3,6 +3,7 @@ from typing import Annotated
 from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.validators import DisplayName, IanaTimezone
+from app.security.password import MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH
 
 
 class UpdateMeRequest(BaseModel):
@@ -37,3 +38,14 @@ class UpdateMeRequest(BaseModel):
         if nulls:
             raise ValueError(f"這些欄位可以省略，但不接受 null：{', '.join(nulls)}")
         return self
+
+
+class ChangePasswordRequest(BaseModel):
+    """`POST /api/me/password`（帳號設定規格 §3.2）。
+
+    `current_password` 只擋空字串與過長：CLI 建的密碼沒有上限，這裡給寬一點（1024），
+    驗證交給 Argon2；不要套新密碼的規則，否則規則改了之後舊密碼連「目前的密碼」都填不進來。
+    """
+
+    current_password: str = Field(min_length=1, max_length=1024)
+    new_password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH)
