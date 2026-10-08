@@ -1,3 +1,4 @@
+import { Camera } from "lucide-react";
 import type { ChangeEvent } from "react";
 import { Link } from "react-router";
 import { MEAL_TYPE_LABELS, type Meal, useTodayMeals } from "../api/meals";
@@ -30,7 +31,7 @@ function MealPhoto({ meal }: { meal: Meal }) {
 	const alt = `${MEAL_TYPE_LABELS[meal.meal_type]}（${formatTime(meal.eaten_at)}）的照片`;
 
 	return (
-		<div data-testid={`meal-photo-${meal.id}`}>
+		<div data-testid={`meal-photo-${meal.id}`} className={styles.photo}>
 			{thumb.objectUrl !== null && (
 				<ZoomablePhoto
 					alt={alt}
@@ -63,14 +64,22 @@ function MealPhotoUpload({ mealId }: { mealId: number }) {
 		upload.mutate(file);
 	}
 
+	// 外觀照編輯這一餐的「加照片」（EditMeal.module.css）：虛線框的標籤＋相機
+	// 圖示當按鈕，真的 input 視覺上藏起來但仍在 tab 順序裡（鍵盤對焦時外框畫在
+	// 標籤上）。不用 display:none——那會讓它不能對焦，鍵盤使用者就上傳不了。
+	// 圖示 aria-hidden：input 的名稱維持「上傳照片」（測試與螢幕閱讀器都靠它）。
 	return (
-		<div>
-			<label htmlFor={inputId}>上傳照片</label>
+		<div className={styles.upload}>
+			<label htmlFor={inputId} className={styles.photoButton}>
+				<Camera aria-hidden="true" size={18} />
+				上傳照片
+			</label>
 			<input
 				id={inputId}
 				type="file"
 				accept="image/*"
 				capture="environment"
+				className={styles.fileInput}
 				onChange={handleChange}
 			/>
 			{upload.isError && (
@@ -104,22 +113,22 @@ function MealCard({ meal }: { meal: Meal }) {
 			</div>
 			{meal.photo_path !== null && <MealPhoto meal={meal} />}
 			<MealPhotoUpload mealId={meal.id} />
-			<ul>
+			<ul className={styles.items}>
 				{meal.items.map((item) => (
 					// 食物名稱留在 <li> 自己的直接文字節點裡，份量另外包一層
 					// <span>——這樣「滷肉飯」在 DOM 上才是單獨可比對的文字，
 					// 不會跟旁邊的份量字串黏成同一段（RTL 的 getByText 是照
 					// 「元素自己的直接子文字節點」比對，不是整棵子樹的 textContent）。
-					<li key={item.id}>
+					<li key={item.id} className={styles.item}>
 						{item.food_name}
-						<span>
+						<span className={styles.quantity}>
 							{" "}
 							· {formatMacro(item.quantity_g)} {item.base_unit}
 						</span>
 					</li>
 				))}
 			</ul>
-			<p>合計 {formatMacro(meal.kcal)} kcal</p>
+			<p className={styles.total}>合計 {formatMacro(meal.kcal)} kcal</p>
 		</li>
 	);
 }
@@ -137,7 +146,7 @@ export function MealList() {
 
 	return (
 		<section>
-			<h2>今日餐點</h2>
+			<h2 className={styles.heading}>今日餐點</h2>
 			{mealsQuery.isLoading && <p>載入中…</p>}
 			{mealsQuery.isError && <p>無法載入餐點清單</p>}
 			<ul className={styles.meals}>

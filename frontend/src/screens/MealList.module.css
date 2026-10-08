@@ -1,3 +1,12 @@
+/* 「今日餐點」：同總覽「今天」的區塊標題（Overview.module.css 的 .sectionTitle）
+   與飲食頁卡片裡的「今日補劑」——小字、灰色，標題不搶卡片的內容。 */
+.heading {
+	margin: var(--space-4) 0 var(--space-1);
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--color-text-muted);
+}
+
 .meals {
 	list-style: none;
 	margin: 0;
@@ -53,4 +62,90 @@
 	color: var(--color-text-muted);
 	font-size: 12px;
 	font-weight: 600;
+}
+
+/* 照片的上傳鈕：同 EditMeal.module.css 的 .photoButton／.fileInput——虛線框、
+   相機圖示，看得出是「可以點的地方」但不搶主要內容。 */
+.upload {
+	margin-bottom: var(--space-2);
+}
+
+.photoButton {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	min-height: 44px;
+	box-sizing: border-box;
+	padding: 0 var(--space-3);
+	border: 1px dashed var(--color-border);
+	border-radius: var(--radius-button);
+	color: var(--color-text-muted);
+	font-size: 14px;
+	cursor: pointer;
+}
+
+/* 視覺上藏起來但仍可用鍵盤對焦（不是 display:none），外框畫在前一個兄弟 label 上。 */
+.fileInput {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	opacity: 0;
+}
+
+.photoButton:has(+ .fileInput:focus-visible) {
+	outline: 2px solid var(--color-action);
+	outline-offset: 2px;
+}
+
+/* 縮圖最寬 240px（同編輯這一餐的照片預覽）：電腦版右欄將近 600px 寬，
+   拉滿的話一張方形照片就佔掉整個視窗的高度；要看大圖點下去（ZoomablePhoto）。
+   跟上傳鈕之間留一點空。 */
+.photo {
+	max-width: 240px;
+	margin-bottom: var(--space-2);
+}
+
+.photo p,
+.upload [role="alert"] {
+	margin: var(--space-1) 0 0;
+	font-size: 13px;
+}
+
+.upload [role="alert"] {
+	color: var(--color-danger);
+}
+
+.items {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.item {
+	padding: var(--space-2) 0;
+	border-bottom: 1px solid var(--color-border);
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+.item:last-child {
+	border-bottom: none;
+}
+
+/* 份量是附屬資訊：小一點、灰色（同編輯這一餐的 .itemMeta）。 */
+.quantity {
+	font-size: 13px;
+	font-weight: 400;
+	color: var(--color-text-muted);
+	font-variant-numeric: tabular-nums;
+}
+
+/* 合計：靠右、粗體，上面一條線跟項目分開（同總覽時間線右邊的數值欄）。 */
+.total {
+	margin: 0;
+	padding-top: var(--space-2);
+	border-top: 1px solid var(--color-border);
+	text-align: right;
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
 }
