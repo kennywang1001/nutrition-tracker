@@ -1,0 +1,52 @@
+/* 飲食頁的營養素列（MacroBar）。進度條的樣式照總覽「今天熱量」卡片
+   （Overview.module.css 的 .progress），兩張卡片的條才長得一樣。 */
+
+.row {
+	padding: var(--space-2) 0;
+	border-bottom: 1px solid var(--color-border);
+}
+
+.row:first-child {
+	padding-top: 0;
+}
+
+.row:last-child {
+	padding-bottom: 0;
+	border-bottom: none;
+}
+
+.line {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: var(--space-3);
+}
+
+.label {
+	font-weight: 600;
+}
+
+/* 數字要上下對齊：等寬數字。很大的數字（例如測試帳號累積的熱量）在窄螢幕
+   上可以換行，不要把整張卡片撐寬。 */
+.figures {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 0 var(--space-2);
+	font-variant-numeric: tabular-nums;
+	text-align: right;
+	overflow-wrap: anywhere;
+}
+
+.muted {
+	min-width: 4ch;
+	color: var(--color-text-muted);
+}
+
+.progress {
+	display: block;
+	width: 100%;
+	height: 6px;
+	margin-top: var(--space-1);
+	accent-color: var(--color-accent);
+}

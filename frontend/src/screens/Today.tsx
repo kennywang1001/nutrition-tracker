@@ -152,8 +152,9 @@ export function Today() {
 									// MacroBar）——兩者混為一談會讓使用者以為自己是「設了目標但
 									// 剛好每一項都沒填」，而不是「根本沒設目標」。
 									<Card>
-										<p>尚未設定目標</p>
-										<dl>
+										<p className={styles.noTarget}>尚未設定目標</p>
+										{/* 一列一項：名稱在左、數字在右（跟有目標時的 MacroBar 同一個節奏）。 */}
+										<dl className={styles.macroList}>
 											<div data-testid="macro-kcal">
 												<dt>熱量</dt>
 												<dd>{formatMacro(stats.actual.kcal)}</dd>
@@ -209,13 +210,15 @@ export function Today() {
 						</div>
 						<div className={styles.supplements}>
 							<Card>
-								<h2>今日補劑</h2>
+								<h2 className={styles.cardTitle}>今日補劑</h2>
 								{/* 補劑的新增與「當天吃了就點一份進去」（P3-C Task 2）的入口。
 						    補劑不是 tab（tab bar 固定是 總覽／報表／＋／飲食／我的），
 						    入口放在飲食畫面——這裡是使用者會看到補劑的地方，也是他們
 						    想「加一個」的當下。 */}
-								<Link to="/supplements">新增補劑</Link>
-								<ul>
+								<Link to="/supplements" className={styles.cardLink}>
+									新增補劑
+								</Link>
+								<ul className={styles.supplementList}>
 									{supplements.map((item) => (
 										<li key={supplementKey(item)}>
 											<span>{item.supplement_name}</span>

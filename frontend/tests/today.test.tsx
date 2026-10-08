@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { MemoryRouter, useLocation } from "react-router";
@@ -110,6 +110,34 @@ describe("今日總覽", () => {
 		expect(screen.getByTestId("macro-protein_g")).not.toHaveTextContent(
 			"未設定",
 		);
+	});
+
+	it("有比例的營養素畫進度條，超過目標時夾在滿格；沒設目標的那一項不畫", async () => {
+		// 進度條的寬度跟總覽「今天熱量」一樣來自 ratioOf()，不是手算。
+		// 空的進度條會被讀成「0%」，所以「未設定」那一列不能有條。
+		mockApi({
+			"/api/stats/daily": () =>
+				json({
+					...STATS_WITH_TARGET,
+					actual: { ...STATS_WITH_TARGET.actual, carb_g: "500.00" },
+				}),
+			"/api/supplements/today": () => json([]),
+		});
+
+		render(wrap(<Today />));
+
+		const kcal = await screen.findByRole("progressbar", { name: "熱量進度" });
+		expect(kcal).toHaveAttribute("value", "0.9");
+		// 500 / 250 = 2：條畫滿（1），超過多少看百分比文字。
+		const carbRow = screen.getByTestId("macro-carb_g");
+		expect(within(carbRow).getByRole("progressbar")).toHaveAttribute(
+			"value",
+			"1",
+		);
+		expect(carbRow).toHaveTextContent("200%");
+		expect(
+			within(screen.getByTestId("macro-fat_g")).queryByRole("progressbar"),
+		).not.toBeInTheDocument();
 	});
 
 	it("整天沒有目標時顯示的是「尚未設定目標」，不是四個未設定", async () => {

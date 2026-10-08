@@ -1,4 +1,5 @@
 import { formatMacro, type Numeric, ratioOf } from "../lib/decimal";
+import styles from "./MacroBar.module.css";
 
 type MacroField = "kcal" | "protein_g" | "fat_g" | "carb_g";
 
@@ -21,24 +22,42 @@ type Props = {
 export function MacroBar({ field, label, actual, target }: Props) {
 	const ratio = ratioOf(actual, target);
 
+	// 上一行：名稱在左、數字在右；下面一條進度條（同總覽「今天熱量」卡片）。
+	// 數字與百分比各自留在自己的 <span>：測試用 getByText(/1800/) 找數字，
+	// 一個 span 只裝一種東西，比對才不會黏到旁邊的字。
 	return (
-		<div data-testid={`macro-${field}`}>
-			<span>{label}</span>
-			<span>
-				{formatMacro(actual)}
-				{target !== null && ` / ${formatMacro(target)}`}
-			</span>
-			{target === null ? (
-				<span>未設定</span>
-			) : (
-				ratio !== null && (
+		<div data-testid={`macro-${field}`} className={styles.row}>
+			<div className={styles.line}>
+				<span className={styles.label}>{label}</span>
+				<span className={styles.figures}>
 					<span>
-						{ratio.toLocaleString(undefined, {
-							style: "percent",
-							maximumFractionDigits: 0,
-						})}
+						{formatMacro(actual)}
+						{target !== null && ` / ${formatMacro(target)}`}
 					</span>
-				)
+					{target === null ? (
+						<span className={styles.muted}>未設定</span>
+					) : (
+						ratio !== null && (
+							<span className={styles.muted}>
+								{ratio.toLocaleString(undefined, {
+									style: "percent",
+									maximumFractionDigits: 0,
+								})}
+							</span>
+						)
+					)}
+				</span>
+			</div>
+			{/* 沒有比例（這一項沒設目標，或目標是 0）就不畫條：空條會被讀成「0%」。
+			    超過目標時條畫滿就好，超過多少看上面的百分比——跟總覽的
+			    TodayKcalCard 一樣用 Math.min 夾在 1，比例本身仍然來自 ratioOf()。 */}
+			{ratio !== null && (
+				<progress
+					className={styles.progress}
+					max={1}
+					value={Math.min(ratio, 1)}
+					aria-label={`${label}進度`}
+				/>
 			)}
 		</div>
 	);

@@ -123,3 +123,85 @@
 :global(.app-desktop) .friendFeed {
 	max-width: 640px;
 }
+
+/* 整天沒有目標（規格 §5.7 第一層 null）：一行說明，下面是一列一項的數字。 */
+.noTarget {
+	margin: 0 0 var(--space-1);
+	font-size: 13px;
+	color: var(--color-text-muted);
+}
+
+.macroList {
+	margin: 0;
+}
+
+.macroList > div {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: var(--space-3);
+	padding: var(--space-2) 0;
+	border-bottom: 1px solid var(--color-border);
+}
+
+.macroList > div:last-child {
+	padding-bottom: 0;
+	border-bottom: none;
+}
+
+.macroList dt {
+	font-weight: 600;
+}
+
+.macroList dd {
+	margin: 0;
+	font-variant-numeric: tabular-nums;
+}
+
+/* 卡片裡的標題：跟其他改版過的卡片（記一餐、編輯這一餐的區塊標題、
+   ui.module.css 的 h2）一樣是小字、灰色、沒有上邊距。瀏覽器預設的 h2
+   上下各有一大截 margin，在卡片裡看起來像空了一行。 */
+.cardTitle {
+	margin: 0 0 var(--space-1);
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--color-text-muted);
+}
+
+.cardLink {
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+	font-weight: 600;
+}
+
+.supplementList {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.supplementList li {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-2);
+	padding: var(--space-2) 0;
+	border-top: 1px solid var(--color-border);
+}
+
+/* 打卡／取消：次要按鈕（外框、珊瑚橘字），同 ui.module.css 的通用按鈕。 */
+.supplementList button {
+	min-height: 44px;
+	padding: 0 var(--space-4);
+	border: 1px solid var(--color-action);
+	border-radius: var(--radius-button);
+	background: transparent;
+	color: var(--color-action);
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.supplementList button:disabled {
+	opacity: 0.4;
+}
