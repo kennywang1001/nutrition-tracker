@@ -2,8 +2,8 @@
 
 **專案：** nutrition-tracker —— 飲食紀錄系統
 **Repo：** https://github.com/kennywang1001/nutrition-tracker（公開）
-**狀態：** 後端完成並可部署、session 撤銷已完成；介面改版第一階段、食物的一份、修改與刪除已記錄的餐點、AI 估算的前端已合併；介面改版第二階段已實作於 `feat/ui-phase2`
-**文件產出日：** 2026-09-11（session 撤銷完成後更新於 2026-09-12）
+**狀態：** 後端完成並可部署、session 撤銷已完成；介面改版第一階段、食物的一份、修改與刪除已記錄的餐點、AI 估算的前端已合併；介面改版第二階段已實作於 `feat/ui-phase2`；帳號與目標設定已實作於 `feat/account-settings`
+**文件產出日：** 2026-09-11（session 撤銷完成後更新於 2026-09-12；§2 的數字更新於 2026-10-08）
 
 ---
 
@@ -28,12 +28,12 @@
 
 | 項目 | 數字 |
 |---|---|
-| 端點 | **45** |
-| 測試 | **503**（`pytest -W error` 全綠） |
-| 覆蓋率 | 96% |
-| 資料表 | 11（+ `alembic_version`） |
-| Migration | `0001` ~ `0007` |
-| Commit | 180+ |
+| 端點 | **75**（OpenAPI 的 operation 數，2026-10-08） |
+| 測試 | 後端 **921**（`pytest -q` 全綠）；前端 722 條（vitest，印出來的數字是兩倍，見 §7）；e2e 41 條（Playwright） |
+| 覆蓋率 | 96%（2026-09 量的，之後沒再量） |
+| 資料表 | 16（+ `alembic_version`） |
+| Migration | `0001` ~ `0016` |
+| Commit | 600+ |
 | PR | 5 個，全部經 CI 驗證後合併 |
 
 ### 階段進度
@@ -53,6 +53,7 @@
 | 好友關係（社群第二步） | 好友碼（`XXXX-XXXX`，可重設）送邀請、對方接受；飲食頁「我的｜好友」看好友動態，點名字看他的某一天（照他的時區）；好友看得到吃了什麼、照片、熱量與營養素，**看不到餐費與備註**；每一餐可設「只有我看得到」（規格 `docs/superpowers/specs/2026-10-07-friends-design.md`、計畫 `docs/superpowers/plans/2026-10-07-friends.md`） | ✅ |
 | 部署改成 CI 做映像 | CI 的 `publish` job 把兩個映像推到 GHCR（多架構）；NAS 上 `sudo ./scripts/deploy.sh` 拉映像、備份、migration、等 healthy、起不來自動退版（規格 `docs/superpowers/specs/2026-10-08-image-deploy-design.md`；部署手冊「二、更新」） | ✅（`publish` job 要等第一次 push 到 master 才驗得到） |
 | 電腦版版面 | 寬度 ≥ 1024px 左側導覽＋總覽／報表／飲食兩欄；比較窄維持手機版、內容最寬 600px 置中。只改版面，不動後端（規格 `docs/superpowers/specs/2026-10-08-desktop-layout-design.md`、計畫 `docs/superpowers/plans/2026-10-08-desktop-layout.md`；見第 10 節「電腦版版面」） | ✅（`feat/desktop-layout`） |
+| 帳號與目標設定 | 「我的」的每日目標卡片＋`/me/targets`（**從今天起**生效，過去的日子維持原本的目標）；帳號卡片的行內「修改名稱」；`/me/password` 改密碼（**其他裝置全部登出**，這台換一組新票繼續用）；管理員在「所有帳號」替一般使用者產生**重設密碼連結**（24 小時、只能用一次、不給管理員帳號），朋友打開 `/reset-password#<碼>` 設新密碼——取代 SSH 跑 `create-user`（規格 `docs/superpowers/specs/2026-10-08-account-settings-design.md`、計畫 `docs/superpowers/plans/2026-10-08-account-settings.md`；見第 10 節「帳號與目標設定」） | ✅（`feat/account-settings`） |
 | UI 改版 第三階段 | 社群（P7）：第一步「開帳號的路」、第二步「好友關係」已完成。按讚、留言、通知刻意沒做——等真的用過再說 | 🟡 |
 
 > **P4 早於 P2/P3 完成是刻意的，但當初的理由有瑕疵。**
@@ -82,6 +83,7 @@ app/
   stats.py             統計彙總核心（SQL 分桶）
   ratelimit.py         登入速率限制（記憶體，單容器）
   food_visibility.py   食物/份量的分層可見性（共用）
+  password_resets.py   重設密碼連結的規則：產生、雜湊、還能用、兌換、撤銷某人的活連結（同 invites.py 的形狀）
   cli.py               create-admin / create-user / cleanup-photos / cleanup-sessions
   storage/photos.py    照片的所有檔案讀寫（規格第 8 節：集中在單一模組）
   security/tokens.py   JWT 編解碼（access / refresh 兩組，refresh 強制帶 jti）
@@ -833,6 +835,17 @@ app 的 `queryClient` 預設 `staleTime` 60 秒、快取會持久化，reload �
 嚴格模式報錯。Task 5 的子代理只跑了單元測試，全部 e2e 到 Task 8 才發現（749d20e）。
 **新增一個標題或按鈕，先 grep e2e 裡有沒有名稱是它子字串的選擇器。**
 
+### 帳號與目標設定：第 18 種又一次
+
+計畫寫的改密碼 e2e：A 改完密碼之後 `page.reload()`，「新票沒存好或被撤銷了，這裡會掉回登入畫面」，
+所以斷言「修改密碼」標題還在。**那個前提不成立**：換票 401 時 `auth/refresh.ts` 清掉 token 與快取，但 `App` 的
+`loggedIn` 只在開頁時讀一次 localStorage，畫面**不會**切回登入；靜態的標題照樣畫得出來，「我的」的資料又可能來自
+離線快取、根本不發請求。實測兩個突變——後端把 `start_session` 搬到 `revoke_all_for_user` 之前（新票自己也被撤銷）、
+前端 `changePassword()` 不 `setTokens`（localStorage 還是被撤銷的舊票）——只看畫面的版本**都是綠的**。
+換票成功與失敗，畫面一模一樣（第 18 種）。改成看伺服器：reload 之前 `waitForResponse("/api/auth/refresh")`，點「我的」的
+「重新整理」（直接打 `/api/me`，記憶體裡沒有 access token → 401 → 換票），斷言**換票的回應是 200**；兩個突變都在這一行紅。
+**要證明「還登入著」，看換票或一個要認證的請求的回應，不要看畫面。**
+
 ---
 
 ## 7. 踩過的技術坑（節錄，完整版在各計畫文件）
@@ -875,6 +888,8 @@ app 的 `queryClient` 預設 `staleTime` 60 秒、快取會持久化，reload �
 | `tsBuildInfoFile` | 要放在**被 gitignore 蓋到的目錄**（這個 repo 是 `./node_modules/.tmp/`）。`tsconfig.e2e.json` 原本指向 `./e2e_modules/.tmp/`，於是那個 build cache 一直被 git 追蹤，每跑一次 typecheck 就多一個 modified |
 | 改了後端的 request/response schema | **一定要 `npm run gen:api` 重新產生 `frontend/src/api/schema.d.ts`**，而**本機沒有任何東西會提醒你**。**連 docstring 也算**——端點的說明文字會進 OpenAPI 的 `description`。2026-10 連續三次漏（安全補強、改吃的時間各改了一段 docstring 沒重新產生，都是下一個分支才補上）：**任何動到 `app/api/routes/*.py` 或 `app/schemas/*.py` 的 commit 都重新產生一次**。唯一的守衛是 CI 的 `contract` job（它起後端、重新產生、`git diff --exit-code`）。P3-B 計畫二 Task 8 加了 `FoodCreateRequest.is_global` 卻沒重新產生，backend / frontend / e2e 三個 job 全過，只有 contract 紅 |
 | react-router 的路由順序 | **依片段具體程度排名，不依宣告順序** —— 跟 FastAPI 完全不是同一種機制。`/foods/:id` 排在 `/foods/new` 前面，`/foods/new` 仍然命中靜態路徑（用 `matchRoutes` 實測過） |
+| 換票失敗之後的畫面 | **不會切回登入畫面**。`refresh.ts` 收到 401 清掉 token 與 query 快取，但 `App` 的 `loggedIn` 是開頁時讀一次 localStorage 的 `useState`，只有「我的」的登出按鈕會把它設回 false；之後每個請求都失敗，畫面停在原地，重新整理才會落到登入。e2e 要證明「還登入著」看 `/api/auth/refresh` 的回應（帳號設定 Task 12） |
+| e2e 開一次性連結 | `/join#…`、`/reset-password#…` 的碼只在第一次 render 讀。同一個 page 再 `goto` 一條只有 `#` 後面不同的連結，瀏覽器不重新載入、畫面停在上一條的結果——**每條連結開新的 context**。登出之後的登入也不換網址：登出前在 `/me`，登入後就在「我的」，不是總覽 |
 
 ---
 
@@ -1308,6 +1323,63 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
 - **小字灰色的區塊標題**：`ui.module.css` 的 `:where(.screen h2), :where(.sectionTitle)` 一條規則；不在 `.screen` 裡的
   總覽「今天」、「今日餐點」「今日補劑」在 h2 上加 `ui.sectionTitle`，各自的模組只管 margin。字重統一 600（總覽原本吃 h2 預設的 bold）。
 - **次要按鈕**：`ui.module.css` 的 `.secondary`，跟 `:where(.screen button)` 寫在同一條規則；補劑的打卡／取消用它。
+
+### 帳號與目標設定
+
+每日目標、改名稱、改密碼、管理員的重設密碼連結（規格 `docs/superpowers/specs/2026-10-08-account-settings-design.md`、
+計畫 `docs/superpowers/plans/2026-10-08-account-settings.md`，計畫的「執行中發現的差異」記了實作跟計畫不一樣的地方）。
+
+**機制摘要：**
+
+- **`PUT /api/targets/today`**：「今天」由後端用 `today_in_timezone(user.timezone)` 算（前端不算今天）。今天生效的那一筆
+  如果**今天才開始** → 原地改（同一個 id）；**更早開始** → 先把它的 `effective_to` 設成今天、flush，再插 `[今天, 原本的結束日)`
+  （過去的日子維持舊的分母）；**沒有** → 插一筆，結束日是下一筆未來期間的開始日（沒有就開放式）。四個鍵都必填、`null`＝不設定、
+  值 > 0。撞上 `ex_user_targets_no_overlap` → 整筆 rollback、`409 TARGET_CONFLICT`。前端讀目前的目標用 `stats/daily` 的
+  `target`，存完失效 `dailyStats` 與 `rangeStatsAll`。
+- **`POST /api/me/password`**：先比字串（新＝目前 → `422 PASSWORD_UNCHANGED`，不跑 Argon2），再查**登入的限速器**（鍵是這個帳號的
+  email，跟登入共用每 email 5 次／60 秒），Argon2 在執行緒池。錯誤**一律 422 不用 401**——`client.ts` 對 401 會換票重送，錯的
+  密碼會被驗兩次。成功：同一個交易改雜湊、撤銷還沒用的重設連結、`revoke_all_for_user`（它的 commit 就是這個交易的 commit），
+  **撤銷之後**才 `start_session` 開新的一條（順序反過來，這一條也會被撤銷）；前端 `changePassword()` 用 `setTokens` 換上。
+- **重設連結**的形狀跟邀請（`app/invites.py`）一樣：`app/password_resets.py`、`secrets.token_urlsafe(32)`、資料庫只存 SHA-256、
+  24 小時、條件式 `UPDATE … RETURNING` 兌換、部分唯一索引保證一個人最多一條活連結（產生新的會撤銷舊的）。**只給一般使用者**：
+  管理員帳號（含自己）→ `422 RESET_NOT_FOR_ADMINS`。公開的 `POST /api/auth/password-reset` 在 Argon2 之前先查碼，四種失效
+  （不存在、用過、過期、撤銷）同一個 `403 RESET_LINK_INVALID`；兌換 → 改雜湊 → `revoke_all_for_user`，**它的 commit 就是重設
+  交易的 commit**，中間不要加 commit（有測試：兌換之後、撤銷之前失敗 → 密碼沒變、連結沒用掉）。成功回 204、不自動登入，清掉那個
+  email 的登入失敗計數。
+- **稽核紀錄**：產生連結、用連結重設、改密碼各寫一行 INFO（只有 id，不寫碼、密碼、email）。`app/main.py` 讓 `app.*` 的 INFO
+  真的輸出（uvicorn 的預設設定只替 `uvicorn.*` 掛 handler）：`docker compose logs api | grep -E "修改了密碼|產生了使用者|用重設連結"`。
+
+**新的東西在哪裡：**
+
+- 後端：`app/password_resets.py`、`app/models/password_reset.py`、`migrations/versions/0016_create_password_reset_tokens.py`、
+  `app/api/routes/admin_users.py`（`GET /api/admin/users`、`POST /api/admin/users/{id}/password-reset`）、`auth.py`
+  （`password-reset-status`、`password-reset`）、`me.py`（`POST /api/me/password`）、`targets.py`（`PUT /api/targets/today`）；
+  `MIN_PASSWORD_LENGTH`／`MAX_PASSWORD_LENGTH` 搬到 `app/security/password.py`（`app/cli.py` 從那裡 import）。
+- 前端：「我的」的 `components/AccountCard`（名字、email、行內改名稱、「修改密碼」連結）、`TargetsCard`、`AccountsAdmin`（管理員）；
+  畫面 `screens/Targets.tsx`（`/me/targets`）、`ChangePassword.tsx`（`/me/password`）、`ResetPassword.tsx`（沒登入的
+  `/reset-password#<碼>`，已登入打開是說明頁）；API 層 `api/targets.ts`、`admin-users.ts`、`password-reset.ts`；
+  `lib/link-token.ts`（`#` 後面的碼，`/join` 共用）、`lib/targets.ts`（四個欄位的標籤、單位、上限）、`lib/decimal.ts` 的 `checkTargetInput`。
+- e2e：`e2e/account-settings.spec.ts`（目標、改密碼、重設連結三條）、`e2e/new-account.ts`（`newAccount()`：用 API 邀請＋註冊開一個
+  新帳號；`loginAs()`）。**會改密碼或目標的 e2e 一律自己開帳號**，不要動 `kenny.demo@example.com`、`e2e.member@example.com`。
+
+**已知限制：**
+
+1. **改密碼與重設之後，其他裝置的 access token 最多還能用 15 分鐘**（§8.1 的既有缺口：access token 不查資料庫）。要的是
+   「再也換不到新票」，不是「立刻斷線」。
+2. **「其他裝置」指其他瀏覽器。** 同一個瀏覽器的其他分頁共用 localStorage，之後換票會直接用新的票。極少見的競態：另一個分頁
+   剛好在改密碼的那一刻**用舊票換票** → 401 → 清掉 localStorage → 這個瀏覽器（包括剛改完密碼的那個分頁）也被登出，再登入一次就好。
+3. 公開的兩個重設端點**不限速**（同 `invite-status`）：碼是 256 位元，無效的碼在 Argon2 之前就回 403。
+4. **管理員帳號不能用重設連結**；管理員忘記密碼仍要 SSH 跑 `create-admin`（知道密碼的話用「修改密碼」）。
+5. 「所有帳號」看不到「這個人有沒有一條還沒用的連結」；再產生一次，舊的就失效。
+6. 「所有帳號」**沒有分頁也沒有搜尋**。正式環境只有個位數帳號沒差；**dev 資料庫會一直長**——每次跑 e2e 都會開新帳號
+   （邀請、好友、帳號設定的 spec），從來不刪（2026-10-08 已經一百多個）。管理員的「我的」因此很長，`account-settings.spec.ts`
+   在那一頁量每一顆按鈕的觸控高度，帳號越多越慢；按鈕要用完整的可及名稱「產生重設密碼連結：{名字}（{email}）」找。
+7. **`/reset-password`（與 `/join`）的同分頁限制**：碼只在第一次 render 讀。在同一個分頁把網址換成只有 `#` 後面不同的另一條連結，
+   瀏覽器不重新載入，畫面停在上一條連結的結果；重新整理或開新分頁就好。
+8. 目標只能「從今天起」：不能設未來的期間、不能編 `label`；新端點不收 0，舊的 `POST`／`PATCH /api/targets` 仍收 0。
+9. 兩台裝置同時存目標 → 後到的 409「目標剛被另一台裝置改過，請重新整理再試」，重存一次就好（第二次走原地改）。
+10. `app.*` 的 INFO 現在會輸出。之前沒有任何 `app.*` 的 `logger.info`，所以目前只多了上面三種稽核紀錄。
+11. 「所有帳號」的清單跟「邀請朋友」一樣會進離線快取（只在管理員的裝置上；`staleTime: 0`，線上時每次重抓）。
 
 ---
 

@@ -85,7 +85,47 @@
    `_new_period_end(db, user_id, today, current)`，**兩條路（有目前的期間／沒有）都能用同一個接縫**造出撞期，
    而「有目前的期間」那條還能驗證「關閉也一起 rollback」。
 
-（執行中發現的差異，照實補在這裡。）
+### 執行中發現的差異
+
+2. **`MIN_PASSWORD_LENGTH` 的「只有一個定義」測試（Task 1）。** 規格 §7.1 與本計畫寫的是
+   `app.cli.MIN_PASSWORD_LENGTH is app.security.password.MIN_PASSWORD_LENGTH`——**這個斷言沒有鑑別力**：CPython 快取
+   -5～256 的小整數，`app/cli.py` 自己再寫一行 `MIN_PASSWORD_LENGTH = 8` 也是同一個物件，實測那個突變下 `is` 照樣成立。
+   改成兩段：值相等（`== 8`），再用 `ast` 讀 `app/cli.py` 的原始碼——名字不能出現在任何賦值的左邊、必須出現在
+   `from app.security.password import …` 裡（`tests/test_password_reset_model.py`）。
+3. **`app` logger 的 INFO（Task 3）。** 寫法照計畫：`app/main.py` 在模組層（import 時，不是 lifespan）把 `app` logger 設成
+   INFO、沒有 handler 才掛一個 `StreamHandler`，格式模仿 uvicorn（`INFO:     app.api.routes.me: …`），`propagate` 不關。
+   要知道的副作用：只有 import `app.main` 的行程才有這個設定——`app/cli.py` 不 import 它（CLI 本來也只寫 WARNING，
+   沒有差別）；以後如果有人替 root 掛 handler（例如 uvicorn 的 `--log-config`），每一行稽核紀錄會印兩次。
+   實測 dev 容器：`docker compose logs api` 看得到三種稽核紀錄，各一行。改密碼那一行的全文是
+   「使用者 {id} 修改了密碼，所有其他 session 已撤銷」（規格 §3.2 只寫了前半句；測試與 grep 都只比前半句）。
+4. **`ChangePassword` 成功之後的版面（Task 9）。** 計畫把 `role="status"` 與「回我的」一起包在 `<div>` 裡，連結要自己給
+   44px。實作把「回我的」放在 `.screen` 正下方（`<p role="status">` 仍然包在 `<div>` 裡），直接吃 `ui.module.css` 的
+   `.screen > a`（44px）——不用寫第三份「44px 的連結」，也就不用抽 `.linkTarget`。
+5. **`AccountsAdmin`（Task 10）比計畫多三種狀態。**
+   - **等 `useMe` 也回來才畫清單**：計畫的 `filter((user) => user.id !== me?.id)` 在 `useMe` 還沒回來時 `me` 是
+     `undefined`，什麼都濾不掉——自己的那一列會先出現一下、再被濾掉。清單回來、`me` 還沒回來時顯示「載入中…」。
+   - **清單載入失敗**：`role="alert"`「無法載入帳號清單」（計畫沒寫，原本會是一個空白的卡片）。
+   - **沒有其他帳號**：「還沒有其他帳號」。
+   - `Created` 不存 `userId`（沒有地方用得到）。
+6. **`/reset-password` 的同分頁限制（Task 11）。** 碼在第一次 render 時從 `window.location.hash` 讀一次
+   （`useState` 的初始值）。在**同一個分頁**把網址換成只有 `#` 後面不同的另一條連結，瀏覽器不重新載入、app 也不重新讀，
+   畫面停在上一條連結的結果（例如「已經失效」）。`/join` 的 `Join` 一模一樣。重新整理或開新分頁就好；e2e 一律開新的
+   context 打開連結。沒有修：要修得監聽 `hashchange` 並重設整個狀態機，兩個畫面一起改，不值得。
+7. **e2e（Task 12）：計畫的改密碼那條有兩處跟現況不符，其中一處是假綠燈。**
+   - **「`pageA.reload()` 之後新票沒存好或被撤銷了，會掉回登入畫面」不成立。** 換票 401 時 `refresh.ts` 清掉 token 與快取，
+     但 `App` 的 `loggedIn` 只在開頁時讀一次 localStorage，畫面**不會**切回登入；「修改密碼」「我的」的標題照樣畫得出來，
+     「我的」的資料又可能來自離線快取、根本不發請求。實測：照計畫只看標題，「後端 `start_session` 搬到
+     `revoke_all_for_user` 之前」與「前端 `changePassword()` 不 `setTokens`」兩個突變**都是綠的**（handover §6 第 18 種）。
+     改成：reload 之前先 `waitForResponse("/api/auth/refresh")`，reload → 點「我的」→ 點「重新整理」（直接打 `/api/me`，
+     記憶體裡沒有 access token → 401 → 換票），斷言換票的回應是 **200**。兩個突變都在這一行紅（`Received: 401`）。
+   - **登出再用新密碼登入之後是「我的」，不是總覽**：登出不換網址，登入之後回到原本的 `/me`。改成等「我的」標題與帳號卡片上的 email。
+   - 目標那條的突變（`Targets.tsx` 不失效 `dailyStats`）紅在**「我的」的每日目標卡片**（存完回到「我的」那一刻），
+     比計畫預測的總覽早一步——同一個原因（`staleTime` 60 秒，回到「我的」不重抓）。
+   - 其他突變照計畫的預測紅：`reset_password` 不撤銷 → `replay` 那行（200 ≠ 401）；`ResetPassword.tsx` 不 `replaceState`
+     → `hash` 那行。
+   - 名稱一律 `exact: true`（「新密碼」⊂「再輸入一次新密碼」、「密碼」⊂「目前的密碼」、「重設密碼」⊂「重設密碼連結」、
+     「重設密碼連結」⊂ 每一顆「產生重設密碼連結：…」的可及名稱）；每次換頁之後先等只有新頁面才有的東西
+     （點「總覽」之後等「總覽」標題、產生連結之後等「給 {名字} 的重設密碼連結」、「去登入」之後等「登入」按鈕）。
 
 ## 檔案結構
 
