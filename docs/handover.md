@@ -1290,12 +1290,24 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
 同一個分支順手補了三個從來沒改版過的畫面（規格 §8，純樣式與標記，可及名稱、testid、主要區塊的 DOM 順序都沒動）：
 
 - **登入**：跟建立帳號一樣包 `ui.module.css` 的 `.screen`（h1 在卡片外、表單是卡片、標籤在上的整列輸入框、主要按鈕、
-  錯誤用危險色）。`.app-auth` 的上方留白是 `clamp(var(--space-6), 10vh, 120px)`——用 vh 不用 media query，斷點只寫在 `layout.ts`。建立帳號頁（`/join`）也套用同一個留白。
-- **飲食頁營養素**：`MacroBar` 一列＝名稱在左、`實際 / 目標`＋百分比在右（等寬數字），下面一條 `<progress>`，跟總覽
-  「今天熱量」同樣是 `ratioOf()` 的比例、`Math.min(ratio, 1)` 夾滿格；「未設定」或目標是 0 不畫條。沒有目標時的 `<dl>` 也排成一列一項。
+  錯誤用危險色）。`.app-auth` 的上方內距是 `clamp(var(--space-6), 10vh, 120px)`——用 vh 不用 media query，斷點只寫在 `layout.ts`；
+  標題上緣離視窗頂端還要再加 h1 自己的 `margin-top: var(--space-3)`（`ui.module.css` 的 `:where(.screen h1)`，`.screen` 是 flex
+  不會跟內距合併），所以實際是 clamp＋12px。建立帳號頁（`/join`）也套用同一個留白。
+- **飲食頁營養素**：`MacroBar` 一列＝名稱在左、`實際 / 目標`＋百分比在右（等寬數字），下面一條進度條。進度條是
+  `components/RatioProgress`，跟總覽「今天熱量」同一個元件：吃 `ratioOf()` 的比例、`Math.min(ratio, 1)` 夾滿格、比例是 null
+  （「未設定」或目標是 0）不畫，間距由呼叫端的 className 給。沒有目標時的 `<dl>` 也排成一列一項，列的排版直接用
+  `MacroBar.module.css` 的 `.row`／`.line`／`.label`（MacroBar 自己的「第一列不留上內距」在 `.bar` 上，`<dl>` 上面有說明，第一列要留）。
 - **今日餐點卡片**：上傳照片改成「加照片」那種虛線框標籤＋相機圖示，`<input type=file>` 視覺上藏起來但仍可用鍵盤對焦
-  （名稱仍是「上傳照片」）；項目沒有項目符號、份量灰色小字；合計靠右粗體；縮圖最寬 240px。「今日餐點」「今日補劑」改成
-  總覽「今天」那種小字灰色的區塊標題，補劑的打卡／取消是 44px 的外框按鈕。
+  （名稱仍是「上傳照片」），上傳中停用並顯示「上傳中…」；項目沒有項目符號、份量灰色小字；合計靠右粗體；縮圖最寬 240px。
+  「今日餐點」「今日補劑」改成總覽「今天」那種小字灰色的區塊標題，補劑的打卡／取消是 44px 的外框按鈕。
+
+事後的審查把這次複製貼上的幾段收成共用的（畫面逐像素沒變）：
+
+- **選照片的按鈕**：記一餐、編輯這一餐、今日餐點卡片、AI 估算面板都用 `components/PhotoPickerButton`（標籤＋相機圖示＋
+  緊接在後的隱藏 input、對焦外框、停用時淡掉）。AI 面板是 `variant="accent"`；各處的 `id`／`accept`／`capture`／名稱照舊。
+- **小字灰色的區塊標題**：`ui.module.css` 的 `:where(.screen h2), :where(.sectionTitle)` 一條規則；不在 `.screen` 裡的
+  總覽「今天」、「今日餐點」「今日補劑」在 h2 上加 `ui.sectionTitle`，各自的模組只管 margin。字重統一 600（總覽原本吃 h2 預設的 bold）。
+- **次要按鈕**：`ui.module.css` 的 `.secondary`，跟 `:where(.screen button)` 寫在同一條規則；補劑的打卡／取消用它。
 
 ---
 

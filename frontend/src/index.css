@@ -147,7 +147,9 @@ a {
    上方留白跟著視窗高度走：表單貼著視窗頂端看起來像版面壞掉，電腦版的視窗
    又高、內容只有一張小卡片。用 vh 不用 media query——斷點只寫在
    lib/layout.ts（電腦版版面規格 §2），未登入的畫面也沒有 app-desktop 可看。
-   不做垂直置中：錯誤訊息出現時整張卡片會跟著往上跳。 */
+   不做垂直置中：錯誤訊息出現時整張卡片會跟著往上跳。
+   標題離視窗頂端＝這裡的內距＋h1 自己的 margin-top（ui.module.css 的
+   :where(.screen h1)，12px；.screen 是 flex，不會跟這裡的內距合併）。 */
 .app-auth {
 	box-sizing: border-box;
 	max-width: 400px;
