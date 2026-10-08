@@ -8,7 +8,6 @@ import { queryKeys } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { Today } from "../src/screens/Today";
-import { setDesktop } from "../src/test/media";
 import { json, mockApiByPath as mockApi } from "./helpers/mock-api";
 
 // 需要 MemoryRouter：P3-C Task 2 在「今日補劑」區塊加了一個連到
@@ -292,69 +291,66 @@ function expectOrder(...elements: HTMLElement[]) {
 }
 
 describe("飲食頁的電腦版兩欄（電腦版版面規格 §4）", () => {
-	// 電腦版靠 grid-template-areas 把補劑擺到左欄下方，DOM 順序不能跟著換——
-	// 手機版就是照 DOM 往下排的。這條在改版前後都該是綠的；它守的是「改完之後
-	// 手機版的順序沒變」，以及 Today 沒有偷偷依寬度換 DOM 順序。
-	it.each([false, true])(
-		"營養素 → 今日餐點 → 今日補劑 的順序不因版面改變（電腦版＝%s）",
-		async (desktop) => {
-			setDesktop(desktop);
-			mockApi({
-				"/api/stats/daily": () => json(STATS_WITH_TARGET),
-				"/api/supplements/today": () =>
-					json([
-						{
-							plan_id: 1,
-							supplement_id: 7,
-							supplement_name: "魚油",
-							dose: "1.00",
-							time_of_day: "morning",
-							done: false,
-							intake_id: null,
-						},
-					]),
-				"/api/meals": () =>
-					json([
-						{
-							id: 12,
-							eaten_at: "2026-09-15T19:00:00+08:00",
-							meal_type: "dinner",
-							note: null,
-							photo_path: null,
-							items: [
-								{
-									id: 1,
-									food_id: 3,
-									food_name: "滷肉飯",
-									portion_id: null,
-									quantity: "200.00",
-									quantity_g: "200.00",
-									kcal: "440.00",
-									protein_g: "13.00",
-									fat_g: "14.00",
-									carb_g: "44.00",
-								},
-							],
-							kcal: "440.00",
-							protein_g: "13.00",
-							fat_g: "14.00",
-							carb_g: "44.00",
-						},
-					]),
-			});
+	// 電腦版靠 Today.module.css 的 grid-template-areas 把補劑擺到左欄下方，
+	// DOM 順序不能跟著換——手機版與螢幕閱讀器都是照 DOM 往下讀的。這條守的是
+	// 手機版（也就是 DOM）的順序；Today 本身不看寬度，所以不用分電腦版、手機版
+	// 各跑一次。電腦版的左右擺放是 CSS，jsdom 量不到，在 e2e/desktop-layout.spec.ts。
+	it("營養素 → 今日餐點 → 今日補劑 的 DOM 順序", async () => {
+		mockApi({
+			"/api/stats/daily": () => json(STATS_WITH_TARGET),
+			"/api/supplements/today": () =>
+				json([
+					{
+						plan_id: 1,
+						supplement_id: 7,
+						supplement_name: "魚油",
+						dose: "1.00",
+						time_of_day: "morning",
+						done: false,
+						intake_id: null,
+					},
+				]),
+			"/api/meals": () =>
+				json([
+					{
+						id: 12,
+						eaten_at: "2026-09-15T19:00:00+08:00",
+						meal_type: "dinner",
+						note: null,
+						photo_path: null,
+						items: [
+							{
+								id: 1,
+								food_id: 3,
+								food_name: "滷肉飯",
+								portion_id: null,
+								quantity: "200.00",
+								quantity_g: "200.00",
+								kcal: "440.00",
+								protein_g: "13.00",
+								fat_g: "14.00",
+								carb_g: "44.00",
+							},
+						],
+						kcal: "440.00",
+						protein_g: "13.00",
+						fat_g: "14.00",
+						carb_g: "44.00",
+					},
+				]),
+		});
 
-			render(wrap(<Today />));
+		render(wrap(<Today />));
 
-			const kcal = await screen.findByTestId("macro-kcal");
-			const meal = await screen.findByText(/滷肉飯/);
-			const supplement = await screen.findByText("魚油");
-			expectOrder(
-				kcal,
-				screen.getByRole("heading", { name: "今日餐點" }),
-				meal,
-				screen.getByRole("heading", { name: "今日補劑" }),
-				supplement,
-			);
-		},
-	);
+		const kcal = await screen.findByTestId("macro-kcal");
+		const meal = await screen.findByText(/滷肉飯/);
+		const supplement = await screen.findByText("魚油");
+		expectOrder(
+			kcal,
+			screen.getByRole("heading", { name: "今日餐點" }),
+			meal,
+			screen.getByRole("heading", { name: "今日補劑" }),
+			supplement,
+		);
+	});
 });

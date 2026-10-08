@@ -362,7 +362,8 @@ describe("App 的電腦版外框（電腦版版面規格 §3）", () => {
 		).toBe("新增紀錄");
 		const main = screen.getByRole("main");
 		expect(main.closest(".app-desktop")).not.toBeNull();
-		expect(main).not.toHaveClass("app-main-no-tab-bar");
+		// 底部留白（沒有分頁列）與內容寬度是 CSS，jsdom 量不到——幾何在
+		// e2e/desktop-layout.spec.ts。這裡只測結構。
 		expect(main.querySelector(".app-content-wide")).not.toBeNull();
 		// 只有一個導覽（不是 SideNav＋TabBar 都在）。
 		expect(
