@@ -2,8 +2,8 @@
 
 **專案：** nutrition-tracker —— 飲食紀錄系統
 **Repo：** https://github.com/kennywang1001/nutrition-tracker（公開）
-**狀態：** 後端完成並可部署、session 撤銷已完成；介面改版第一階段、食物的一份、修改與刪除已記錄的餐點、AI 估算的前端已合併；介面改版第二階段已實作於 `feat/ui-phase2`；帳號與目標設定已實作於 `feat/account-settings`
-**文件產出日：** 2026-09-11（session 撤銷完成後更新於 2026-09-12；§2 的數字更新於 2026-10-08）
+**狀態：** 後端完成並可部署、session 撤銷已完成；介面改版第一階段、食物的一份、修改與刪除已記錄的餐點、AI 估算的前端已合併；介面改版第二階段已實作於 `feat/ui-phase2`；帳號與目標設定已實作於 `feat/account-settings`；報表看其他月份與匯出資料已實作於 `feat/reports-month-export`
+**文件產出日：** 2026-09-11（session 撤銷完成後更新於 2026-09-12；§2 的數字更新於 2026-10-09）
 
 ---
 
@@ -28,8 +28,8 @@
 
 | 項目 | 數字 |
 |---|---|
-| 端點 | **75**（OpenAPI 的 operation 數，2026-10-08） |
-| 測試 | 後端 **921**（`pytest -q` 全綠）；前端 722 條（vitest，印出來的數字是兩倍，見 §7）；e2e 41 條（Playwright） |
+| 端點 | **78**（OpenAPI 的 operation 數，跟 `grep -c "@router\." app/api/routes/*.py` 的加總一樣；2026-10-09） |
+| 測試 | 後端 **980**（`pytest -q -W error` 全綠，約 2 分 20 秒）；前端 `Test Files 138`、`Tests 1633`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **44** 條（Playwright）。2026-10-09 在 `feat/reports-month-export` 量的 |
 | 覆蓋率 | 96%（2026-09 量的，之後沒再量） |
 | 資料表 | 16（+ `alembic_version`） |
 | Migration | `0001` ~ `0016` |
@@ -54,6 +54,7 @@
 | 部署改成 CI 做映像 | CI 的 `publish` job 把兩個映像推到 GHCR（多架構）；NAS 上 `sudo ./scripts/deploy.sh` 拉映像、備份、migration、等 healthy、起不來自動退版（規格 `docs/superpowers/specs/2026-10-08-image-deploy-design.md`；部署手冊「二、更新」） | ✅（`publish` job 要等第一次 push 到 master 才驗得到） |
 | 電腦版版面 | 寬度 ≥ 1024px 左側導覽＋總覽／報表／飲食兩欄；比較窄維持手機版、內容最寬 600px 置中。只改版面，不動後端（規格 `docs/superpowers/specs/2026-10-08-desktop-layout-design.md`、計畫 `docs/superpowers/plans/2026-10-08-desktop-layout.md`；見第 10 節「電腦版版面」） | ✅（`feat/desktop-layout`） |
 | 帳號與目標設定 | 「我的」的每日目標卡片＋`/me/targets`（**從今天起**生效，過去的日子維持原本的目標）；帳號卡片的行內「修改名稱」；`/me/password` 改密碼（**其他裝置全部登出**，這台換一組新票繼續用）；管理員在「所有帳號」替一般使用者產生**重設密碼連結**（24 小時、只能用一次、不給管理員帳號），朋友打開 `/reset-password#<碼>` 設新密碼——取代 SSH 跑 `create-user`（規格 `docs/superpowers/specs/2026-10-08-account-settings-design.md`、計畫 `docs/superpowers/plans/2026-10-08-account-settings.md`；見第 10 節「帳號與目標設定」） | ✅（`feat/account-settings`） |
+| 報表看其他月份、匯出資料 | 報表頂端的「‹ 上個月｜月份｜下個月 ›」（`?month=YYYY-MM`，沒有就是這個月；**這個月是哪個月由後端決定**）；「我的」的匯出資料：餐點／花費／補劑各下載一個 CSV（UTF-8＋BOM、帳號時區、分塊串流、每人每分鐘 6 次）。沒有 migration（規格 `docs/superpowers/specs/2026-10-09-reports-month-export-design.md`、計畫 `docs/superpowers/plans/2026-10-09-reports-month-export.md`；見第 10 節「報表看其他月份與匯出資料」） | ✅（`feat/reports-month-export`） |
 | UI 改版 第三階段 | 社群（P7）：第一步「開帳號的路」、第二步「好友關係」已完成。按讚、留言、通知刻意沒做——等真的用過再說 | 🟡 |
 
 > **P4 早於 P2/P3 完成是刻意的，但當初的理由有瑕疵。**
@@ -82,6 +83,8 @@ app/
   nutrition.py         營養素換算（每 100 單位的「100」只存在這裡）
   stats.py             統計彙總核心（SQL 分桶）
   ratelimit.py         登入速率限制（記憶體，單容器）
+  csv_export.py        CSV 的唯一寫法：BOM、RFC 4180 的引號、公式字元（儲存格的型別決定怎麼寫）
+  export.py            匯出的三支分塊 async generator（餐點、花費、補劑；keyset 分塊）
   food_visibility.py   食物/份量的分層可見性（共用）
   password_resets.py   重設密碼連結的規則：產生、雜湊、還能用、兌換、撤銷某人的活連結（同 invites.py 的形狀）
   cli.py               create-admin / create-user / cleanup-photos / cleanup-sessions
@@ -877,6 +880,24 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
   看到的是重抓之前的畫面，把表單直接綁在 query 上的突變是綠的。等一下（`act(() => settle())`）
   才紅。
 
+### 報表看其他月份與匯出資料：第 30／49、38 種又一次，另外兩條假綠燈
+
+沒有編新的號碼：前兩條是既有的種類，後兩條是執行時量到的，機制都不新。
+
+- **第 30、49 種（共用 session 讀到記憶體裡的舊值）只在有人握著那個物件時成立。** 匯出餐點項目的查詢原本加了
+  `populate_existing`，理由是「工廠留在 identity map 的 `Decimal("150")` 會蓋住資料庫的 `150.00`」。突變（拿掉它）
+  **存活**：identity map 是弱參照，工廠建的 `MealItem` 沒有人握著就被回收了，查詢拿到的本來就是資料庫的值。
+  那一行沒有任何測試看得到它的效果，刪了。之後有測試握著物件再去比匯出的份量，要在測試裡 `refresh`。
+- **第 38 種（同一段文字在畫面上出現兩次）。** 報表的摘要裡「999.00」出現兩次（總計、佔 100% 的那個分類），
+  「2026年11月」也是兩次（月份標籤、清單的 `<h2>`）。總額比 `toHaveTextContent("總計 999.00")`，月份標籤用
+  `within(group).getByRole("status")`。
+- **只測了一個方向（突變存活才發現）。** 匯出卡片的規格是「再按一次先清掉上一次的訊息」，計畫的測試只有「成功把上一次的
+  **錯誤**清掉」；「開頭不清掉上一次的『已下載』」這個突變全綠——先成功、再失敗時畫面上同時寫著「已下載 …」與
+  「下載失敗」。補了一條反方向的測試（`tests/export-card.test.tsx`「先成功、再按一次失敗」）。
+  **「清掉上一次的狀態」有幾種狀態，就要有幾個方向的測試。**
+- **測試全綠，但那個工具本來就不看型別。** 計畫的 e2e spec 在 Playwright 底下三條全綠，卻過不了 `tsc -b`
+  （8 個 `TS18048`，見 §7「Playwright 不做型別檢查」），而且就這樣進了一個 commit（`ac2372b`，下一個 `81f0df7` 修掉）。
+
 ---
 
 ## 7. 踩過的技術坑（節錄，完整版在各計畫文件）
@@ -907,7 +928,7 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
 | 改依賴後 | **必須重建映像**，`--reload` 只換程式碼不換依賴 |
 | **新增 migration 後** | 也**必須重建映像**。`Dockerfile` 是 `COPY . .`，migration 檔案是烤進映像的，不是掛載的 —— dev 的原始碼掛載只有 `./app`。症狀是 `relation "xxx" does not exist`，而檔案明明在 repo 裡 |
 | `ruff format` | **CI 只跑 `ruff check .`，沒有跑 `ruff format --check`**。這個 repo 有既有的格式差異，跑 `ruff format` 會把一堆跟你這次改動無關的行重排進 diff 裡。不要在不相干的改動裡順手跑它 |
-| vitest 的 `Test Files` / `Tests` | **都是實際數量的兩倍**。`vite.config.ts` 的 `typecheck.include` 跟一般 include 蓋到同一組檔案，每個檔案被跑兩次（一次執行、一次交給 tsc）。算數字時要除以二 |
+| vitest 的 `Test Files` / `Tests` | **`Test Files` 是實際檔案數的兩倍；`Tests` 大約兩倍、但不是剛好兩倍。** `vite.config.ts` 的 `typecheck.include` 跟一般 include 蓋到同一組檔案，每個檔案被跑兩次（一次執行、一次交給 tsc）；`it.each` 在執行那次展開成好幾條、在型別那次算一條，所以 `Tests` 除以二不是整數也不是真的條數。**文件裡一律寫 vitest 印出來的數字**（§2），不要自己換算 |
 | 只 grep `Tests ` 那一行 | **會漏掉整個檔案沒編譯成功**。一個 transform parse error 讓 vitest 同時印出 `FAIL tests/x.test.tsx (0 test)` 與 `Tests 8 passed (8)`。驗證要一起 grep `FAIL` 與 `Unhandled` |
 | render 期例外的錯誤訊息 | `Failed Tests` 第一層顯示的是 `TestingLibraryElementError`（找不到元素），**真正的 `TypeError` 在要往下翻的 `Unhandled Errors` 區塊** —— 元件樹整個沒畫出來，沒有 error boundary 接住 |
 | biome `noAriaHiddenOnFocusable` 對 SVG `<text>` | **誤判**。SVG 的 `<text>` 不能聚焦，但規則把它當成可聚焦元素；趨勢圖日期軸的文字是裝飾（柱子的 aria-label 已經有日期），用 `biome-ignore` 加理由（`TrendChart.tsx`） |
@@ -922,6 +943,11 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
 | 換票失敗之後的畫面 | ~~不會切回登入畫面~~——**帳號設定審查 I2 之後會**：`clearTokens()` 真的清掉儲存時通知 `auth/store.ts` 的 `onLoggedOut` 訂閱者，`App` 切回登入畫面；不是自己按的登出（換票 401、另一個分頁登出）顯示「已被登出，請重新登入」。**登入的方向仍然不是 store 驅動的**（`Join` 要先換網址再 `onSuccess`）。e2e 要證明「還登入著」仍然先看 `/api/auth/refresh` 的回應——401、429、5xx、斷線裡只有 401 會登出 |
 | Web Locks 不能重入 | 握著 `token-refresh` 的程式碼裡再呼叫 `refreshTokens()`（它會要同一把鎖）會永遠等不到自己放手。改密碼握著鎖送請求，access token 過期時會先 401、要換票——所以 `withTokenLock` 交給 task 一個「已經在鎖裡」的換票函式，`apiFetch` 的第三個參數收它（帳號設定審查 M6） |
 | e2e 開一次性連結 | `/join#…`、`/reset-password#…` 的碼只在第一次 render 讀。同一個 page 再 `goto` 一條只有 `#` 後面不同的連結，瀏覽器不重新載入、畫面停在上一條的結果——**每條連結開新的 context**。登出之後的登入也不換網址：登出前在 `/me`，登入後就在「我的」，不是總覽 |
+| **突變成無限迴圈** | keyset 分塊的 `(時間, id) > 游標` 改成 `>=`：generator 永遠查到同一塊，**測試不會紅，只會跑不完**（寫匯出的計畫時實際卡住過）。突變工具要有 timeout；被砍掉之後記得把檔案改回來、`.py` 還要 `touch` |
+| `StreamingResponse` 與 `yield` 依賴 | **FastAPI ≥ 0.118** 才是「回應送完才收尾」；更早、或 `Depends(get_db, scope="function")`，session 在第一塊送出之前就關了（`pyproject.toml` 的下限、`tests/test_export.py` 的收尾順序測試）。另外 `httpx.ASGITransport` **把整個回應收完才交回來**：「一塊一塊吐」在端點層看不到，分塊要直接測 generator |
+| 原始碼裡看不見的 BOM（U+FEFF） | 計畫的程式碼片段把 BOM 直接寫成字面值：複製、重打、經過工具轉手都可能**無聲地掉了**，而那幾條測試守的正是「BOM 還在」。一律寫成跳脫字元——Python `"\ufeff".encode()`、TypeScript `"\uFEFF"`；`grep -n $'\xef\xbb\xbf'` 找得到漏網的。**反方向也會**：寫這一列的時候，編輯工具把打進去的跳脫字元換成了真的 BOM——動到它的檔案，commit 前數一次位元組 |
+| **Playwright 不做型別檢查** | spec 用 esbuild 轉譯就跑，型別錯了照樣綠；`npm run typecheck`（`tsc -b`，含 `tsconfig.e2e.json`）才看得到。`noUncheckedIndexedAccess` 底下從陣列解構出來的每一個都多一個 `undefined`，只擋 `null` 的 `if` 縮不掉（`reports-export.spec.ts` 第一版就這樣進了一個 commit）。**加了 spec 之後 typecheck 要重跑**，而且檢查與 `git commit` 之間用 `&&` 串，不要用 `;` |
+| Playwright 抓下載 | `page.waitForEvent("download")` 抓得到 `<a download href="blob:…">` 的點擊；`suggestedFilename()` 就是 `download` 屬性——沒有它時檔名是一串 UUID。內容用 `download.path()` 讀成位元組再比（BOM 要比位元組，轉成字串就看不到了） |
 
 ---
 
@@ -1464,6 +1490,89 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
     例外：這個分頁正開著一條**碼還在網址列**的邀請或重設連結（登入還沒確認過，例如連不上）→ 直接變成那條連結的表單。
 15. **已登入打開邀請或重設連結時連不上**：確認不了登入，碼會一直留在網址列（歷史紀錄、截圖），說明頁上「網址列上的
     已經拿掉了」那句話這時不準。恢復連線後重新整理就會確認並拿掉。寧可這樣，也不在不確定的時候把碼拿掉。
+
+### 報表看其他月份與匯出資料
+
+報表可以一個月一個月往回看；「我的」可以把自己全部的餐點、花費、補劑各下載成一個 CSV（規格
+`docs/superpowers/specs/2026-10-09-reports-month-export-design.md`、計畫
+`docs/superpowers/plans/2026-10-09-reports-month-export.md`，計畫的「執行中發現的差異」記了實作跟計畫不一樣的地方）。
+**沒有 migration、沒有新的環境變數；後端的月份參數一行都沒改**（本來就收 `month`，只補了兩條測試）。
+
+**機制摘要：**
+
+- **看哪個月寫在網址上**：`/reports?month=YYYY-MM`，**沒有參數＝這個月**。重新整理、上一頁、書籤都免費得到；平常的網址不變，
+  跨月之後自動是新的月份。
+- **「這個月」是後端說的**：報表畫面永遠掛著不帶月份的 `useExpenseSummary(null)`，它回應裡的 `month` 就是
+  `this_month_in_timezone(user.timezone)`。「下個月」到它為止、網址上的月份有沒有超過，都跟它比；**還不知道的時候不猜**
+  （沒帶月份 → 兩顆都停用；帶了合法的月份 → 照樣顯示那個月、只有「上個月」能按）。
+- **月份的加減是純字串運算**（`lib/months.ts`：`isYearMonth`、`shiftMonth`、`formatYearMonth`），**不用 `Date`**——同
+  `lib/civil-date.ts`，有原始碼掃描測試守著。範圍是後端收的 `1900-01`～`2099-12`，推出去 `shiftMonth` 回 `null`、按鈕停用。
+- **網址上的月份不能用就當成沒帶，並用 `replace` 清掉**：格式不對 → 馬上（不拿它問後端，會 422）；比這個月後面 → 等後端
+  回了這個月才清。**剛好等於這個月不清**（「這個月」可能來自離線快取、是舊的）；**從過去翻回這個月時把參數拿掉**
+  （不寫 `?month=這個月`，才會跟著後端走）。換月份是 push：上一頁回到剛才看的月份。
+- **`keepPreviousData` 在 `useExpenses`／`useExpenseSummary` 裡**；換月份時摘要與清單的內容層各自 `aria-busy`＋`.stale`
+  （同趨勢頁），月份標籤與標題已經是新的月份。query key 沒動（`["expenses","list"｜"summary", month]`），改刪之後失效
+  `expensesAll` 本來就打到每一個月；**離線持久化沒改**。
+- **之後有別的畫面要「看某個月／某一天」，照這個形狀：網址放明確的值、沒有值就讓後端決定、界線問後端。**
+- **CSV 的寫法只有一份**（`app/csv_export.py`）：`csv.writer`、CRLF、開頭一個 BOM。**儲存格的型別決定怎麼寫**——
+  `str` 是文字（第一個字元是 `=` `+` `-` `@` Tab CR LF 的前面加 `'`，擋 CSV injection）、`Decimal` 是數字
+  （`format(v, "f")`，不加）、`None` 是空的。呼叫端不用記哪幾欄要擋。**之後任何要輸出 CSV 的地方都走它。**
+- **分塊是 keyset 查詢**（`app/export.py` 的三支 async generator）：`(時間, id) > 上一塊最後一列`＋`LIMIT`（一塊 500 列，
+  餐點一塊 200 餐、項目用 `meal_id IN (…)` 一次拿），交給 `StreamingResponse`。**不用 OFFSET**：越後面越慢，而且匯出到一半
+  有人新增一筆，後面每一列都會位移。**游標帶 `id`**：同一個時刻的列不會被跳過或重複。不是 server-side cursor——不握著一個
+  跨整個下載的 cursor，在測試的 savepoint 夾具裡也照常運作。
+- **串流用的就是 `Depends(get_db)` 那個 session，靠 FastAPI ≥ 0.118 活到串流結束**（`yield` 依賴在回應送完之後才收尾）。
+  `Depends(get_db, scope="function")` 會在第一塊之前就把它關掉；`pyproject.toml` 的下限是 `fastapi>=0.118`
+  （lock 是 0.141.1），`tests/test_export.py` 有一條測試守著「塊、塊、收尾」的順序。
+- **匯出的內容**：只有呼叫者自己的（`user_id` 一律來自 token，沒有任何「誰的資料」參數）；時間是帳號時區的當地時間；
+  餐點的營養素用 `item_join_query()`＋`scale()`（跟 `GET /api/meals` 同一份實作）；`photo_path` 根本沒有被 SELECT；
+  內部 id 只有「餐點編號」。分類、餐別是中文標籤（後端自己一份對照表，測試守「每個 enum 成員都有標籤」）。
+- **限速**：`export_rate_limiter`（`KeyedRateLimiter`），**每人每分鐘 6 次、三個端點共用**，鍵是 `str(user.id)`，`hit` 在
+  handler 裡、碰資料庫之前；超過是 `429 TOO_MANY_EXPORTS`＋`Retry-After`。記憶體、單容器（同 §5.2）。
+- **前端下載**：`<a href>` 帶不了 `Authorization`（同照片），所以 `api/client.ts` 的 `fetchDownload()`（跟 `apiFetch`、
+  `fetchPhotoBlob` 共用 `fetchWithAuthRetry`）先拿成 `Blob`、檔名讀 `Content-Disposition`；`lib/save-file.ts` 的 `saveBlob()`
+  用暫時的 object URL＋`<a download>` 存檔、40 秒後才 `revokeObjectURL`。**iOS 主畫面模式**（`navigator.standalone === true`
+  而且 `canShare({ files })`）改用 `navigator.share`——桌面與 Android 也有 `canShare`，但那裡下載是好的，不分享。
+  檔名的日期是後端算的（前端不算今天）。卡片不用 `useMutation`（離線時暫停、恢復連線才送的下載會在人離開之後自己冒出來），
+  下載中三顆一起停用。
+
+**新的東西在哪裡：**
+
+- 後端：`app/csv_export.py`、`app/export.py`、`app/api/routes/export.py`（`GET /api/export/{meals,expenses,supplements}.csv`，
+  在 `app/main.py` 註冊）、`app/ratelimit.py` 的 `export_rate_limiter`（`tests/conftest.py` 的 autouse fixture 每個測試重置）；
+  測試 `tests/test_csv_export.py`、`tests/test_export.py`、`tests/test_expenses_summary.py`（月界線的兩條釘子）。
+- 前端：`lib/months.ts`；`screens/Expenses.tsx`／`Expenses.module.css`（月份切換，`role="group"`「切換月份」、月份是
+  `role="status"`；內容層 `data-testid="month-summary"`、`month-list`）；`api/expenses.ts`（`keepPreviousData`）；
+  `api/client.ts` 的 `fetchDownload`；`lib/save-file.ts`；`api/export.ts`（`EXPORT_KINDS`、`downloadExport`）；
+  `components/ExportCard.tsx`（`data-testid="export-card"`，放在「好友」之後、管理員的卡片之前）。測試
+  `tests/months.test.ts`、`expenses-month.test.tsx`、`offline.test.tsx`、`save-file.test.ts`、`export-card.test.tsx`、
+  `client.test.ts`、`me.test.tsx`。
+- e2e：`e2e/reports-export.spec.ts`（換月份、匯出花費、手機尺寸三條）。**會記帳的兩條各自開新帳號**——總額與 CSV 的列數
+  才是確定的（示範帳號同時有別的 worker 在記帳）。
+
+**已知限制**（規格 §8 的 17 點，編號相同）：
+
+1. **清單最多 100 筆**（既有落差）：報表的總額算整個月，清單被 `limit` 截斷時兩者對不起來，而且沒有訊號。看過去的月份一樣。
+2. 一次只能翻一個月，沒有月份選擇器；翻到這個月為止。
+3. 記帳永遠記在「現在」：過去的月份不能補記、不能改一筆的日期。
+4. **還不知道這個月是哪個月時**（離線而且沒有快取、或那個請求失敗），沒帶月份的報表不能翻。
+5. **跨月的那一刻**：快取裡的「這個月」還是上個月時（`staleTime` 60 秒內、或剛從離線快取還原），標籤與「下個月」的界線
+   是舊的，重抓回來才更正。
+6. 手打未來的月份：前端在知道這個月之前會先照它問一次後端（空的結果），然後退回這個月。
+7. **離線時看得到的過去月份只有最近看過的**：5 分鐘沒有畫面在用的 query 會被 TanStack 回收（預設 `gcTime`），下一次寫入
+   就從 localStorage 拿掉。照預設值推論的，沒有另外量。
+8. 匯出是「全部歷史、一種一個檔」：沒有日期範圍；餐點的檔沒有餐費，花費的檔沒有餐點編號，兩個檔之間沒有可以對起來的鍵。
+9. **後端的記憶體是平的，瀏覽器的不是**：整份 CSV 先變成一個 Blob 才存檔。
+10. **匯出期間握著一條資料庫連線**（連線池 5＋10）；下載很慢的用戶端會一直佔著。
+11. **不是同一個時間點的快照**：每一塊是分開的查詢，匯出途中新增、刪除、改時間的列可能有、可能沒有、可能出現兩次。
+12. 串流開始之後才出錯（例如資料庫斷線）：狀態碼已經是 200，只能中斷連線。前端顯示「下載失敗」；用 curl 的人會拿到
+    被截斷的檔案。**沒有測試。**
+13. 食物、補劑的名稱與品牌是**現在的**（名稱不版本化）；營養素與份量是當時的。
+14. 分類與餐別的中文標籤前後端各一份；加分類時兩邊都要改（後端有測試會紅，前端是編譯錯誤）。
+15. 開頭是公式字元的文字，匯出之後前面多一個看得到的 `'`。全形的 `＝＋－＠` 不擋。
+16. **iOS 主畫面模式沒有實機驗證，到交接時仍然沒有**：分享面板與退回的 `<a download>` 兩條路都只有單元測試
+    （守的是「走哪一條路」）。**要請使用者在 iPhone 上從主畫面打開、實際按一次「花費」**，結果補在這裡。
+17. 匯出的限速在記憶體裡，重啟歸零（同其他限速器）。
 
 ---
 

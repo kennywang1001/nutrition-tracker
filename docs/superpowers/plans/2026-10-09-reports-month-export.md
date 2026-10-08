@@ -107,7 +107,69 @@
 
 ### 執行中發現的差異
 
-（執行時填：實作跟計畫不一樣的地方、預測錯的紅燈、新踩到的「綠燈說謊」。）
+執行於 2026-10-09。Task 1～5 與 Task 6～9 是兩個不同的執行者做的；Task 1～5 的三條是交接時留下的說明，
+照原話記，沒有更細的紀錄。
+
+**Task 1～5**
+
+1. **`app/csv_export.py` 的 BOM 寫成 `"\ufeff".encode()`**，不是計畫第 1535 行那個看不見的字面值（`UTF8_BOM = "<U+FEFF>".encode()`）。
+   行為一樣；看不見的字元經過工具轉手可能無聲地掉了，跳脫字元不會。
+2. **Task 3 的紅燈不是只有一種原因。** 計畫預測新測試紅在「找不到『切換月份』那一組」；實際上紅的原因是混的，
+   不只是缺那一組。
+3. **Task 1、2 多跑了計畫沒列的突變。**
+
+**Task 6（`fetchDownload` 與 `saveBlob`）**
+
+4. **測試裡的三個 BOM 字面值都寫成 `"\uFEFF"`**（`tests/client.test.ts`、`tests/save-file.test.ts`，以及 Task 7 的
+   `tests/export-card.test.tsx`）。程式碼是用腳本從這份計畫的 code block 抽出來的（位元組照抄，只把 U+FEFF 換成跳脫字元），
+   不是重打。
+5. **紅燈跟預測差一點**：執行期如預測（`fetchDownload is not a function` 6 條、`save-file.test.ts` 找不到模組）；
+   但型別那一次印的是 `Type Errors  no errors`，沒有報「沒有這個 export」。為什麼沒印，沒有追
+   （同一輪有一個檔案 transform 失敗，可能有關）。
+6. 綠燈 `Tests 38 passed`、整套 `Test Files 136`／`Tests 1611`，跟計畫一樣。**計畫列的 12 個突變全部跑了、全部紅**，
+   紅的就是表格寫的那幾條。
+
+**Task 7（匯出資料卡片）**
+
+7. Step 1 的 grep 如預期（只有三行 `exact` 的「補劑」標題）。紅燈如預測（`me.test.tsx` 既有 16 條綠、新的一條紅；
+   `export-card.test.tsx` 找不到元件）。綠燈 `Tests 52 passed`。
+8. **計畫列的 7 個突變全部紅**，紅的條數跟表格一樣。**另外加跑兩個：**
+   - `saveBlob(blob, filename, "text/plain")` → 三條「按『…』」紅。
+   - **`handleDownload` 開頭不 `setDone(null)` → 存活。** 規格 §4.2 是「再按一次先清掉上一次的訊息」，計畫的測試只守
+     「成功清掉上一次的錯誤」；先成功、再失敗時「已下載 …」會留在「下載失敗」旁邊。**補了一條測試**
+     （「先成功、再按一次失敗：上一次的『已下載』不會留在錯誤旁邊」），補完之後這個突變紅。實作沒有改。
+9. 因此整套是 `Test Files 138`／**`Tests 1633`**（計畫預期 1631；多的 2 是那一條在執行與型別各算一次），
+   `export-card` 是 20 不是 18。
+
+**Task 8（e2e）**
+
+10. **spec 要先過 `biome check --write`**：計畫的程式碼有兩處超過行寬（`new RegExp(…)` 那一行、
+    `expectTouchTargets(…, "月份切換（上個月）")`），biome 把它們折成多行。只有排版。
+11. **計畫的 spec 過不了 `npm run typecheck`**（`tsc -b` 含 `tsconfig.e2e.json`）：`const [left, label, right] = boxes;`
+    在 `noUncheckedIndexedAccess` 底下每一個都是 `… | null | undefined`，`=== null` 的 `if` 縮不掉 `undefined`，8 個 `TS18048`。
+    Playwright 不做型別檢查，所以三條測試照樣綠。改成三個各自 `await …boundingBox()`；斷言沒動。
+    **這個錯進了一個 commit**：`ac2372b` 的指令把 typecheck 與 `git commit` 用 `;` 串在一起，typecheck 失敗沒有擋住；
+    `81f0df7` 修掉（不 amend）。計畫「整份跑過一次、typecheck 乾淨」的說法對這個檔案不成立。
+12. **計畫列的 7 個突變全部紅**，訊息跟表格一樣（`/reports` 對 `?month=`、`?month=2026-10` 對 `/reports$`、
+    `toHaveCount(0)` 收到 1、「總計 0.00」收到「總計 123.45…」、檔名是一串 UUID、三個元素不在一列、「餐點」的高度 21）。
+    第 11 點改完之後重跑了碰到那一段的三個（`goTo` 永遠不寫月份、`display: block`、拿掉 `ui.secondary`），一樣紅。
+13. **整套 e2e `44 passed`**，預設 worker 數連跑兩次都綠（第 11 點修正前兩次、修正後又兩次）。
+    `docker compose logs api --since 30m | grep 重用` 沒有任何一行。
+14. Step 6 看畫面是用 Playwright 截圖看的（1280 與 390、淺色與深色；報表的這個月與上個月、匯出卡片、「已下載 …」那一行），
+    沒有需要改的地方。
+
+**Task 9（文件）**
+
+15. 量到的數字：後端 **980 passed**（140 秒）、`@router.` 加總 **78**（等於 OpenAPI 的 operation 數）、前端
+    `Test Files 138`／`Tests 1633`、e2e **44**。`ruff check .`、`mypy app` 乾淨。
+16. **多改了 `docs/deployment.md`**（Step 4 說只有三個檔案）：「各版本的升級備註」加一條——沒有 migration、沒有新的環境變數、
+    可以直接退版。
+17. **寫這一節的時候，同一個坑反方向又踩一次**：在文件裡打「反斜線 u feff」這六個字元，編輯工具把它**換成了真的 U+FEFF**
+    （上面第 1、4 點與 handover §7 那一列，共四處）——文字看起來變成一對空的引號。commit 之前
+    `grep -c $'\xef\xbb\xbf'` 的數字比 HEAD 多才發現，用腳本改回六個字元（腳本裡用 `chr(0xFEFF)`，不寫跳脫）。
+    這份計畫現在剛好四個字面值，都是原本就在 code block 裡的那四個。**跳脫字元與字面值，兩個方向都會被工具轉掉；
+    動到它的檔案，commit 前數一次位元組。**
+18. **完成條件裡「請使用者在 iPhone 上實際按一次」還沒有做**，handover 的已知限制第 16 點照實寫著。
 
 ## 檔案結構
 
