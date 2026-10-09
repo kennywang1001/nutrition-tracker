@@ -220,31 +220,12 @@ test("駁回 → 提案者在食物庫的編輯歷史看得到駁回理由", asy
 	// 完全獨立的 browser context——那本來就打不到，兩個 context 的
 	// queryClient 是各自獨立的模組實例）。
 	//
-	// **實測發現、清 localStorage 是必要的：** 第一次寫這條測試時沒清，
-	// reload 之後畫面只看得到最原始那一筆「已通過」，駁回那一筆完全不見——
-	// 不是後端沒寫進去（直接打 API 重現過：propose → reject 之後
-	// `GET /api/foods/{id}/revisions` 確實回兩筆，駁回的那筆帶著
-	// reject_reason），是 `PersistQueryClientProvider`（`api/persist.ts`）
-	// 把 member 自己在 propose 之前那次瀏覽（只有 1 筆）持久化到
-	// localStorage 過，`queryClient` 的 `staleTime` 是 60 秒（`api/queries.ts`），
-	// reload restore 回來的那份快照在 60 秒視窗內被當成「還新鮮」，不會
-	// 自動重打 API——member 自己的 propose 雖然有 invalidate，但那次的新狀態
-	// 有沒有趕在 reload 前被節流寫回 localStorage 純粹是時間賽跑，不可靠。
-	// 清掉這個 key，reload 之後就沒有快照可以 restore，保證是一次真的
-	// 打 API 拿最新資料。
-	//
-	// **不能整個 `localStorage.clear()`：** refresh token 也放在
-	// localStorage（`auth/store.ts` 的 `REFRESH_TOKEN_KEY`），清掉它會讓
-	// reload 之後掉回登入畫面，這條測試就整個垮了。只清這一個 key。
-	//
-	// 字面值 `"nutrition-tracker-offline-cache"` 抄自
-	// `frontend/src/api/persist.ts` 的 `OFFLINE_CACHE_STORAGE_KEY`——
-	// `page.evaluate()` 在瀏覽器 context 裡執行，沒有簡單的路可以直接
-	// import 那個模組（它會一路帶進 `@tanstack/query-async-storage-persister`
-	// 等瀏覽器 API 依賴），兩邊改了其中一個要記得改另一個。
-	await memberPage.evaluate(() => {
-		localStorage.removeItem("nutrition-tracker-offline-cache");
-	});
+	// reload 之前**不清**離線快取（以前要清，handover §6 第 17 種）：member 在 propose 之前
+	// 瀏覽過這個食物的編輯歷史（只有 1 筆），那一份會被 `PersistQueryClientProvider`
+	// （`api/persist.ts`）寫進 localStorage；以前 reload 還原回來的快照在 60 秒的
+	// `staleTime` 裡算新鮮、不重打 API，畫面上就只有最原始那一筆「已通過」，駁回的那一筆
+	// 不見——紅綠取決於節流寫入的時間賽跑。現在還原回來的 query 一律重抓
+	// （`serializePersistedClient`），下面等到的是伺服器的那兩筆，不管快照是哪一份。
 	await memberPage.reload();
 	await expect(memberPage.getByText("已駁回", { exact: true })).toBeVisible();
 	await expect(memberPage.getByText(rejectReason)).toBeVisible();
