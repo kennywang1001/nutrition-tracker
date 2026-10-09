@@ -17,7 +17,9 @@ export type FriendDay = components["schemas"]["FriendDayResponse"];
 
 const JSON_HEADERS = { "content-type": "application/json" };
 
-async function required<T>(
+/** 這些端點成功時一定有 body；`apiFetch` 的型別為了 204 多一個 `null`，在這裡收掉。
+ *  社群與通知的 API 層（`social.ts`、`notifications.ts`）共用。 */
+export async function required<T>(
 	response: Promise<T | null>,
 	what: string,
 ): Promise<T> {

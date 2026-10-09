@@ -897,6 +897,80 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 		);
 	});
 
+	it("讚、留言、通知都不會被寫進 localStorage", async () => {
+		// 別人的名字與留言不留在這台裝置上（社群規格 D21）：對方可以解除好友、可以刪掉
+		// 留言，那之後不該還能離線翻出來。做法同上面三條：先讓 query 真的進到 client，
+		// 證明 persist 跑過一輪（stats 在），再用 queryKeys 產生的 key 做深比對（第 23 種）；
+		// 另外直接看原始字串裡沒有留言與通知的文字——key 換了命名空間也躲不掉。
+		mockApi({
+			"/api/stats/daily": () => json(STATS_WITH_TARGET),
+			"/api/supplements/today": () => json([]),
+			"/api/meals": () => json([]),
+		});
+		const client = newTestClient();
+		render(wrap(client, <Today />));
+		await screen.findByText(/1800/);
+
+		const socialKeys = [
+			queryKeys.socialMeal(1),
+			queryKeys.notifications,
+			queryKeys.unreadCount,
+		];
+		client.setQueryData(queryKeys.socialMeal(1), {
+			meal: { id: 1, user: { id: 2, display_name: "鮑伯" } },
+			is_mine: false,
+			likes: [{ display_name: "只在名單上的小卡", is_me: false }],
+			comments: [
+				{
+					id: 31,
+					display_name: "鮑伯",
+					is_me: false,
+					can_delete: false,
+					body: "這則留言不該留在這台裝置上",
+					created_at: "2026-10-06T05:00:00Z",
+				},
+			],
+			comments_truncated: false,
+		});
+		client.setQueryData(queryKeys.notifications, [
+			{
+				id: 41,
+				type: "comment",
+				actor_name: "鮑伯",
+				meal: { id: 1, meal_type: "lunch", eaten_at: "2026-10-06T04:00:00Z" },
+				comment_preview: "通知裡的預覽也不該留下來",
+				created_at: "2026-10-06T05:00:00Z",
+				is_read: false,
+			},
+		]);
+		client.setQueryData(queryKeys.unreadCount, 3);
+		const socialKeysJson = socialKeys.map((key) => JSON.stringify(key));
+
+		await waitFor(
+			() => {
+				const raw = localStorage.getItem(OFFLINE_CACHE_STORAGE_KEY);
+				expect(raw).not.toBeNull();
+				const persisted: { queryKey: unknown[] }[] = JSON.parse(raw ?? "{}")
+					.clientState.queries;
+				expect(
+					persisted.some(
+						(query) =>
+							Array.isArray(query.queryKey) && query.queryKey[0] === "stats",
+					),
+				).toBe(true);
+				expect(
+					persisted
+						.map((query) => JSON.stringify(query.queryKey))
+						.filter((key) => socialKeysJson.includes(key)),
+				).toEqual([]);
+				expect(raw).not.toContain("這則留言不該留在這台裝置上");
+				expect(raw).not.toContain("只在名單上的小卡");
+				expect(raw).not.toContain("通知裡的預覽也不該留下來");
+			},
+			{ timeout: 3000 },
+		);
+	});
+
 	it("過去月份的報表也進離線快取：離線重新載入停在那個月，資料還在", async () => {
 		// 報表可以看其他月份之後（報表月份與匯出規格 §2）：`["expenses", "list" | "summary",
 		// "2026-08"]` 跟這個月的 key（月份是 null）走同一條持久化規則。這一條在 persist.ts

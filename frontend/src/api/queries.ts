@@ -113,6 +113,15 @@ export const queryKeys = {
 	friendPhotoThumb: (friendId: number, mealId: number) =>
 		["friend-photo", friendId, mealId, "thumb"] as const,
 	friendPhotos: (friendId: number) => ["friend-photo", friendId] as const,
+	/** 所有好友的所有「某一天」（`friendDay` 的前綴）：讚的數字寫回快取、留言數
+	 *  標成過期時用——那時手上只有餐的 id，不知道是哪個好友的哪一天。 */
+	friendDays: ["friends", "day"] as const,
+	/** 社群（讚、留言、通知）一律在 `"social"` 底下：`persist.ts` 靠第一個字不把它們
+	 *  存進 localStorage——別人的名字與留言不留在這台裝置上（社群規格 D21）。
+	 *  新的社群 query 也放這裡；要離線可用的請放別的命名空間。 */
+	socialMeal: (mealId: number) => ["social", "meal", mealId] as const,
+	notifications: ["social", "notifications"] as const,
+	unreadCount: ["social", "unread"] as const,
 	/** 某個月的花費清單。`month` 是 `"YYYY-MM"`，或 `null` 代表
 	 *  「讓後端決定這個月」（後端省略 `?month=` 時走
 	 *  `this_month_in_timezone(user.timezone)`）——跟 `dailyStats` 不帶日期
