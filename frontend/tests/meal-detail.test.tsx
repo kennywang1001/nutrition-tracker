@@ -201,8 +201,12 @@ describe("餐點頁：好友的餐", () => {
 				.getAllByRole("listitem")
 				.map((item) => item.textContent),
 		).toEqual(["排骨便當 · 350 g620 kcal", "無糖綠茶 · 500 ml0 kcal"]);
+		// 合計的熱量自己一列（跟上面每一項的熱量對齊在右邊），三大營養素在下面一列。
+		expect(screen.getByText("合計").parentElement).toHaveTextContent(
+			/^合計620 kcal$/,
+		);
 		expect(
-			screen.getByText("合計 620 kcal · 蛋白質 25.5 g · 脂肪 20 g · 碳水 80 g"),
+			screen.getByText("蛋白質 25.5 g · 脂肪 20 g · 碳水 80 g"),
 		).toBeInTheDocument();
 		// 名單上是我的那一個寫「我」，不寫我的名字。
 		expect(screen.getByText("小卡、我 說讚")).toBeInTheDocument();
@@ -680,6 +684,10 @@ describe("餐點頁：看不到、載入失敗", () => {
 		expect(
 			screen.getByRole("heading", { level: 1, name: "餐點" }),
 		).toBeInTheDocument();
+		// 為什麼看不到：後端刻意不分是哪一種，所以兩種都說。
+		expect(
+			screen.getByText("它可能已經刪除了，或是設成只有本人看得到。"),
+		).toBeInTheDocument();
 		expect(screen.getByRole("link", { name: "回飲食" })).toHaveAttribute(
 			"href",
 			"/diet",
@@ -736,6 +744,95 @@ describe("餐點頁：看不到、載入失敗", () => {
 
 		expect(await screen.findByText("看不到這一餐")).toBeInTheDocument();
 		expect(screen.queryByText("刪除失敗，請再試一次")).not.toBeInTheDocument();
+	});
+
+	it("送留言時那一餐已經看不到了（404）：整頁換成「看不到這一餐」，不是留著舊的內容", async () => {
+		// 開著這一頁的時候被解除好友、或對方把這一餐關起來：留言框回 404。只在框底下
+		// 寫一句錯誤的話，上面還是那一餐與所有人的留言——要等回到這個視窗才會換掉。
+		let gone = false;
+		const page = setup(
+			() =>
+				gone
+					? failure(404, "MEAL_NOT_FOUND", "找不到該餐點")
+					: json(socialMeal({ comments: THREE }, { comment_count: 3 })),
+			{
+				extra: [
+					{
+						method: "POST",
+						path: `${MEAL_URL}/comments`,
+						handler: () => {
+							gone = true;
+							return failure(404, "MEAL_NOT_FOUND", "找不到該餐點");
+						},
+					},
+				],
+			},
+		);
+		await userEvent.type(
+			await screen.findByRole("textbox", { name: "寫留言" }),
+			"好吃嗎{Enter}",
+		);
+
+		expect(await screen.findByText("看不到這一餐")).toBeInTheDocument();
+		expect(screen.queryByText("看起來不錯")).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole("textbox", { name: "寫留言" }),
+		).not.toBeInTheDocument();
+		expect(page.fetches()).toBe(2);
+	});
+
+	it("按讚時那一餐已經看不到了（404）：整頁換成「看不到這一餐」", async () => {
+		let gone = false;
+		const page = setup(
+			() =>
+				gone
+					? failure(404, "MEAL_NOT_FOUND", "找不到該餐點")
+					: json(socialMeal({ comments: THREE }, { comment_count: 3 })),
+			{
+				extra: [
+					{
+						method: "PUT",
+						path: `${MEAL_URL}/like`,
+						handler: () => {
+							gone = true;
+							return failure(404, "MEAL_NOT_FOUND", "找不到該餐點");
+						},
+					},
+				],
+			},
+		);
+		await userEvent.click(
+			await screen.findByRole("button", { name: "讚，鮑伯的午餐" }),
+		);
+
+		expect(await screen.findByText("看不到這一餐")).toBeInTheDocument();
+		expect(screen.queryByText("看起來不錯")).not.toBeInTheDocument();
+		expect(page.fetches()).toBe(2);
+	});
+
+	it("按讚失敗但不是 404（429）：這一餐不重抓，錯誤寫在按鈕下面", async () => {
+		const page = setup(
+			() => json(socialMeal({ comments: THREE }, { comment_count: 3 })),
+			{
+				extra: [
+					{
+						method: "PUT",
+						path: `${MEAL_URL}/like`,
+						handler: () =>
+							failure(429, "TOO_MANY_LIKES", "按得太快了，請稍後再試"),
+					},
+				],
+			},
+		);
+		await userEvent.click(
+			await screen.findByRole("button", { name: "讚，鮑伯的午餐" }),
+		);
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"按得太快了，請稍後再試",
+		);
+		expect(screen.getByText("看起來不錯")).toBeInTheDocument();
+		expect(page.fetches()).toBe(1);
 	});
 
 	it("500 而且沒有快取：「無法載入這一餐」", async () => {

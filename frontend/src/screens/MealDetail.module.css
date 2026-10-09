@@ -64,11 +64,17 @@
 	overflow-wrap: anywhere;
 }
 
-/* 縮圖最寬 360px：電腦版的內容區有 600px 寬，拉滿的話一張方形照片就佔掉整個視窗；
-   要看大圖點下去（ZoomablePhoto）。手機上卡片比它窄，就是滿版。 */
+/* 縮圖最寬 360px、固定 4:3（裁切置中）：直的照片照原比例放的話，手機上一張就佔滿
+   整個畫面，底下的項目與留言要捲一整頁才看得到。要看完整的點下去（ZoomablePhoto）。
+   手機上卡片比 360px 窄，就是滿版。 */
 .photo {
 	max-width: 360px;
 	margin-bottom: var(--space-2);
+}
+
+.photo img {
+	aspect-ratio: 4 / 3;
+	object-fit: cover;
 }
 
 .photo p {
@@ -104,12 +110,22 @@
 	font-variant-numeric: tabular-nums;
 }
 
-/* 合計：上面一條線跟項目分開。 */
+/* 合計：上面一條線跟項目分開；「合計」在左、熱量在右（跟每一項的熱量同一欄）。 */
 .total {
+	display: flex;
+	justify-content: space-between;
+	gap: var(--space-3);
 	padding-top: var(--space-2);
 	border-top: 1px solid var(--color-border);
-	font-size: 14px;
-	font-weight: 600;
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+}
+
+/* 三大營養素：附屬資訊，小一點、灰色。 */
+.macros {
+	margin-top: var(--space-1);
+	color: var(--color-text-muted);
+	font-size: 13px;
 	font-variant-numeric: tabular-nums;
 }
 
@@ -153,21 +169,15 @@
 	outline: none;
 }
 
-/* 看不到這一餐（404）。 */
+/* 看不到這一餐（404）。是一個狀態，不是使用者做錯了什麼：不用 ui.screen 給
+   role="alert" 的紅字。 */
 .goneTitle {
-	margin: var(--space-3) 0 var(--space-1);
+	color: var(--color-text);
 	font-weight: 600;
 }
 
 .goneWhy {
-	margin: 0 0 var(--space-2);
+	margin-top: var(--space-1);
 	color: var(--color-text-muted);
 	font-size: 14px;
-}
-
-.back {
-	display: inline-flex;
-	align-items: center;
-	min-height: 44px;
-	font-weight: 600;
 }

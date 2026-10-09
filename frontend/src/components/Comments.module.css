@@ -99,6 +99,11 @@
 	min-width: 0;
 }
 
+/* 超過字數：框也變紅，不只是下面那一行字。 */
+.row input[aria-invalid="true"] {
+	border-color: var(--color-danger);
+}
+
 .submit {
 	flex: none;
 }

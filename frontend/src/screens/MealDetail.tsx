@@ -56,17 +56,19 @@ export function MealDetail() {
 	const gone = query.error instanceof ApiError && query.error.status === 404;
 	if (gone || Number.isNaN(mealId)) {
 		return (
-			<section>
+			// ui.screen：標題的大小跟看得到的時候一樣；直接底下的連結長得像一顆按鈕
+			// （44px）——這一頁唯一能做的事就是回去。
+			<section className={ui.screen}>
 				<h1>餐點</h1>
-				<p role="alert" className={styles.goneTitle}>
-					看不到這一餐
-				</p>
-				<p className={styles.goneWhy}>
-					它可能已經刪除了，或是設成只有本人看得到。
-				</p>
-				<Link to="/diet" className={styles.back}>
-					回飲食
-				</Link>
+				<div>
+					<p role="alert" className={styles.goneTitle}>
+						看不到這一餐
+					</p>
+					<p className={styles.goneWhy}>
+						它可能已經刪除了，或是設成只有本人看得到。
+					</p>
+				</div>
+				<Link to="/diet">回飲食</Link>
 			</section>
 		);
 	}
@@ -132,10 +134,15 @@ export function MealDetail() {
 						</li>
 					))}
 				</ul>
+				{/* 合計的熱量在右邊，跟上面每一項的熱量同一欄；三大營養素另外一列
+				    （擠在同一列的話手機上會斷成兩行）。 */}
 				<p className={styles.total}>
-					合計 {formatMacro(meal.kcal)} kcal · 蛋白質{" "}
-					{formatMacro(meal.protein_g)} g · 脂肪 {formatMacro(meal.fat_g)} g ·
-					碳水 {formatMacro(meal.carb_g)} g
+					<span>合計</span>
+					<span>{formatMacro(meal.kcal)} kcal</span>
+				</p>
+				<p className={styles.macros}>
+					蛋白質 {formatMacro(meal.protein_g)} g · 脂肪{" "}
+					{formatMacro(meal.fat_g)} g · 碳水 {formatMacro(meal.carb_g)} g
 				</p>
 				{/* 讚：好友看到按鈕；主人不能對自己的餐按讚（後端 422），只看到數字。
 				    主人而且還沒有人按：整列不畫。會換行的 flex 列——LikeButton 失敗時的

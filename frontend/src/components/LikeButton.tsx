@@ -2,7 +2,12 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Heart } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { ApiError } from "../api/errors";
-import { afterLikeChange, type LikeState, setLike } from "../api/social";
+import {
+	afterLikeChange,
+	type LikeState,
+	refreshIfMealGone,
+	setLike,
+} from "../api/social";
 import styles from "./LikeButton.module.css";
 import ui from "./ui.module.css";
 
@@ -114,7 +119,12 @@ export function LikeButton({ mealId, label, count, liked }: Props) {
 		setHeld(
 			server === null ? null : { state: server, over: latestProps.current },
 		);
-		if (failure !== null) setError(describeError(failure.caught));
+		if (failure !== null) {
+			setError(describeError(failure.caught));
+			// 404 而且人就在那一餐的頁面上：讓那一頁重抓，整頁換成「看不到這一餐」。
+			// 在卡片上按的沒有那一頁，這一行不做事。
+			refreshIfMealGone(queryClient, mealId, failure.caught);
+		}
 	}
 
 	return (

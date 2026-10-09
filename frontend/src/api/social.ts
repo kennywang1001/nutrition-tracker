@@ -4,7 +4,7 @@ import {
 	useQuery,
 } from "@tanstack/react-query";
 import { apiFetch } from "./client";
-import { retryUnlessNotFound } from "./errors";
+import { ApiError, retryUnlessNotFound } from "./errors";
 import { type FriendDay, type FriendFeedPage, required } from "./friends";
 import { queryKeys } from "./queries";
 import type { components } from "./schema";
@@ -104,6 +104,21 @@ export function afterCommentChange(
 	void queryClient.invalidateQueries({ queryKey: queryKeys.friendDays });
 	void queryClient.invalidateQueries({ queryKey: queryKeys.meals });
 	return queryClient.invalidateQueries({
+		queryKey: queryKeys.socialMeal(mealId),
+	});
+}
+
+/** 讚或留言失敗之後：如果是 404，這一餐已經看不到了（剛被解除好友、對方把它關起來
+ *  或刪掉）——讓餐點頁重抓。正開著那一頁的話它會換成「看不到這一餐」，不是留著那一餐
+ *  與底下所有人的留言，等人回到這個視窗才換。沒有人掛著那一份（在動態的卡片上按的讚）
+ *  就只是標成過期，一個請求都不會多。 */
+export function refreshIfMealGone(
+	queryClient: QueryClient,
+	mealId: number,
+	caught: unknown,
+): void {
+	if (!(caught instanceof ApiError && caught.status === 404)) return;
+	void queryClient.invalidateQueries({
 		queryKey: queryKeys.socialMeal(mealId),
 	});
 }

@@ -5,6 +5,7 @@ import {
 	afterCommentChange,
 	COMMENT_MAX_LENGTH,
 	postComment,
+	refreshIfMealGone,
 } from "../api/social";
 import styles from "./Comments.module.css";
 import ui from "./ui.module.css";
@@ -74,6 +75,8 @@ export function CommentForm({ mealId }: { mealId: number }) {
 		} catch (caught) {
 			// 失敗：字留著，不用重打。
 			setError(describeError(caught));
+			// 404：餐點頁重抓，整頁換成「看不到這一餐」（這個表單跟著卸載）。
+			refreshIfMealGone(queryClient, mealId, caught);
 		} finally {
 			busy.current = false;
 			setPending(false);
