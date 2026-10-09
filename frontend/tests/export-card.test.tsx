@@ -175,6 +175,34 @@ describe("匯出資料", () => {
 		expect(card().queryByRole("alert")).not.toBeInTheDocument();
 	});
 
+	it("429 沒有 Retry-After（另一個匯出還在跑）：只顯示後端的訊息，不編一個秒數", async () => {
+		// 後端的「一個人同時一個匯出」不帶 Retry-After——前一個什麼時候結束它不知道。
+		mockApi([
+			{
+				method: "GET",
+				path: "/api/export/meals.csv",
+				handler: () =>
+					json(
+						{
+							error: {
+								code: "EXPORT_IN_PROGRESS",
+								message: "已經有一個匯出在進行，等它下載完再試",
+								details: {},
+							},
+						},
+						429,
+					),
+			},
+		]);
+		render(<ExportCard />);
+
+		await userEvent.click(card().getByRole("button", { name: "餐點" }));
+
+		const alert = await card().findByRole("alert");
+		expect(alert).toHaveTextContent(/^已經有一個匯出在進行，等它下載完再試$/);
+		expect(saveBlobMock).not.toHaveBeenCalled();
+	});
+
 	it("先成功、再按一次失敗：上一次的「已下載」不會留在錯誤旁邊", async () => {
 		// 429 那一條守的是「成功把上一次的錯誤清掉」；這一條是反方向——不清的話畫面上
 		// 同時寫著「已下載 …」與「下載失敗」，看不出這一次到底有沒有存到。

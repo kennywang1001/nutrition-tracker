@@ -100,22 +100,29 @@ class TooManyRequestsError(AppError):
     帶 `Retry-After` 標頭告訴呼叫端多久後可以再試。秒數用 `math.ceil` 無條件
     進位、且至少 1 秒：無條件捨去可能讓呼叫端在視窗真正重置「之前」就又送出
     下一次請求，那樣算出來的等待時間會比實際需要的短。
+
+    `retry_after_seconds=None`：**沒有說得準的秒數**——擋的不是「這段時間內太多次」，
+    而是「另一個還沒做完」（`InFlightLimiter`），那個什麼時候結束伺服器不知道。這時候
+    不帶 `Retry-After`（RFC 6585：429 **可以**帶，不是一定要），不編一個數字；前端沒收到
+    標頭就只顯示訊息、不顯示倒數（`ApiError.retryAfterSeconds` 是 `null`）。
     """
 
     def __init__(
         self,
         code: str,
         message: str,
-        retry_after_seconds: float,
+        retry_after_seconds: float | None,
         details: dict[str, Any] | None = None,
     ) -> None:
-        retry_after = max(1, math.ceil(retry_after_seconds))
+        retry_after = (
+            None if retry_after_seconds is None else max(1, math.ceil(retry_after_seconds))
+        )
         super().__init__(
             code,
             message,
             status.HTTP_429_TOO_MANY_REQUESTS,
             details,
-            headers={"Retry-After": str(retry_after)},
+            headers=None if retry_after is None else {"Retry-After": str(retry_after)},
         )
         self.retry_after_seconds = retry_after
 

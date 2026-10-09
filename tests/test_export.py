@@ -5,19 +5,30 @@
 在端點層看不到，那幾條直接測 `app/export.py` 的 generator。
 """
 
+import asyncio
 import csv
 import io
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 import pytest
+import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import event
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import delete, event, text
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.util import await_only
 
 from app.api.routes import export as export_routes
 from app.db import get_db
+from app.errors import TooManyRequestsError
 from app.export import (
     EXPENSE_CATEGORY_LABELS,
     MEAL_TYPE_LABELS,
@@ -30,8 +41,9 @@ from app.models.expense import ExpenseCategory
 from app.models.food import BaseUnit, FoodRevision
 from app.models.meal import MealType
 from app.models.user import User
-from app.ratelimit import EXPORT_LIMIT
+from app.ratelimit import EXPORT_LIMIT, InFlightLimiter
 from app.security.tokens import create_access_token
+from tests.conftest import TEST_DATABASE_URL
 from tests.factories import (
     create_expense,
     create_food,
@@ -497,6 +509,255 @@ async def test_the_database_session_stays_open_until_the_last_chunk(
     assert events == ["chunk", "chunk", "session-closed"]  # 標題、一塊資料，然後才收尾
 
 
+# ── 送的時候不握著資料庫連線 ──────────────────────────────────────────────────
+#
+# 讀得很慢、或根本不讀的用戶端，會讓伺服器卡在 ASGI 的 `send` 上（uvicorn 的寫入緩衝滿了
+# 就等）。那時候如果交易還開著，那條連線就一直「idle in transaction」地被佔著——限速只管
+# 「開始幾次」，幾個卡住的下載就能把連線池（5＋10）佔滿。所以這裡看的是 **`send` 的那一刻**。
+
+
+async def _just_send(message: dict[str, Any]) -> None:
+    return None
+
+
+def _on_the_wire(
+    on_send: Callable[[dict[str, Any]], Awaitable[None]] = _just_send,
+    *,
+    hang_up: asyncio.Event | None = None,
+) -> Any:
+    """包在 `app` 外面的一層 ASGI，站在 uvicorn 的位置上。
+
+    - 每一個要送出去的訊息（標頭、每一塊、結尾）先交給 `on_send`。
+    - 給了 `hang_up`：它被 set 的時候，app 收到 `http.disconnect`——用戶端斷線在 ASGI 裡
+      就是這個訊息，Starlette 收到之後取消還在串流的那個 task（用的是 anyio 的 cancel scope，
+      跟直接 `task.cancel()` 不一樣：在那個 scope 裡每一次 await 都會再被取消一次）。
+      斷線之後 app 沒送結尾就回來了；真的 uvicorn 這時候只是把連線關掉，httpx 的
+      `ASGITransport` 卻堅持回應要有結尾，所以這裡替它補一個——測試拿到的是斷在半路的內容。
+    """
+
+    async def asgi(scope: Any, receive: Any, send: Any) -> None:
+        asked = False
+        ended = False
+
+        async def spy_send(message: dict[str, Any]) -> None:
+            nonlocal ended
+            await on_send(message)
+            await send(message)
+            ended = _kind(message) == "end"
+
+        async def spy_receive() -> dict[str, Any]:
+            nonlocal asked
+            if hang_up is None or not asked:
+                asked = True  # GET 沒有 body：第一個訊息就是整個請求
+                return await receive()
+            await hang_up.wait()
+            return {"type": "http.disconnect"}
+
+        await app(scope, spy_receive, spy_send)
+        if hang_up is not None and hang_up.is_set() and not ended:
+            await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+    return asgi
+
+
+def _kind(message: dict[str, Any]) -> str:
+    """標頭／一塊內容／結尾。Starlette 的結尾是一個空的、`more_body=False` 的 body。"""
+    if message["type"] == "http.response.start":
+        return "start"
+    return "chunk" if message.get("more_body") else "end"
+
+
+@pytest.mark.parametrize(("path", "generator"), EXPORT_PATHS)
+async def test_no_transaction_is_open_whenever_the_response_is_being_sent(
+    client, db_session, monkeypatch, path, generator
+):
+    """共用交易的夾具看不到連線池，看的是它的前提：`send` 的時候 session 沒有開著的交易
+    （正式環境裡，交易結束＝連線還給池子；真的連線池在下一條測試）。"""
+    monkeypatch.setattr("app.export.EXPORT_CHUNK_ROWS", 2)
+    monkeypatch.setattr("app.export.EXPORT_CHUNK_MEALS", 2)
+    user = await create_user(db_session)
+    await _some_of_each(db_session, user, count=3)
+    user_id = user.id
+    seen: list[tuple[str, bool]] = []
+
+    async def on_send(message: dict[str, Any]) -> None:
+        seen.append((_kind(message), db_session.in_transaction()))
+
+    transport = ASGITransport(app=_on_the_wire(on_send))
+    async with AsyncClient(transport=transport, base_url="http://test") as watched:
+        response = await watched.get(path, headers=auth(user_id))
+
+    assert response.status_code == 200
+    assert len(_table(response.content)) == 1 + 3
+    # 標頭（認證那一次查詢開的交易）、標題列、兩塊資料、結尾（最後那一次「查不到東西」的查詢）。
+    assert seen == [
+        ("start", False),
+        ("chunk", False),
+        ("chunk", False),
+        ("chunk", False),
+        ("end", False),
+    ]
+
+
+@pytest_asyncio.fixture
+async def one_connection_pool(migrated_database: None, monkeypatch) -> AsyncIterator[AsyncEngine]:
+    """**真的連線池、而且只有一條連線**，接在正式的 `get_db` 後面（換掉的是 `SessionLocal`）。
+
+    `db_session` 夾具從頭到尾握著同一條連線，「還給池子」在那裡不存在。其餘跟 `app/db.py`
+    一樣（`pool_pre_ping`：每次借連線先 ping 一下）。
+    """
+    engine = create_async_engine(
+        TEST_DATABASE_URL, pool_pre_ping=True, pool_size=1, max_overflow=0, pool_timeout=0.5
+    )
+    monkeypatch.setattr("app.db.SessionLocal", async_sessionmaker(engine, expire_on_commit=False))
+    try:
+        yield engine
+    finally:
+        await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def committed_user(migrated_database: None) -> AsyncIterator[int]:
+    """**真的 commit 進資料庫**的使用者（三種資料各三筆）——別的連線才看得到。測試結束時
+    刪掉，其他的跟著 `ON DELETE CASCADE` 走。
+
+    用自己的 engine，不用被測的那個池子：那個池子漏了連線（這幾條測試紅的樣子）的時候，
+    這裡照樣清得掉，不會留一個使用者給後面的測試。
+    """
+    engine = create_async_engine(TEST_DATABASE_URL)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as setup:
+        user = await create_user(setup)
+        user_id = user.id
+        await _some_of_each(setup, user, count=3)
+    try:
+        yield user_id
+    finally:
+        async with sessions() as cleanup:
+            await cleanup.execute(delete(User).where(User.id == user_id))
+            await cleanup.commit()
+        await engine.dispose()
+
+
+@pytest.mark.parametrize(("path", "generator"), EXPORT_PATHS)
+async def test_the_connection_is_back_in_the_pool_whenever_the_response_is_being_sent(
+    one_connection_pool, committed_user, monkeypatch, path, generator
+):
+    monkeypatch.setattr("app.export.EXPORT_CHUNK_ROWS", 2)
+    monkeypatch.setattr("app.export.EXPORT_CHUNK_MEALS", 2)
+    engine = one_connection_pool
+    seen: list[tuple[str, int, bool]] = []  # （哪一種訊息, 借出去幾條, 這時候別人借不借得到）
+
+    async def on_send(message: dict[str, Any]) -> None:
+        checked_out = engine.pool.checkedout()
+        try:
+            # 池子只有一條：串流還握著它的話，這裡等到 pool_timeout 就放棄。
+            async with engine.connect() as other:
+                await other.execute(text("SELECT 1"))
+            borrowed = True
+        except PoolTimeoutError:
+            borrowed = False
+        seen.append((_kind(message), checked_out, borrowed))
+
+    transport = ASGITransport(app=_on_the_wire(on_send))
+    async with AsyncClient(transport=transport, base_url="http://test") as watched:
+        response = await watched.get(path, headers=auth(committed_user))
+
+    assert response.status_code == 200
+    # 每一塊都是重新借一條連線查的，而且三列都在：還了之後下一塊照樣讀得到。
+    assert len(_table(response.content)) == 1 + 3
+    assert seen == [
+        ("start", 0, True),
+        ("chunk", 0, True),
+        ("chunk", 0, True),
+        ("chunk", 0, True),
+        ("end", 0, True),
+    ]
+    assert engine.pool.checkedout() == 0
+
+
+async def _backend_pid(engine: AsyncEngine) -> int:
+    async with engine.connect() as connection:
+        return (await connection.execute(text("SELECT pg_backend_pid()"))).scalar_one()
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
+        pytest.param("_do_ping_w_event", id="checkout"),
+        pytest.param("do_execute", id="query"),
+        pytest.param("do_commit", id="commit"),
+    ],
+)
+async def test_a_disconnect_in_the_middle_of_a_database_step_does_not_cost_the_connection(
+    one_connection_pool, committed_user, monkeypatch, caplog, step
+):
+    """每一塊都重新借一次連線，所以斷線有機會落在「借」（pre-ping）、查詢、結束交易的任何
+    一步中間。被取消打斷的資料庫操作，SQLAlchemy 只能把那條連線作廢——而在被取消的 scope 裡
+    連關都關不掉（log 一個 `Exception terminating connection` 的 traceback）；落在「借」的
+    中間時更糟：連線一直記在「借出去了」，要等垃圾回收才回到池子。
+
+    所以那一步要做完：做完才輪到取消，還回去的是好好的同一條連線。**而且取消真的要輪到**
+    ——斷線之後 uvicorn 的 `send` 馬上就回來（不等任何東西），取消沒有地方可以送達的話，
+    串流會把剩下的整段歷史讀完、對著一條已經關掉的連線送完。
+
+    作法：把 dialect 的那一個方法換成「先停住、再做原本的事」→ 停住的時候斷線 → 放行。
+    換的是 dialect 的方法而不是事件 hook：hook 在 SQLAlchemy 處理 DBAPI 例外的那一層外面，
+    在那裡被取消不會讓連線作廢，測不到東西。
+    """
+    engine = one_connection_pool
+    backend_before = await _backend_pid(engine)
+    armed = False
+    reached = asyncio.Event()
+    resume = asyncio.Event()
+    hang_up = asyncio.Event()
+    dialect = engine.sync_engine.dialect
+    original = getattr(dialect, step)
+
+    def held_step(*args: Any, **kwargs: Any) -> Any:
+        # 同步的方法，但跑在 SQLAlchemy 的 greenlet 裡：`await_only` 可以在這裡等。
+        nonlocal armed
+        if armed:
+            armed = False
+            reached.set()
+            await_only(resume.wait())
+        return original(*args, **kwargs)
+
+    sent: list[str] = []
+
+    async def on_send(message: dict[str, Any]) -> None:
+        # 標題列送出去之後才開始攔：攔的是「下一塊」的那一步，不是認證的那一次查詢。
+        # 這裡沒有任何 await——跟斷線之後的 uvicorn 一樣，取消不會在「送」的時候送達。
+        nonlocal armed
+        sent.append(_kind(message))
+        if _kind(message) == "chunk":
+            armed = True
+
+    monkeypatch.setattr(dialect, step, held_step)
+    try:
+        transport = ASGITransport(app=_on_the_wire(on_send, hang_up=hang_up))
+        async with AsyncClient(transport=transport, base_url="http://test") as wire:
+            download = asyncio.create_task(wire.get(EXPENSES, headers=auth(committed_user)))
+            await asyncio.wait_for(reached.wait(), 5)
+            hang_up.set()
+            # 讓取消有機會送達：沒有擋住的話，它這時候就會打斷停住的那一步。
+            for _ in range(10):
+                await asyncio.sleep(0)
+            resume.set()
+            response = await asyncio.wait_for(download, 5)
+    finally:
+        resume.set()
+    checked_out = engine.pool.checkedout()  # 不靠垃圾回收：請求一結束就要是 0
+
+    assert response.status_code == 200  # 標頭早就送出去了；內容斷在半路
+    # 標頭、標題列，然後就停了：斷線的時候正在做的那一塊沒有送出去，也沒有再讀下一塊。
+    assert sent == ["start", "chunk"]
+    assert checked_out == 0
+    # 池子裡還是同一條連線：沒有被作廢、重連。
+    assert await _backend_pid(engine) == backend_before
+    assert [record.getMessage() for record in caplog.records if record.levelname == "ERROR"] == []
+
+
 # ── 限速 ──────────────────────────────────────────────────────────────────────
 
 
@@ -519,3 +780,187 @@ async def test_the_three_exports_share_one_budget_per_user(client, db_session):
     assert blocked.json()["error"]["code"] == "TOO_MANY_EXPORTS"
     assert 1 <= int(blocked.headers["Retry-After"]) <= 60
     assert someone_else.status_code == 200  # 別人的額度不受影響
+
+
+# ── 一個人同時只能有一個匯出在跑 ──────────────────────────────────────────────
+
+
+def test_the_in_flight_limiter_allows_one_per_key_until_it_is_released():
+    limiter = InFlightLimiter(code="BUSY", message="忙")
+
+    limiter.acquire("alice")
+    limiter.acquire("bob")  # 別人不受影響
+    with pytest.raises(TooManyRequestsError) as refused:
+        limiter.acquire("alice")
+    limiter.release("alice")
+    limiter.acquire("alice")  # 放掉之後又可以了
+    limiter.release("nobody")  # 沒有佔著的鍵：不是錯誤
+
+    assert (refused.value.status_code, refused.value.code) == (429, "BUSY")
+    # 不知道前一個什麼時候結束：不給一個編出來的秒數。
+    assert refused.value.retry_after_seconds is None
+    assert refused.value.headers is None
+    limiter.reset()
+    limiter.acquire("alice")
+    limiter.acquire("bob")
+
+
+class _HeldExport:
+    """換掉 route 模組裡的 generator：吐了標題就停住，等測試放行（或叫它失敗）。"""
+
+    def __init__(self) -> None:
+        self.header_sent = asyncio.Event()
+        self.proceed = asyncio.Event()
+        self.fail_with: Exception | None = None
+        self.started = 0
+
+    async def csv(self, db: AsyncSession, *, user_id: int, tz_name: str) -> AsyncIterator[bytes]:
+        self.started += 1
+        yield BOM + b"header\r\n"
+        self.header_sent.set()
+        await self.proceed.wait()
+        if self.fail_with is not None:
+            raise self.fail_with
+        yield b"row\r\n"
+
+
+@pytest.fixture
+def held(monkeypatch) -> _HeldExport:
+    """花費那一支換成會停住的版本；餐點與補劑是真的。"""
+    held = _HeldExport()
+    monkeypatch.setattr(export_routes, "expense_csv", held.csv)
+    return held
+
+
+async def test_a_second_export_is_refused_while_one_is_still_streaming(client, db_session, held):
+    alice = (await create_user(db_session)).id
+    bob = (await create_user(db_session)).id
+
+    first = asyncio.create_task(client.get(EXPENSES, headers=auth(alice)))
+    try:
+        await asyncio.wait_for(held.header_sent.wait(), 5)
+        # 另外兩個端點也一樣：算的是人，不是端點。
+        second = await client.get(MEALS, headers=auth(alice))
+        # 被擋下來的那一次不能把正在跑的那個的位子放掉。
+        third = await client.get(SUPPLEMENTS, headers=auth(alice))
+        someone_else = await client.get(MEALS, headers=auth(bob))
+    finally:
+        held.proceed.set()
+        finished = await first
+    afterwards = await client.get(MEALS, headers=auth(alice))
+
+    for refused in (second, third):
+        assert refused.status_code == 429
+        assert refused.json()["error"] == {
+            "code": "EXPORT_IN_PROGRESS",
+            "message": "已經有一個匯出在進行，等它下載完再試",
+            "details": {},
+        }
+        # 跟「太頻繁」不同：沒有一個說得準的秒數。
+        assert "Retry-After" not in refused.headers
+    assert someone_else.status_code == 200
+    assert finished.status_code == 200
+    assert finished.content == BOM + b"header\r\nrow\r\n"
+    assert afterwards.status_code == 200  # 傳完就放掉了
+
+
+async def test_refused_attempts_still_count_towards_the_rate_limit(client, db_session, held):
+    # 順序是「先算次數、再看有沒有在跑」：對著進行中的匯出狂打的迴圈一樣會被限速擋下來。
+    alice = (await create_user(db_session)).id
+
+    first = asyncio.create_task(client.get(EXPENSES, headers=auth(alice)))
+    try:
+        await asyncio.wait_for(held.header_sent.wait(), 5)
+        codes = [
+            (await client.get(MEALS, headers=auth(alice))).json()["error"]["code"]
+            for _ in range(EXPORT_LIMIT)
+        ]
+    finally:
+        held.proceed.set()
+        await first
+
+    assert codes == ["EXPORT_IN_PROGRESS"] * (EXPORT_LIMIT - 1) + ["TOO_MANY_EXPORTS"]
+
+
+async def test_the_slot_is_released_when_the_stream_fails_midway(client, db_session, held):
+    alice = (await create_user(db_session)).id
+    held.fail_with = RuntimeError("資料庫斷線之類的")
+    held.proceed.set()
+
+    with pytest.raises(RuntimeError, match="資料庫斷線之類的"):
+        await client.get(EXPENSES, headers=auth(alice))
+    afterwards = await client.get(MEALS, headers=auth(alice))
+
+    assert held.started == 1
+    assert afterwards.status_code == 200
+
+
+async def _never_sent(stalled: asyncio.Event) -> Callable[[dict[str, Any]], Awaitable[None]]:
+    """讀的人不讀了：第一塊內容永遠送不出去（uvicorn 的寫入緩衝滿了就是這樣卡在 `send`）。"""
+
+    async def on_send(message: dict[str, Any]) -> None:
+        if message["type"] == "http.response.body" and message.get("body"):
+            stalled.set()
+            await asyncio.Event().wait()
+
+    return on_send
+
+
+async def test_the_slot_is_released_when_a_stalled_download_hangs_up(client, db_session, held):
+    """讀的人不讀了（伺服器卡在 `send`），然後斷線。Starlette 取消的是卡在 `send` 的那個
+    task；generator 停在 `yield` 上，沒有人叫它收尾——位子不能靠 generator 自己放。"""
+    alice = (await create_user(db_session)).id
+    stalled = asyncio.Event()
+    hang_up = asyncio.Event()
+
+    transport = ASGITransport(app=_on_the_wire(await _never_sent(stalled), hang_up=hang_up))
+    async with AsyncClient(transport=transport, base_url="http://test") as stuck:
+        download = asyncio.create_task(stuck.get(EXPENSES, headers=auth(alice)))
+        await asyncio.wait_for(stalled.wait(), 5)
+        refused = await client.get(MEALS, headers=auth(alice))  # 卡著的時候位子還佔著
+        hang_up.set()
+        cut_short = await asyncio.wait_for(download, 5)
+    afterwards = await client.get(MEALS, headers=auth(alice))
+
+    assert refused.status_code == 429
+    assert cut_short.content == b""  # 一塊都沒送出去
+    assert held.started == 1
+    assert not held.header_sent.is_set()  # generator 還停在第一個 yield
+    assert afterwards.status_code == 200
+
+
+async def test_the_slot_is_released_when_the_request_task_is_cancelled(client, db_session, held):
+    """同一種卡住，但結束的方式是整個請求的 task 被取消（伺服器關機時就是這樣）。"""
+    alice = (await create_user(db_session)).id
+    stalled = asyncio.Event()
+
+    transport = ASGITransport(app=_on_the_wire(await _never_sent(stalled)))
+    async with AsyncClient(transport=transport, base_url="http://test") as stuck:
+        download = asyncio.create_task(stuck.get(EXPENSES, headers=auth(alice)))
+        await asyncio.wait_for(stalled.wait(), 5)
+        download.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await download
+    afterwards = await client.get(MEALS, headers=auth(alice))
+
+    assert held.started == 1
+    assert not held.header_sent.is_set()
+    assert afterwards.status_code == 200
+
+
+async def test_the_slot_is_released_when_the_response_never_starts(client, db_session, held):
+    """handler 已經回了 `StreamingResponse`，但連標頭都送不出去（用戶端早就走了）：
+    generator 建了、**從來沒有被迭代**——寫在 generator 裡的 `finally` 永遠不會跑。"""
+    alice = (await create_user(db_session)).id
+
+    async def on_send(message: dict[str, Any]) -> None:
+        raise OSError("用戶端已經斷線")
+
+    transport = ASGITransport(app=_on_the_wire(on_send))
+    async with AsyncClient(transport=transport, base_url="http://test") as gone:
+        with pytest.raises(OSError, match="用戶端已經斷線"):
+            await gone.get(EXPENSES, headers=auth(alice))
+    afterwards = await client.get(MEALS, headers=auth(alice))
+
+    assert held.started == 0
+    assert afterwards.status_code == 200

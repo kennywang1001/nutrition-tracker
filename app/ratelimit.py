@@ -240,18 +240,64 @@ session_rate_limiter = KeyedRateLimiter(
     message="操作太頻繁，請稍後再試",
 )
 
+
+class InFlightLimiter:
+    """每個鍵**同一時間**最多一個在跑——不是「一段時間內幾次」。
+
+    `KeyedRateLimiter` 算的是「開始了幾次」，管不到「開始之後佔多久」：一個下載到一半就
+    不讀的用戶端可以讓一次匯出一直掛著。這個類別只記「誰現在佔著」，`acquire` 與
+    `release` 要成對，呼叫端負責在**每一條**結束的路上放掉（做完、失敗、被取消、
+    根本沒開始）。
+
+    擋下來的是 `TooManyRequestsError`、**不帶 `Retry-After`**：前一個什麼時候結束這裡
+    不知道，不編一個秒數（`app/errors.py`）。
+
+    跟上面兩個限速器一樣只在這個 process 的記憶體裡：單一容器成立；多容器的話，每個
+    容器各算各的，「一個人一個」會變成「一個人每個容器一個」。重啟就全部清空——那時
+    進行中的串流也一起斷了，兩邊是一致的。
+    """
+
+    def __init__(self, *, code: str, message: str) -> None:
+        self._code = code
+        self._message = message
+        self._active: set[str] = set()
+
+    def acquire(self, key: str) -> None:
+        """佔住 `key`；已經有人佔著就丟 429，**而且這一次什麼都沒有佔到**——
+        被擋下來的呼叫端不能呼叫 `release`（那會把正在跑的那一個的位子放掉）。"""
+        if key in self._active:
+            raise TooManyRequestsError(self._code, self._message, retry_after_seconds=None)
+        self._active.add(key)
+
+    def release(self, key: str) -> None:
+        self._active.discard(key)
+
+    def reset(self) -> None:
+        self._active.clear()
+
+
 EXPORT_LIMIT = 6
 EXPORT_WINDOW_SECONDS = 60.0
 
 # 匯出（報表月份與匯出規格 §3.6）：三個端點共用，鍵是使用者 id（`str(user.id)`）。
 #
-# 每一次匯出都是把這個人的整段歷史讀一遍、握著一條資料庫連線直到下載完——偷到
-# access token 的人、或一個寫壞的重試迴圈，不該能一直叫它做。**6 次**：三顆按鈕
-# 各按一次是 3 次，手滑再按一輪還在額度內；正常使用碰不到（e2e 一條測試按一次）。
+# 每一次匯出都是把這個人的整段歷史讀一遍——偷到 access token 的人、或一個寫壞的
+# 重試迴圈，不該能一直叫它做。**6 次**：三顆按鈕各按一次是 3 次，手滑再按一輪還在
+# 額度內；正常使用碰不到（e2e 一條測試按一次）。
 # 鍵是使用者不是端點：分開算的話，額度實際上是三倍。
 export_rate_limiter = KeyedRateLimiter(
     limit=EXPORT_LIMIT,
     window_seconds=EXPORT_WINDOW_SECONDS,
     code="TOO_MANY_EXPORTS",
     message="匯出太頻繁，請稍後再試",
+)
+
+# 匯出「一個人同時一個」（規格 §8 第 10 點）：鍵跟上面一樣是使用者 id，三個端點共用。
+#
+# 限速只管「開始幾次」；一個下載到一半就不讀的用戶端會讓那一次一直掛著——已經不握資料庫
+# 連線了（`app/api/routes/export.py` 每一塊之間把連線還回去），但還佔著一個 task 與 uvicorn
+# 的寫入緩衝，而且每分鐘可以再疊 6 個。佔與放都在 `export_slot` 那個依賴裡。
+export_in_flight = InFlightLimiter(
+    code="EXPORT_IN_PROGRESS",
+    message="已經有一個匯出在進行，等它下載完再試",
 )

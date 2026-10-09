@@ -7,6 +7,9 @@ dependencies = [
     # >=0.118：`yield` 的依賴在回應送完之後才收尾——匯出的 StreamingResponse 串流到一半
     # 還要用 get_db 的 session（tests/test_export.py 有一條守著）。lock 檔是 0.141.1。
     "fastapi>=0.118",
+    # Starlette 本來就帶著它（斷線時取消串流用的就是 anyio 的 cancel scope）；匯出直接
+    # import 它來擋那個取消（app/api/routes/export.py），所以寫明。lock 檔是 4.14.2，沒有變。
+    "anyio>=4",
     "uvicorn[standard]>=0.32",
     "sqlalchemy[asyncio]>=2.0.36",
     "asyncpg>=0.30",
