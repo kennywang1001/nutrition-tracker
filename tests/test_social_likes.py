@@ -5,9 +5,9 @@ from datetime import datetime
 
 import pytest
 from PIL import Image
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
-from app.models.meal import MealItem
+from app.models.meal import Meal, MealItem
 from app.models.social import MealLike, Notification, NotificationType
 from app.ratelimit import LIKE_LIMIT
 from tests.factories import create_comment, create_friendship, create_like, create_meal
@@ -311,3 +311,31 @@ async def test_both_writes_are_committed(client, db_session, cast):
     assert (await client.delete(_url(meal_id), headers=bob)).status_code == 200
     await db_session.rollback()
     assert await stored() == ([], [])
+
+
+@pytest.mark.parametrize("method", ["put", "delete"])
+async def test_the_meal_vanishing_right_after_the_commit_is_not_a_500(
+    client, db_session, cast, monkeypatch, method
+):
+    """審查 M4 順便檢查的：按讚與收回在 commit **之後**才讀數字（留言以前在同一個位置
+    `refresh`，那一餐或那則留言被刪掉就是 500）。這裡把空檔做成確定會發生的——commit
+    一回來主人就把整餐刪掉。讀的是數字不是那一列，所以是 200 與 0，不是例外。
+    小卡先按了一個讚：餐還在的話數字不會是 0。"""
+    meal_id = cast.meal.id
+    await create_like(db_session, meal=cast.meal, user=cast.carol)
+    await create_like(db_session, meal=cast.meal, user=cast.bob)
+    real_commit = db_session.commit
+
+    async def commit_then_the_owner_deletes_the_meal() -> None:
+        await real_commit()
+        await db_session.execute(delete(Meal).where(Meal.id == meal_id))
+        await real_commit()
+
+    monkeypatch.setattr(db_session, "commit", commit_then_the_owner_deletes_the_meal)
+
+    response = await client.request(method, _url(meal_id), headers=auth(cast.bob))
+
+    assert response.status_code == 200
+    assert response.json() == {"like_count": 0, "liked_by_me": False}
+    monkeypatch.undo()
+    assert await db_session.scalar(select(Meal.id).where(Meal.id == meal_id)) is None

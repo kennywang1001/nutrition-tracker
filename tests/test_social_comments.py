@@ -1,7 +1,7 @@
 """留言的新增與刪除（社群規格 §5.3、§5.4）。"""
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, event, select
 
 from app.models.social import MealComment
 from app.ratelimit import COMMENT_LIMIT
@@ -395,6 +395,67 @@ async def test_both_writes_are_committed(client, db_session, cast):
         select(MealComment.body).where(MealComment.meal_id == meal_id).order_by(MealComment.id)
     )
     assert list(rows) == ["新的"]
+
+
+async def test_the_owner_deleting_it_right_after_the_commit_is_not_a_500(
+    client, db_session, cast, monkeypatch
+):
+    """審查 M4：端點以前在 commit **之後** `db.refresh(comment)`。commit 一放掉那一餐的鎖，
+    主人就可以刪掉這則留言（或整餐）；那個 refresh 讀不到列，就是 500——而留言其實寫成功了、
+    通知也送了。這裡把那個空檔做成確定會發生的：commit 一回來就把留言刪掉。
+    回應是 commit 之前組好的，所以照樣是 201 與剛寫進去的那一則。"""
+    meal_id = cast.meal.id
+    real_commit = db_session.commit
+
+    async def commit_then_the_owner_deletes_it() -> None:
+        await real_commit()
+        await db_session.execute(delete(MealComment).where(MealComment.meal_id == meal_id))
+        await real_commit()
+
+    monkeypatch.setattr(db_session, "commit", commit_then_the_owner_deletes_it)
+
+    response = await _post(client, cast.bob, meal_id, "剛好被刪掉的")
+
+    assert response.status_code == 201
+    created = response.json()
+    assert (created["body"], created["display_name"]) == ("剛好被刪掉的", "鮑伯")
+    assert (created["is_me"], created["can_delete"]) == (True, True)
+    assert isinstance(created["id"], int)
+    assert created["created_at"].endswith(("Z", "+00:00"))
+    # 空檔裡真的刪掉了——不然上面的 201 什麼都沒證明。
+    assert await _bodies(db_session, cast.meal) == []
+
+
+async def test_nothing_is_read_back_after_the_commit(client, db_session, db_connection, cast):
+    """上一條的結構版：commit 之後這個請求**一句 SQL 都不送**，而且整個請求碰 `meal_comments`
+    的只有那一句 INSERT——`id` 與 `created_at`（資料庫的預設值）是 `RETURNING` 帶回來的，
+    不是事後再 SELECT 一次。上一條只擋得到「留言被刪」這一種空檔；這一條擋的是
+    「commit 之後又去讀任何東西」這個形狀本身。"""
+    statements: list[tuple[bool, str]] = []
+    committed = False
+
+    def on_commit(session) -> None:
+        nonlocal committed
+        committed = True
+
+    def record(conn, cursor, statement, parameters, context, executemany) -> None:
+        statements.append((committed, " ".join(statement.split())))
+
+    event.listen(db_session.sync_session, "after_commit", on_commit)
+    event.listen(db_connection.sync_connection, "before_cursor_execute", record)
+    try:
+        response = await _post(client, cast.bob, cast.meal.id, "好吃嗎")
+    finally:
+        event.remove(db_connection.sync_connection, "before_cursor_execute", record)
+        event.remove(db_session.sync_session, "after_commit", on_commit)
+
+    assert response.status_code == 201
+    assert committed  # 真的有 commit（不然「之後」是空的沒有意義）
+    assert [sql for after, sql in statements if after] == []
+    [on_comments] = [sql for _, sql in statements if "meal_comments" in sql]
+    assert on_comments.startswith("INSERT INTO meal_comments")
+    returning = on_comments.split("RETURNING", 1)[1]
+    assert "meal_comments.id" in returning and "meal_comments.created_at" in returning
 
 
 async def test_comments_need_a_login(client, db_session, cast):

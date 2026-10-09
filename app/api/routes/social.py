@@ -94,6 +94,9 @@ async def read_social_meal(
 
 
 async def _like_state(db: AsyncSession, user_id: int, meal_id: int) -> LikeState:
+    """按讚與收回在 **commit 之後**呼叫它（數字要包含剛寫進去的那一列與別人同時按的）。
+    那個空檔裡這一餐可能被刪掉：`social_counts` 對每一個傳進去的 id 都回一筆，查不到就是 0，
+    所以這裡不會因為列不見了而丟例外（跟留言以前的 `refresh` 不一樣，審查 M4）。"""
     counts = (await social_counts(db, user_id, [meal_id]))[meal_id]
     return LikeState(like_count=counts.like_count, liked_by_me=counts.liked_by_me)
 
@@ -169,14 +172,21 @@ async def add_comment(
     owner_id = meal.user_id
     comment = MealComment(meal_id=meal_id, user_id=user_id, body=payload.body)
     db.add(comment)
-    await db.flush()  # 要先拿到留言的 id
+    # flush 送出 INSERT … RETURNING：`id` 與 `created_at`（資料庫的預設值）這時候就回來了。
+    await db.flush()
     # 同一個交易：留言寫進去了通知就一定在。
     notify_comment(
         db, owner_id=owner_id, actor_id=user_id, meal_id=meal_id, comment_id=comment.id
     )
+    # **回應在 commit 之前組好，commit 之後不再碰資料庫**（社群審查 M4）。以前是 commit 之後
+    # `db.refresh(comment)`：commit 一放掉那一餐的鎖，主人就可以刪掉這則留言或整餐，
+    # refresh 讀不到那一列就是 500——而留言其實寫成功了、通知也送了。
+    # （按讚與收回在 commit 之後讀的是「數字」：那一餐不見了也只是 0，不會丟例外。）
+    # 把下面這一行搬到 commit 之後、不 refresh，測試照樣綠：`expire_on_commit=False`，
+    # 物件沒有過期、什麼都不會去讀。不靠那個設定——commit 之後就是不碰這個物件。
+    response = _comment_response(comment, display_name, viewer_id=user_id, owner_id=owner_id)
     await db.commit()
-    await db.refresh(comment)
-    return _comment_response(comment, display_name, viewer_id=user_id, owner_id=owner_id)
+    return response
 
 
 @router.delete("/meals/{meal_id}/comments/{comment_id}", status_code=status.HTTP_204_NO_CONTENT)
