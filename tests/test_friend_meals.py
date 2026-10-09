@@ -94,7 +94,10 @@ async def test_a_friends_shared_meal_shows_in_the_feed_with_only_the_whitelisted
     assert set(shared) == {
         "id", "user", "eaten_at", "meal_type", "description", "items",
         "kcal", "protein_g", "fat_g", "carb_g", "has_photo",
+        "like_count", "comment_count", "liked_by_me",
     }
+    # 社群規格 §5.6：白名單**刻意**多三個數字；沒有人按讚留言時是 0、0、False。
+    assert (shared["like_count"], shared["comment_count"], shared["liked_by_me"]) == (0, 0, False)
     assert set(shared["items"][0]) == {"food_name", "quantity_g", "base_unit", "kcal"}
     # 同一餐同時有描述與備註（第 5 種：兩個都要有，才分得出「描述給看、備註不給」）。
     assert shared["description"] == "滷肉飯配燙青菜"
@@ -478,10 +481,14 @@ def test_only_the_friend_modules_touch_the_friendship_table():
 
     只掃 `Friendship` 不夠：最順手的放寬是在既有端點裡 import `friend_visibility`
     的函式（`friend_ids`、`shared_meals`…），一個字都不用碰 `Friendship`。所以
-    可見性模組與它的函式名也一起掃；模型檔只准出現表名與類別名。"""
+    可見性模組與它的函式名也一起掃；模型檔只准出現表名與類別名。
+
+    社群的可見性模組是第三個（社群規格 §4）：「一餐上面的讚與留言還算不算數」要問
+    「作者現在是不是主人的好友」。"""
     root = Path(__file__).resolve().parent.parent / "app"
     friend_modules = {
         root / "friend_visibility.py",
+        root / "social_visibility.py",
         root / "api" / "routes" / "friends.py",
     }
     models = {
@@ -498,5 +505,36 @@ def test_only_the_friend_modules_touch_the_friendship_table():
             continue
         text = path.read_text(encoding="utf-8")
         if (path not in models and table_words.search(text)) or visibility_words.search(text):
+            offenders.append(str(path.relative_to(root)))
+    assert offenders == []
+
+
+def test_only_the_social_modules_widen_who_can_read_a_meal():
+    """社群規格 D6：「看得到別人的一餐」只有社群的模組做得到。`/api/meals` 仍然只回自己的——
+    它從可見性模組只准拿「這幾餐各有幾個讚」（`social_counts` 不放寬任何讀取）。
+
+    掃的是文字：這幾個名字連註解都不准出現在別的模組。"""
+    root = Path(__file__).resolve().parent.parent / "app"
+    routes = root / "api" / "routes"
+    social_modules = {
+        root / "social_visibility.py",
+        root / "friend_meals.py",
+        routes / "friends.py",
+        routes / "social.py",
+        routes / "notifications.py",
+    }
+    words = re.compile(
+        r"\bsocial_visibility\b|\bload_visible_meal\b|\bmeal_visible_to\b"
+        r"|\bbuild_friend_meals\b|\bfriend_meals\b|\blike_counts\b|\bauthor_counts\b"
+    )
+    allowed_in_meals = "from app.social_visibility import SocialCounts, social_counts\n"
+    offenders = []
+    for path in root.rglob("*.py"):
+        if path in social_modules:
+            continue
+        source = path.read_text(encoding="utf-8")
+        if path == routes / "meals.py":
+            source = source.replace(allowed_in_meals, "", 1)
+        if words.search(source):
             offenders.append(str(path.relative_to(root)))
     assert offenders == []

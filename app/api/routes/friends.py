@@ -9,8 +9,6 @@
 import base64
 import binascii
 import json
-from collections import defaultdict
-from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 
@@ -26,6 +24,7 @@ from app.days import day_bounds, today_in_timezone
 from app.db import get_db
 from app.errors import ConflictError, NotFoundError, UnprocessableEntityError
 from app.friend_codes import format_friend_code, new_friend_code, normalize_friend_code
+from app.friend_meals import build_friend_meals
 from app.friend_visibility import (
     friend_ids,
     involves,
@@ -34,18 +33,13 @@ from app.friend_visibility import (
     other_side,
     shared_meals,
 )
-from app.meal_reads import item_join_query
-from app.models.food import Food, FoodRevision
 from app.models.friendship import Friendship, FriendshipStatus
-from app.models.meal import Meal, MealItem
+from app.models.meal import Meal
 from app.models.user import User
-from app.nutrition import Macros, scale, total
 from app.schemas.friend import (
     FriendCodeResponse,
     FriendDayResponse,
     FriendFeedResponse,
-    FriendMeal,
-    FriendMealItem,
     FriendRequestCreate,
     FriendRequestItem,
     FriendRequestResult,
@@ -320,58 +314,6 @@ def _decode_cursor(cursor: str) -> tuple[datetime, int]:
     return eaten_at, meal_id
 
 
-async def _friend_meals(
-    db: AsyncSession, meals: Sequence[Meal], people: dict[int, User]
-) -> list[FriendMeal]:
-    """組 `FriendMeal`。營養素用跟 `MealResponse` 同一套（`scale`／`total`，釘住
-    當時的 revision）。一次查完所有項目（`meal_id IN (...)`）。"""
-    if not meals:
-        return []
-    rows = (
-        await db.execute(
-            item_join_query()
-            .where(MealItem.meal_id.in_([meal.id for meal in meals]))
-            .order_by(MealItem.id)
-        )
-    ).all()
-    by_meal: dict[int, list[tuple[MealItem, FoodRevision, Food]]] = defaultdict(list)
-    for item, revision, food in rows:
-        by_meal[item.meal_id].append((item, revision, food))
-
-    result: list[FriendMeal] = []
-    for meal in meals:
-        items: list[FriendMealItem] = []
-        macros_list: list[Macros] = []
-        for item, revision, food in by_meal[meal.id]:
-            macros = scale(revision, item.quantity_g)
-            macros_list.append(macros)
-            items.append(
-                FriendMealItem(
-                    food_name=food.name,
-                    quantity_g=item.quantity_g,
-                    base_unit=revision.base_unit,
-                    kcal=macros.kcal,
-                )
-            )
-        totals = total(macros_list)
-        result.append(
-            FriendMeal(
-                id=meal.id,
-                user=_person(people[meal.user_id]),
-                eaten_at=meal.eaten_at,
-                meal_type=meal.meal_type,
-                description=meal.description,
-                items=items,
-                kcal=totals.kcal,
-                protein_g=totals.protein_g,
-                fat_g=totals.fat_g,
-                carb_g=totals.carb_g,
-                has_photo=meal.photo_path is not None,
-            )
-        )
-    return result
-
-
 @router.get("/feed", response_model=FriendFeedResponse)
 async def friend_feed(
     before: str | None = Query(default=None, max_length=200),
@@ -400,7 +342,7 @@ async def friend_feed(
         for person in await db.scalars(select(User).where(User.id.in_({m.user_id for m in page})))
     }
     return FriendFeedResponse(
-        meals=await _friend_meals(db, page, people),
+        meals=await build_friend_meals(db, user.id, page, people),
         next_cursor=_encode_cursor(page[-1]) if len(meals) > limit else None,
     )
 
@@ -426,7 +368,7 @@ async def friend_day(
     return FriendDayResponse(
         friend=_person(friend),
         day=day,
-        meals=await _friend_meals(db, meals, {friend.id: friend}),
+        meals=await build_friend_meals(db, user.id, meals, {friend.id: friend}),
     )
 
 

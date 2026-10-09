@@ -591,6 +591,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/social/meals/{meal_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Social Meal
+         * @description 一餐、誰按了讚、最近的留言。自己的餐與看得到的好友的餐都走這裡。
+         */
+        get: operations["read_social_meal_api_social_meals__meal_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/food-revisions": {
         parameters: {
             query?: never;
@@ -1610,6 +1630,24 @@ export interface components {
             /** New Password */
             new_password: string;
         };
+        /** CommentResponse */
+        CommentResponse: {
+            /** Id */
+            id: number;
+            /** Display Name */
+            display_name: string;
+            /** Is Me */
+            is_me: boolean;
+            /** Can Delete */
+            can_delete: boolean;
+            /** Body */
+            body: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /**
          * ConsistencyResult
          * @description `app.ai.consistency.Consistency`（frozen dataclass）的 API 形狀。
@@ -1856,6 +1894,12 @@ export interface components {
             carb_g: string;
             /** Has Photo */
             has_photo: boolean;
+            /** Like Count */
+            like_count: number;
+            /** Comment Count */
+            comment_count: number;
+            /** Liked By Me */
+            liked_by_me: boolean;
         };
         /** FriendMealItem */
         FriendMealItem: {
@@ -1993,6 +2037,13 @@ export interface components {
             base_unit: components["schemas"]["BaseUnit"];
             /** Serving Kcal */
             serving_kcal: string;
+        };
+        /** LikerResponse */
+        LikerResponse: {
+            /** Display Name */
+            display_name: string;
+            /** Is Me */
+            is_me: boolean;
         };
         /** LoginRequest */
         LoginRequest: {
@@ -2443,6 +2494,22 @@ export interface components {
          * @enum {string}
          */
         RevisionStatus: "pending" | "approved" | "rejected";
+        /**
+         * SocialMealResponse
+         * @description 一餐與它上面的讚、留言。`meal` 是好友看的那個白名單——主人看自己的餐也是
+         *     （沒有餐費與備註；要看那些去編輯畫面）。
+         */
+        SocialMealResponse: {
+            meal: components["schemas"]["FriendMeal"];
+            /** Is Mine */
+            is_mine: boolean;
+            /** Likes */
+            likes: components["schemas"]["LikerResponse"][];
+            /** Comments */
+            comments: components["schemas"]["CommentResponse"][];
+            /** Comments Truncated */
+            comments_truncated: boolean;
+        };
         /** SupplementCreateRequest */
         SupplementCreateRequest: {
             /** Name */
@@ -3825,6 +3892,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_social_meal_api_social_meals__meal_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                meal_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SocialMealResponse"];
                 };
             };
             /** @description Validation Error */

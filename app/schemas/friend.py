@@ -70,6 +70,11 @@ class FriendMeal(BaseModel):
     fat_g: Decimal
     carb_g: Decimal
     has_photo: bool
+    # 社群規格 §5.6：過濾後的數字——只算主人現在的好友（留言另外算主人自己的）。
+    # 沒有預設值：哪一條組這個形狀的路徑漏帶，是當場的驗證錯誤，不是悄悄的 0。
+    like_count: int
+    comment_count: int
+    liked_by_me: bool
 
 
 class FriendFeedResponse(BaseModel):
