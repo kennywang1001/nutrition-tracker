@@ -124,9 +124,10 @@ Migration **`0018_create_social_tables`**：三張新表，全部只有新增。
 
 約束：
 
-- `ck_notifications_type_valid`：`type IN (…)`。
 - `ck_notifications_not_self`：`user_id <> actor_id`。
 - `ck_notifications_shape_matches_type`：`like` 有餐沒有留言；`comment` 兩個都有；好友的兩種兩個都沒有。
+  **它同時就是 `type` 的手寫約束**（四種以外的值三個分支都不成立）——不另外寫一條 `type IN (…)`：
+  那一條永遠被這一條先擋下來，沒有測試看得到它（handover §6 規矩 2）。
 
 索引：
 
@@ -351,7 +352,7 @@ def notification_visible() -> ColumnElement[bool]          # D13
 
 ### 8.1 後端
 
-- **Migration**：`alembic check` 乾淨；三條 CHECK 與兩個唯一真的擋得住（直接寫資料庫）；刪餐、刪留言、刪使用者的 cascade。
+- **Migration**：`alembic check` 乾淨；三條 CHECK（留言長度、不通知自己、形狀）與兩個唯一真的擋得住（直接寫資料庫）；刪餐、刪留言、刪使用者的 cascade。
 - **可見性（核心）**：§4.1 的每一格，五個端點各一次（表格化）；404 的 body 跟不存在的 id **逐字相同**。
   同一個測試裡「看得到 → 解除 → 404」「看得到 → 改成私人 → 404、主人仍然看得到留言」。
 - **§4.2**：解除之後數字、名單、留言少掉那個人；加回來又出現。B 看得到 C 在 A 的餐上的留言（D3）。
