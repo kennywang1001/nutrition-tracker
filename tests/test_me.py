@@ -39,6 +39,32 @@ async def test_can_update_display_name(client, db_session):
     assert user.display_name == "新名字"
 
 
+async def test_updating_display_name_drops_invisible_format_characters(client, db_session):
+    """審查 M2：名字裡的 U+202E 會把通知那一行後面的字倒過來。拿掉；只剩看不見的字就是 422，
+    而且名字沒有被改掉。"""
+    user = await create_user(db_session, display_name="舊名字")
+    headers = {"Authorization": f"Bearer {create_access_token(user.id)}"}
+
+    response = await client.patch(
+        "/api/me",
+        json={"display_name": "新" + chr(0x202E) + "名" + chr(0x200B) + "字 "},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["display_name"] == "新名字"
+    await db_session.refresh(user)
+    assert user.display_name == "新名字"
+
+    refused = await client.patch(
+        "/api/me", json={"display_name": chr(0x202E) + chr(0x200B)}, headers=headers
+    )
+
+    assert refused.status_code == 422
+    await db_session.refresh(user)
+    assert user.display_name == "新名字"
+
+
 async def test_updating_one_field_leaves_the_other_untouched(client, db_session):
     """只帶一個欄位時，另一個欄位必須完全不動 —— 這是 exclude_unset 存在的理由。
 

@@ -15,6 +15,7 @@ from app.models.meal import Meal
 from app.models.session import RefreshSession
 from app.models.user import User, UserRole
 from app.password_resets import revoke_live_resets
+from app.schemas.validators import clean_display_name
 from app.security.password import MIN_PASSWORD_LENGTH, hash_password
 from app.security.sessions import revoke_all_for_user
 from app.storage.photos import thumbnail_path
@@ -51,6 +52,10 @@ async def _upsert_account(
     """
     if len(password) < MIN_PASSWORD_LENGTH:
         raise ValueError(f"密碼至少 {MIN_PASSWORD_LENGTH} 個字元")
+    # 跟註冊、`PATCH /api/me` 同一個清理（社群審查 M2）：這裡以前原樣寫進資料庫，
+    # 貼上的名字帶一個雙向控制字元（U+202E）就會把好友通知那一行倒過來。
+    # 不合格（空的、有控制字元）就是 `ValueError`——跟上面的密碼一樣，在動任何欄位之前。
+    display_name = clean_display_name(display_name)
 
     email = email.strip().lower()
 

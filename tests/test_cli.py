@@ -88,6 +88,43 @@ async def test_create_regular_user_updates_an_existing_regular_user(db_session):
     assert verify_password("a-new-password", existing.password_hash)
 
 
+@pytest.mark.parametrize("create", [create_admin, create_regular_user])
+async def test_the_display_name_goes_through_the_same_cleaner_as_the_api(db_session, create):
+    """CLI 的名字以前原樣寫進資料庫（審查 M2 發現的：註冊與 `PATCH /api/me` 有清，這裡沒有）。
+    頭尾空白去掉、看不見的格式字元（U+202E、零寬空白）拿掉。"""
+    name = "  老" + chr(0x202E) + "闆" + chr(0x200B) + " "
+
+    user, _ = await create(db_session, "boss@example.com", "a-good-password", name)
+
+    assert user.display_name == "老闆"
+    assert await db_session.scalar(select(User.display_name)) == "老闆"
+
+
+@pytest.mark.parametrize(
+    ("name", "message"),
+    [
+        ("   ", "顯示名稱不能只有空白"),
+        (chr(0x200B), "顯示名稱不能只有空白"),
+        ("老" + chr(0) + "闆", "控制字元"),
+    ],
+    ids=["blank", "zero-width", "nul"],
+)
+async def test_a_bad_display_name_is_refused_before_anything_is_changed(db_session, name, message):
+    """跟太短的密碼同一種拒絕：`ValueError`，而且既有帳號的密碼與名字都沒動。
+    用 select 不用 refresh——髒掉的物件 refresh 會把髒值丟掉，看不出「先改了才拒絕」。"""
+    existing = await create_user(
+        db_session, email="member@example.com", role=UserRole.USER, display_name="原本的名字"
+    )
+    old_hash = existing.password_hash
+
+    with pytest.raises(ValueError, match=message):
+        await create_regular_user(db_session, "member@example.com", "a-new-password", name)
+
+    stored = await db_session.scalar(select(User).where(User.email == "member@example.com"))
+    assert stored is not None
+    assert (stored.display_name, stored.password_hash) == ("原本的名字", old_hash)
+
+
 async def test_create_regular_user_refuses_to_demote_an_admin(db_session):
     """**這一條是這個 task 最重要的行為。**
 

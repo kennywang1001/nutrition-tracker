@@ -21,6 +21,7 @@ NUL byte 讓 `display_name` 通過 Pydantic 又被 PostgreSQL 拒收，變成一
 """
 
 import re
+import unicodedata
 from typing import Annotated
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -31,24 +32,58 @@ from pydantic import AfterValidator
 # 變成一個未經認證就能觸發的 500。
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
-# 會顯示給別人（好友）、寫進 CSV 的單行文字裡不該留下的字元：C0／DEL／C1 控制字元
-# （含換行與 Tab）、行／段分隔（U+2028、U+2029）、雙向控制字元（U+202A～U+202E、
-# U+2066～U+2069——它們能讓一段文字在畫面上倒著顯示）。
-# **不含 ZWJ（U+200D）**：表情符號的組合序列靠它。
-_UNSAFE_FOR_DISPLAY = re.compile(
-    r"[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]"
-)
+# 會顯示給別人（好友）、寫進 CSV 的單行文字裡要**換成空白**的字元：C0／DEL／C1 控制字元
+# （含換行與 Tab）、行／段分隔（U+2028、U+2029）。它們本來就佔一個位置（或是斷行），
+# 直接拿掉會把前後兩個詞黏在一起。
+# （U+2028、U+2029 與換行、Tab 其實 `str.split()` 本來就當空白——把它們從這裡拿掉，
+# 測試照樣綠。寫著是讓這張清單自己說得完整；真正靠這一條的是 NUL 這類不是空白的。）
+_BECOMES_A_SPACE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+
+# ZWJ（U+200D，零寬連接符）：格式字元裡唯一留著的。表情符號的組合序列靠它
+# （一家三口、主廚、彩虹旗）。
+_ZWJ = "\N{ZERO WIDTH JOINER}"
+# 沒有被兩個「看得見的字」夾在中間的 ZWJ：開頭、結尾、空白旁邊、另一個 ZWJ 旁邊。
+# 組合序列裡的 ZWJ 兩邊一定各有一個字，所以這些都是多的——而且只留它們的話，
+# 一串 ZWJ 就是一則「不是空的、但什麼都看不到」的留言。
+_STRAY_ZWJ = re.compile(rf"(?<![^\s{_ZWJ}]){_ZWJ}|{_ZWJ}(?![^\s{_ZWJ}])")
+
+
+def _drop_format_characters(value: str) -> str:
+    """拿掉看不見的格式字元：Unicode 類別 `Cf` 整類，夾在兩個字中間的 ZWJ 除外。
+
+    `Cf` 包含：零寬空白與零寬不連字（U+200B、U+200C）、詞連接符（U+2060）、BOM（U+FEFF）、
+    軟連字號（U+00AD）、**雙向控制字元**（U+202A～U+202E、U+2066～U+2069、U+200E、U+200F、
+    U+061C——U+202E 能讓它後面的字在畫面上倒著顯示；名字會被放進通知的句子裡、給共同好友看）、
+    標籤字元（U+E0001、U+E0020～U+E007F，可以藏一段看不見的字）。
+
+    **整類拿掉，不是一張「想得到的」清單**：清單永遠少一個，而且 Unicode 每一版都會加。
+    **拿掉而不是換成空白**：它們沒有寬度，換成空白會把一個詞切成兩個。
+
+    已知的代價（社群規格「審查後的修正」）：
+    - 靠標籤字元組成的「子區域旗」（英格蘭、蘇格蘭、威爾斯）會只剩一面黑旗。
+    - 波斯文、印度諸語言用 U+200C 控制連字的寫法會被改掉。這個 app 的介面只有中文。
+    - **看不見的字不只 `Cf`**：變體選擇符（U+FE0F，`Mn`——表情符號的呈現靠它，所以不動）、
+      韓文填充字（U+3164，`Lo`）、點字空白（U+2800，`So`）都不在這一類裡，只用它們
+      仍然寫得出一則看起來是空的留言。那是另一張沒有盡頭的清單，這裡不追。
+    """
+    kept = "".join(ch for ch in value if ch == _ZWJ or unicodedata.category(ch) != "Cf")
+    return _STRAY_ZWJ.sub("", kept)
 
 
 def single_line(value: str) -> str:
-    """把一段不可信的文字變成一行：不安全的字元換成空白、連續空白併成一個、去頭尾。
+    """把一段不可信的文字變成一行：控制字元與行分隔換成空白、看不見的格式字元拿掉
+    （`_drop_format_characters`）、連續空白併成一個、去頭尾。
 
-    用在兩種來源：模型輸出（AI 多樣估算的名稱與描述，`app/ai/estimator.py`）、
-    以及會給好友看的使用者輸入（`meals.description`）。**換掉而不是拒絕**：
-    模型輸出被拒絕等於一次已經付費的估算作廢；使用者貼上的文字帶換行也不該是 422。
-    清完可能是空字串，由呼叫端決定那代表什麼。
+    用在三種來源：模型輸出（AI 多樣估算的名稱與描述，`app/ai/estimator.py`）、
+    會給好友看的使用者輸入（`meals.description`）、留言（`app/schemas/social.py`）。
+    **清掉而不是拒絕**：模型輸出被拒絕等於一次已經付費的估算作廢；使用者貼上的文字
+    帶換行也不該是 422。清完可能是空字串，由呼叫端決定那代表什麼（留言是 422、
+    描述是 NULL）。
+
+    **順序有意義**：控制字元先變成空白，才看 ZWJ 的兩邊——反過來的話，被兩個 NUL 夾住的
+    ZWJ 會被當成「夾在兩個字中間」留下來，清完是一個看不見、但不是空的字串。
     """
-    return " ".join(_UNSAFE_FOR_DISPLAY.sub(" ", value).split())
+    return " ".join(_drop_format_characters(_BECOMES_A_SPACE.sub(" ", value)).split())
 
 
 def _clean_optional_single_line(value: str | None) -> str | None:
@@ -58,8 +93,21 @@ def _clean_optional_single_line(value: str | None) -> str | None:
     return single_line(value) or None
 
 
-def _clean_display_name(value: str) -> str:
-    value = value.strip()
+def clean_display_name(value: str) -> str:
+    """顯示名稱：看不見的格式字元拿掉、去頭尾空白；清完是空的、或裡面有控制字元就拒絕。
+
+    **先拿掉格式字元才去頭尾**：反過來的話，「零寬空白＋空白＋阿明」會留下開頭那個空白，
+    而只有零寬字的名字會通過「不能只有空白」。
+
+    格式字元是**拿掉**（貼上的文字裡帶一個 BOM 或零寬空白，不該是 422）；控制字元照舊是
+    **拒絕**（名字裡出現換行或 NUL 不是手滑貼上的）。跟 `single_line` 不同的地方：
+    不併中間的空白——名字是使用者自己打的，不是一段要壓成一行的文字。
+
+    用在註冊、`PATCH /api/me`、邀請的備註（`DisplayName`），以及 CLI 的
+    `create-admin`／`create-user`（`app/cli.py`）。**既有的名字不會回頭清**：只有
+    下一次寫入才經過這裡。
+    """
+    value = _drop_format_characters(value).strip()
     if not value:
         raise ValueError("顯示名稱不能只有空白")
     if _CONTROL_CHARACTERS.search(value):
@@ -91,7 +139,7 @@ def _must_be_real_timezone(value: str) -> str:
     return value
 
 
-DisplayName = Annotated[str, AfterValidator(_clean_display_name)]
+DisplayName = Annotated[str, AfterValidator(clean_display_name)]
 IanaTimezone = Annotated[str, AfterValidator(_must_be_real_timezone)]
 # `X | None` 的欄位：`None` 與清完是空的都變成 `None`。AfterValidator 綁在整個
 # 聯集上，所以函式自己處理 `None`（跟上面 `DisplayName` 綁在 `str` 分支不同——

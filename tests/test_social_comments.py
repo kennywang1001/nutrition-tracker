@@ -92,15 +92,22 @@ async def test_a_comment_lands_on_that_meal_only(client, db_session, cast):
 
 
 async def test_the_body_is_cleaned_into_one_safe_line(client, db_session, cast):
-    """換行、Tab、NUL、雙向控制字元都變成空白並壓成一個；ZWJ 的表情符號留著。"""
+    """換行、Tab、NUL 變成空白並壓成一個；格式字元（雙向控制字元 U+202E、零寬空白 U+200B）
+    直接拿掉——不是換成空白，它們本來就沒有寬度。表情符號裡的 ZWJ 與 VS16（U+FE0F）留著。"""
     family = "".join(chr(code) for code in (0x1F468, 0x200D, 0x1F469, 0x200D, 0x1F467))
-    raw = "  好吃\n\t嗎" + chr(0x202E) + "真的" + chr(0) + " " + family + "  "
+    heart = chr(0x2764) + chr(0xFE0F)
+    parts = ["  好吃\n\t嗎", chr(0x202E), "真", chr(0x200B), "的", chr(0), " ", family, heart]
+    raw = "".join(parts) + chr(0x200D) + "  "  # 結尾多一個沒有夾在兩個字中間的 ZWJ
 
     response = await _post(client, cast.bob, cast.meal.id, raw)
 
     assert response.status_code == 201
-    assert response.json()["body"] == f"好吃 嗎 真的 {family}"
-    assert await _bodies(db_session, cast.meal) == [f"好吃 嗎 真的 {family}"]
+    assert response.json()["body"] == f"好吃 嗎真的 {family}{heart}"
+    [stored] = await _bodies(db_session, cast.meal)
+    assert stored == f"好吃 嗎真的 {family}{heart}"
+    # 存進去的那一列裡沒有雙向控制字元與零寬空白；ZWJ 只剩表情符號裡的那兩個。
+    assert chr(0x202E) not in stored and chr(0x200B) not in stored
+    assert stored.count(chr(0x200D)) == 2
 
 
 @pytest.mark.parametrize(
@@ -116,6 +123,12 @@ async def test_the_body_is_cleaned_into_one_safe_line(client, db_session, cast):
         ("", 422),
         ("   \n\t ", 422),
         (chr(0x202E) + chr(0), 422),  # 清完是空的
+        # 只有看不見的字（審查 M2）：以前存得進去，畫面上是一則空的留言。
+        (chr(0x200B), 422),
+        (chr(0x200B) + " " + chr(0xFEFF) + chr(0x2060) + chr(0x200C), 422),
+        (chr(0x200D), 422),  # 單獨的 ZWJ 也是看不見的
+        # 200 個字中間夾了看不見的字：量的是清完之後的長度。
+        (("字" + chr(0x200B)) * 200, 201),
         ("字" * 1001, 422),  # 清理之前的上限
         # 清理之前的上限**自己**擋的那一格：清完只剩一個字，200 那一道管不到它。
         ("字" + " " * 999, 201),
@@ -132,6 +145,10 @@ async def test_the_body_is_cleaned_into_one_safe_line(client, db_session, cast):
         "empty",
         "blank",
         "control",
+        "zero-width",
+        "zero-width-mixed",
+        "lone-zwj",
+        "200-with-zero-width",
         "raw",
         "raw-1000-padded",
         "raw-1001-padded",

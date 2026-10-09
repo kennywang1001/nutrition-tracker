@@ -1,3 +1,4 @@
+import pytest
 from sqlalchemy import select
 
 from app.models.user import User, UserRole
@@ -166,6 +167,53 @@ async def test_register_strips_surrounding_whitespace_from_display_name(client, 
 
     assert response.status_code == 201
     assert response.json()["display_name"] == "阿明"
+
+
+async def test_register_drops_invisible_format_characters_from_display_name(
+    client, db_session, invite_token
+):
+    """名字會出現在通知的句子裡、給共同好友看：U+202E（由右至左覆寫）能把那一行後面的字
+    倒過來（審查 M2）。拿掉，不是拒絕；表情符號裡的 ZWJ 留著。"""
+    cook = chr(0x1F468) + chr(0x200D) + chr(0x1F373)
+    response = await client.post(
+        "/api/auth/register",
+        json={
+            "email": "new@example.com",
+            "password": "a-good-password",
+            "display_name": chr(0x200B) + " 阿" + chr(0x202E) + "明" + cook + chr(0xFEFF) + " ",
+            "invite_token": invite_token,
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["display_name"] == "阿明" + cook
+    stored = await db_session.scalar(
+        select(User.display_name).where(User.email == "new@example.com")
+    )
+    assert stored == "阿明" + cook
+
+
+@pytest.mark.parametrize(
+    "name",
+    [chr(0x200B), chr(0x202E) + " " + chr(0x200B), chr(0x200D)],
+    ids=["zero-width", "mixed", "lone-zwj"],
+)
+async def test_register_rejects_a_display_name_with_nothing_visible(
+    client, db_session, invite_token, name
+):
+    response = await client.post(
+        "/api/auth/register",
+        json={
+            "email": "new@example.com",
+            "password": "a-good-password",
+            "display_name": name,
+            "invite_token": invite_token,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert await db_session.scalar(select(User.id).where(User.email == "new@example.com")) is None
 
 
 async def test_register_normalises_email_to_lowercase(client, db_session, invite_token):
