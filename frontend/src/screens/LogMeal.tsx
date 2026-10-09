@@ -430,8 +430,11 @@ export function LogMeal({ onSaved }: Props) {
 					{photoPreview !== null && (
 						<div className={styles.preview}>
 							<img src={photoPreview} alt="選好的照片" />
+							{/* 記一餐不在 ui.module.css 的 .screen 裡，通用的按鈕樣式套不到：
+							    不指定的話這顆是瀏覽器預設的樣子（同這張表單的「移除 X」）。 */}
 							<button
 								type="button"
+								className={ui.secondary}
 								disabled={saveMeal.isPending}
 								onClick={() => setPhoto(null)}
 							>

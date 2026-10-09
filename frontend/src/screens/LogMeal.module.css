@@ -48,10 +48,6 @@
 	gap: var(--space-3);
 }
 
-.preview button {
-	min-height: 44px;
-}
-
 .preview img {
 	width: 72px;
 	height: 72px;
