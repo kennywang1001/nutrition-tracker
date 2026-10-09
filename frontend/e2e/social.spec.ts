@@ -305,6 +305,15 @@ test("社群：按讚、留言、通知、刪留言；解除好友之後讚不�
 	await expect(ownComments(1)).toBeVisible();
 	await expect(pageA.getByText("1 個讚", { exact: true })).toHaveCount(1);
 
+	// 「我的」最上面的卡片：同一個數字，旁邊是進通知頁的連結。
+	await go(pageA, "我的");
+	await expect(pageA.getByTestId("notifications-card")).toContainText(
+		"3 則新通知",
+	);
+	await expectTouchTargets(
+		pageA.getByRole("link", { name: "看通知", exact: true }),
+		"「我的」的「看通知」",
+	);
 	const noticesA = await openNotifications(pageA);
 	const rows = noticesA.getByRole("link");
 	await expect(rows).toHaveCount(3);
