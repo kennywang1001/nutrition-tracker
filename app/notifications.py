@@ -49,3 +49,20 @@ def notify_comment(
             comment_id=comment_id,
         )
     )
+
+
+_FRIEND_TYPES = (NotificationType.FRIEND_REQUEST, NotificationType.FRIEND_ACCEPTED)
+
+
+async def notify_friend(db: AsyncSession, *, to: int, actor: int, kind: NotificationType) -> None:
+    """好友邀請（`to` 收到 `actor` 的邀請）或接受（`actor` 接受了 `to` 的邀請）。
+
+    先刪掉同一個方向的舊好友通知：拒絕之後再邀請、解除之後再加回來，都只有最新的一則。"""
+    await db.execute(
+        delete(Notification).where(
+            Notification.user_id == to,
+            Notification.actor_id == actor,
+            Notification.type.in_(_FRIEND_TYPES),
+        )
+    )
+    db.add(Notification(user_id=to, actor_id=actor, type=kind))

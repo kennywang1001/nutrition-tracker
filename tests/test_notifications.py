@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy import func, select, update
 
+from app.friend_codes import format_friend_code
 from app.models.friendship import FriendshipStatus
 from app.models.social import Notification, NotificationType
 from tests.factories import create_comment, create_friendship, create_meal
@@ -401,3 +402,232 @@ async def test_all_three_need_a_login(client):
     assert (await client.get("/api/notifications")).status_code == 401
     assert (await client.get("/api/notifications/unread-count")).status_code == 401
     assert (await client.post("/api/notifications/read-all", json={"up_to": 1})).status_code == 401
+
+
+# ---------- 好友的通知（規格 D14、§5.7） ----------
+
+
+async def _send_request(client, sender, target):
+    response = await client.post(
+        "/api/friends/requests",
+        headers=auth(sender),
+        json={"code": format_friend_code(target.friend_code)},
+    )
+    assert response.status_code in (200, 201), response.text
+    return response
+
+
+async def _pending_id(client, user, box: str, other) -> int:
+    """`user` 的收件匣（incoming）或寄件匣（outgoing）裡，跟 `other` 的那一個邀請。
+    用人去找：`make_cast` 裡阿丁給愛麗絲的邀請一直都在。"""
+    requests = (await client.get("/api/friends/requests", headers=auth(user))).json()
+    [request] = [r for r in requests[box] if r["person"]["id"] == other.id]
+    return request["id"]
+
+
+async def _accept(client, receiver, sender):
+    request_id = await _pending_id(client, receiver, "incoming", sender)
+    response = await client.post(
+        f"/api/friends/requests/{request_id}/accept", headers=auth(receiver)
+    )
+    assert response.status_code == 200, response.text
+
+
+async def _turn_down(client, who, box: str, other):
+    request_id = await _pending_id(client, who, box, other)
+    response = await client.delete(f"/api/friends/requests/{request_id}", headers=auth(who))
+    assert response.status_code == 204, response.text
+
+
+async def test_a_friend_request_tells_the_receiver(client, db_session, cast):
+    response = await _send_request(client, cast.eve, cast.alice)
+    assert response.status_code == 201 and response.json()["status"] == "pending"
+
+    [item] = await _inbox(client, cast.alice)
+    assert (item["type"], item["actor_name"], item["meal"], item["comment_preview"]) == (
+        "friend_request",
+        "伊芙",
+        None,
+        None,
+    )
+    assert item["is_read"] is False
+    assert await _unread(client, cast.alice) == 1
+    # 送的人自己、愛麗絲的好友：都沒有。
+    assert await _inbox(client, cast.eve) == [] and await _inbox(client, cast.bob) == []
+    assert await _rows(db_session) == 1
+
+
+async def test_accepting_tells_the_sender_and_retires_the_request_notice(client, cast):
+    await _send_request(client, cast.eve, cast.alice)
+    assert len(await _inbox(client, cast.alice)) == 1
+
+    await _accept(client, cast.alice, cast.eve)
+
+    [item] = await _inbox(client, cast.eve)
+    assert (item["type"], item["actor_name"], item["meal"], item["comment_preview"]) == (
+        "friend_accepted",
+        "愛麗絲",
+        None,
+        None,
+    )
+    assert await _unread(client, cast.eve) == 1
+    # 邀請不在等了：收件人那一則不再顯示，未讀數也不算它。
+    assert await _inbox(client, cast.alice) == []
+    assert await _unread(client, cast.alice) == 0
+
+
+@pytest.mark.parametrize(
+    ("who_deletes", "box", "other"),
+    [("alice", "incoming", "eve"), ("eve", "outgoing", "alice")],
+    ids=["rejected", "withdrawn"],
+)
+async def test_rejecting_or_withdrawing_hides_the_request_notice(
+    client, cast, who_deletes, box, other
+):
+    await _send_request(client, cast.eve, cast.alice)
+    assert len(await _inbox(client, cast.alice)) == 1
+
+    await _turn_down(client, getattr(cast, who_deletes), box, getattr(cast, other))
+
+    assert await _inbox(client, cast.alice) == []
+    assert await _unread(client, cast.alice) == 0
+    # 沒有人因為拒絕或收回收到通知。
+    assert await _inbox(client, cast.eve) == []
+
+
+async def test_sending_to_someone_who_already_asked_makes_friends_and_tells_them(
+    client, db_session, cast
+):
+    """阿丁的邀請還在等（`make_cast`）；愛麗絲用他的好友碼送邀請 → 直接成立。"""
+    response = await _send_request(client, cast.alice, cast.dan)
+
+    assert response.json()["status"] == "accepted"
+    assert _who_did_what(await _inbox(client, cast.dan)) == [("愛麗絲", "friend_accepted")]
+    assert await _inbox(client, cast.alice) == []
+    assert await _rows(db_session) == 1
+
+
+async def test_a_request_that_is_refused_writes_nothing(client, db_session, cast):
+    """已經是好友（409）、已經送過（409）、自己的碼與不存在的碼（404）：都沒有通知。"""
+    for sender, code, status in [
+        (cast.bob, format_friend_code(cast.alice.friend_code), 409),
+        (cast.dan, format_friend_code(cast.alice.friend_code), 409),
+        (cast.eve, format_friend_code(cast.eve.friend_code), 404),
+    ]:
+        response = await client.post(
+            "/api/friends/requests", headers=auth(sender), json={"code": code}
+        )
+        assert response.status_code == status, response.text
+
+    assert await _rows(db_session) == 0
+
+
+async def test_asking_again_after_a_rejection_leaves_one_fresh_notice(client, db_session, cast):
+    await _send_request(client, cast.eve, cast.alice)
+    [first] = await _inbox(client, cast.alice)
+    await client.post(
+        "/api/notifications/read-all", headers=auth(cast.alice), json={"up_to": first["id"]}
+    )
+    await _turn_down(client, cast.alice, "incoming", cast.eve)
+
+    await _send_request(client, cast.eve, cast.alice)
+
+    [again] = await _inbox(client, cast.alice)  # 一則，不是兩則
+    assert again["id"] != first["id"] and again["is_read"] is False
+    assert await _rows(db_session) == 1
+
+
+async def test_an_old_request_notice_does_not_resurface_when_i_ask_them(client, cast):
+    """伊芙邀愛麗絲、愛麗絲拒絕；後來換愛麗絲邀伊芙。這一對現在又有一列「在等」，
+    但那是愛麗絲送的——愛麗絲那則舊的「伊芙想加你為好友」不能跟著冒出來。"""
+    await _send_request(client, cast.eve, cast.alice)
+    await _turn_down(client, cast.alice, "incoming", cast.eve)
+
+    await _send_request(client, cast.alice, cast.eve)
+
+    assert await _inbox(client, cast.alice) == []
+    assert _who_did_what(await _inbox(client, cast.eve)) == [("愛麗絲", "friend_request")]
+
+
+async def test_a_request_to_someone_else_does_not_revive_my_notice(client, cast):
+    """伊芙邀愛麗絲、被拒絕；伊芙接著邀鮑伯（那一個還在等）。愛麗絲的通知看的是
+    「伊芙給**我**的邀請還在不在」，不是「伊芙有沒有任何一個邀請在等」。"""
+    await _send_request(client, cast.eve, cast.alice)
+    await _turn_down(client, cast.alice, "incoming", cast.eve)
+
+    await _send_request(client, cast.eve, cast.bob)
+
+    assert await _inbox(client, cast.alice) == []
+    assert _who_did_what(await _inbox(client, cast.bob)) == [("伊芙", "friend_request")]
+
+
+async def test_unfriending_hides_the_accepted_notice(client, db_session, cast):
+    """伊芙另外還有鮑伯這個好友：解除之後她仍然「有好友」，只是不是愛麗絲。"""
+    await create_friendship(db_session, cast.eve, cast.bob)
+    await _send_request(client, cast.eve, cast.alice)
+    await _accept(client, cast.alice, cast.eve)
+    assert len(await _inbox(client, cast.eve)) == 1
+
+    await unfriend(db_session, cast.alice, cast.eve)
+
+    assert await _inbox(client, cast.eve) == []
+    assert await _unread(client, cast.eve) == 0
+
+
+async def test_becoming_friends_again_keeps_their_older_notifications(client, db_session, cast):
+    """好友通知「只留最新一則」的那個 DELETE 不能掃到讚與留言的通知。"""
+    await _like(client, cast.bob, cast.meal)
+    await _comment(client, cast.bob, cast.meal, "解除之前留的")
+    await unfriend(db_session, cast.alice, cast.bob)
+    await _send_request(client, cast.bob, cast.alice)
+    # 邀請還在等：看得到的只有邀請那一則，讚與留言的還藏著。
+    assert _who_did_what(await _inbox(client, cast.alice)) == [("鮑伯", "friend_request")]
+
+    await _accept(client, cast.alice, cast.bob)
+
+    assert _who_did_what(await _inbox(client, cast.alice)) == [
+        ("鮑伯", "comment"),
+        ("鮑伯", "like"),
+    ]
+    assert _who_did_what(await _inbox(client, cast.bob)) == [("愛麗絲", "friend_accepted")]
+
+
+async def test_each_direction_keeps_its_own_notice(client, db_session, cast):
+    """「只留最新一則」是**同一個方向**的：愛麗絲接受伊芙時刪的是（伊芙 ← 愛麗絲）那一則，
+    不是（愛麗絲 ← 伊芙）的，也不是別人的。"""
+    await _send_request(client, cast.eve, cast.alice)
+    await _send_request(client, cast.eve, cast.bob)
+    await _accept(client, cast.alice, cast.eve)
+
+    # 愛麗絲 ← 伊芙（邀請，藏起來了）、鮑伯 ← 伊芙（邀請）、伊芙 ← 愛麗絲（接受）。
+    assert await _rows(db_session) == 3
+    assert _who_did_what(await _inbox(client, cast.bob)) == [("伊芙", "friend_request")]
+    assert _who_did_what(await _inbox(client, cast.eve)) == [("愛麗絲", "friend_accepted")]
+
+    # 同一個收件人、另一個動作者：小卡也邀鮑伯，伊芙那一則還在。
+    await _send_request(client, cast.carol, cast.bob)
+    assert _who_did_what(await _inbox(client, cast.bob)) == [
+        ("小卡", "friend_request"),
+        ("伊芙", "friend_request"),
+    ]
+
+
+async def test_the_friend_notices_are_committed_with_the_request(client, db_session, cast):
+    """共用 session 看得到沒 commit 的寫入。端點回來之後 rollback 一次：通知如果是在
+    commit 之後才寫的（不在邀請的那個交易裡），這裡會不見。"""
+    alice, eve = auth(cast.alice), auth(cast.eve)
+    code = format_friend_code(cast.alice.friend_code)
+
+    sent = await client.post("/api/friends/requests", headers=eve, json={"code": code})
+    assert sent.status_code == 201
+    await db_session.rollback()
+    [notice] = (await client.get("/api/notifications", headers=alice)).json()["items"]
+    assert notice["type"] == "friend_request"
+
+    requests = (await client.get("/api/friends/requests", headers=alice)).json()
+    [request_id] = [r["id"] for r in requests["incoming"] if r["person"]["display_name"] == "伊芙"]
+    accepted = await client.post(f"/api/friends/requests/{request_id}/accept", headers=alice)
+    assert accepted.status_code == 200
+    await db_session.rollback()
+    [notice] = (await client.get("/api/notifications", headers=eve)).json()["items"]
+    assert notice["type"] == "friend_accepted"

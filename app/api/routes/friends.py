@@ -35,7 +35,9 @@ from app.friend_visibility import (
 )
 from app.models.friendship import Friendship, FriendshipStatus
 from app.models.meal import Meal
+from app.models.social import NotificationType
 from app.models.user import User
+from app.notifications import notify_friend
 from app.schemas.friend import (
     FriendCodeResponse,
     FriendDayResponse,
@@ -109,7 +111,10 @@ async def _accept(db: AsyncSession, friendship_id: int, receiver_id: int) -> _Ac
         return None
     accepted_at, user_a, user_b = row
     assert accepted_at is not None
-    return _Accepted(since=accepted_at, other_id=user_b if user_a == receiver_id else user_a)
+    other_id = user_b if user_a == receiver_id else user_a
+    # 跟接受在同一個交易：呼叫端 commit 才成立，接受落空（rollback）就不會留下通知。
+    await notify_friend(db, to=other_id, actor=receiver_id, kind=NotificationType.FRIEND_ACCEPTED)
+    return _Accepted(since=accepted_at, other_id=other_id)
 
 
 @router.post("/requests", response_model=FriendRequestResult)
@@ -161,7 +166,9 @@ async def _insert_request(
     db: AsyncSession, user_a: int, user_b: int, requested_by: int
 ) -> Friendship | None:
     """新增一筆邀請並 commit → None。對方剛好同時送了邀請給我：唯一約束擋住
-    這一列 → 回那一列（改走「既有那一列」）。"""
+    這一列 → 回那一列（改走「既有那一列」）。
+
+    邀請與「有人想加你為好友」的通知在同一個交易（社群規格 §5.7）。"""
     db.add(
         Friendship(
             user_a=user_a,
@@ -171,6 +178,15 @@ async def _insert_request(
         )
     )
     try:
+        # 先 flush 讓唯一約束說話：通知的 DELETE 會觸發 autoflush，IntegrityError 要落在
+        # 這個 try 裡——而且撞到的時候通知還沒寫，rollback 之後什麼都不會留下。
+        await db.flush()
+        await notify_friend(
+            db,
+            to=user_b if requested_by == user_a else user_a,
+            actor=requested_by,
+            kind=NotificationType.FRIEND_REQUEST,
+        )
         await db.commit()
     except IntegrityError:
         await db.rollback()
