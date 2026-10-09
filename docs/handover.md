@@ -29,7 +29,7 @@
 | 項目 | 數字 |
 |---|---|
 | 端點 | **78**（OpenAPI 的 operation 數，跟 `grep -c "@router\." app/api/routes/*.py` 的加總一樣；2026-10-09） |
-| 測試 | 後端 **998**（`pytest -q -W error` 全綠，約 2 分 20 秒）；前端 `Test Files 138`、`Tests 1649`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **45** 條（Playwright）。2026-10-09 在 `feat/reports-month-export` 量的（審查修正之後） |
+| 測試 | 後端 **1004**（`pytest -q -W error` 全綠，約 2 分 20 秒）；前端 `Test Files 138`、`Tests 1655`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **45** 條（Playwright）。2026-10-09 在 `feat/reports-month-export` 量的（審查修正與三個後續修正之後） |
 | 覆蓋率 | 96%（2026-09 量的，之後沒再量） |
 | 資料表 | 16（+ `alembic_version`） |
 | Migration | `0001` ~ `0016` |
@@ -993,7 +993,7 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
 | 原始碼裡看不見的 BOM（U+FEFF） | 計畫的程式碼片段把 BOM 直接寫成字面值：複製、重打、經過工具轉手都可能**無聲地掉了**，而那幾條測試守的正是「BOM 還在」。一律寫成跳脫字元——Python `"\ufeff".encode()`、TypeScript `"\uFEFF"`；`grep -n $'\xef\xbb\xbf'` 找得到漏網的。**反方向也會**：寫這一列的時候，編輯工具把打進去的跳脫字元換成了真的 BOM——動到它的檔案，commit 前數一次位元組 |
 | **Playwright 不做型別檢查** | spec 用 esbuild 轉譯就跑，型別錯了照樣綠；`npm run typecheck`（`tsc -b`，含 `tsconfig.e2e.json`）才看得到。`noUncheckedIndexedAccess` 底下從陣列解構出來的每一個都多一個 `undefined`，只擋 `null` 的 `if` 縮不掉（`reports-export.spec.ts` 第一版就這樣進了一個 commit）。**加了 spec 之後 typecheck 要重跑**，而且檢查與 `git commit` 之間用 `&&` 串，不要用 `;` |
 | **串流 generator 的 `finally`** | **不保證會跑**。Starlette 不會 `aclose()` 交給 `StreamingResponse` 的 generator：用戶端斷線時它取消的是卡在 `send` 的那個 task，generator 停在 `yield` 上，`finally` 要等垃圾回收；標頭就送不出去時 generator **從來沒被迭代**，`finally` 永遠不跑。`background=` 只在送成功之後才跑。**要在回應結束時一定收尾的東西，放在 `yield` 的依賴裡**（FastAPI ≥ 0.118 在送完、失敗、被取消、沒開始之後都會收尾；`export_slot`） |
-| anyio 的 shield | `with anyio.CancelScope(shield=True):` 擋的是 anyio cancel scope 的取消（Starlette 斷線時用的那種），**擋不住直接對 task 的 `cancel()`**。擋完之後取消在「下一個真的會等的 await」才送達——如果外面只剩 `yield` 與一個不等任何東西的 `send`，它永遠送不達：擋完自己 `await anyio.lowlevel.checkpoint_if_cancelled()`。`with` 裡面不能有 `yield`（cancel scope 不能跨 yield） |
+| anyio 的 shield | `with anyio.CancelScope(shield=True):` 擋的是 anyio cancel scope 的取消（Starlette 斷線時用的那種），**擋不住直接對「跑著它的那個 task」的 `cancel()`**——但**先確認被取消的是哪一個 task**：uvicorn 關機（設了 `--timeout-graceful-shutdown` 才會）取消的是請求的 task，而 `StreamingResponse` 的串流是 task group 裡的子 task（uvicorn 0.52 報 ASGI 2.3 時），它收到的是 cancel scope 的取消，shield 擋得住。這一格原本把「伺服器關機」寫成擋不住的例子，是錯的（探針實測；ASGI ≥ 2.4 時 Starlette 直接在請求的 task 裡跑串流，那時才擋不住）。**shield 裡的每一步都要有自己的期限**——匯出那一段沒有：`pool_timeout` 30 秒＋沒有 statement timeout 的查詢。擋完之後取消在「下一個真的會等的 await」才送達——如果外面只剩 `yield` 與一個不等任何東西的 `send`，它永遠送不達：擋完自己 `await anyio.lowlevel.checkpoint_if_cancelled()`。`with` 裡面不能有 `yield`（cancel scope 不能跨 yield） |
 | SQLAlchemy：取消落在資料庫操作中間 | 被取消打斷的 execute／commit，連線會被**作廢**；在 anyio 已取消的 scope 裡連終止都會再被取消一次，log 一個 `Exception terminating connection … CancelledError` 的 ERROR。落在**借連線**（pool checkout、pre-ping）的中間更糟：那條連線沒有人握著、也沒被登記回去，`pool.checkedout()` 多一條，直到垃圾回收（那時再 log 一個 `garbage collector is trying to clean up non-checked-in connection`）。2.0.52 實測 |
 | `session.commit()`／`rollback()`／`close()` 結束一個只讀的交易 | 對資料庫都一樣，連線都回到池子。差別在 session 裡的物件：`rollback()` **一律**讓它們過期（`expire_on_commit=False` 管不到），之後碰屬性就是 `MissingGreenlet`；`close()` 把它們踢出 session。共用一個 session 的測試夾具會踩到——匯出用 `commit()` |
 | `httpx.ASGITransport` 與斷線 | 它的 `receive()` 要等回應送完才回 `http.disconnect`，測不到「送到一半斷線」；而且 app 沒送結尾就回來時它自己 `assert response_complete`。要模擬斷線：在 `app` 外面包一層 ASGI，換掉 `receive`（事件 set 之後回 `http.disconnect`）、app 回來之後替它補一個結尾（`tests/test_export.py` 的 `_on_the_wire`）。同一層換掉 `send` 就能看到「每一次送的那一刻」——這是端點層唯一看得到分塊的地方 |
@@ -1661,9 +1661,15 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
 16. **iOS 主畫面模式沒有實機驗證，到交接時仍然沒有**：分享面板與退回的 `<a download>` 兩條路都只有單元測試
     （守的是「走哪一條路」）。**要請使用者在 iPhone 上從主畫面打開、實際按一次「花費」**，結果補在這裡。
 17. 匯出的限速在記憶體裡，重啟歸零（同其他限速器）。「一個人同時一個」也是；多容器的話每個容器各算各的。
-18. **用戶端斷線時，正在做的那一塊會做完才停**（最多多讀 500 列／200 餐）。擋的是 Starlette 斷線時用的 anyio cancel
-    scope；**伺服器關機時直接取消 task 擋不住**——那時 log 裡可能有 `Exception terminating connection … CancelledError`
-    的 traceback，是已知的雜訊（審查 M4；用戶端斷線的那條路已經不會出現）。
+18. **用戶端斷線時，正在做的那一塊會做完才停**（通常最多多讀 500 列／200 餐）。**伺服器關機的取消也一樣**——這一點
+    原本寫「關機時直接取消 task 擋不住、log 裡可能有 traceback」，**是錯的**（後續修正時用審查的探針確認）：
+    - uvicorn 取消的是請求的 task，串流是 Starlette task group 裡的子 task，收到的是 anyio cancel scope 的取消，
+      shield 擋得住。關機的取消最多等一塊，那條路上沒有 `Exception terminating connection … CancelledError`。
+      （靠的是 uvicorn 報 ASGI 2.3；報 2.4 的話 Starlette 直接在請求的 task 裡跑串流，要重看——§7「anyio 的 shield」。）
+    - **這個部署裡 uvicorn 關機時根本不取消**：`Dockerfile` 的 CMD 沒有 `--timeout-graceful-shutdown`。卡住的下載會讓
+      `docker compose stop`／`restart` 等到 SIGKILL（預設 10 秒）——這個分支之前就是這樣。
+    - **擋住的那一段有多長**：借連線最多等 `pool_timeout`（預設 30 秒）＋查詢（沒有 statement timeout），這段時間取消
+      送不達。**連線池被借光時，正在匯出的人**等滿 30 秒拿到 `TimeoutError`，檔案斷在半路（第 12 點）。
 19. **換月份時留著的上一個月是 `inert`**，請求重試的期間（預設 3 次，約 7 秒）也是：看得到但不能操作。jsdom 不實作
     `inert`，單元測試守的是屬性；真的點不到由 e2e 守。
 20. **「離線」是瀏覽器說的**（`fetchStatus === "paused"`）。連得上網路但連不到後端（tailnet 不通）不是 paused：請求照常

@@ -118,7 +118,8 @@
 2. **M3：換月份時留著的上一個月還能操作；離線時它一直留著。** A11 加了 `inert` 與「`paused` 算讀不到」（§4.1）。
 3. **M4：斷線落在查詢中間時 log 一個 ERROR traceback**（`Exception terminating connection … CancelledError`）。
    I1 (a) 擋住取消之後，用戶端斷線不再打斷資料庫操作，這個 traceback 不再出現（探針跑三次、三個斷線的時間點）。
-   沒有接例外、沒有改 log 等級。伺服器關機時直接取消 task 的那條路擋不住，還是可能出現（§8 第 18 點）。
+   沒有接例外、沒有改 log 等級。~~伺服器關機時直接取消 task 的那條路擋不住，還是可能出現~~——**這句是錯的**：關機的取消走的也是
+   anyio 的 cancel scope，一樣被擋住，那條路上也不會出現（§8 第 18 點，後續修正時用探針確認）。
 4. **M5：停用時丟焦點、status 連字一起插進來。** A13、B15 改用 `aria-disabled`；status 區塊先在再填字（§4.2）。
 5. **M6：「session 活到最後一塊」原本只測花費那一支。** 三個端點各自宣告 `Depends(get_db)`，改成三條都測。
 
@@ -438,9 +439,18 @@
 16. **iOS 主畫面模式沒有實機驗證**。分享面板要使用者手勢還有效，資料很多、抓太久時會退回 `<a download>`——在那個模式下不保證有用。
 17. 匯出的限速在記憶體裡，重啟歸零（同其他限速器）。「一個人同時一個」也是：重啟清空（進行中的串流也一起斷了）；
     多容器的話每個容器各算各的，變成「一個人每個容器一個」。
-18. **用戶端斷線時，正在做的那一塊會做完才停**（借連線、查詢、結束交易這一段擋住取消）：最多多讀一塊（500 列／200 餐）。
-    擋的是 Starlette 斷線時用的 anyio cancel scope；**伺服器關機時直接取消 task 擋不住**——那時被打斷的連線會被作廢、
-    log 一個 `Exception terminating connection … CancelledError` 的 traceback（審查 M4 原本說的那個），是已知的雜訊。
+18. **用戶端斷線時，正在做的那一塊會做完才停**（借連線、查詢、結束交易這一段擋住取消）：通常最多多讀一塊（500 列／200 餐）。
+    - **伺服器關機的取消也一樣**（這一點原本寫「關機時直接取消 task 擋不住、會有 traceback」，**是錯的**）。uvicorn
+      取消的是請求的 task；串流是 Starlette task group 裡的子 task（uvicorn 報 ASGI 2.3 時 Starlette 這樣跑），被取消
+      的方式是 anyio 的 cancel scope——shield 擋得住。所以關機的取消最多等一塊（正在做的那一步做完才輪到），那條路上
+      **沒有** `Exception terminating connection` 的 traceback。審查的探針對請求的 task 直接 `cancel()`：那一步做完才
+      結束；把探針的 ASGI 版本改成 2.4（Starlette 直接在請求的 task 裡跑串流），同一個取消就打斷了那一步——
+      **uvicorn 哪天改報 2.4，這一點要重看**。
+    - **這個部署裡 uvicorn 關機時根本不取消**：`Dockerfile` 的 CMD 沒有 `--timeout-graceful-shutdown`，它一直等連線
+      自己結束。卡住的下載會讓容器等到 Docker 的 SIGKILL（預設 10 秒）才停——這個分支之前就是這樣，沒有變。
+    - **擋住的那一段有多長**：借連線最多等連線池的 `pool_timeout`（預設 30 秒，沒有改），查詢沒有
+      statement timeout——上限是「30 秒＋查詢要多久」，這段時間斷線與關機的取消都送不達。**連線池被借光時**（5＋10），
+      正在匯出的人在那裡等滿 30 秒、拿到 `TimeoutError`，檔案斷在半路（第 12 點的那種：狀態碼已經是 200）。
 19. **換月份時留著的上一個月是 `inert`**，請求重試的期間（TanStack 預設 3 次，約 7 秒）也是：看得到但不能操作。
     jsdom 不實作 `inert`，單元測試守的是屬性在不在；真的點不到、Tab 不到由 e2e 守。
 20. **「離線」是瀏覽器說的**（TanStack 的 `fetchStatus === "paused"`，靠瀏覽器的 `offline` 事件）。連得上網路但連不到後端

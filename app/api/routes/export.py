@@ -102,9 +102,26 @@ async def _release_between_chunks(
     的任何一步中間。被打斷的資料庫操作，SQLAlchemy 只能把那條連線作廢，而在被取消的 scope
     裡連關都關不掉（log 一個 `Exception terminating connection` 的 traceback）；落在「借」
     （pre-ping）的中間更糟：那條連線一直記在「借出去了」，要等垃圾回收才回到池子——修掉
-    「卡住的下載佔著連線」卻換來「斷線的下載漏掉連線」。擋住的時間最多是一塊的查詢
-    （`EXPORT_CHUNK_ROWS` 列）。擋不住直接對 task 的 `cancel()`（伺服器關機）——那跟
-    以前一樣。
+    「卡住的下載佔著連線」卻換來「斷線的下載漏掉連線」。
+
+    **擋住多久：通常是一塊的查詢（`EXPORT_CHUNK_ROWS` 列），但那不是上限。** 這一段裡沒有
+    任何一步有自己的期限：借連線最多等連線池的 `pool_timeout`（SQLAlchemy 預設的 30 秒，
+    `app/db.py` 沒有改），查詢沒有 statement timeout。上限是「30 秒＋查詢要多久」，這段時間
+    裡斷線與關機的取消都送不達。連線池被借光的時候（5＋10 條都在忙）更直接：**正在匯出的人**
+    在這裡等滿 30 秒、拿到連線池的 `TimeoutError`，串流斷在半路——標頭早就是 200 了，
+    用戶端拿到的是被截斷的檔案（規格 §8 第 12 點）。
+
+    **伺服器關機的取消也是做完這一步才輪到**（這裡原本寫「擋不住」，是錯的）。shield 擋
+    不住的是直接取消**跑著它的那個 task**；uvicorn 關機時取消的是請求的 task，而串流不在
+    那個 task 裡——uvicorn 報的 ASGI 版本是 2.3，Starlette 在這個版本把串流放進 task group
+    的子 task（另一個在聽斷線）。請求的 task 被取消，是 task group 用 anyio 的 cancel scope
+    去取消子 task：跟斷線同一條路，所以一樣最多等一塊，連線好好地還回去，沒有
+    `Exception terminating connection` 的 traceback（審查的探針實測；把探針的 ASGI 版本改成
+    2.4——Starlette 那時直接在請求的 task 裡跑串流——同一個取消就會打斷那一步）。
+
+    而這個部署裡 uvicorn 根本不會去取消：`Dockerfile` 的 CMD 沒有
+    `--timeout-graceful-shutdown`，關機時它一直等連線自己結束。卡住的下載會讓容器等到
+    Docker 的 SIGKILL（預設 10 秒）——這個分支之前就是這樣。
 
     **擋完要自己問一次「被取消了嗎」（`checkpoint_if_cancelled`）。** `body` 在兩個 `yield`
     之間做的事全部在 shield 裡面，外面只剩 `yield`——而斷線之後 uvicorn 的 `send` 馬上就

@@ -1061,7 +1061,8 @@ async def test_a_stalled_download_loses_the_slot_after_the_time_limit(
 
 
 async def test_the_slot_is_released_when_the_request_task_is_cancelled(client, db_session, held):
-    """同一種卡住，但結束的方式是整個請求的 task 被取消（伺服器關機時就是這樣）。"""
+    """同一種卡住，但結束的方式是整個請求的 task 被取消——uvicorn 設了
+    `--timeout-graceful-shutdown`、關機等到時間到的時候就是這樣（這個部署沒有設）。"""
     alice = (await create_user(db_session)).id
     stalled = asyncio.Event()
 
