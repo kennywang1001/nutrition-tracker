@@ -15,6 +15,7 @@ from app.api.routes import (
     health,
     me,
     meals,
+    notifications,
     social,
     stats,
     supplement_intakes,
@@ -43,6 +44,7 @@ app.include_router(me.router, prefix="/api")
 app.include_router(foods.router, prefix="/api")
 app.include_router(friends.router, prefix="/api")
 app.include_router(social.router, prefix="/api")
+app.include_router(notifications.router, prefix="/api")
 app.include_router(admin_foods.router, prefix="/api")
 app.include_router(admin_invites.router, prefix="/api")
 app.include_router(admin_users.router, prefix="/api")

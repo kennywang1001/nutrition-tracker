@@ -15,6 +15,7 @@ from app.errors import NotFoundError, UnprocessableEntityError
 from app.friend_meals import build_friend_meals
 from app.models.social import MealComment, MealLike
 from app.models.user import User
+from app.notifications import forget_like, notify_comment, notify_like
 from app.ratelimit import comment_rate_limiter, like_rate_limiter
 from app.schemas.social import (
     CommentCreate,
@@ -113,9 +114,15 @@ async def like_meal(
     meal = await load_visible_meal(db, user, meal_id, lock=True)
     if meal.user_id == user_id:
         raise UnprocessableEntityError("CANNOT_LIKE_OWN_MEAL", "不能對自己的餐點按讚")
-    await db.execute(
-        pg_insert(MealLike).values(meal_id=meal_id, user_id=user_id).on_conflict_do_nothing()
+    inserted = await db.scalar(
+        pg_insert(MealLike)
+        .values(meal_id=meal_id, user_id=user_id)
+        .on_conflict_do_nothing()
+        .returning(MealLike.id)
     )
+    if inserted is not None:
+        # 真的新增了才通知。重複的 PUT 不會走到這裡（衝突時 RETURNING 沒有列）。
+        await notify_like(db, owner_id=meal.user_id, actor_id=user_id, meal_id=meal_id)
     await db.commit()
     return await _like_state(db, user_id, meal_id)
 
@@ -130,10 +137,12 @@ async def unlike_meal(
     看不到這一餐（包含已經解除好友）就是 404——那個讚本來就被藏起來了。"""
     user_id = user.id
     like_rate_limiter.hit(str(user_id))
-    await load_visible_meal(db, user, meal_id, lock=True)
+    meal = await load_visible_meal(db, user, meal_id, lock=True)
     await db.execute(
         delete(MealLike).where(MealLike.meal_id == meal_id, MealLike.user_id == user_id)
     )
+    # 同一個交易：讚不在了，「他按了讚」的通知也不該留著（規格 D12）。
+    await forget_like(db, owner_id=meal.user_id, actor_id=user_id, meal_id=meal_id)
     await db.commit()
     return await _like_state(db, user_id, meal_id)
 
@@ -159,6 +168,11 @@ async def add_comment(
     owner_id = meal.user_id
     comment = MealComment(meal_id=meal_id, user_id=user_id, body=payload.body)
     db.add(comment)
+    await db.flush()  # 要先拿到留言的 id
+    # 同一個交易：留言寫進去了通知就一定在。
+    notify_comment(
+        db, owner_id=owner_id, actor_id=user_id, meal_id=meal_id, comment_id=comment.id
+    )
     await db.commit()
     await db.refresh(comment)
     return _comment_response(comment, display_name, viewer_id=user_id, owner_id=owner_id)

@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.errors import NotFoundError
 from app.models.friendship import Friendship, FriendshipStatus
 from app.models.meal import Meal
-from app.models.social import MealComment, MealLike
+from app.models.social import MealComment, MealLike, Notification, NotificationType
 from app.models.user import User
 
 
@@ -117,3 +117,20 @@ async def social_counts(
         )
         for meal_id in meal_ids
     }
+
+
+def notification_visible() -> ColumnElement[bool]:
+    """這則通知現在還看不看得到（規格 §4.3）。跟 `Notification` 一起用在 WHERE 裡。
+
+    - 好友邀請：那個邀請**還在等**（接受、拒絕、收回之後就不顯示）。
+    - 其他三種：做這件事的人現在是我的好友——解除之後，他留言的預覽不會留在我的通知裡。
+
+    餐或留言被刪的情況不用管：FK cascade 已經把那一列帶走了。"""
+    pair = (Notification.user_id, Notification.actor_id)
+    still_pending = exists().where(
+        Friendship.status == FriendshipStatus.PENDING,
+        Friendship.requested_by == Notification.actor_id,
+        *_pair(*pair),
+    )
+    is_request = Notification.type == NotificationType.FRIEND_REQUEST
+    return or_(and_(is_request, still_pending), and_(~is_request, _are_friends(*pair)))

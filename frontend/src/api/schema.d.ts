@@ -684,6 +684,71 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Notifications
+         * @description 最近 50 則，新的在前。一次查詢：動作者的名字、餐、留言都 join 回來。
+         *
+         *     餐不用再過一次「看不看得到」：讚與留言的通知只寫給餐的主人，收件人就是主人——
+         *     她把那一餐改成只有自己看得到，通知照樣在（規格 D5）。
+         */
+        get: operations["list_notifications_api_notifications_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/notifications/unread-count": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Unread Count
+         * @description 分頁上的數字。跟清單同一個過濾，但不受 50 則的上限影響。
+         */
+        get: operations["unread_count_api_notifications_unread_count_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/notifications/read-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read All
+         * @description 把我的、`id <= up_to`、還沒讀的標成已讀；回剩下的未讀數。
+         *
+         *     不套可見性的過濾：現在看不到的（對方已經解除好友）一起標掉沒有壞處。
+         */
+        post: operations["read_all_api_notifications_read_all_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/food-revisions": {
         parameters: {
             query?: never;
@@ -2317,6 +2382,48 @@ export interface components {
             /** Cost */
             cost?: number | string | null;
         };
+        /** NotificationItem */
+        NotificationItem: {
+            /** Id */
+            id: number;
+            type: components["schemas"]["NotificationType"];
+            /** Actor Name */
+            actor_name: string;
+            meal: components["schemas"]["NotificationMeal"] | null;
+            /** Comment Preview */
+            comment_preview: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Is Read */
+            is_read: boolean;
+        };
+        /**
+         * NotificationMeal
+         * @description 畫「你的午餐」與連結所需要的最少欄位。
+         */
+        NotificationMeal: {
+            /** Id */
+            id: number;
+            meal_type: components["schemas"]["MealType"];
+            /**
+             * Eaten At
+             * Format: date-time
+             */
+            eaten_at: string;
+        };
+        /**
+         * NotificationType
+         * @enum {string}
+         */
+        NotificationType: "like" | "comment" | "friend_request" | "friend_accepted";
+        /** NotificationsResponse */
+        NotificationsResponse: {
+            /** Items */
+            items: components["schemas"]["NotificationItem"][];
+        };
         /**
          * NullableMacrosResponse
          * @description 四個欄位各自可能是 null（陷阱 3：目標的四個營養素欄位都可以獨立
@@ -2513,6 +2620,11 @@ export interface components {
             trend: components["schemas"]["DayTrendResponse"][];
             /** Adherence */
             adherence: string | null;
+        };
+        /** ReadAllRequest */
+        ReadAllRequest: {
+            /** Up To */
+            up_to: number;
         };
         /** RefreshRequest */
         RefreshRequest: {
@@ -2899,6 +3011,11 @@ export interface components {
              * @default bearer
              */
             token_type: string;
+        };
+        /** UnreadCount */
+        UnreadCount: {
+            /** Count */
+            count: number;
         };
         /**
          * UpdateMeRequest
@@ -4146,6 +4263,79 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_notifications_api_notifications_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationsResponse"];
+                };
+            };
+        };
+    };
+    unread_count_api_notifications_unread_count_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnreadCount"];
+                };
+            };
+        };
+    };
+    read_all_api_notifications_read_all_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReadAllRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnreadCount"];
+                };
             };
             /** @description Validation Error */
             422: {

@@ -6,6 +6,8 @@ from typing import Annotated
 
 from pydantic import AfterValidator, BaseModel, Field
 
+from app.models.meal import MealType
+from app.models.social import NotificationType
 from app.schemas.friend import FriendMeal
 from app.schemas.validators import single_line
 
@@ -59,3 +61,36 @@ class CommentCreate(BaseModel):
     # 1000 是清理**之前**的長度（同 MealCreateRequest.description 的寫法）：擋掉超大的 body，
     # 又不會因為貼上的文字多了幾個換行就 422。
     body: Annotated[str, AfterValidator(_clean_comment)] = Field(max_length=1000)
+
+
+class NotificationMeal(BaseModel):
+    """畫「你的午餐」與連結所需要的最少欄位。"""
+
+    id: int
+    meal_type: MealType
+    eaten_at: datetime
+
+
+class NotificationItem(BaseModel):
+    id: int
+    type: NotificationType
+    # 只有名字（D9）。
+    actor_name: str
+    # 讚與留言才有；好友的兩種是 None。
+    meal: NotificationMeal | None
+    comment_preview: str | None
+    created_at: datetime
+    is_read: bool
+
+
+class NotificationsResponse(BaseModel):
+    items: list[NotificationItem]
+
+
+class UnreadCount(BaseModel):
+    count: int
+
+
+class ReadAllRequest(BaseModel):
+    # 清單裡最新那一則的 id：之後才到的通知不會沒被看過就變成已讀（D15）。
+    up_to: int = Field(gt=0, lt=2**63)

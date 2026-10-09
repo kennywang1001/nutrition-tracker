@@ -22,7 +22,7 @@ from app.api.routes.social import add_comment, like_meal
 from app.errors import NotFoundError
 from app.models.friendship import Friendship, FriendshipStatus
 from app.models.meal import Meal, MealType
-from app.models.social import MealComment, MealLike
+from app.models.social import MealComment, MealLike, Notification
 from app.models.user import User
 from app.schemas.social import CommentCreate
 from tests.conftest import TEST_DATABASE_URL
@@ -107,6 +107,14 @@ async def test_the_second_of_two_simultaneous_likes_waits_then_does_nothing(inde
             assert (state.like_count, state.liked_by_me) == (1, True)
 
         assert await _like_rows(independent_sessions, meal) == 1
+        async with independent_sessions() as check:
+            notes = await check.scalar(
+                select(func.count())
+                .select_from(Notification)
+                .where(Notification.meal_id == meal.id)
+            )
+        # 第一個「PUT」是測試自己寫的列（沒寫通知）；第二個什麼都沒新增，所以也不該寫。
+        assert notes == 0
     finally:
         await _clean_up(independent_sessions, alice, bob)
 
