@@ -189,6 +189,74 @@
 - 記一餐不在 `ui.module.css` 的 `.screen` 裡：「移除照片」那顆按鈕是瀏覽器預設的樣子（原本就是）。
 - dev 的 `kenny.demo` 帳號多了幾個私人食物（截圖時真的建的：滷雞腿、燙青菜、味噌湯、烤鯖魚…），食物沒有刪除的端點；那幾餐刪掉了。
 
+**Task 7 之前的一個小收尾（`7362d06`）**
+
+- 上面第三點的「移除照片」改成次要按鈕：加 `ui.secondary`，原本只補高度的 `.preview button { min-height: 44px }` 拿掉
+  （`.secondary` 自己有 44px）。可及名稱沒有變。390 寬截圖量過：94×44、沒有橫向捲軸。單元測試照樣 `Test Files 142`、`Tests 1788`。
+
+**Task 7（`c94d5e2`）**
+
+環境：`docker compose up -d --build api`；dev 資料庫已經是 `0017 (head)`；`POST /api/ai/analyze-meal` 不帶票回 401（端點在）。
+spec 用 `sed -n` 從這份計畫依行號原樣取出，再過一次 `biome check --write`。
+
+| 原本寫的 | 實際 | 為什麼 |
+|---|---|---|
+| 「描述」那一條：`getByRole("link", { name: /^編輯 \d{2}:\d{2} 點心$/ })` | 等到逾時（30 秒）。改成 `/^編輯 .+ 點心$/` | 連結的名稱是 `formatTime()`＝`toLocaleTimeString(undefined, …)`，跟瀏覽器語系走；Playwright 的 Chromium 預設 en-US，名稱是「編輯 05:42 PM 點心」。新帳號只有這一餐，不需要靠時間的格式來認。CSV 那一列的 `\d{2}:\d{2}` 是後端寫的，照舊 |
+| Step 3：`5 passed` | 第一次 4 passed、1 failed（上面那一條）；改完 `5 passed` | — |
+| 多樣那一條量兩處點擊目標（清單、AI 估的項目） | 多量一處：照片預覽的「移除照片」 | 上面那個收尾沒有任何測試守；拿掉 `ui.secondary` 紅在「照片預覽：「移除照片」的高度」（23px） |
+| `ai-estimate.spec.ts`：兩條各自寫一次 `page.waitForResponse(…)` | 抽成檔案裡的 `analyzeMealResponse(page)`，兩條共用 | 同一段判斷寫兩次 |
+| `-g 描述` 只跑第一條 | 兩條都跑 | 第二條的標題裡也有「描述」（「…飲食頁看到每一樣、描述與照片」）。不影響結果，表裡照實寫 |
+| 整套 `47 passed` | **`47 passed`（31.9 秒）、再一次 `47 passed`（34.7 秒）**，預設 workers（6） | 19 個檔案。跑完 `docker compose logs api --since 20m \| grep 重用` 是 0 行；那 20 分鐘裡 `analyze-meal` 只有 200（短路）、503（沒設定）、401（開工前的探針）——假造的那幾次沒有到後端 |
+
+**Task 7 的突變（實測；每個都改、跑、還原、比對位元組，`.py` 還原後 `touch` 並等 `--reload`）**
+
+| # | 突變 | 跑 | 實測 |
+|---|---|---|---|
+| 1 | `MealCard` 拿掉描述那一段 | `ai-multi-food` | 兩條都紅（`meal-description-…`：`toHaveCount(1)` 收到 0；另一條 `element(s) not found`） |
+| 2 | `EditMeal` 的 `mealChanges` 不送 `description` | 同上 | 「描述」紅：「儲存」一直是停用的，等不到 PATCH 的回應（逾時） |
+| 3 | 後端 `meal_csv` 的 `tail` 拿掉 `meal.description` | 同上 | 「描述」紅：那一列是 `…,28.00,,否`，少一格 |
+| 4 | 後端 `_clean_optional_single_line` 原樣回傳 | 同上 | **綠**（如計畫預期：e2e 的描述沒有控制字元，清理由 `tests/test_meals_description.py` 守） |
+| 5 | `resolveFood` 不用食物庫的（一律建） | 同上 | 「多樣」紅：等到的第一個 `POST /api/foods` 是 409，不是 201 |
+| 6 | `onItemsReady` 不設照片 | 同上 | 「多樣」紅：「選好的照片」不出現 |
+| 7 | `LogMeal.module.css` 的 `.aiItems input` 拿掉 `min-height: 44px` | 同上 | **綠——存活**。整張表單的 `.form input:not([type="file"]):not([type="checkbox"])` 也給 44px（Task 5 補的），「AI 估的項目」的輸入框在 `.form` 裡，兩條規則各自保證同一件事 |
+| 7a | 只拿掉 `.form input…` 那一條的 `min-height` | 同上 | 「描述」紅在「記一餐：輸入框」（36px）；「多樣」綠（`.aiItems input` 撐著） |
+| 7b | 兩條一起拿掉 | 同上 | 兩條都紅；「多樣」紅在「AI 估的項目：「第 1 個」的高度」（36px）。**這個性質有人守，`.aiItems input` 那一行單獨沒有**——留著不補：它讓這一塊不依賴外層表單的規則 |
+| 7c | 「移除 X」拿掉 `ui.secondary` | 同上 | 「多樣」紅：「AI 估的項目：「移除」的高度」（23px） |
+| 8 | `AiMealPanel.module.css` 的 `.check` 拿掉 `min-height: 44px` | 同上 | 「多樣」紅：「AI 估算結果：「… 200 g · 260 kcal」的高度」（39px） |
+| 9 | `friends.spec` 的私人那一餐改成公開 | `friends` | 紅，但紅的是**既有的** `feed.getByText(foodY)` 那一行——它排在新加的 `hidden` 前面 |
+| 9b | 同 9，並暫時拿掉 `foodY` 那一行 | `friends` | 紅在新加的 `feed.getByText(hidden, { exact: true })`（收到 1）。新的那一行自己咬得住 |
+| 10 | 後端 `_friend_meals` 改成 `description=None` | `friends` | 紅在 `shared` 那一行 |
+| 11 | `api/ai.ts` 的 `ANALYZE_MEAL` 改回 `"/api/ai/analyze"`（計畫沒有列） | `ai-estimate` | 兩條都紅（等不到 `/api/ai/analyze-meal` 的回應）。**同一個突變對改之前的 spec：「AI 沒設定」那一條是綠的**（兩支端點回同一個 503、同一句話），「用這個」那一條紅（回應的形狀不同）——所以「打的是新端點」這個斷言不是多的 |
+| 12 | `onItemsReady` 不填描述（計畫沒有列） | `ai-multi-food` | 「多樣」紅：「描述（選填）」是空的 |
+| 13 | 「移除照片」拿掉 `ui.secondary`（計畫沒有列） | 同上 | 「多樣」紅：「照片預覽：「移除照片」的高度」（23px） |
+
+十六個裡十四個紅；4 是預期的綠，7 是存活（理由如表）。`satisfies AnalyzeMealResponse` 由 `npx tsc -p tsconfig.e2e.json` 看（乾淨）；
+`npm run -s lint`、`npm run -s typecheck` 乾淨。
+
+**Task 8（文件）**
+
+量到的數字（2026-10-09，`feat/ai-multi-food`）：後端 `pytest -q -W error` **1113 passed**（158.6 秒）；
+`grep -c "@router\."` 加總 **79**；migration 檔 **17** 個（到 `0017`）；前端 `Test Files 142`、`Tests 1788`、`Type Errors no errors`；
+e2e `Total: 47 tests in 19 files`。
+
+| 原本寫的 | 實際 | 為什麼 |
+|---|---|---|
+| handover §8.2「後面接規格 §9.2 的 11 點」 | **12 點**：多一點「文字短路只認整段文字剛好是一個食物的名稱」；第 1 點改寫成「從來沒有對真的 LLM 打過」，第 5 點寫明私人食物是「加入」的當下建的 | 交接時最要緊的是前者；規格 §9.2 的編號沒有動 |
+| handover §6 寫三條 | 寫了十條（那三條確認過都成立，另外七條是 Task 1～7 的突變與 e2e 長出來的） | 逐條都是執行時量到的，見上面各 task 的表 |
+| handover §7 加兩列 | 四列：多「e2e 選擇器裡的時間」「Write／Edit 工具與反斜線 u 跳脫」 | Task 7 與工具那一段 |
+| 部署手冊：「多樣估算用的是既有的 … `AI_DAILY_LIMIT`」；環境變數表裡 `AI_DAILY_LIMIT` 的說明補一句 | 部署手冊**沒有**這個變數的表格列，而且 **`docker-compose.yml` 沒有把 `AI_DAILY_LIMIT` 傳進 api 容器**（只傳 `AI_PROVIDER`、`AI_MODEL`、兩把金鑰）——NAS 上的上限就是 `app/config.py` 的預設 20，在 `.env.production` 填了沒有效果。手冊照實寫了這件事，沒有改 compose | 不在這個分支的範圍（P2 就是這樣）；改 compose 是一個要另外決定的行為變更 |
+| 部署手冊「打開之後怎麼確認」 | 「看到結果卡片就是通的」改成「看到『AI 估算結果』的勾選清單就是通的」 | 記一餐的入口換了面板 |
+| 規格「把這份計畫同名那一節的重點寫過去」 | 寫了八點；另外把 §5.2、§5.3 的 `_estimate` 改成實際的 `_complete`＋`_Call` | 規格的方法名稱跟程式對不上 |
+| `scripts/deploy.sh` 的 `ROLLBACK_UNSAFE_REVISIONS` | 沒有改，仍然是 `(0012)` | `0017` 只加一個 nullable 欄位，舊程式的 `INSERT` 不帶這一欄就是 `NULL` |
+| 每個 task 的突變表「把預測換成實測」 | Task 1～6 的表沒有逐格改寫，實測記在這一節各 task 的段落（哪幾格跟預測不同）；Task 7 的實測是上面那張完整的表 | 前面幾個 task 就是這樣記的，保留原本的預測才看得出差在哪裡 |
+
+**沒做、要告訴使用者的事**
+
+- **真的 LLM 一次都沒有打過**（開發環境沒有金鑰；dev 的 API 對估算回 `503 AI_NOT_CONFIGURED`）。兩家供應商對多樣 schema 的實際
+  反應、提示詞的效果，要部署後有金鑰的人手動拍一張——部署手冊 `0017` 那一段寫了看哪三件事。
+- `AI_DAILY_LIMIT` 在 NAS 上調不了（見上表）。
+- 記一餐搜尋結果那一列的食物按鈕（搜尋框有字時最上面那一顆）在 390 寬的截圖裡是瀏覽器預設的樣子——既有的，這次沒有動。
+
 ## 檔案結構
 
 | 檔案 | 動作 | Task |
@@ -6480,6 +6548,8 @@ Expected：**47 passed**（45＋2）。偶發紅先看是不是第 48／53 種�
 | 8 | `AiMealPanel.module.css` 的 `.check` 拿掉 `min-height: 44px` | 同上 | 「AI 估算結果」的點擊目標那一行 |
 | 9 | `friends.spec` 的私人那一餐改成公開（測試自己的突變：確認 `hidden` 那一行真的會紅） | `friends` | `toHaveCount(0)` 紅 |
 | 10 | 後端 `_friend_meals` 改成 `description=None` | `friends` | `shared` 那一行紅 |
+
+**實測**記在「執行中發現的差異」的「Task 7 的突變」：十六個（這張表的十個＋六個），十四個紅；4 如預期是綠的，7 存活（兩條 CSS 規則各自保證 44px）。
 
 - [ ] **Step 5：typecheck、Commit**
 

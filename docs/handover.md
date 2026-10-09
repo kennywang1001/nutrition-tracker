@@ -2,7 +2,7 @@
 
 **專案：** nutrition-tracker —— 飲食紀錄系統
 **Repo：** https://github.com/kennywang1001/nutrition-tracker（公開）
-**狀態：** 後端完成並可部署、session 撤銷已完成；介面改版第一階段、食物的一份、修改與刪除已記錄的餐點、AI 估算的前端已合併；介面改版第二階段已實作於 `feat/ui-phase2`；帳號與目標設定已實作於 `feat/account-settings`；報表看其他月份與匯出資料已實作於 `feat/reports-month-export`
+**狀態：** 後端完成並可部署、session 撤銷已完成；介面改版第一階段、食物的一份、修改與刪除已記錄的餐點、AI 估算的前端已合併；介面改版第二階段已實作於 `feat/ui-phase2`；帳號與目標設定已實作於 `feat/account-settings`；報表看其他月份與匯出資料已實作於 `feat/reports-month-export`；AI 一次估算多樣食物與餐點的描述已實作於 `feat/ai-multi-food`
 **文件產出日：** 2026-09-11（session 撤銷完成後更新於 2026-09-12；§2 的數字更新於 2026-10-09）
 
 ---
@@ -28,11 +28,11 @@
 
 | 項目 | 數字 |
 |---|---|
-| 端點 | **78**（OpenAPI 的 operation 數，跟 `grep -c "@router\." app/api/routes/*.py` 的加總一樣；2026-10-09） |
-| 測試 | 後端 **1004**（`pytest -q -W error` 全綠，約 2 分 20 秒）；前端 `Test Files 138`、`Tests 1671`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **45** 條（Playwright）。2026-10-09 在 `feat/reports-month-export` 量的（審查修正與四個後續修正之後） |
+| 端點 | **79**（OpenAPI 的 operation 數，跟 `grep -c "@router\." app/api/routes/*.py` 的加總一樣；2026-10-09） |
+| 測試 | 後端 **1113**（`pytest -q -W error` 全綠，約 2 分 40 秒）；前端 `Test Files 142`、`Tests 1788`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **47** 條、19 個檔案（Playwright；預設 workers 連跑兩次都是 `47 passed`）。2026-10-09 在 `feat/ai-multi-food` 量的 |
 | 覆蓋率 | 96%（2026-09 量的，之後沒再量） |
 | 資料表 | 16（+ `alembic_version`） |
-| Migration | `0001` ~ `0016` |
+| Migration | `0001` ~ `0017` |
 | Commit | 600+ |
 | PR | 5 個，全部經 CI 驗證後合併 |
 
@@ -50,11 +50,12 @@
 | UI 改版 第二階段 | 六個舊畫面（食物庫、食物詳情、新增食物、補劑、趨勢、管理員審核）換新外觀；報表的分類甜甜圈圖；趨勢的營養素切換（規格 `docs/superpowers/specs/2026-10-06-ui-redesign-phase2-design.md`、計畫 `docs/superpowers/plans/2026-10-06-ui-redesign-phase2.md`） | ✅ |
 | 小項目包 | 份量的修改與刪除（`PATCH`／`DELETE /api/foods/{id}/portions/{pid}`，已記的餐不受影響）；編輯歷史的日期改成好讀格式；趨勢圖日期軸；報表清單按鈕換新外觀（規格 `docs/superpowers/specs/2026-10-06-small-items-design.md`、計畫 `docs/superpowers/plans/2026-10-06-small-items.md`） | ✅ |
 | 開帳號的路（社群第一步） | 管理員在「我的」產生一次性邀請連結（7 天、只能用一次、可撤銷，資料庫只存 SHA-256）；朋友打開 `/join#<碼>` 自己建帳號。**註冊一定要有邀請**（規格 `docs/superpowers/specs/2026-10-06-invites-design.md`、計畫 `docs/superpowers/plans/2026-10-06-invites.md`） | ✅ |
-| 好友關係（社群第二步） | 好友碼（`XXXX-XXXX`，可重設）送邀請、對方接受；飲食頁「我的｜好友」看好友動態，點名字看他的某一天（照他的時區）；好友看得到吃了什麼、照片、熱量與營養素，**看不到餐費與備註**；每一餐可設「只有我看得到」（規格 `docs/superpowers/specs/2026-10-07-friends-design.md`、計畫 `docs/superpowers/plans/2026-10-07-friends.md`） | ✅ |
+| 好友關係（社群第二步） | 好友碼（`XXXX-XXXX`，可重設）送邀請、對方接受；飲食頁「我的｜好友」看好友動態，點名字看他的某一天（照他的時區）；好友看得到吃了什麼、照片、熱量與營養素，**看不到餐費與備註**（描述看得到，見下面「AI 一次估算多樣食物、餐點的描述」那一列）；每一餐可設「只有我看得到」（規格 `docs/superpowers/specs/2026-10-07-friends-design.md`、計畫 `docs/superpowers/plans/2026-10-07-friends.md`） | ✅ |
 | 部署改成 CI 做映像 | CI 的 `publish` job 把兩個映像推到 GHCR（多架構）；NAS 上 `sudo ./scripts/deploy.sh` 拉映像、備份、migration、等 healthy、起不來自動退版（規格 `docs/superpowers/specs/2026-10-08-image-deploy-design.md`；部署手冊「二、更新」） | ✅（`publish` job 要等第一次 push 到 master 才驗得到） |
 | 電腦版版面 | 寬度 ≥ 1024px 左側導覽＋總覽／報表／飲食兩欄；比較窄維持手機版、內容最寬 600px 置中。只改版面，不動後端（規格 `docs/superpowers/specs/2026-10-08-desktop-layout-design.md`、計畫 `docs/superpowers/plans/2026-10-08-desktop-layout.md`；見第 10 節「電腦版版面」） | ✅（`feat/desktop-layout`） |
 | 帳號與目標設定 | 「我的」的每日目標卡片＋`/me/targets`（**從今天起**生效，過去的日子維持原本的目標）；帳號卡片的行內「修改名稱」；`/me/password` 改密碼（**其他裝置全部登出**，這台換一組新票繼續用）；管理員在「所有帳號」替一般使用者產生**重設密碼連結**（24 小時、只能用一次、不給管理員帳號），朋友打開 `/reset-password#<碼>` 設新密碼——取代 SSH 跑 `create-user`（規格 `docs/superpowers/specs/2026-10-08-account-settings-design.md`、計畫 `docs/superpowers/plans/2026-10-08-account-settings.md`；見第 10 節「帳號與目標設定」） | ✅（`feat/account-settings`） |
 | 報表看其他月份、匯出資料 | 報表頂端的「‹ 上個月｜月份｜下個月 ›」（`?month=YYYY-MM`，沒有就是這個月；**這個月是哪個月由後端決定**）；「我的」的匯出資料：餐點／花費／補劑各下載一個 CSV（UTF-8＋BOM、帳號時區、分塊串流、每人每分鐘 6 次、同時一個）。沒有 migration（規格 `docs/superpowers/specs/2026-10-09-reports-month-export-design.md`、計畫 `docs/superpowers/plans/2026-10-09-reports-month-export.md`；見第 10 節「報表看其他月份與匯出資料」） | ✅（`feat/reports-month-export`） |
+| AI 一次估算多樣食物、餐點的描述 | 記一餐的 AI 入口改成一餐一次估（`POST /api/ai/analyze-meal`：一句描述＋最多 8 樣，**算一次額度**）；估完是勾選清單，食物庫同名的預設用食物庫的，「加入這 N 樣」把每一樣變成食物放進這一餐（部分失敗可以重試）。這一餐多一個「描述」（`meals.description`，migration `0017`）：**好友看得到**（備註仍然只有自己看得到），飲食頁與好友的卡片、餐點 CSV 都有。新增食物與編輯這一餐的「加一項」仍然是一次一樣（規格 `docs/superpowers/specs/2026-10-09-ai-multi-food-design.md`、計畫 `docs/superpowers/plans/2026-10-09-ai-multi-food.md`；見第 10 節「AI 多樣估算與餐點描述」） | ✅（`feat/ai-multi-food`；**沒有對真的 LLM 打過**，見 §8.2） |
 | UI 改版 第三階段 | 社群（P7）：第一步「開帳號的路」、第二步「好友關係」已完成。按讚、留言、通知刻意沒做——等真的用過再說 | 🟡 |
 
 > **P4 早於 P2/P3 完成是刻意的，但當初的理由有瑕疵。**
@@ -199,6 +200,10 @@ DB 只存相對路徑。不存進資料庫的真正理由不是效能，是**備
   `shared_meals`（屬於好友、而且 `NOT is_private`）。動態、某一天、照片都從 `shared_meals` 開始。
 - **白名單回應** `FriendMeal`：不是從 `MealResponse` 刪欄位——沒有餐費、備註、照片路徑、
   食物與份量的 id、份量名稱（可能是私人份量）。
+  **白名單後來多了一項 `description`**（AI 多樣估算規格 D12、D14）：它是一個**新欄位**（`meals.description`），
+  不是把 `note` 放寬——`note` 就是編輯畫面的「備註（選填）」，大家已經寫在裡面的字當初講好好友看不到。
+  分工：**描述＝吃了什麼（好友看得到）；備註＝給自己的話（只有自己）**，兩格底下各有一句說明。
+  既有的餐描述都是 `NULL`，上線當下沒有任何舊資料因此公開；「只有我看得到」的餐照舊整餐不出現。
 - **守住它的測試**：「在兩人**是好友**的狀態下，既有的單筆端點照樣 404、**列表端點**（今天的餐、
   支出、月報、每日統計、今日補劑）照樣沒有對方的資料」；原始碼掃描「`Friendship` 與可見性函式
   （`friend_ids`、`shared_meals`…）只出現在好友模組」——最後審查抓到：原本的掃描只找
@@ -956,6 +961,45 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
   拿掉之前先確認過不是碰運氣：用一條暫時的探針把快照固定在「記帳之前」（登入後等到快照裡有「這個月 0.00」，
   之後擋掉那個 key 的 `setItem`），修之前 3 次都紅在「總計 0.00」，修之後 3 次都綠。
 
+### AI 多樣估算：第 2、43、48 種又一次，另外幾條「突變存活才發現」
+
+沒有編新的號碼，機制都不新。逐條的經過在計畫 `docs/superpowers/plans/2026-10-09-ai-multi-food.md` 的「執行中發現的差異」。
+
+- **第 43 種的新面孔（`mockApi` 用 includes 依序比對）。** `/api/ai/analyze` 這條路由接得住 `/api/ai/analyze-meal`——
+  「打的是哪一支端點」只給路由分不出來，要斷言實際的網址（`tests/ai-api.test.ts` 的 `sentUrl`）；新面板的測試乾脆
+  **不給**單樣端點的路由，打錯就炸。e2e 是同一件事的另一面：記一餐換了面板之後畫面上的字一個都沒變，
+  `ai-estimate.spec.ts` 兩條不改照樣綠——而把前端打的路徑改回 `/api/ai/analyze`，「AI 沒設定」那一條**還是綠的**
+  （兩支端點回同一個 503、同一句話；「用這個」那一條因為回應的形狀不同才紅）。兩條都補了「等的是
+  `/api/ai/analyze-meal` 的回應」之後，同一個突變兩條都紅。**兩個端點給同一段畫面時，畫面的斷言分不出是哪一個。**
+- **schema 的上下限會變成模型的手銬。** `LLMMealEstimateSchema.items` 如果寫 `min_length=1`，事後驗證的結果一模一樣
+  （解析的測試全綠，突變存活），但送給 Anthropic 的 schema 多了 `minItems: 1`，模型就沒有辦法照提示詞回空陣列說
+  「看不出任何食物」。守它的不是解析的測試，是「**送出去的** schema 沒有 `minItems`」那一行——而且兩種寫法都要看：
+  google-genai 把字典裡的 `minItems` 送成 `min_items`（`tests/test_ai_provider_errors.py`）。
+- **第 48 種的親戚：可及名稱裡少一個空白。** 勾選框的 `<label>` 裡兩個相鄰的 `<span>`，JSX 會把中間的換行吃掉，名稱變成
+  「白飯200 g · 260 kcal」——畫面上因為 flex 的 `gap` 看起來是分開的，只有照名稱找元素的測試（與讀屏）看得到。
+  現在兩個 `<span>` 之間有一個明寫的空白字元。
+- **第 2 種（測試資料讓錯的實作不可能失敗）出現在 schema 的界線上。** `MealUpdateRequest.description` 的 `max_length`
+  改成 5000，建立那一條 501 字的測試照樣綠——PATCH 是另一個 schema 上的另一個 `max_length`。同理截斷後的 `.rstrip()`、
+  退回各樣名稱時的 `[:500]`，都是補了「剛好踩在那一行上」的資料才紅。**一條規則寫在兩個地方，就要兩條測試。**
+- **既有的守衛其實沒有人守（突變才發現）。** `_find_in_food_library` 的可見性條件（別人的私人食物不算命中）在單樣端點
+  **從來沒有測試**：計畫預期「單樣那邊既有的測試也會紅」，實際只有新檔那一條紅。補了
+  `tests/test_ai_analyze.py::test_someone_elses_private_food_is_not_a_library_hit`。
+- **非受控的輸入框在打第一個字之前看不出來。** 編輯畫面的描述 `value={… ?? ""}` 拿掉 `?? ""`（離線快取裡的舊餐沒有這個
+  key）：畫面一樣是空的、「儲存」一樣不能按，突變存活；React 要到打第一個字才警告。測試多打一個字、斷言
+  `console.error` 沒被呼叫才紅。
+- **`await act(async () => {})` 一輪不保證後面那幾步都跑完（第 41 種）。** 「加入到一半就離開畫面」等的是那個回應的
+  `bodyUsed`，再讓 microtask 跑完，才斷言「沒有交回」。
+- **e2e：兩條 CSS 規則各自保證同一件事，拿掉一條是綠的。** 「AI 估的項目」的輸入框 44px 同時來自 `.aiItems input` 與
+  整張表單的 `.form input:not(…)`；計畫的突變只拿掉前者——存活。兩條一起拿掉才紅（另外一條突變只拿掉後者，
+  紅在描述那一條 e2e 的「記一餐：輸入框」）。**「這一行有沒有人守」與「這個性質有沒有人守」是兩個問題**；這裡是後者有、
+  前者沒有，留著不補。
+- **e2e：新斷言排在一個更早就會紅的舊斷言後面。** 好友那一條新加的「私人那一餐的描述看不到」排在既有的「私人那一餐的
+  食物看不到」後面：把那一餐改成公開，紅的是舊的那一行，新的那一行有沒有咬合力看不出來。暫時拿掉舊的那一行再突變
+  一次，才看到新的那一行自己會紅。
+- **計畫寫錯（e2e 才看得到）：可及名稱裡的時間跟瀏覽器語系走。** 飲食頁卡片的「編輯 HH:MM 點心」用
+  `toLocaleTimeString(undefined, …)`；Playwright 的 Chromium 預設 en-US，名稱是「編輯 05:42 PM 點心」，
+  計畫的 `/^編輯 \d{2}:\d{2} 點心$/` 等到逾時。單元測試（jsdom）與台灣的手機都看不到這個差別。
+
 ---
 
 ## 7. 踩過的技術坑（節錄，完整版在各計畫文件）
@@ -993,8 +1037,7 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
 | 份量的「預設」沒有部分唯一索引 | 「同一個擁有者、同一個食物只有一個預設」靠的是同一個交易裡先取消其他預設，**兩個同時送出的請求可能各自成功**、留下兩個預設。單人使用不會發生；要擋就加 `WHERE is_default` 的部分唯一索引（要 migration） |
 | 限速的上限只在單元測試裡驗 | **單元測試每個測試都重置計數器、各用一個新帳號，永遠碰不到「同一個帳號在真實使用裡一分鐘打幾次」**。換票限速一開始定 10 次，單元測試全綠，完整 e2e（同一個帳號一直開新頁，每次整頁載入都換票）才紅。定上限之前先量真實的頻率（`docker compose logs api` 數 `POST /api/auth/refresh`） |
 | `// biome-ignore` 在 JSX children 位置 | **會被當成文字**，裡面的 `<rect>` 之類會被解析成開始標籤 → parse error。那個位置要用 `{/* biome-ignore … */}`；`return (` 之後屬於運算式位置，`//` 形式合法 |
-| Windows Python 改 markdown | 文字模式寫入會把**整份檔案**轉成 CRLF，跟 `.gitattributes`（`* text=auto eol=lf`）衝突，整個 diff 變成雜訊。用 `newline="
-"` |
+| Windows Python 改 markdown | 文字模式寫入會把**整份檔案**轉成 CRLF，跟 `.gitattributes`（`* text=auto eol=lf`）衝突，整個 diff 變成雜訊。用 `newline="\n"` |
 | `tsBuildInfoFile` | 要放在**被 gitignore 蓋到的目錄**（這個 repo 是 `./node_modules/.tmp/`）。`tsconfig.e2e.json` 原本指向 `./e2e_modules/.tmp/`，於是那個 build cache 一直被 git 追蹤，每跑一次 typecheck 就多一個 modified |
 | 改了後端的 request/response schema | **一定要 `npm run gen:api` 重新產生 `frontend/src/api/schema.d.ts`**，而**本機沒有任何東西會提醒你**。**連 docstring 也算**——端點的說明文字會進 OpenAPI 的 `description`。2026-10 連續三次漏（安全補強、改吃的時間各改了一段 docstring 沒重新產生，都是下一個分支才補上）：**任何動到 `app/api/routes/*.py` 或 `app/schemas/*.py` 的 commit 都重新產生一次**。唯一的守衛是 CI 的 `contract` job（它起後端、重新產生、`git diff --exit-code`）。P3-B 計畫二 Task 8 加了 `FoodCreateRequest.is_global` 卻沒重新產生，backend / frontend / e2e 三個 job 全過，只有 contract 紅 |
 | react-router 的路由順序 | **依片段具體程度排名，不依宣告順序** —— 跟 FastAPI 完全不是同一種機制。`/foods/:id` 排在 `/foods/new` 前面，`/foods/new` 仍然命中靜態路徑（用 `matchRoutes` 實測過） |
@@ -1012,6 +1055,10 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
 | `httpx.ASGITransport` 與斷線 | 它的 `receive()` 要等回應送完才回 `http.disconnect`，測不到「送到一半斷線」；而且 app 沒送結尾就回來時它自己 `assert response_complete`。要模擬斷線：在 `app` 外面包一層 ASGI，換掉 `receive`（事件 set 之後回 `http.disconnect`）、app 回來之後替它補一個結尾（`tests/test_export.py` 的 `_on_the_wire`）。同一層換掉 `send` 就能看到「每一次送的那一刻」——這是端點層唯一看得到分塊的地方 |
 | jsdom 與 `inert`、`disabled` 的焦點 | jsdom **不實作 `inert`**（`userEvent.click` 照樣點得到），也**不會因為按鈕變成 `disabled` 把焦點移走**（Chromium 會）。單元測試只能守機制（屬性在不在、是不是原生 `disabled`）；行為要在 Playwright 守——用座標 `page.mouse.click`，因為 `locator.click()` 會等到元素點得到為止。另外 jest-dom 的 `toBeDisabled()` **不認** `aria-disabled`，Playwright 的 `toBeDisabled()` **認** |
 | Playwright 抓下載 | `page.waitForEvent("download")` 抓得到 `<a download href="blob:…">` 的點擊；`suggestedFilename()` 就是 `download` 屬性——沒有它時檔名是一串 UUID。內容用 `download.path()` 讀成位元組再比（BOM 要比位元組，轉成字串就看不到了） |
+| `transform_schema()`（anthropic SDK）與給 LLM 的 Pydantic 類別 | 類別的 **docstring** 會進送給模型的 JSON schema 的 `description`；欄位的上下限有的保留（`min_length` → `minItems`）、有的變成 `description` 裡的提示（`maxItems: 8`）。給 LLM 用的 schema 類別**用 `#` 註解、不寫給人看的 docstring**；「至少一樣」這種下限不寫在 schema 上（模型會被逼著生一樣出來），放在事後的解析裡檢查（`app/ai/estimator.py` 的 `parse_raw_meal_estimate`） |
+| 必填欄位加進 `MealResponse` 之後 | **有型別標註**的測試資料（`tests/timeline.test.ts`）會讓 `tsc -b` 紅——其他測試資料是沒有標註的物件，不會，所以紅的只有那一處。另外**離線快取裡的舊餐沒有那個 key**（`undefined`，不是 `null`）：畫面判斷要用真值（`meal.description ? … : null`），寫 `!== null` 會畫出一個空的 `<p>`；受控輸入框的 `value` 要 `?? ""` |
+| e2e 選擇器裡的時間 | `formatTime` 是 `toLocaleTimeString(undefined, …)`——跟瀏覽器語系走。Playwright 的 Chromium 預設 **en-US**（「05:42 PM」），台灣的手機是「下午05:42」。可及名稱帶時間的元素（飲食頁卡片的「編輯 … 點心」）不要用 `\d{2}:\d{2}` 去對；CSV 裡的時間是後端寫的，才是固定的 `HH:MM` |
+| Write／Edit 工具與「反斜線 u」跳脫 | 工具會把參數裡「反斜線 u＋四位十六進位」解成**真的字元**（`\x00`、`\n` 不會）。要在原始碼裡留跳脫寫法（BOM、雙向控制字元）就不能直接打：用腳本從計畫依行號原樣取出，或寫完再用腳本換回去；commit 前掃一次 Cf／Zl／Zp 類的字元（同上面 BOM 那一格的「反方向也會」） |
 
 ---
 
@@ -1080,7 +1127,36 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
 ### 8.2 其他延後項目
 
 - **AI 估算的已知限制與後續**（AI 估算前端規格、計畫 `docs/superpowers/plans/2026-10-05-ai-estimate-frontend.md`）：
-  - 一次一樣食物（P2 規格 §9）。
+  - ~~一次一樣食物（P2 規格 §9）~~——**記一餐已完成**（AI 多樣估算規格）：`POST /api/ai/analyze-meal` 一次估一餐、
+    最多 8 樣、算一次額度。**新增食物與編輯這一餐的「加一項」仍然一次一樣**（`/api/ai/analyze`、`AiEstimatePanel`，
+    一個字沒動）。多樣估算自己的已知限制（規格 §9.2，用執行後的實際情況寫）：
+    1. **從來沒有對真的 LLM 打過，一次都沒有。** 後端測試用假傳輸層（兩家 SDK 的 HTTP 那一層）、前端測試用 mock、
+       e2e 的多樣清單是 `page.route` 假造的估算回應。提示詞好不好、Gemini 收不收巢狀的 `responseSchema`、Anthropic 對
+       `$defs`＋`$ref` 的 schema 實際怎麼回，**沒有任何自動測試守得到**——驗過的只有「送出去的請求長什麼樣」與
+       「回來的字怎麼解析」。**部署後第一次真的估算要有人看著**（部署手冊 `0017` 那一段寫了看哪三件事）。
+       供應商不收這份 schema 的話，照 estimator 的分類多半是 `502 AI_UPSTREAM_ERROR`（「請稍後再試」，其實等多久都不會好；
+       log 的「AI 供應商暫時無法使用」那一行有供應商的原話），訊息裡剛好有 `model` 的 400 則是 `503 AI_MISCONFIGURED`。
+       單樣估算（新增食物、加一項）不受影響，多樣的壞了可以先用它們。
+    2. 模型回 9 樣以上、0 樣、或任何一樣超出範圍（名稱清完是空的、負數、超過上限）→ **整次** `502 AI_BAD_RESPONSE`，
+       而且算一次額度。不默默丟掉幾樣：使用者會以為那就是全部。
+    3. **會把思考算進輸出上限的模型可能在 4096 token 之內寫不完** → JSON 被截斷 → `AI_BAD_RESPONSE`。症狀是
+       「AI 這次的回答看不懂」而且**每次都是**、每次都吃一次額度；`AI_BAD_RESPONSE` 後端沒有記原因的 log。上限是 `app/ai/estimator.py` 的
+       `MAX_MEAL_OUTPUT_TOKENS`（單樣仍是 1024）；沒有環境變數可以調，要改程式或換模型。
+    4. AI 估的量一律當 g；食物庫同名的那一樣如果是 ml 的，數字照搬（1 g≈1 ml）。
+    5. **「加入這 N 樣」建的私人食物是當場真的建了**（餐要到按「記錄」才存）：加入之後放棄這一餐，那幾個私人食物
+       留在食物庫裡，而食物沒有刪除的端點。同名只比名稱、不看品牌；改名後的同名檢查上限 200 筆（同單樣）。
+    6. 「改用 AI 的數字」之後不能改回用食物庫的（重新估算）。取消勾選的那幾樣仍然寫在 AI 的描述裡——描述要自己改。
+    7. AI 項目的量只能直接輸入（g／ml），不能選食物的份量；量超過 10000 或超過兩位小數是後端 422、畫面是通用的
+       「記錄失敗」。
+    8. `ai_analyses` 分不出單樣與多樣（`kind` 仍是 `text`／`image`）。**兩個端點共用同一個額度**（同一張表、同一個
+       `ai_daily_limit`，預設 20。寫文件時才發現：程式認得 `AI_DAILY_LIMIT`，但 `docker-compose.yml` 沒有把它傳進
+       api 容器，所以 NAS 上這個數字改不了——P2 就是這樣，不是這次造成的）。
+    9. 描述是單行（換行會變空白）；全形空白會變成半形。`PATCH` 送 `null`、空字串、全空白都是清掉。
+    10. e2e 的多樣清單是假的估算回應：前後端對 `AnalyzeMealResponse` 的理解一致靠的是 `schema.d.ts` 的型別
+        （spec 裡的假回應寫了 `satisfies AnalyzeMealResponse`，只有 `tsc` 看得到）與 CI 的 contract job。
+    11. SDK 的逾時是預設值（Anthropic 10 分鐘），`apiFetch` 沒有逾時——估算卡住時面板一直是「AI 估算中…」（同單樣）。
+    12. 文字的食物庫短路只認「整段文字剛好是一個食物的名稱」：打「白飯和滷雞腿」不會短路，會真的呼叫 AI。
+        短路的結果不進勾選清單（規格「與原始決定的差異」第 4 點），走「用這個」→「已選擇」＋份量欄位。
   - ~~「編輯這一餐」的加一項沒有 AI~~——**已完成**（AI 與編輯畫面的收尾規格 §2 第 1 項）：
     加一項的 `FoodPicker` 給了 `renderBelowSearch`，同記一餐放 `AiEstimatePanel`；存好（或
     「用這個」「用食物庫的」）的食物走加一項選食物的同一條路，份量先 `reset` 成一份 × 1。
@@ -1105,7 +1181,8 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
   - Anthropic 的「credit balance too low」是 400、訊息裡沒有 `model`——落到上游錯誤：
     `502`「請稍後再試」（其實要儲值，等多久都不會好），而且**每按一次記一列**、吃一次額度。
   - `remaining_today` 在同時多個請求時可能多報（各自以為只有自己用了一次）；額度檢查
-    本身也有同樣的競爭（P2 就存在）。單人使用可接受。
+    本身也有同樣的競爭（P2 就存在）。單人使用可接受。兩個端點（`/api/ai/analyze`、`/api/ai/analyze-meal`）
+    共用同一個額度（同一張表），這個競爭在兩者之間也成立。
   - ~~`analyzeImage` 與 `uploadMealPhoto` 重複「擋大小＋縮到 1280」~~——**已完成**：
     `lib/photo.ts` 的 `preparePhoto(file)`，兩邊共用；`MAX_PHOTO_BYTES` 與 `PhotoTooLargeError`
     一起搬過去，`api/photos.ts` 原樣轉出（既有的匯入不用改，也不會循環匯入）。
@@ -1133,6 +1210,8 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
       逾時，只能重新整理。
     - **e2e 走不到這條路**：要一個「不是食物庫命中」的估算結果，那一定要真的呼叫 AI（CI 沒有
       金鑰、e2e 也不該花錢）。只有元件測試守著（面板、記一餐、新增食物、加一項各一組）。
+      （記一餐現在是多樣面板，它的 e2e 用 `page.route` 假造估算回應走到了清單——`e2e/ai-multi-food.spec.ts`；
+      單樣面板的這條路仍然只有元件測試。）
     - 一個測試上的提醒：同名檢查加進來之後，既有的面板與新增食物測試的 mock 沒有
       `GET /api/foods?` 這條路由——不補的話它們會悄悄走「查詢失敗照樣存」的後備路徑，照樣綠。
       這次都補了回空陣列的路由；之後新增會存食物的測試也要記得給。
@@ -1226,7 +1305,8 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
   邀請沒有綁 email，連結被別人搶先用掉只能從「已經用掉的」清單發現。
 - **e2e 會在 dev 資料庫留東西**：每跑一次邀請的 e2e 就多一個 `e2e.friend.*` 帳號
   與一張用掉的邀請（加上觸控測試產生的邀請）；好友的 e2e 多一個 `e2e.pal.*` 帳號、
-  兩個 `E2E 好友…` 食物與幾餐（管理員 kenny.demo 的）。
+  兩個 `E2E 好友…` 食物與幾餐（管理員 kenny.demo 的）。AI 多樣估算的 e2e 每跑一次多兩個帳號
+  （`e2e.describe.*`、`e2e.multi.*`），各有一兩個私人食物與一餐（`e2e.multi.*` 的那一餐有一張照片）。
 - **好友關係的已知取捨**（好友規格）：
   - 好友碼由 ORM 的 `default=` 產生、**不重試**：31⁸ 種組合，碰撞機率可忽略；碰到就是一次 500。
   - migration `0012` 替既有使用者補碼的那段**沒有自動化測試**（測試資料庫從空的升級）；
@@ -1709,6 +1789,84 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
     飲食頁。還成立的是：**沒看過的月份**在連不上時是「無法載入…」（重試那約 7 秒是調淡的上一個月）；
     **`paused` 而且有資料時三個畫面都不標離線**；飲食頁的餐點清單在重抓失敗時是清單照列、外加一句
     「無法載入餐點清單」（`MealList.tsx`，既有，跟另外兩個畫面的說法不一致）。
+
+### AI 多樣估算與餐點描述
+
+記一餐拍一張照片（或打一段字），AI 一次估出這一餐的每一樣，勾選後一起加進這一餐；AI 說它看到了什麼的那句話存成這一餐的
+「描述」（規格 `docs/superpowers/specs/2026-10-09-ai-multi-food-design.md`、計畫
+`docs/superpowers/plans/2026-10-09-ai-multi-food.md`，計畫的「執行中發現的差異」記了實作跟計畫不一樣的地方）。
+**一個 migration（`0017`，只加一個可以是空的欄位，可以退版）、沒有新的環境變數。**
+**既有的 `POST /api/ai/analyze` 與 `AiEstimatePanel`（新增食物、編輯這一餐的加一項）沒有動。**
+
+**流程：**
+
+| 步驟 | 發生什麼 | 在哪裡 |
+|---|---|---|
+| 入口 | 記一餐搜尋框下面的「用 AI 估算「X」」（搜尋框有字才有）與「拍照估算」——跟以前同一個位置、同樣的字 | `components/AiMealPanel.tsx` |
+| 估算 | `POST /api/ai/analyze-meal`（請求就是既有的 `AnalyzeRequest`：文字或照片**擇一**）。回一句描述＋1～8 樣，每一樣的形狀跟單樣估算相同，另帶 `library_food`（食物庫有同名的）。**一次呼叫算一次額度、寫一列 `ai_analyses`** | `app/api/routes/ai.py` 的 `analyze_meal`；`app/ai/estimator.py` 的 `parse_raw_meal_estimate` |
+| 文字短路 | 整段文字剛好是一個看得到的食物的名稱 → 不呼叫 LLM、不記一列、不算額度、`analysis_id: null`。畫面是原本那張「食物庫裡已經有「X」」＋「用這個」，**不進勾選清單** | 同上；AI 沒設定時這條路照樣能用 |
+| 清單 | `<section aria-label="AI 估算結果">`：描述、「今天還能用 N 次」、每一樣一個勾選框（預設全勾；名稱、量、熱量——顯示的是**會記下去的那個**熱量）。食物庫同名的標「用食物庫的」＋「改用 AI 的數字」；其餘有「修改」（一次只開一個） | `lib/ai-meal.ts`（純函式）、`components/EstimateDraftFields.tsx` |
+| 加入 | 「加入這 N 樣」**一樣一樣依序**做，每一樣四種來源之一：這一輪已經處理過同名的 → 用那個；用食物庫的 → `GET /api/foods/{id}`；改過名稱而且撞到看得到的同名食物 → 停下來問；其餘 → `POST /api/foods`（撞到自己的同名食物是 `409`，問「用現有的／改名」）。成功的標「已加入」，失敗的留在清單、再按一次只做還沒加入的 | `AiMealPanel.tsx` 的 `resolveFood` 與加入那一輪 |
+| 記一餐的表單 | 多一個「AI 估的項目」清單（每列：食物名、一格量 g／ml、「移除」），跟原本手選的那一樣**並存**；估算用的照片當這一餐的照片、AI 的描述填進「描述（選填）」——**兩者都是已經有就不覆蓋** | `screens/LogMeal.tsx` |
+| 記錄 | 按「記錄」才 `POST /api/meals`：`items` ＝ AI 的幾列（`{ food_id, quantity }`）＋手選的那一樣；描述 trim 後是空的就不帶 | 同上；後端本來就收多個 `items` |
+
+**兩個自由文字欄位的分工：**
+
+| | 描述（`meals.description`） | 備註（`meals.note`） |
+|---|---|---|
+| 是什麼 | 吃了什麼 | 給自己的話 |
+| 誰看得到 | 自己與好友（那一餐不是「只有我看得到」時） | 只有自己 |
+| 在哪裡填 | 記一餐、編輯這一餐；多樣估算會先填上 AI 的那句話 | 只有編輯這一餐 |
+| 在哪裡看 | 飲食頁的卡片、好友的卡片（動態與某一天）、餐點 CSV 的「描述」欄。**總覽時間線不顯示** | 編輯畫面、餐點 CSV 的「備註」欄 |
+| 清理 | `single_line`：控制字元與雙向控制字元換成空白、連續空白併成一個、去頭尾；最多 500 字；清完是空的存 `NULL` | 原樣（最多 500 字） |
+
+**共用的東西**（改其中一個，兩個端點／兩個面板一起變）：
+
+- 後端：`_find_in_food_library`（「同名」只有這一種定義：看得到的、有生效版本、去頭尾空白不分大小寫的完全相同、自己的優先）、
+  `_assert_quota_available`、`_call_estimator_or_record_failure`（錯誤碼與訊息逐字相同）、`_decode_photo`、
+  `_to_analyzed_nutrition`；兩家 estimator 各自的 `_complete`（單樣與多樣共用同一個 `try/except` 分類，差別收在
+  `_Call`：system prompt、輸出上限、schema）；`app/schemas/validators.py` 的 `single_line`（模型輸出的名稱與描述、
+  使用者打的描述，都是它）。
+- 前端：`api/ai.ts` 的 `describeAnalyzeError`（從單樣面板搬來）、`lib/photo.ts` 的 `preparePhoto`；`lib/ai-food.ts` 的
+  `confirmedFoodRequest`／`draftFromEstimate`／`editedFoodRequest`（多樣的每一樣用 `lib/ai-meal.ts` 的 `toEstimate`
+  拼回一個單樣的估算再交給它們）；`components/EstimateDraftFields.tsx`（修改表單的六個欄位，從 `AiEstimatePanel` 抽出）。
+- **不共用、要記得的**：修改表單的輸入框在多樣面板是 44px（`AiMealPanel.module.css` 的 `.editForm input`），在單樣面板
+  仍然是 36px（`AiEstimatePanel.module.css` 的 `.form input`，沒有動）。記一餐不在 `ui.module.css` 的 `.screen` 裡，
+  表單裡的按鈕要自己加 `ui.secondary`（「移除 X」「不記這一樣」「移除照片」都是）。
+
+**新的東西在哪裡：**
+
+- 後端：`migrations/versions/0017_add_meals_description.py`；`app/models/meal.py`；`app/schemas/validators.py`
+  （`single_line`、`OptionalSingleLine`）、`app/schemas/meal.py`、`app/schemas/friend.py`、`app/schemas/ai.py`
+  （`LibraryFoodMatch`、`AnalyzedMealItem`、`AnalyzeMealResponse`）；`app/ai/estimator.py`（`RawMealEstimate`、
+  `MEAL_SYSTEM_PROMPT`、`LLMMealItemSchema`、`LLMMealEstimateSchema`、`parse_raw_meal_estimate`、
+  `MAX_MEAL_ITEMS = 8`、`MAX_MEAL_OUTPUT_TOKENS = 4096`）；兩家 estimator 的 `estimate_meal_text`／`estimate_meal_image`；
+  `app/api/routes/ai.py` 的 `analyze_meal`；`app/api/routes/meals.py`、`friends.py`、`app/export.py`（帶出描述）。
+  測試 `tests/test_meals_description.py`、`test_schema_validators.py`、`test_ai_analyze_meal.py`，以及
+  `test_ai_estimator.py`、`test_ai_provider_errors.py`、`test_friend_meals.py`、`test_export.py`、`test_ai_analyze.py` 的新增。
+- 前端：`api/ai.ts`（`analyzeMealText`、`analyzeMealImage`）；`lib/ai-meal.ts`；`components/AiMealPanel.tsx`＋
+  `.module.css`；`components/EstimateDraftFields.tsx`；`screens/LogMeal.tsx`（面板、「AI 估的項目」、描述）；
+  `screens/EditMeal.tsx`（描述＋兩句說明）；`screens/MealList.tsx`、`components/FriendMealCard.tsx`（卡片的描述；
+  飲食頁那一行是 `data-testid="meal-description-<id>"`）。測試 `tests/ai-meal.test.ts`、`ai-meal-panel.test.tsx`、
+  `log-meal-ai.test.tsx`（改寫），以及 `ai-api`、`log-meal`、`edit-meal`、`meal-list`、`friend-feed`、`friend-day`、
+  `overview` 的新增。
+- e2e：`e2e/ai-multi-food.spec.ts`（兩條，各開新帳號，390 寬）；`ai-estimate.spec.ts`（兩條都多斷言打的是新端點）；
+  `friends.spec.ts`（好友看得到公開那一餐的描述、看不到私人那一餐的）。
+
+**沒有自動測試守的（重要）：**
+
+- **模型實際的輸出。** 沒有任何測試、任何一次手動操作對真的 LLM 打過多樣估算——開發環境沒有金鑰。守住的是兩頭：
+  「送出去的請求」（`max_tokens`／`maxOutputTokens` 是 4096、schema 是多樣的那一份、沒有 `minItems`）與
+  「回來的字怎麼解析」（0 樣、9 樣、某一樣不合格、描述太長、不是 JSON）。中間那一段——兩家供應商收不收這份 schema、
+  模型照不照提示詞拆——**要部署後有金鑰的人手動拍一張**（部署手冊「各版本的升級備註」的 `0017`）。
+- **e2e 的多樣清單是假的估算回應。** `ai-multi-food.spec.ts` 第二條用 `page.route` 假造
+  `POST /api/ai/analyze-meal` 的回應（兩樣：一樣食物庫有、一樣沒有），之後的讀食物、建食物、記一餐、上傳照片、
+  飲食頁都是真的後端。原因：CI 沒有金鑰、e2e 不花錢，而不假造就走不到清單（真後端不花錢走得到的只有文字短路與 503，
+  那兩條在 `ai-estimate.spec.ts`）。假回應寫了 `satisfies AnalyzeMealResponse`：後端改了回應的形狀，這個 spec 在
+  `tsc -b` 就紅——**但 Playwright 自己不做型別檢查**（§7）。
+
+**已知限制**在 §8.2「AI 估算的已知限制與後續」第一點底下（12 點）。最要緊的三點：沒有對真的 LLM 打過（第 1 點）、
+會把思考算進輸出上限的模型可能寫不完（第 3 點）、「加入」建的私人食物在放棄這一餐之後留著（第 5 點）。
 
 ---
 

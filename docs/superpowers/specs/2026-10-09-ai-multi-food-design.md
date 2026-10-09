@@ -1,6 +1,6 @@
 # AI 一次估算多樣食物，並把描述存在這一餐
 
-**狀態：** 規格（尚未實作）
+**狀態：** 已實作（`feat/ai-multi-food`，2026-10-09）。**沒有對真的 LLM 打過**——見 §9.2 第 1 點與「執行中發現的差異」
 **日期：** 2026-10-09
 **分支：** `feat/ai-multi-food`
 **前置：** P2 AI 分析（`2026-09-27-p2-ai-analysis-design.md`）、AI 估算的前端（`2026-10-05-ai-estimate-frontend-design.md`）、
@@ -84,6 +84,37 @@ AI 與編輯畫面的收尾（`2026-10-08-ai-edit-polish-design.md`）、好友�
 9. **多樣清單的 e2e 用 `page.route` 假造估算回應**（D22），不是「只靠元件測試」。
 10. **送給供應商的 schema 不帶樣數的下限**（§5.1）：0 樣照樣是 `AI_BAD_RESPONSE`，但那是事後檢查出來的，不是 schema 逼出來的。
 11. **記一餐的輸入框高度補到 44px**（§6.3）：新欄位要 44px，同一張表單裡只有它高一截不合理，所以整張表單一起補。
+
+### 執行中發現的差異
+
+逐條的經過（哪個 task、原本寫什麼、突變的結果）在計畫的同名那一節；這裡只記**跟這份規格的文字有出入**的地方。
+行為上沒有任何一條決定（D1～D22）被推翻。
+
+1. **兩家 estimator 抽出來的方法叫 `_complete`，參數收在一個 `_Call`**（system prompt、輸出上限、schema），不是 §5.2、§5.3
+   原本寫的「`_estimate` 抽出參數」。分類的 `try/except` 仍然只有一份，單樣與多樣共用。兩節已經改成現在的名字。
+2. **Gemini 的 schema 不能有樣數下限這件事，要看兩種寫法**（§5.3）：實測 google-genai 把字典裡的 `minItems` 送成
+   `min_items`。守「送出去的 schema 沒有下限」的那條測試兩家都看、兩種寫法都看。
+3. **額度檢查在照片解碼之前**（§3.1 的第 3、4 步）原本沒有測試守順序，補了一條；**`_find_in_food_library` 的可見性**
+   （別人的私人食物不算命中）在單樣端點原本也沒有測試，補在 `tests/test_ai_analyze.py`。兩條都是突變存活才發現的。
+4. **`PATCH` 的 500 字上限是另一個 schema 上的另一個 `max_length`**（§3.2）：建立那一條測試守不到，多一條。
+5. **版面**（§6.2、§6.3、§6.6；看過 390×844 與 1280×800 的截圖之後改的，行為沒有變）：
+   - 多樣面板的修改表單，輸入框是 44px（單樣面板的仍然是 36px，沒有動）。
+   - `consistency.flagged` 的提示在那一列的按鈕**後面**，按鈕靠右；衝突的提問自成一塊；清單底下的按鈕上面隔一條線；
+     錯誤訊息用 `--color-danger`；沒有字的 live region 不佔高度。
+   - 記一餐：「已選擇：X」與「不記這一樣」同一列（多包一層 `div`）；「AI 估的項目」底下一條線；照片預覽旁邊的
+     「移除照片」改成次要按鈕的樣子（原本是瀏覽器預設的按鈕，§6.6「每顆按鈕 44px」本來就包含它，只是長相沒有跟上）。
+6. **e2e**（§8.3）：
+   - 第 1 條裡從卡片進編輯畫面的連結，名稱帶的時間跟瀏覽器語系走（Playwright 預設 en-US 是「05:42 PM」），
+     選擇器不假設 `HH:MM`。
+   - 第 2 條多量一個點擊目標：照片預覽的「移除照片」。
+   - 第 3 項不是「改成打新端點之後照樣要綠」而已：既有兩條**不改就是綠的**（畫面上的字沒有變），而把前端打的路徑改回
+     舊端點，「AI 沒設定」那一條照樣綠。兩條都另外斷言「回應來自 `/api/ai/analyze-meal`」（短路是 200 而且
+     `analysis_id` 是 `null`；沒設定是 503）。
+7. **`AI_DAILY_LIMIT`**（D7、§7）：程式認得這個環境變數（`app/config.py` 的 `ai_daily_limit`，預設 20），但
+   `docker-compose.yml` 沒有把它傳進 api 容器——部署出去的上限就是 20，改不了。P2 就是這樣，不是這次造成的；
+   這份規格裡寫「仍受 `AI_DAILY_LIMIT` 限制」的地方，讀成「仍受每日上限限制」。
+8. **§8.3 最後一句「交付前有金鑰的人手動拍一張」沒有做**：開發環境沒有金鑰。改成部署後做，寫在部署手冊
+   「各版本的升級備註」的 `0017` 那一段與交接文件 §8.2。
 
 ---
 
@@ -196,14 +227,14 @@ def downgrade() -> None:
 
 `_MEAL_OUTPUT_CONFIG = {"format": {"type": "json_schema", "schema": transform_schema(LLMMealEstimateSchema)}}`。
 實測（anthropic 1.8.0）：巢狀清單變成 `$defs`＋`$ref`；`min_length` 會變成 `minItems`（所以不寫，見 §5.1），`maxItems: 8` 被移到 `description`（提示而已）——
-上限靠事後的 Pydantic 驗證。`_estimate` 抽出參數（system、max_tokens、output_config、parse），單樣與多樣共用同一個 `try/except` 分類。
+上限靠事後的 Pydantic 驗證。打 API 的那一段抽成 `_complete(message, call)`，`_Call` 收三個參數（system、max_tokens、output_config），單樣與多樣共用同一個 `try/except` 分類；解析由各自的 `estimate_*` 方法接著做。
 
 ### 5.3 Gemini
 
 手寫的 `_MEAL_RESPONSE_SCHEMA`：`OBJECT { description: STRING, items: ARRAY of 既有的那個 OBJECT }`，只用 `type`／`properties`／`required`／
 `nullable`／`items`。**不寫 `minItems`／`maxItems`**：沒有金鑰驗證不了真的 API 收不收，而收不收都不影響正確性（事後驗證才是防線），
 寫了卻被拒絕就是每次 400。實測（google-genai 2.25.0）：字典原樣送進 `generationConfig.responseSchema`，`maxOutputTokens` 是 4096。
-同樣把 `_estimate` 抽出參數，分類的 `try/except` 只有一份。
+同樣抽成 `_complete(contents, call)`＋`_Call`，分類的 `try/except` 只有一份。
 
 ### 5.4 沒有變的
 
