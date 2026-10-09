@@ -21,6 +21,7 @@ import { queryKeys } from "../api/queries";
 import { PhotoPickerButton } from "../components/PhotoPickerButton";
 import { fromLocalDateTime, localDateTime } from "../lib/dates";
 import { formatMoney } from "../lib/decimal";
+import { parseResourceId } from "../lib/resource-id";
 import { useConfirmFocus } from "../lib/use-confirm-focus";
 import styles from "./EditMeal.module.css";
 import { EditMealItems } from "./EditMealItems";
@@ -543,7 +544,10 @@ function DeleteMeal({
  *  日期與時間在「這一餐」表單裡改（改時間規格）。 */
 export function EditMeal() {
 	const params = useParams<{ id: string }>();
-	const mealId = params.id !== undefined ? Number(params.id) : Number.NaN;
+	// 跟餐點頁同一個解析（社群審查 M6）：不是一餐的 id 就是 `NaN`——`useMeal` 不發請求，
+	// 下面直接是「找不到這一餐」。以前是 `Number(params.id)`：`1.5`、`-3`、太長的數字都
+	// 照樣去問，後端回 422（不是 404），重試三次之後才是「無法載入這一餐」。
+	const mealId = parseResourceId(params.id);
 	const mealQuery = useMeal(mealId);
 	const navigate = useNavigate();
 	const location = useLocation();

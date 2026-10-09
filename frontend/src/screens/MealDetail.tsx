@@ -13,6 +13,7 @@ import ui from "../components/ui.module.css";
 import { ZoomablePhoto } from "../components/ZoomablePhoto";
 import { formatDateTime } from "../lib/dates";
 import { formatMacro } from "../lib/decimal";
+import { parseResourceId } from "../lib/resource-id";
 import styles from "./MealDetail.module.css";
 
 /** 自己那一餐的照片：走 `/api/meals/{id}/photo`（只給主人的那個端點）。好友的餐用
@@ -35,19 +36,14 @@ function OwnPhoto({ mealId, alt }: { mealId: number; alt: string }) {
 	);
 }
 
-/** 網址的 `:id` → 餐的 id；不是正整數就是 `NaN`（`useSocialMeal` 看到 `NaN` 不發請求）。
- *  `Number("1.5")`、`Number("-3")`、`Number("")` 都是「數字」，所以不能只靠 `Number`。 */
-function parseMealId(raw: string | undefined): number {
-	if (raw === undefined || !/^[1-9]\d*$/.test(raw)) return Number.NaN;
-	return Number(raw);
-}
-
 /** `/meals/:id`：一餐的唯讀畫面，底下是讚與留言（社群規格 §6.3）。自己的餐與看得到的
  *  好友的餐都走這裡——同一個端點、同一份白名單（沒有餐費、備註）。
  *
  *  **不是 `/meals/:id/edit`**（那是主人改這一餐的畫面），也不是 `/meals/new`。 */
 export function MealDetail() {
-	const mealId = parseMealId(useParams().id);
+	// 不是一餐的 id（寫法不對、或大到 JS 表示不了）就是 `NaN`：`useSocialMeal` 不發請求，
+	// 下面直接是「看不到這一餐」。
+	const mealId = parseResourceId(useParams().id);
 	const query = useSocialMeal(mealId);
 	const commentsHeading = useRef<HTMLHeadingElement>(null);
 

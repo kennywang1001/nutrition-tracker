@@ -853,13 +853,39 @@ describe("餐點頁：看不到、載入失敗", () => {
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
 
-	it.each(["/meals/abc", "/meals/0", "/meals/1.5", "/meals/-3"])(
+	it.each([
+		"/meals/abc",
+		"/meals/0",
+		"/meals/1.5",
+		"/meals/-3",
+		// 審查 M6：全是數字、但太長。超過 2^63 − 1 後端回 422——不是 404，所以會被
+		// 重試三次（約 7 秒），最後是「無法載入這一餐」而不是這一頁。
+		"/meals/9223372036854775808",
+		"/meals/99999999999999999999999999",
+		// 超過 2^53 − 1：`Number()` 會把它四捨五入成另一個 id，去問的就不是網址上那一餐。
+		"/meals/9007199254740993",
+	])(
 		"網址的 id 不是一餐的 id（%s）：看不到這一餐，一個請求都不送",
-		(path) => {
+		async (path) => {
 			const page = setup(() => json(socialMeal()), { path });
 
 			expect(screen.getByRole("alert")).toHaveTextContent("看不到這一餐");
+			expect(screen.queryByText("載入中…")).not.toBeInTheDocument();
+			// 等一下再看：請求是掛載之後才送的，馬上看永遠是空的。
+			await new Promise((resolve) => setTimeout(resolve, 30));
 			expect(page.calls()).toEqual([]);
+			expect(screen.getByRole("alert")).toHaveTextContent("看不到這一餐");
 		},
 	);
+
+	it("JS 表示得了的最大 id 照樣去問（2^53 − 1）", async () => {
+		const url = "/api/social/meals/9007199254740991";
+		const page = setup(() => json(socialMeal()), {
+			path: "/meals/9007199254740991",
+			extra: [{ method: "GET", path: url, handler: () => json(socialMeal()) }],
+		});
+
+		await waitFor(() => expect(page.urls()).toContain(url));
+		expect(screen.queryByText("看不到這一餐")).not.toBeInTheDocument();
+	});
 });

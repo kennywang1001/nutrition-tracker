@@ -1300,22 +1300,39 @@ describe("編輯這一餐：草稿只記動過的欄位", () => {
 });
 
 describe("編輯這一餐：其他", () => {
-	it("網址的 id 不是數字：說找不到，也不打 /api/meals", async () => {
-		const fetchMock = mockApi(routes());
-		const client = newClient();
-		render(
-			<QueryClientProvider client={client}>
-				<MemoryRouter initialEntries={["/meals/abc/edit"]}>
-					<Routes>
-						<Route path="/meals/:id/edit" element={<EditMeal />} />
-					</Routes>
-				</MemoryRouter>
-			</QueryClientProvider>,
-		);
+	// 跟餐點頁同一個 `parseResourceId`（社群審查 M6）。以前這裡只擋「不是數字」：
+	// `Number("1.5")`、`Number("-3")`、`Number("")`、太長的數字都是「數字」，照樣去問，
+	// 後端回 422——不是 404，所以重試三次（約 7 秒）之後是「無法載入這一餐」。
+	it.each([
+		"abc",
+		"0",
+		"1.5",
+		"-3",
+		"9223372036854775808",
+		"9007199254740993",
+		"99999999999999999999999999",
+	])(
+		"網址的 id 不是一餐的 id（%s）：說找不到，也不打 /api/meals",
+		async (id) => {
+			const fetchMock = mockApi(routes());
+			const client = newClient();
+			render(
+				<QueryClientProvider client={client}>
+					<MemoryRouter initialEntries={[`/meals/${id}/edit`]}>
+						<Routes>
+							<Route path="/meals/:id/edit" element={<EditMeal />} />
+						</Routes>
+					</MemoryRouter>
+				</QueryClientProvider>,
+			);
 
-		expect(await screen.findByText("找不到這一餐")).toBeInTheDocument();
-		expect(calls(fetchMock, "GET", "/api/meals")).toHaveLength(0);
-	});
+			expect(await screen.findByText("找不到這一餐")).toBeInTheDocument();
+			// 等一下再看：請求是掛載之後才送的。
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			expect(calls(fetchMock, "GET", "/api/meals")).toHaveLength(0);
+			expect(screen.getByText("找不到這一餐")).toBeInTheDocument();
+		},
+	);
 
 	it("上傳照片進行中顯示「上傳中…」", async () => {
 		const fetchMock = mockApi(routes());
