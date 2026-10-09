@@ -2241,3 +2241,954 @@ git commit -F "$S/aimulti-t3-msg.txt"
 訊息：`feat(backend): POST /api/ai/analyze-meal——一次估出一餐的每一樣，算一次額度`。
 
 ---
+
+## Task 4：前端——API 層（`api/ai.ts`）與清單的純函式（`lib/ai-meal.ts`）
+
+**Files:**
+- Create: `frontend/src/lib/ai-meal.ts`、`frontend/tests/ai-meal.test.ts`
+- Modify: `frontend/src/api/ai.ts`、`frontend/src/components/AiEstimatePanel.tsx`（`describeAnalyzeError` 改成匯入）、`frontend/tests/ai-api.test.ts`
+
+`schema.d.ts` 在 Task 1、Task 3 已經重新產生；這裡先確認型別在：`grep -n "AnalyzeMealResponse\|LibraryFoodMatch" frontend/src/api/schema.d.ts | head`（各至少一處）。沒有就回去補，不要手寫型別。
+
+**這個 task 起的前端程式碼都沒有跑過**（必讀第 4 點）。
+
+- [ ] **Step 1：API 的測試（紅）**
+
+`tests/ai-api.test.ts`：匯入改成 `import { analyzeImage, analyzeMealImage, analyzeMealText, analyzeText } from "../src/api/ai";`，在 `sentBody` 後面加一個小工具，並在「AI 估算的 API」那個 `describe` 裡加四條：
+
+```ts
+function sentUrl(fetchMock: ReturnType<typeof mockApi>): string {
+	return String(fetchMock.mock.calls[0]?.[0]);
+}
+```
+
+```ts
+	// mockApi 用 includes 比對：`/api/ai/analyze` 這條路由也會接住 `/api/ai/analyze-meal`。
+	// 所以下面每一條都另外斷言**實際打的網址**——只給路由分不出打的是哪一支。
+	it("文字（單樣）：打的是 /api/ai/analyze，不是多樣的那一支", async () => {
+		const fetchMock = mockApi([
+			{ method: "POST", path: "/api/ai/analyze", handler: () => json({}) },
+		]);
+
+		await analyzeText("一碗牛肉麵");
+
+		expect(sentUrl(fetchMock)).toBe("/api/ai/analyze");
+	});
+
+	it("一餐的文字：POST /api/ai/analyze-meal，送 kind=text", async () => {
+		const fetchMock = mockApi([
+			{
+				method: "POST",
+				path: "/api/ai/analyze-meal",
+				handler: () => json({ description: "便當", items: [] }),
+			},
+		]);
+
+		const result = await analyzeMealText("雞腿便當");
+
+		expect(sentUrl(fetchMock)).toBe("/api/ai/analyze-meal");
+		expect(sentBody(fetchMock)).toEqual({ kind: "text", text: "雞腿便當" });
+		expect(result.description).toBe("便當");
+	});
+
+	it("一餐的照片：同一套前處理（先擋大小、縮到 1280），送 kind=image 與 base64", async () => {
+		vi.mocked(shrinkToLongestEdge).mockClear();
+		const fetchMock = mockApi([
+			{
+				method: "POST",
+				path: "/api/ai/analyze-meal",
+				handler: () => json({ description: "便當", items: [] }),
+			},
+		]);
+		const file = new File(["fake-jpeg"], "lunch.jpg", { type: "image/jpeg" });
+
+		await analyzeMealImage(file);
+
+		expect(sentUrl(fetchMock)).toBe("/api/ai/analyze-meal");
+		expect(sentBody(fetchMock)).toEqual({
+			kind: "image",
+			image_base64: btoa("fake-jpeg"),
+		});
+		expect(vi.mocked(shrinkToLongestEdge)).toHaveBeenCalledWith(file, 1280);
+	});
+
+	it("一餐的照片太大：送出前就擋，不打網路", async () => {
+		const fetchMock = mockApi([]);
+		const file = new File(["x"], "big.jpg", { type: "image/jpeg" });
+		Object.defineProperty(file, "size", { value: MAX_PHOTO_BYTES + 1 });
+
+		await expect(analyzeMealImage(file)).rejects.toBeInstanceOf(
+			PhotoTooLargeError,
+		);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+```
+
+Run（在 `frontend/`）: `npx vitest run tests/ai-api.test.ts`
+Expected: FAIL（`analyzeMealText`／`analyzeMealImage` 不存在：型別那一輪報錯，執行那一輪 `is not a function`）。第一條（單樣的網址）是釘子，一開始就綠。
+
+- [ ] **Step 2：`api/ai.ts`**
+
+整個檔案換成（`fileToBase64` 不動）：
+
+```ts
+import { preparePhoto } from "../lib/photo";
+import { apiFetch } from "./client";
+import { ApiError } from "./errors";
+import { describePhotoUploadError, PhotoTooLargeError } from "./photos";
+import type { components } from "./schema";
+
+export type AnalyzeResponse = components["schemas"]["AnalyzeResponse"];
+export type AnalyzeMealResponse = components["schemas"]["AnalyzeMealResponse"];
+export type AnalyzedMealItem = components["schemas"]["AnalyzedMealItem"];
+export type LibraryFoodMatch = components["schemas"]["LibraryFoodMatch"];
+
+const ANALYZE = "/api/ai/analyze";
+const ANALYZE_MEAL = "/api/ai/analyze-meal";
+
+async function post<T>(path: string, body: unknown): Promise<T> {
+	const result = await apiFetch<T>(path, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(body),
+	});
+	if (result === null) {
+		// 後端成功時一律回 200 + JSON；null 代表 apiFetch 的假設被破壞。
+		throw new Error("AI 估算沒有回傳結果");
+	}
+	return result;
+}
+
+/** 文字估算（一樣食物）。後端會先查食物庫（精確比對名稱），命中就不呼叫 AI、不扣次數。 */
+export function analyzeText(text: string): Promise<AnalyzeResponse> {
+	return post(ANALYZE, { kind: "text", text });
+}
+
+/** 照片估算（一樣食物）。**前處理跟上傳餐點照片同一套**（`preparePhoto`：先擋大小，
+ *  再把長邊縮到 1280），最後轉 base64。照片只拿來估算，後端不存（P2 規格 §6）。 */
+export async function analyzeImage(file: File): Promise<AnalyzeResponse> {
+	const resized = await preparePhoto(file);
+	return post(ANALYZE, {
+		kind: "image",
+		image_base64: await fileToBase64(resized),
+	});
+}
+
+/** 一餐的文字估算（AI 多樣估算規格 §3.1）：回一句描述＋最多 8 樣。整段文字剛好是
+ *  食物庫裡一個食物的名稱時不呼叫 AI（`analysis_id` 是 null、只有那一樣）。
+ *  算一次額度，不管估出幾樣。 */
+export function analyzeMealText(text: string): Promise<AnalyzeMealResponse> {
+	return post(ANALYZE_MEAL, { kind: "text", text });
+}
+
+/** 一餐的照片估算。照片的前處理同 `analyzeImage`。 */
+export async function analyzeMealImage(
+	file: File,
+): Promise<AnalyzeMealResponse> {
+	const resized = await preparePhoto(file);
+	return post(ANALYZE_MEAL, {
+		kind: "image",
+		image_base64: await fileToBase64(resized),
+	});
+}
+
+/** 估算失敗時給人看的話。兩個端點的錯誤碼是同一組（後端是同一批函式丟的），
+ *  單樣面板與多樣面板共用這一份。 */
+export function describeAnalyzeError(error: unknown): string {
+	if (error instanceof PhotoTooLargeError) return error.message;
+	if (error instanceof ApiError) {
+		switch (error.code) {
+			case "AI_DAILY_LIMIT":
+				// 後端的訊息含「今天用了 N/20」。
+				return error.message;
+			case "AI_NOT_CONFIGURED":
+				// 後端的訊息說缺什麼（「AI 分析未設定：缺 GEMINI_API_KEY」），
+				// 部署手冊叫操作者照著它補。
+				return error.message;
+			case "AI_MISCONFIGURED":
+			case "AI_UPSTREAM_ERROR":
+				// 後端把供應商的錯誤分成兩類（AI 與編輯畫面的收尾規格 §2 第 2 項）：
+				// 「設定有問題，請管理員檢查」與「暫時無法使用，請稍後再試」——
+				// 該做的事不同，通用的「再試一次」對前者是錯的指示。
+				return error.message;
+			case "AI_BAD_RESPONSE":
+				return "AI 這次的回答看不懂，可以再試一次";
+			case "PHOTO_TOO_LARGE":
+			case "INVALID_PHOTO":
+				return describePhotoUploadError(error);
+		}
+	}
+	return "AI 估算失敗，請再試一次";
+}
+```
+
+`components/AiEstimatePanel.tsx`：刪掉檔案裡的 `describeAnalyzeError` 函式，匯入改成 `import { type AnalyzeResponse, analyzeImage, analyzeText, describeAnalyzeError } from "../api/ai";`；`describePhotoUploadError`、`PhotoTooLargeError` 的匯入如果因此沒人用就拿掉（`npm run -s lint` 會說）。**函式本體是原樣搬過去的**——對一下兩邊的 `switch`，一個 case 都不能少。
+
+Run: `npx vitest run tests/ai-api.test.ts tests/ai-estimate-panel.test.tsx tests/new-food-ai.test.tsx`
+Expected: PASS（`ai-api` 多 4 條——vitest 印出來的數字是 ＋8；另外兩個檔案不變：錯誤訊息的測試還是綠的，證明搬對了）。
+
+- [ ] **Step 3：純函式的測試（紅）**
+
+`tests/ai-meal.test.ts`：
+
+```ts
+import { describe, expect, it } from "vitest";
+import type { AnalyzeMealResponse } from "../src/api/ai";
+import {
+	initialChecklist,
+	itemAmount,
+	itemName,
+	nameKey,
+	pendingItems,
+	toEstimate,
+	wasRenamed,
+} from "../src/lib/ai-meal";
+
+// 白飯：食物庫有同名的（熱量跟 AI 的不同：260 對 280）。滷雞腿：沒有。
+const RESULT: AnalyzeMealResponse = {
+	analysis_id: 41,
+	description: "一碗白飯、滷雞腿一隻",
+	remaining_today: 18,
+	items: [
+		{
+			name: "白飯",
+			brand: null,
+			nutrition: {
+				base_unit: "g",
+				serving_grams: "200.00",
+				kcal: "140.00",
+				protein_g: "2.50",
+				fat_g: "0.25",
+				carb_g: "31.00",
+				serving_kcal: "280.00",
+				serving_protein_g: "5.00",
+				serving_fat_g: "0.50",
+				serving_carb_g: "62.00",
+			},
+			confidence: "0.80",
+			consistency: { atwater_kcal: "272.50", deviation: "7.50", flagged: false },
+			library_food: {
+				food_id: 7,
+				name: "白飯（食物庫）",
+				base_unit: "ml",
+				serving_kcal: "260.00",
+			},
+		},
+		{
+			name: "滷雞腿",
+			brand: "阿嬤的店",
+			nutrition: {
+				base_unit: "g",
+				serving_grams: "150.00",
+				kcal: "200.00",
+				protein_g: "18.00",
+				fat_g: "13.33",
+				carb_g: "2.00",
+				serving_kcal: "300.00",
+				serving_protein_g: "27.00",
+				serving_fat_g: "20.00",
+				serving_carb_g: "3.00",
+			},
+			confidence: "0.60",
+			consistency: { atwater_kcal: "300.00", deviation: "0.00", flagged: false },
+			library_food: null,
+		},
+	],
+};
+
+const DRAFT = {
+	name: " 烤雞腿 ",
+	servingGrams: " 180 ",
+	kcal: " 333 ",
+	protein_g: "30",
+	fat_g: "22",
+	carb_g: "1",
+};
+
+describe("AI 多樣估算的清單", () => {
+	it("toEstimate：一樣＋外層的 analysis_id／remaining_today 拼成單樣流程認得的形狀", () => {
+		const [, chicken] = RESULT.items;
+		if (chicken === undefined) throw new Error("測試資料要有兩樣");
+
+		expect(toEstimate(RESULT, chicken)).toEqual({
+			analysis_id: 41,
+			food_id: null,
+			name: "滷雞腿",
+			brand: "阿嬤的店",
+			nutrition: chicken.nutrition,
+			confidence: "0.60",
+			consistency: chicken.consistency,
+			remaining_today: 18,
+		});
+	});
+
+	it("initialChecklist：每一樣預設勾著，食物庫同名的帶著那一筆，其餘都是空的", () => {
+		const items = initialChecklist(RESULT);
+
+		expect(items.map((item) => item.key)).toEqual([0, 1]);
+		expect(items.map((item) => item.checked)).toEqual([true, true]);
+		expect(items.map((item) => item.library?.food_id ?? null)).toEqual([7, null]);
+		for (const item of items) {
+			expect(item).toMatchObject({
+				draft: null,
+				pickedFoodId: null,
+				skipSameNameCheck: false,
+				added: false,
+				error: null,
+				conflict: null,
+			});
+		}
+		expect(items[1]?.estimate.name).toBe("滷雞腿");
+	});
+
+	it("用食物庫的：名稱、單位、熱量都是食物庫那一筆的；量是 AI 估的", () => {
+		const [rice] = initialChecklist(RESULT);
+		if (rice === undefined) throw new Error("測試資料要有兩樣");
+
+		expect(itemName(rice)).toBe("白飯（食物庫）");
+		expect(itemAmount(rice)).toEqual({ quantity: "200", unit: "ml", kcal: "260" });
+	});
+
+	it("改用 AI 的數字（library 是 null）：名稱、單位、熱量都是 AI 的", () => {
+		const [rice] = initialChecklist(RESULT);
+		if (rice === undefined) throw new Error("測試資料要有兩樣");
+
+		const ai = { ...rice, library: null };
+
+		expect(itemName(ai)).toBe("白飯");
+		expect(itemAmount(ai)).toEqual({ quantity: "200", unit: "g", kcal: "280" });
+	});
+
+	it("改過的：名稱、量、熱量都是草稿的（去掉頭尾空白）", () => {
+		const [, chicken] = initialChecklist(RESULT);
+		if (chicken === undefined) throw new Error("測試資料要有兩樣");
+
+		const edited = { ...chicken, draft: DRAFT };
+
+		expect(itemName(edited)).toBe("烤雞腿");
+		expect(itemAmount(edited)).toEqual({ quantity: "180", unit: "g", kcal: "333" });
+	});
+
+	it("pendingItems：勾著而且還沒加入的", () => {
+		const [rice, chicken] = initialChecklist(RESULT);
+		if (rice === undefined || chicken === undefined) {
+			throw new Error("測試資料要有兩樣");
+		}
+
+		expect(pendingItems([rice, chicken]).map((item) => item.key)).toEqual([0, 1]);
+		expect(
+			pendingItems([{ ...rice, checked: false }, chicken]).map((item) => item.key),
+		).toEqual([1]);
+		expect(
+			pendingItems([{ ...rice, added: true }, chicken]).map((item) => item.key),
+		).toEqual([1]);
+		expect(pendingItems([{ ...rice, added: true }, { ...chicken, checked: false }])).toEqual([]);
+	});
+
+	it("wasRenamed：只有草稿的名稱跟 AI 的不同才算（去頭尾空白、不分大小寫）", () => {
+		const [, chicken] = initialChecklist(RESULT);
+		if (chicken === undefined) throw new Error("測試資料要有兩樣");
+
+		expect(wasRenamed(chicken)).toBe(false);
+		expect(wasRenamed({ ...chicken, draft: DRAFT })).toBe(true);
+		expect(wasRenamed({ ...chicken, draft: { ...DRAFT, name: " 滷雞腿 " } })).toBe(false);
+		expect(nameKey("  Latte ")).toBe("latte");
+	});
+});
+```
+
+Run: `npx vitest run tests/ai-meal.test.ts`
+Expected: FAIL（`FAIL tests/ai-meal.test.ts`：找不到 `../src/lib/ai-meal`）。
+
+- [ ] **Step 4：`lib/ai-meal.ts`**
+
+```ts
+import type {
+	AnalyzedMealItem,
+	AnalyzeMealResponse,
+	AnalyzeResponse,
+	LibraryFoodMatch,
+} from "../api/ai";
+import type { EstimateDraft } from "./ai-food";
+import { formatMacro } from "./decimal";
+
+/** 一樣 ＋ 外層的 `analysis_id`／`remaining_today` → 單樣流程的 `AnalyzeResponse`。
+ *
+ *  為了**原樣重用** `lib/ai-food.ts`：`confirmedFoodRequest`、`draftFromEstimate`、
+ *  `editedFoodRequest` 吃的都是它（AI 多樣估算規格 D3）。`food_id` 一律 null——
+ *  食物庫同名的那一筆在清單項目的 `library`，不混進這個物件
+ *  （它會被整個存成食物的 `ai_raw_response`）。 */
+export function toEstimate(
+	result: AnalyzeMealResponse,
+	item: AnalyzedMealItem,
+): AnalyzeResponse {
+	return {
+		analysis_id: result.analysis_id,
+		food_id: null,
+		name: item.name,
+		brand: item.brand,
+		nutrition: item.nutrition,
+		confidence: item.confidence,
+		consistency: item.consistency,
+		remaining_today: result.remaining_today,
+	};
+}
+
+/** 要使用者決定才能繼續的那一樣。 */
+export type ItemConflict = {
+	/** `own`：建食物時撞到自己的同名食物（409 FOOD_EXISTS）。
+	 *  `library`：改過名稱之後，跟看得到的食物同名。 */
+	source: "own" | "library";
+	foodId: number;
+	name: string;
+};
+
+/** 勾選清單的一列。**狀態只往前走**：`added` 一旦是 true 就不會再被處理——
+ *  「同一樣不會加兩次」靠的是這個，不是按鈕停用（規格 D18）。 */
+export type ChecklistItem = {
+	/** 回應裡的第幾樣；整個清單的生命週期裡不變。 */
+	key: number;
+	estimate: AnalyzeResponse;
+	/** 預設用食物庫的這一筆；按了「改用 AI 的數字」之後是 null。 */
+	library: LibraryFoodMatch | null;
+	checked: boolean;
+	/** 「套用」過的修改（一份的值，還沒建任何東西）。 */
+	draft: EstimateDraft | null;
+	/** 衝突時選了「用食物庫的／用現有的」：加入時直接拿這個食物。 */
+	pickedFoodId: number | null;
+	/** 衝突時選了「還是建一個」：這一樣不再查同名。 */
+	skipSameNameCheck: boolean;
+	added: boolean;
+	error: string | null;
+	conflict: ItemConflict | null;
+};
+
+export function initialChecklist(result: AnalyzeMealResponse): ChecklistItem[] {
+	return result.items.map((item, index) => ({
+		key: index,
+		estimate: toEstimate(result, item),
+		library: item.library_food,
+		checked: true,
+		draft: null,
+		pickedFoodId: null,
+		skipSameNameCheck: false,
+		added: false,
+		error: null,
+		conflict: null,
+	}));
+}
+
+/** 清單上顯示的名稱＝會記下去的那個食物的名稱。 */
+export function itemName(item: ChecklistItem): string {
+	if (item.draft !== null) return item.draft.name.trim();
+	return item.library?.name ?? item.estimate.name;
+}
+
+/** 清單上顯示的量、單位、熱量——**會記下去的那一組**：改過的看草稿；用食物庫的
+ *  看後端算好的 `library.serving_kcal`（食物庫的每 100 × AI 估的量）；其餘是 AI 的。
+ *  這裡不做任何乘除（小數運算只在 `lib/decimal.ts`）。
+ *
+ *  `quantity` 同時是放進這一餐的量（g 或 ml）。 */
+export function itemAmount(item: ChecklistItem): {
+	quantity: string;
+	unit: string;
+	kcal: string;
+} {
+	const nutrition = item.estimate.nutrition;
+	if (item.draft !== null) {
+		return {
+			quantity: item.draft.servingGrams.trim(),
+			unit: nutrition.base_unit,
+			kcal: item.draft.kcal.trim(),
+		};
+	}
+	if (item.library !== null) {
+		return {
+			quantity: formatMacro(nutrition.serving_grams),
+			unit: item.library.base_unit,
+			kcal: formatMacro(item.library.serving_kcal),
+		};
+	}
+	return {
+		quantity: formatMacro(nutrition.serving_grams),
+		unit: nutrition.base_unit,
+		kcal: formatMacro(nutrition.serving_kcal),
+	};
+}
+
+/** 「加入這 N 樣」的 N：勾著而且還沒加入的。 */
+export function pendingItems(items: readonly ChecklistItem[]): ChecklistItem[] {
+	return items.filter((item) => item.checked && !item.added);
+}
+
+/** 比名稱用的鍵：去頭尾空白、不分大小寫（同 `findSameNameFood` 與後端的比對）。 */
+export function nameKey(name: string): string {
+	return name.trim().toLowerCase();
+}
+
+/** 改過而且名稱跟 AI 給的不同：後端的食物庫比對用的是 AI 的名稱，改名之後不算數，
+ *  加入前要再查一次（規格「與原始決定的差異」第 7 點）。 */
+export function wasRenamed(item: ChecklistItem): boolean {
+	return (
+		item.draft !== null &&
+		nameKey(item.draft.name) !== nameKey(item.estimate.name)
+	);
+}
+```
+
+Run: `npx vitest run tests/ai-meal.test.ts`
+Expected: PASS（7 條；vitest 印 `Tests 14 passed`）。
+
+- [ ] **Step 5：突變**
+
+| # | 突變 | 預期紅的 |
+|---|---|---|
+| 1 | `analyzeMealText` 打 `ANALYZE` | `ai-api`「一餐的文字」（網址那一行） |
+| 2 | `analyzeMealImage` 不經過 `preparePhoto`（直接 `fileToBase64(file)`） | 「一餐的照片」（`shrinkToLongestEdge` 沒被呼叫）、「一餐的照片太大」 |
+| 3 | `analyzeText` 打 `ANALYZE_MEAL` | 「文字（單樣）：打的是 /api/ai/analyze」——既有的「文字：送 kind=text」**仍綠**（路由用 includes 接得住），這就是加那條釘子的理由 |
+| 4 | `toEstimate` 的 `food_id` 寫成 `item.library_food?.food_id ?? null` | `ai-meal`「toEstimate」**仍綠**（滷雞腿沒有食物庫的）→ 把測試的那一樣換成白飯再加一條斷言 `food_id` 是 `null`，再跑一次，要紅。照實記這個補強 |
+| 5 | `itemAmount` 用食物庫時的 `kcal` 寫成 `nutrition.serving_kcal` | 「用食物庫的」（260 對 280） |
+| 6 | `itemAmount` 用食物庫時的 `unit` 寫成 `nutrition.base_unit` | 「用食物庫的」（ml 對 g） |
+| 7 | `itemAmount` 草稿那一段拿掉 `.trim()` | 「改過的」 |
+| 8 | `pendingItems` 拿掉 `!item.added` | 「pendingItems」 |
+| 9 | `wasRenamed` 拿掉 `nameKey`（直接比字串） | 「wasRenamed」（` 滷雞腿 ` 那一行） |
+
+- [ ] **Step 6：整套、Commit**
+
+```bash
+cd frontend && npm run -s lint && npm run -s test 2>&1 | grep -E "Test Files|Tests |FAIL|Unhandled|Type Errors"
+```
+
+Expected：`Test Files 140`（＋2：新檔案跑兩次）、`Tests` 是基準線 ＋8＋14（＝1693；第 4 個突變補的那一條另計），沒有 `FAIL`／`Unhandled`。
+
+```bash
+S=C:/Users/user/AppData/Local/Temp/claude/f--wallet/e7b60c93-fbd5-4a61-9c85-74550ff7244b/scratchpad
+cd frontend && npm run -s typecheck && cd .. && git add frontend/src/api/ai.ts frontend/src/lib/ai-meal.ts frontend/src/components/AiEstimatePanel.tsx frontend/tests/ai-api.test.ts frontend/tests/ai-meal.test.ts && git commit -F "$S/aimulti-t4-msg.txt"
+```
+
+訊息：`feat(frontend): AI 多樣估算的 API 與清單的純函式`。
+
+---
+
+## Task 5：前端——「描述」欄位（記一餐、編輯這一餐）與卡片（飲食頁、好友）
+
+**Files:**
+- Modify: `frontend/src/screens/LogMeal.tsx`、`LogMeal.module.css`、`screens/EditMeal.tsx`、`EditMeal.module.css`、`screens/MealList.tsx`、`MealList.module.css`、`components/FriendMealCard.tsx`、`FriendMealCard.module.css`
+- Modify（測試）: `frontend/tests/log-meal.test.tsx`、`edit-meal.test.tsx`、`meal-list.test.tsx`、`friend-feed.test.tsx`、`friend-day.test.tsx`、`overview.test.tsx`
+
+這個 task 不碰 AI：做完之後「手打一段描述」整條路是通的。
+
+**先 grep**（必讀第 11 點）：`grep -rn "描述" frontend/e2e frontend/tests | grep -v "描述這個食物"`——新增食物頁有一個「描述這個食物」的欄位，e2e 或測試如果用沒有 `exact` 的 `getByLabel("描述")`／`getByLabelText(/描述/)`，新欄位會讓它對到兩個。有就先改成 `exact`，記在「執行中發現的差異」。
+
+- [ ] **Step 1：測試（紅）**
+
+**`tests/log-meal.test.tsx`**（放在「沒填金額時不送 cost 欄位」後面）：
+
+```tsx
+	it("填了描述就一起送出（去頭尾空白）", async () => {
+		const fetchMock = mockApi({
+			"/api/foods/frequent": () => json(FREQUENT_FOODS),
+			"/api/foods/recent": () => json([]),
+			"/api/foods/1/portions": () => json([]),
+			"/api/meals": () => json({ id: 99 }, 201),
+		});
+
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+		await userEvent.type(
+			screen.getByLabelText("描述（選填）"),
+			"  巷口的滷肉飯加蛋  ",
+		);
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() =>
+			expect(mealBody(fetchMock)).toMatchObject({
+				description: "巷口的滷肉飯加蛋",
+			}),
+		);
+	});
+
+	it("沒填描述（或只有空白）時不送 description 欄位", async () => {
+		const fetchMock = mockApi({
+			"/api/foods/frequent": () => json(FREQUENT_FOODS),
+			"/api/foods/recent": () => json([]),
+			"/api/foods/1/portions": () => json([]),
+			"/api/meals": () => json({ id: 99 }, 201),
+		});
+
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+		await userEvent.type(screen.getByLabelText("描述（選填）"), "   ");
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() => expect(mealBody(fetchMock)).not.toBeNull());
+		expect(mealBody(fetchMock)).not.toHaveProperty("description");
+	});
+
+	it("描述欄位說明好友看得到，而且最多 500 字", async () => {
+		mockWithPortions([]);
+
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+
+		const field = screen.getByLabelText("描述（選填）");
+		expect(field).toHaveAttribute("maxlength", "500");
+		expect(field).toHaveAccessibleDescription("好友看得到這段描述");
+	});
+```
+
+**`tests/edit-meal.test.tsx`**（放在「備註：輸入新的備註送 note」後面；`routes`、`renderEditMeal`、`bodyOf` 是這個檔案既有的工具。`MEAL` 這個測試資料**沒有 `description` 這個 key**——剛好就是離線快取裡的舊形狀）：
+
+```tsx
+	it("描述：顯示伺服器的值；改了只送 description", async () => {
+		const fetchMock = mockApi(
+			routes({ ...MEAL, description: "原本的描述", note: "原本的備註" }),
+		);
+		renderEditMeal();
+
+		const field = await screen.findByLabelText("描述（選填）");
+		expect(field).toHaveValue("原本的描述");
+		// 兩格各顯示各的。
+		expect(screen.getByLabelText("備註（選填）")).toHaveValue("原本的備註");
+		await userEvent.clear(field);
+		await userEvent.type(field, "  改過的描述  ");
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		await waitFor(() =>
+			expect(bodyOf(fetchMock, "PATCH", "/api/meals/5")).toEqual({
+				description: "改過的描述",
+			}),
+		);
+	});
+
+	it("描述：清空既有的描述送 description: null", async () => {
+		const fetchMock = mockApi(routes({ ...MEAL, description: "原本的描述" }));
+		renderEditMeal();
+
+		const field = await screen.findByLabelText("描述（選填）");
+		await userEvent.clear(field);
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		await waitFor(() =>
+			expect(bodyOf(fetchMock, "PATCH", "/api/meals/5")).toEqual({
+				description: null,
+			}),
+		);
+	});
+
+	it("描述：沒動它、只改備註時不送 description", async () => {
+		const fetchMock = mockApi(routes({ ...MEAL, description: "原本的描述" }));
+		renderEditMeal();
+
+		await userEvent.type(await screen.findByLabelText("備註（選填）"), "加蛋");
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		await waitFor(() =>
+			expect(bodyOf(fetchMock, "PATCH", "/api/meals/5")).toEqual({
+				note: "加蛋",
+			}),
+		);
+	});
+
+	it("描述：舊快取裡的餐沒有 description 這個欄位——欄位是空的，「儲存」不能按", async () => {
+		mockApi(routes());
+		renderEditMeal();
+
+		expect(await screen.findByLabelText("描述（選填）")).toHaveValue("");
+		expect(screen.getByRole("button", { name: "儲存" })).toBeDisabled();
+	});
+
+	it("描述與備註各有一句說明：誰看得到", async () => {
+		mockApi(routes());
+		renderEditMeal();
+
+		expect(
+			await screen.findByLabelText("描述（選填）"),
+		).toHaveAccessibleDescription("好友看得到這段描述");
+		expect(screen.getByLabelText("備註（選填）")).toHaveAccessibleDescription(
+			"備註只有自己看得到",
+		);
+	});
+```
+
+**`tests/meal-list.test.tsx`**（檔尾那個 `describe` 裡）：
+
+```tsx
+	it("有描述的餐在卡片上顯示描述；沒有的（null、或舊快取沒有這個欄位）不留空行", async () => {
+		mockApi({
+			"/api/meals": () =>
+				json([
+					{ ...MEALS[0], description: "巷口的滷肉飯加蛋" },
+					{ ...MEALS[1], description: null },
+					// 舊快取的形狀：沒有 description 這個 key。
+					{ ...MEALS[1], id: 13 },
+				]),
+		});
+
+		render(wrap(<MealList />));
+
+		expect(await screen.findByTestId("meal-description-11")).toHaveTextContent(
+			"巷口的滷肉飯加蛋",
+		);
+		expect(screen.queryByTestId("meal-description-12")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("meal-description-13")).not.toBeInTheDocument();
+	});
+```
+
+（這個檔案的 `mockApi` 是 `mockApiByPath`：`/api/meals` 這一條用 includes 也接住了縮圖的請求，同既有的測試。）
+
+**`tests/friend-feed.test.tsx`**：
+
+```tsx
+	it("卡片顯示好友寫的描述；沒有描述的不留空行", async () => {
+		mockApi(
+			feedRoutes(() =>
+				json({
+					meals: [
+						friendMeal(7, { description: "公司樓下的雞腿便當" }),
+						friendMeal(8, { description: null }),
+						friendMeal(9),
+					],
+					next_cursor: null,
+				}),
+			),
+		);
+		renderFeed();
+
+		expect(
+			await screen.findByTestId("friend-meal-description-7"),
+		).toHaveTextContent("公司樓下的雞腿便當");
+		expect(
+			screen.queryByTestId("friend-meal-description-8"),
+		).not.toBeInTheDocument();
+		expect(
+			screen.queryByTestId("friend-meal-description-9"),
+		).not.toBeInTheDocument();
+	});
+```
+
+**`tests/friend-day.test.tsx`**（`dayResponse` 回的那一餐 id 是 7）：
+
+```tsx
+	it("某一天的卡片也顯示描述（跟動態同一個元件）", async () => {
+		const day = dayResponse("2026-10-06", "今天的便當");
+		mockApi([
+			{
+				method: "GET",
+				path: "/api/friends/2/meals",
+				handler: () =>
+					json({
+						...day,
+						meals: day.meals.map((meal) => ({
+							...meal,
+							description: "公司樓下的雞腿便當",
+						})),
+					}),
+			},
+		]);
+		renderDay();
+
+		expect(
+			await screen.findByTestId("friend-meal-description-7"),
+		).toHaveTextContent("公司樓下的雞腿便當");
+	});
+```
+
+**`tests/overview.test.tsx`**（釘子：動工前就是綠的，守的是以後有人把描述加進時間線）：
+
+```tsx
+	it("時間線不顯示這一餐的描述（只在飲食頁的卡片）", async () => {
+		mockOverview({
+			"/api/meals": () =>
+				json([{ ...LUNCH, description: "只在飲食頁出現的描述" }]),
+		});
+
+		render(wrap(<Overview />));
+
+		// 先等時間線畫出來（第 41 種），再斷言沒有。
+		expect(await screen.findAllByTestId("timeline-row")).toHaveLength(2);
+		expect(screen.queryByText(/只在飲食頁出現的描述/)).not.toBeInTheDocument();
+	});
+```
+
+Run: `npx vitest run tests/log-meal.test.tsx tests/edit-meal.test.tsx tests/meal-list.test.tsx tests/friend-feed.test.tsx tests/friend-day.test.tsx tests/overview.test.tsx 2>&1 | grep -E "✓|×|FAIL|Tests "`
+Expected: FAIL——新增的 12 條裡 11 條紅（找不到「描述（選填）」、找不到 testid）；**總覽那一條綠**（釘子）。
+
+- [ ] **Step 2：記一餐**
+
+`screens/LogMeal.tsx`：
+
+`isPrivate` 的 state 後面：
+
+```tsx
+	// 這一餐吃了什麼的一句話（AI 多樣估算規格 D13）。好友看得到；跟「備註」是兩回事。
+	const [description, setDescription] = useState("");
+```
+
+`POST /api/meals` 的 body，`cost` 那一行後面：
+
+```tsx
+					// 同 cost：留空（或只有空白）整個不帶。後端會再清一次（控制字元、長度）。
+					...(description.trim() === ""
+						? {}
+						: { description: description.trim() }),
+```
+
+`onSuccess` 裡 `setCost("");` 後面加 `setDescription("");`。
+
+表單裡，金額的 `<input>` 後面、「只有我看得到」的 `<label>` 前面：
+
+```tsx
+					<label htmlFor="meal-description">描述（選填）</label>
+					{/* 單行：後端把換行清成空白（`single_line`），這裡用 input 就不會讓人
+					    以為可以分段。maxLength 跟後端的 500 一致。 */}
+					<input
+						id="meal-description"
+						type="text"
+						maxLength={500}
+						value={description}
+						aria-describedby="meal-description-hint"
+						onChange={(event) => setDescription(event.target.value)}
+					/>
+					<p id="meal-description-hint" className={styles.hint}>
+						好友看得到這段描述
+					</p>
+```
+
+`LogMeal.module.css`：
+
+```css
+/* 欄位底下的一句說明。 */
+.hint {
+	margin: 0;
+	font-size: 12px;
+	color: var(--color-text-muted);
+}
+```
+
+- [ ] **Step 3：編輯這一餐**
+
+`screens/EditMeal.tsx`：
+
+1. `MealChanges` 加 `description?: string | null;`。
+2. `mealChanges` 的 `draft` 參數型別加 `description: string | undefined;`，函式裡 `note` 那一段**前面**加（同一條規則）：
+
+```tsx
+	if (draft.description !== undefined) {
+		const description = draft.description.trim();
+		// `meal.description` 可能是 undefined：離線快取裡的舊形狀沒有這個欄位。
+		if (description !== (meal.description ?? "")) {
+			changes.description = description === "" ? null : description;
+		}
+	}
+```
+
+3. `mealChanges` 上面的 docstring「備註清空＝`note: null`」後面補「；描述清空＝`description: null`」。
+4. `MealDetailsForm`：`const [description, setDescription] = useState<string | undefined>(undefined);`；傳進 `mealChanges({ …, description, … })`；`onSuccess` 清草稿的地方加 `setDescription(undefined);`（docstring 的「六個草稿」改成七個，括號裡補上描述）。
+5. 表單裡「金額（選填）」的 `<input>` 後面、「備註（選填）」的 `<label>` 前面：
+
+```tsx
+			<label htmlFor="edit-meal-description">描述（選填）</label>
+			<input
+				id="edit-meal-description"
+				type="text"
+				maxLength={500}
+				value={description ?? meal.description ?? ""}
+				aria-describedby="edit-meal-description-hint"
+				onChange={(event) => edit(setDescription)(event.target.value)}
+			/>
+			<p id="edit-meal-description-hint" className={styles.hint}>
+				好友看得到這段描述
+			</p>
+```
+
+6. 既有的備註 `<input>` 加 `aria-describedby="edit-meal-note-hint"`，後面加：
+
+```tsx
+			<p id="edit-meal-note-hint" className={styles.hint}>
+				備註只有自己看得到
+			</p>
+```
+
+`EditMeal.module.css`：同一個 `.hint`（三行，照 `LogMeal.module.css` 的）。**不要改 `.section input…` 那條規則**——新的輸入框自動吃到 44px（`e2e/edit-meal.spec.ts` 會量這個表單的每一個輸入框）。
+
+- [ ] **Step 4：卡片**
+
+`screens/MealList.tsx` 的 `MealCard`，`cardHeader` 那個 `<div>` 後面、照片前面：
+
+```tsx
+			{/* 真值判斷，不是 `!== null`：離線快取裡的舊餐沒有這個欄位（undefined），
+			    `!== null` 會畫出一個空的段落。內容是 React 的文字節點——不會被當成 HTML。 */}
+			{meal.description ? (
+				<p
+					data-testid={`meal-description-${meal.id}`}
+					className={styles.description}
+				>
+					{meal.description}
+				</p>
+			) : null}
+```
+
+`MealList.module.css`：
+
+```css
+/* 這一餐的描述：一句話，可能很長、可能沒有空白可以斷行。 */
+.description {
+	margin: 0;
+	font-size: 14px;
+	color: var(--color-text);
+	overflow-wrap: anywhere;
+}
+```
+
+`components/FriendMealCard.tsx`，`header` 那個 `<div>` 後面：
+
+```tsx
+			{meal.description ? (
+				<p
+					data-testid={`friend-meal-description-${meal.id}`}
+					className={styles.description}
+				>
+					{meal.description}
+				</p>
+			) : null}
+```
+
+`FriendMealCard.module.css`：同一個 `.description`。
+
+Run: Step 1 的那一行指令。
+Expected: PASS（12 條新的全綠；既有的不變）。
+
+- [ ] **Step 5：突變**
+
+| # | 突變 | 預期紅的 |
+|---|---|---|
+| 1 | 記一餐 body 的條件寫成 `description === ""`（沒 trim） | 「沒填描述（或只有空白）」 |
+| 2 | 記一餐送 `description`（沒 trim 的值） | 「填了描述就一起送出」 |
+| 3 | 記一餐一律送 `description: description.trim()`（空的也送） | 「沒填描述」 |
+| 4 | 記一餐的 `<input>` 拿掉 `aria-describedby` | 「描述欄位說明好友看得到」 |
+| 5 | `mealChanges` 的描述那一段寫成 `changes.note = …` | 「描述：顯示伺服器的值；改了只送 description」 |
+| 6 | `mealChanges` 拿掉 `=== "" ? null :`（空的送 `""`） | 「描述：清空…送 description: null」 |
+| 7 | `mealChanges` 拿掉 `if (draft.description !== undefined)` 這一層、把 `undefined` 當成 `""` | 「描述：沒動它、只改備註時不送」 |
+| 8 | 編輯畫面的 `value` 寫成 `description ?? meal.description`（沒有 `?? ""`） | 「舊快取…欄位是空的」——React 會警告 uncontrolled；看它紅在哪一行，照實記 |
+| 9 | 編輯畫面的描述欄位綁到 `note`（`value={note ?? meal.note ?? ""}`） | 「描述：顯示伺服器的值」（值不對） |
+| 10 | `MealCard` 改成 `meal.description !== null` | 「…不留空行」（id 13 那一行） |
+| 11 | `FriendMealCard` 改成 `meal.description !== null` | 好友動態「…不留空行」（id 9 那一行） |
+| 12 | `Overview`（或 `lib/timeline.ts`）把 `meal.description` 加進餐點列的文字 | 總覽「時間線不顯示這一餐的描述」——證明那條釘子有咬合力；改回 |
+
+- [ ] **Step 6：整套、Commit**
+
+```bash
+cd frontend && npm run -s lint && npm run -s test 2>&1 | grep -E "Test Files|Tests |FAIL|Unhandled|Type Errors"
+```
+
+Expected：`Test Files 140`（不變）、`Tests` 是 Task 4 之後的數字 ＋24。`css-tokens`、`decimal-containment` 兩條掃描測試照樣綠（新的 CSS 只用變數與既有就有的 `12px`／`14px` 字級寫法——**先看 `tests/css-tokens.test.ts` 管的是哪些屬性**，被它擋下就改用變數）。
+
+```bash
+S=C:/Users/user/AppData/Local/Temp/claude/f--wallet/e7b60c93-fbd5-4a61-9c85-74550ff7244b/scratchpad
+cd frontend && npm run -s typecheck && cd .. && git add frontend/src/screens/LogMeal.tsx frontend/src/screens/LogMeal.module.css frontend/src/screens/EditMeal.tsx frontend/src/screens/EditMeal.module.css frontend/src/screens/MealList.tsx frontend/src/screens/MealList.module.css frontend/src/components/FriendMealCard.tsx frontend/src/components/FriendMealCard.module.css frontend/tests/log-meal.test.tsx frontend/tests/edit-meal.test.tsx frontend/tests/meal-list.test.tsx frontend/tests/friend-feed.test.tsx frontend/tests/friend-day.test.tsx frontend/tests/overview.test.tsx && git commit -F "$S/aimulti-t5-msg.txt"
+```
+
+訊息：`feat(frontend): 這一餐的「描述」——記一餐與編輯畫面可以填，飲食頁與好友的卡片看得到`。
+
+---
