@@ -69,6 +69,81 @@
 
 （執行時發現的寫在這裡。）
 
+## 執行中發現的差異
+
+（哪個 task、原本寫什麼、實際是什麼、為什麼。Task 1～3 已填；後面的 task 接著寫。）
+
+**基準線與數字**
+
+- 開工前量到的跟計畫寫的一樣：後端 1227、前端 `Test Files 142`／`Tests 1817`。
+- 後端條數：1227 → Task 1 **1249**（＋22）→ Task 2 **1282**（＋33）→ Task 3 **1304**（＋22）。前端三個 task 之後仍然是 142／1817。
+- 計畫預測的條數每一個都少算——不是數錯，是補了測試（下面各 task 的表）。
+- dev 資料庫（`wallet`）**沒有升版**，還在 `0017`；`0018` 只對 `wallet_test` 跑過 upgrade → `alembic check` → downgrade → upgrade → `alembic check`。Task 11 的 `docker compose up -d --build api` 會把 dev 升上去。
+
+**工具（Task 1～3 都適用）**
+
+- 在 Bash heredoc 裡跑的 Python 腳本，內容的反斜線會少一層：要寫進測試檔的 regex 單字邊界（反斜線＋b）變成了**真的退格字元（0x08）**，「反斜線＋n」變成真的換行。這一次是 `SyntaxError` 當場擋下來的；退格字元是 `Cc` 類，**「執行環境」那一段的掃描（只看 `Cf`／`Zl`／`Zp`）掃不到它**。之後帶反斜線的內容一律用 Write／Edit 工具寫；Task 3 commit 之後另外對這三個 commit 動到的 23 個檔案掃了一次 `Cc`（Tab 與換行除外）與 CR，乾淨。
+- 突變用一支小腳本做（改 → 跑 → 還原 bytes → 刪掉對應的 `.pyc`）。刪 `.pyc` 比 `touch` 可靠：pyc 用「秒」比對 mtime，同一秒內同樣大小的改動會被當成沒變。
+
+**Task 1（`f62026c`）**
+
+| 原本寫的 | 實際 | 為什麼 |
+|---|---|---|
+| `test_social_model.py` **18** 條 | **22** 條：多一條 `test_the_four_right_shapes_are_accepted`（四種對的形狀各寫一次） | 計畫說「對的形狀由後面的 task 經過端點寫進去」，但 `friend_request`／`friend_accepted` 要到 Task 6 才有人寫。只測「錯的被擋」的話，把 `shape_matches_type` 的好友分支整個拿掉（好友通知一則都寫不進去）是**全綠**——突變確認過，補了之後紅 2 條 |
+| 突變「`uq_notifications_like` 拿掉 `postgresql_where`」紅 `test_only_one_like_notification…` 的後半 | 紅 4 條：那一條，加上三條 cascade 測試 | `_fill` 對同一個（收件人、動作者、餐）寫一則讚的通知與一則留言的通知，索引變成全表唯一之後第二則就撞到 |
+| 突變表其餘 7 個 | 全部如預測：唯一約束、`BETWEEN` 兩個邊界、`not_self`、`like` 分支、`unique=True`、`SET NULL`（紅的樣子是 `CheckViolationError … ck_notifications_shape_matches_type`）、只改模型（22 條全部 ERROR 在 `alembic check`） | — |
+| — | 多跑兩個突變：`shape` 拿掉好友分支（見上）；`meal_likes.meal_id` 的 FK 不 cascade → `test_deleting_a_meal…` 紅在 `ForeignKeyViolationError` | 模型與 migration 兩邊一起改，`alembic check` 不會先擋 |
+| migration 的 `shape` 那一條沒有註解 | 加了一行註解（它同時是 `type` 的手寫約束）與「述詞必須跟模型一字不差」 | 照 `0016` 的慣例；純註解 |
+
+**Task 2（`87db687`）**
+
+| 原本寫的 | 實際 | 為什麼 |
+|---|---|---|
+| `test_social_meal.py` **20** 條 | **32** 條 | 見下面「補的測試」 |
+| 重新產生 `schema.d.ts`「多四個 schema」 | 三個：`LikerResponse`、`CommentResponse`、`SocialMealResponse` | 計畫多數了一個（`LikeState` 是 Task 3 的） |
+| `build_friend_meals` 的 `user=` 沿用 `_person` | 直接組 `PersonResponse(id=…, display_name=…)`；`_person` 留在 `routes/friends.py`（別的端點還在用） | 新模組不該反過來 import 路由檔 |
+| `social_helpers.make_cast` | 多一行 `assert revision is not None` | `db_session.get` 的回傳可能是 `None`；跟 `test_friend_meals.py` 的 `pals` 同一個寫法 |
+| `test_a_friend_sees_the_whitelisted_meal…` 只斷言 `meal` 裡的幾個欄位 | 多斷言 `set(body["meal"])` 等於完整的白名單（14 個鍵）與 `items[0]` 的鍵 | 這是 D7 的重點：主人與好友同一個白名單。只用「回應裡沒有這幾個字串」的話，多帶一個新欄位看不出來 |
+| 突變表 14 個 | 全部紅，紅的測試都包含預測的那幾條 | 補的測試讓好幾個突變多紅幾條（例如拿掉 `status == ACCEPTED` 多紅 `…[pending]` 與「主人送出的邀請」） |
+
+補的測試（**每一條都有一個只有它抓得到的突變**，除非另外註明）：
+
+1. `test_a_friend_of_a_friend_is_still_a_stranger`——小卡是愛麗絲的好友、不是鮑伯的，鮑伯的餐她看不到。**計畫的那組人分不出這件事**：阿丁與伊芙一個已接受的好友都沒有，所以把 `meal_visible_to` 寫成「viewer 有任何一個好友」也是全綠。突變確認：只有這一條紅。
+2. `test_someone_elses_friend_does_not_count_on_this_meal`——同一件事在「作者算不算數」那一邊：`author_counts` 寫成「作者有任何一個好友」時，只有這一條紅（`like_counts` 的同一個突變另外被 `test_a_self_like_row_never_counts` 抓到）。
+3. `test_the_one_who_liked_is_marked_as_me`——名單的 `is_me`。計畫的測試裡名單上的人從來不是看的人，`is_me=False` 寫死是全綠。
+4. `test_every_way_of_not_seeing_is_the_same_404[stranger|pending|private|unfriended]`——四種看不到各自跟「id 不存在」**逐字相同**（計畫只比了陌生人那一種）；每一種先確認主人打同一個網址是 200。
+5. `test_an_invitation_the_owner_sent_opens_nothing_until_it_is_accepted`——阿丁是「別人邀主人」；這是另一個方向，而且接受之後同一個網址變成 200。
+6. `test_each_meal_in_the_feed_carries_its_own_numbers`——兩餐、數字不一樣。（沒有專屬的突變：把 `comment_count` 寫死已經被別的測試抓到；它守的是 `GROUP BY` 對錯餐。）
+7. `test_an_id_that_cannot_be_a_meal_is_422_not_500[0|-1|2**63]`——規格 §5「超出 bigint → 422」。
+
+另外多跑 8 個計畫沒列的突變，全部紅：可見性改成「viewer 有任何好友」、作者過濾改成「作者有任何好友」、名單 `is_me` 寫死、`is_mine` 寫死、名單順序反過來、`read_social_meal` 不過可見性（直接 `db.get`）、`liked_by_me` 的 `bool_or` 恆真、`FriendMeal.comment_count` 寫死。
+
+**Task 3（`69e76c5`）**
+
+| 原本寫的 | 實際 | 為什麼 |
+|---|---|---|
+| `test_social_likes.py` **14** 條、並行 **1** 條 | **20** 條、並行 **2** 條 | 見下面 |
+| `like_meal`／`unlike_meal` 在 commit 之後用 `meal.id`、`user.id` | 開頭先存 `user_id = user.id`，之後一律用 `user_id` 與路徑參數 `meal_id`；`unlike_meal` 沒有留住 `meal`（`await load_visible_meal(…)` 不接回傳值） | commit 之後不碰 ORM 物件（「開工前必讀」第 7 點的同一個坑）。**Task 5 要注意**：`unlike_meal` 要改回 `meal = await load_visible_meal(…)` 才拿得到 `meal.user_id`（通知的收件人），而且要在 commit **之前**讀 |
+| import `CommentResponse, LikeState, LikerResponse, …` | `CommentResponse, LikerResponse, LikeState, …` | ruff 的 I001（排序分大小寫） |
+| `_own_views` 走四條路徑；改項目、上傳照片「補不上就照實寫」 | 補上了，六條都走；另外斷言每一條回的是同一餐（`body["id"]`） | 突變確認：`update_meal_item`、`upload_meal_photo` 各自改傳 `SocialCounts()` 都紅 |
+| 突變「拿掉 `on_conflict_do_nothing`」紅並行那一條與 `test_both_directions_are_idempotent` | 那兩條，加上 `test_after_unfriending…`（加回好友之後再按一次）。共用 session 裡紅的樣子是 `IntegrityError` 直接從 `client.put` 丟出來，不是 500 的回應 | 測試的 ASGI transport 預設把 app 的例外往外丟 |
+| 突變「`conftest.py` 拿掉 `like_rate_limiter.reset()`」預期存活 | 存活（46 passed） | 如預測 |
+| 突變表其餘 | 全部如預測 | — |
+| Step 7：`typecheck` 紅一處（`tests/timeline.test.ts`） | 紅一處，就是那一處；補兩個欄位之後 typecheck、test（142／1817）、lint 都綠 | — |
+
+補的測試：
+
+1. **`test_a_like_racing_the_owner_closing_the_meal_waits_and_is_then_refused`（兩條真的連線）**——規格 §4.4。主人的交易 `FOR UPDATE` 載入這一餐、改成私人、還沒 commit；好友同時按讚：讚等主人 commit，然後是 `NotFoundError(MEAL_NOT_FOUND)`，`meal_likes` 一列都沒有。**計畫沒有任何測試看得到 `lock=True`**：把 `like_meal` 改成 `lock=False`，計畫的測試全綠，只有這一條紅（按讚不等、直接寫進去）。
+2. `test_a_like_lands_on_that_meal_only`——同一個人在另一餐也有讚。`unlike_meal` 的 `DELETE` 拿掉 `meal_id` 條件（收回我所有的讚）時只有這一條紅。
+3. `test_a_friend_of_a_friend_cannot_like`、私人與解除之後的 404 跟不存在逐字相同（加在既有的兩條裡）、`test_an_id_that_cannot_be_a_meal_is_422_not_500[put|delete]`。
+4. `test_my_list_gives_each_meal_its_own_numbers`——同一天兩餐。`list_meals` 每一餐都拿第一餐的數字時只有這一條紅。
+5. `test_my_own_endpoints_still_refuse_a_friends_meal`——`/api/meals` 多了兩個數字，沒有多讀得到任何人的餐：鮑伯在社群的端點看得到的那一餐，`/api/meals/{id}` 照舊 404、清單照舊是空的。（回歸用：實作之前就是綠的。）
+
+**沒有測試守住的事（已知，照實記）**
+
+- `unlike_meal` 的 `lock=True`：拿掉它沒有測試會紅。收回一個讚落在正在關起來的餐上沒有壞處（讚少一個），鎖是照規格 §4.4「讚、留言寫入時」加的。
+- `read_social_meal` 的 `if owner is None`（主人的帳號剛好被刪）：現在沒有刪帳號的路，走不到。
+
 ## 檔案結構
 
 | 檔案 | Task | 內容 |
@@ -102,7 +177,7 @@
 - Create: `app/models/social.py`、`migrations/versions/0018_create_social_tables.py`、`tests/test_social_model.py`
 - Modify: `app/models/__init__.py`、`tests/factories.py`
 
-- [ ] **Step 1：模型。** `app/models/social.py`：
+- [x] **Step 1：模型。** `app/models/social.py`：
 
 ```python
 """按讚、留言、通知（社群規格 §3）。三張表都只被社群的模組讀寫；
@@ -237,7 +312,7 @@ class Notification(Base):
 
 `app/models/__init__.py`：加 `from app.models.social import MealComment, MealLike, Notification, NotificationType`，四個名字照字母順序放進 `__all__`。
 
-- [ ] **Step 2：migration。** `migrations/versions/0018_create_social_tables.py`（格式照 `0013`、`0016`）：
+- [x] **Step 2：migration。** `migrations/versions/0018_create_social_tables.py`（格式照 `0013`、`0016`）：
 
 ```python
 """create social tables
@@ -360,7 +435,7 @@ def downgrade() -> None:
     op.drop_table("meal_likes")
 ```
 
-- [ ] **Step 3：工廠。** `tests/factories.py` 最後加（import `MealComment`、`MealLike`）：
+- [x] **Step 3：工廠。** `tests/factories.py` 最後加（import `MealComment`、`MealLike`）：
 
 ```python
 async def create_like(db_session: AsyncSession, *, meal: Meal, user: User) -> MealLike:
@@ -382,7 +457,7 @@ async def create_comment(
     return comment
 ```
 
-- [ ] **Step 4：測試。** `tests/test_social_model.py`：
+- [x] **Step 4：測試。** `tests/test_social_model.py`：
 
 ```python
 """社群三張表的資料庫保證（社群規格 §3）。這裡全部直接寫資料庫——端點的規則在別的檔案。"""
@@ -562,7 +637,7 @@ async def test_deleting_a_user_takes_what_they_did(db_session, scene):
     assert await _counts(db_session) == (1, 0, 0)
 ```
 
-- [ ] **Step 5：跑。**
+- [x] **Step 5：跑。**
 
 ```bash
 ./.venv/Scripts/python.exe -m pytest -q -W error tests/test_social_model.py
@@ -570,7 +645,7 @@ async def test_deleting_a_user_takes_what_they_did(db_session, scene):
 
 Expected：**18 passed**（1＋4＋1＋8＋1＋3；對的形狀由後面的 task 經過端點寫進去，這裡不重複；`conftest.py` 的 `alembic upgrade head`＋`alembic check` 在這一步就會跑——`check` 報漂移就是模型與 migration 對不上，先修那個）。
 
-- [ ] **Step 6：突變（每一個改完跑 Step 5，看到指定的紅，再改回）。** migration 與模型要**一起**改（只改一邊紅的是 `alembic check`，那是另一道防線——規矩 8）。
+- [x] **Step 6：突變（每一個改完跑 Step 5，看到指定的紅，再改回）。** migration 與模型要**一起**改（只改一邊紅的是 `alembic check`，那是另一道防線——規矩 8）。
 
 | 突變（模型＋migration 兩邊） | 該紅的 |
 |---|---|
@@ -582,7 +657,7 @@ Expected：**18 passed**（1＋4＋1＋8＋1＋3；對的形狀由後面的 task
 | `notifications.comment_id` 的 `ondelete` 改成 `SET NULL` | `test_deleting_a_comment…`（而且是 `shape` 的 CHECK 把它擋成 IntegrityError——照實記下紅的樣子） |
 | 只改模型不改 migration（任一個索引改名） | 整個 session 在 `alembic check` 就停 |
 
-- [ ] **Step 7：整套＋靜態檢查＋commit。**
+- [x] **Step 7：整套＋靜態檢查＋commit。**
 
 ```bash
 ./.venv/Scripts/python.exe -m pytest -q -W error && ./.venv/Scripts/python.exe -m ruff check . && ./.venv/Scripts/python.exe -m mypy app
@@ -603,7 +678,7 @@ git commit -F "$S/social-plan-task1-msg.txt"   # feat(backend): 讚、留言、�
 - Create: `app/social_visibility.py`、`app/friend_meals.py`、`app/schemas/social.py`、`app/api/routes/social.py`、`tests/social_helpers.py`、`tests/test_social_meal.py`
 - Modify: `app/schemas/friend.py`、`app/api/routes/friends.py`、`app/main.py`、`tests/test_friend_meals.py`、`frontend/src/api/schema.d.ts`
 
-- [ ] **Step 1：`app/social_visibility.py`**（整份；寫計畫時對真的資料庫跑過）：
+- [x] **Step 1：`app/social_visibility.py`**（整份；寫計畫時對真的資料庫跑過）：
 
 ```python
 """讚、留言、通知的可見性（社群規格 §4）。
@@ -726,7 +801,7 @@ async def social_counts(
     }
 ```
 
-- [ ] **Step 2：`FriendMeal` 多三個欄位、組法搬家。**
+- [x] **Step 2：`FriendMeal` 多三個欄位、組法搬家。**
 
 `app/schemas/friend.py` 的 `FriendMeal` 最後加（**沒有預設值**——漏帶是當場的驗證錯誤，同 `MealResponse.description` 的註解）：
 
@@ -765,7 +840,7 @@ async def build_friend_meals(
 
 `app/api/routes/friends.py`：刪掉 `_friend_meals`，兩個呼叫點改成 `await build_friend_meals(db, user.id, page, people)`、`await build_friend_meals(db, user.id, meals, {friend.id: friend})`；清掉用不到的 import（`defaultdict`、`item_join_query`、`Food`、`FoodRevision`、`MealItem`、`Macros`、`scale`、`total`、`FriendMeal`、`FriendMealItem`——ruff 會指出來）。
 
-- [ ] **Step 3：`app/schemas/social.py`**（這個 task 只用到讀取的三個；其餘 Task 3、4 才加）：
+- [x] **Step 3：`app/schemas/social.py`**（這個 task 只用到讀取的三個；其餘 Task 3、4 才加）：
 
 ```python
 """讚與留言的回應（社群規格 §5）。**沒有 email、沒有作者的 user id**（D9）：
@@ -804,7 +879,7 @@ class SocialMealResponse(BaseModel):
     comments_truncated: bool
 ```
 
-- [ ] **Step 4：`app/api/routes/social.py`**，並在 `app/main.py` 註冊（`app.include_router(social.router, prefix="/api")`，放在 `friends` 後面；`app/api/routes/__init__.py` 如果有列名字就照加）：
+- [x] **Step 4：`app/api/routes/social.py`**，並在 `app/main.py` 註冊（`app.include_router(social.router, prefix="/api")`，放在 `friends` 後面；`app/api/routes/__init__.py` 如果有列名字就照加）：
 
 ```python
 """一餐上面的讚與留言（社群規格 §5）。
@@ -893,7 +968,7 @@ async def read_social_meal(
     )
 ```
 
-- [ ] **Step 5：掃描測試。** `tests/test_friend_meals.py`：
+- [x] **Step 5：掃描測試。** `tests/test_friend_meals.py`：
 
 1. `test_only_the_friend_modules_touch_the_friendship_table` 的 `friend_modules` 加一行 `root / "social_visibility.py",`（docstring 補一句「社群的可見性模組是第三個」）。
 2. 白名單那條（`test_a_friends_shared_meal_shows_in_the_feed_with_only_the_whitelisted_fields`）的 `set(shared) == {…}` 加 `"like_count", "comment_count", "liked_by_me"`——**刻意的改變**，並加一行 `assert (shared["like_count"], shared["comment_count"], shared["liked_by_me"]) == (0, 0, False)`。
@@ -931,7 +1006,7 @@ def test_only_the_social_modules_widen_who_can_read_a_meal():
     assert offenders == []
 ```
 
-- [ ] **Step 6：`tests/social_helpers.py` 與 `tests/test_social_meal.py`。** 這一組人之後四個測試檔都要用，所以放在一個普通的模組裡（不是 `conftest.py`：只有社群的測試需要）。
+- [x] **Step 6：`tests/social_helpers.py` 與 `tests/test_social_meal.py`。** 這一組人之後四個測試檔都要用，所以放在一個普通的模組裡（不是 `conftest.py`：只有社群的測試需要）。
 
 `tests/social_helpers.py`：
 
@@ -1269,7 +1344,7 @@ async def test_the_feed_does_not_query_per_meal(client, db_session, db_connectio
     assert await selects() == one
 ```
 
-- [ ] **Step 7：跑。**
+- [x] **Step 7：跑。**
 
 ```bash
 ./.venv/Scripts/python.exe -m pytest -q -W error tests/test_social_meal.py tests/test_friend_meals.py tests/test_friend_requests.py
@@ -1277,7 +1352,7 @@ async def test_the_feed_does_not_query_per_meal(client, db_session, db_connectio
 
 Expected：全部 PASS（`test_social_meal.py` 是 **20** 條：8＋4＋4＋4）。`test_friend_meals.py` 既有的條數不變、多 1 條掃描。
 
-- [ ] **Step 8：突變。** `social_visibility.py`、`friend_meals.py`、`routes/social.py` 都是新檔案——先各 `cp` 一份到 `$S`。
+- [x] **Step 8：突變。** `social_visibility.py`、`friend_meals.py`、`routes/social.py` 都是新檔案——先各 `cp` 一份到 `$S`。
 
 | 突變 | 該紅的 |
 |---|---|
@@ -1296,7 +1371,7 @@ Expected：全部 PASS（`test_social_meal.py` 是 **20** 條：8＋4＋4＋4）
 | `build_friend_meals` 的 `social_counts` 搬進迴圈（每餐查一次） | `test_the_feed_does_not_query_per_meal` |
 | `social.py` 加一行註解提到 `Friendship`；`routes/meals.py` 加 `from app.social_visibility import load_visible_meal` | 兩條掃描測試各一條 |
 
-- [ ] **Step 9：`schema.d.ts`、整套、commit。** 重新產生 `schema.d.ts`（多一條路徑、四個 schema、`FriendMeal` 多三個欄位）→ `cd frontend && npm run -s typecheck && npm run -s test`（Expected：都綠——`FriendMeal` 的測試資料沒有型別標註，不會紅）。
+- [x] **Step 9：`schema.d.ts`、整套、commit。** 重新產生 `schema.d.ts`（多一條路徑、四個 schema、`FriendMeal` 多三個欄位）→ `cd frontend && npm run -s typecheck && npm run -s test`（Expected：都綠——`FriendMeal` 的測試資料沒有型別標註，不會紅）。
 
 ```bash
 ./.venv/Scripts/python.exe -m pytest -q -W error && ./.venv/Scripts/python.exe -m ruff check . && ./.venv/Scripts/python.exe -m mypy app
@@ -1312,7 +1387,7 @@ git commit -F "$S/social-plan-task2-msg.txt"   # feat(backend): 單一餐點的�
 - Create: `tests/test_social_likes.py`、`tests/test_social_likes_concurrency.py`
 - Modify: `app/ratelimit.py`、`tests/conftest.py`、`app/schemas/social.py`、`app/api/routes/social.py`、`app/schemas/meal.py`、`app/api/routes/meals.py`、`frontend/src/api/schema.d.ts`、`frontend/tests/timeline.test.ts`
 
-- [ ] **Step 1：限速器。** `app/ratelimit.py` 檔尾（兩個一起加，Task 4 用第二個）：
+- [x] **Step 1：限速器。** `app/ratelimit.py` 檔尾（兩個一起加，Task 4 用第二個）：
 
 ```python
 LIKE_LIMIT = 60
@@ -1340,7 +1415,7 @@ comment_rate_limiter = KeyedRateLimiter(
 
 `tests/conftest.py`：import 這兩個，`_reset_login_rate_limiter` 裡加 `like_rate_limiter.reset()`、`comment_rate_limiter.reset()`（docstring 補一句）。
 
-- [ ] **Step 2：測試（先寫，看它紅）。** `tests/test_social_likes.py`：
+- [x] **Step 2：測試（先寫，看它紅）。** `tests/test_social_likes.py`：
 
 ```python
 """`PUT`／`DELETE /api/social/meals/{id}/like`（社群規格 §5.2）與卡片上的數字（§5.6）。"""
@@ -1625,7 +1700,7 @@ async def test_the_second_of_two_simultaneous_likes_waits_then_does_nothing(inde
 Run：`./.venv/Scripts/python.exe -m pytest -q -W error tests/test_social_likes.py tests/test_social_likes_concurrency.py`
 Expected：FAIL——端點不存在是 405／404，`like_meal` 的 import 是 collection error。
 
-- [ ] **Step 3：端點。** `app/schemas/social.py` 加：
+- [x] **Step 3：端點。** `app/schemas/social.py` 加：
 
 ```python
 class LikeState(BaseModel):
@@ -1681,7 +1756,7 @@ async def unlike_meal(
     return await _like_state(db, user.id, meal.id)
 ```
 
-- [ ] **Step 4：`MealResponse` 的兩個數字。**
+- [x] **Step 4：`MealResponse` 的兩個數字。**
 
 `app/schemas/meal.py` 的 `MealResponse` 最後加：
 
@@ -1709,7 +1784,7 @@ async def unlike_meal(
 4. `create_meal` 直接組 `MealResponse` 的那一處：`like_count=0, comment_count=0,`，上面一行註解「剛建立的餐不會有讚與留言」。
 5. `read_meal`、`list_meals` 的 docstring 把查詢次數改對（3 → 5：多了讚與留言各一次，一樣跟餐數無關）。
 
-- [ ] **Step 5：跑。**
+- [x] **Step 5：跑。**
 
 ```bash
 ./.venv/Scripts/python.exe -m pytest -q -W error tests/test_social_likes.py tests/test_social_likes_concurrency.py tests/test_friend_meals.py
@@ -1717,7 +1792,7 @@ async def unlike_meal(
 
 Expected：`test_social_likes.py` **14 passed**（1＋1＋1＋4＋1＋1＋1＋1＋1＋1＋1）、並行 1 條、掃描測試仍然綠（`meals.py` 那一行 import 被允許）。
 
-- [ ] **Step 6：突變。**
+- [x] **Step 6：突變。**
 
 | 突變 | 該紅的 |
 |---|---|
@@ -1733,10 +1808,10 @@ Expected：`test_social_likes.py` **14 passed**（1＋1＋1＋4＋1＋1＋1＋1�
 | `update_meal_item`、`upload_meal_photo` 改傳 `SocialCounts()` | **沒有測試會紅**（`_own_views` 沒有走這兩條）。在 `_own_views` 補上這兩條路徑之後再突變一次——需要一個項目 id 與一張 JPEG（照 `tests/test_friend_meals.py` 的 `_jpeg()`）；補不上就照實寫進「與規格的差異」 |
 | `meals.py` 的 import 改成 `from app.social_visibility import SocialCounts, load_visible_meal, social_counts` | `test_only_the_social_modules_widen…` |
 
-- [ ] **Step 7：`schema.d.ts` 與前端的型別。** 重新產生 → `cd frontend && npm run -s typecheck`。
+- [x] **Step 7：`schema.d.ts` 與前端的型別。** 重新產生 → `cd frontend && npm run -s typecheck`。
 Expected：**紅一處**——`tests/timeline.test.ts` 的 `meal()`（唯一有型別標註的 `Meal` 測試資料）少了兩個欄位。加上 `like_count: 0, comment_count: 0,`，再跑 `npm run -s typecheck && npm run -s test`，全綠、數字跟基準線一樣。
 
-- [ ] **Step 8：整套、commit。**
+- [x] **Step 8：整套、commit。**
 
 ```bash
 ./.venv/Scripts/python.exe -m pytest -q -W error && ./.venv/Scripts/python.exe -m ruff check . && ./.venv/Scripts/python.exe -m mypy app
