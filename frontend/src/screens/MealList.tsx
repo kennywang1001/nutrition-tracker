@@ -141,24 +141,28 @@ function MealCard({ meal }: { meal: Meal }) {
 					</li>
 				))}
 			</ul>
-			<p className={styles.total}>合計 {formatMacro(meal.kcal)} kcal</p>
-			<div className={styles.social}>
-				{/* 自己的餐不能按讚（後端 422）：只顯示數字，0 就不畫。 */}
-				{likeCount > 0 && (
-					<span className={styles.likes}>
-						<Heart aria-hidden="true" size={16} />
-						<span aria-hidden="true">{likeCount}</span>
-						<span className={ui.srOnly}>{likeCount} 個讚</span>
-					</span>
-				)}
-				{/* 名稱帶時間與餐別，理由同上面的「編輯」。 */}
-				<Link
-					to={`/meals/${meal.id}`}
-					className={styles.comments}
-					aria-label={`${formatTime(meal.eaten_at)} ${MEAL_TYPE_LABELS[meal.meal_type]}，留言 ${commentCount} 則`}
-				>
-					留言 {commentCount}
-				</Link>
+			{/* 最下面一列：合計在右、讚與留言在左。原始碼裡合計在前（接在項目後面唸），
+			    畫面上用 row-reverse 排到右邊——這一列只有一個能聚焦的東西，順序不會亂。 */}
+			<div className={styles.footer}>
+				<p className={styles.total}>合計 {formatMacro(meal.kcal)} kcal</p>
+				<div className={styles.social}>
+					{/* 自己的餐不能按讚（後端 422）：只顯示數字，0 就不畫。 */}
+					{likeCount > 0 && (
+						<span className={styles.likes}>
+							<Heart aria-hidden="true" size={16} />
+							<span aria-hidden="true">{likeCount}</span>
+							<span className={ui.srOnly}>{likeCount} 個讚</span>
+						</span>
+					)}
+					{/* 名稱帶時間與餐別，理由同上面的「編輯」。 */}
+					<Link
+						to={`/meals/${meal.id}`}
+						className={styles.comments}
+						aria-label={`${formatTime(meal.eaten_at)} ${MEAL_TYPE_LABELS[meal.meal_type]}，留言 ${commentCount} 則`}
+					>
+						留言 {commentCount}
+					</Link>
+				</div>
 			</div>
 		</li>
 	);

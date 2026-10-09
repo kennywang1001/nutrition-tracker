@@ -41,13 +41,16 @@
 }
 
 /* 最下面一列：讚的按鈕、連到餐點頁的「留言 N」。會換行——讚失敗時的錯誤訊息
-   （LikeButton 的 .error）佔滿一整列，落在這兩個的下面。 */
+   （LikeButton 的 .error）佔滿一整列，落在這兩個的下面。
+   下緣往外退一點：兩個 44px 的觸控目標比裡面的字高，不退的話卡片底下比上面空
+   （好友的某一天沒有名字那一列，看得最清楚）。 */
 .social {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
 	gap: 0 var(--space-3);
 	margin-top: var(--space-1);
+	margin-bottom: calc(-1 * var(--space-2));
 }
 
 .comments {

@@ -278,6 +278,14 @@ describe("讚的按鈕", () => {
 		expectShown(false, 2);
 	});
 
+	it("樂觀的數字不會變成負的（收到互相矛盾的「按過、0 個」時）", async () => {
+		setup({ like_count: 0, liked_by_me: true });
+
+		await userEvent.click(button());
+
+		expectShown(false, 0);
+	});
+
 	it("連按兩下：請求一次一個，第一個回來才送第二個；最後是沒讚", async () => {
 		const page = setup();
 

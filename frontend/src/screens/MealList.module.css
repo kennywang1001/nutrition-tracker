@@ -123,23 +123,38 @@
 	font-variant-numeric: tabular-nums;
 }
 
-/* 合計：靠右、粗體，上面一條線跟項目分開（同總覽時間線右邊的數值欄）。 */
+/* 卡片最下面一列，上面一條線跟項目分開：左邊是讚與留言，右邊是合計。
+   分成兩列的話「留言 N」那一列要 44px 高（觸控目標），卡片底下會空一大塊。
+   row-reverse：合計在原始碼裡排前面（見 MealList.tsx），畫面上在右邊。
+   放不下時（合計的數字很長）讚與留言掉到下一列，仍然靠左。
+   下緣往外退一點：這一列因為 44px 的連結比字高，不退的話卡片底下比上面空。 */
+.footer {
+	display: flex;
+	flex-flow: row-reverse wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0 var(--space-3);
+	margin-bottom: calc(-1 * var(--space-2));
+	border-top: 1px solid var(--color-border);
+}
+
+/* 合計：靠右、粗體（同總覽時間線右邊的數值欄）。 */
 .total {
 	margin: 0;
-	padding-top: var(--space-2);
-	border-top: 1px solid var(--color-border);
 	text-align: right;
 	font-weight: 700;
 	font-variant-numeric: tabular-nums;
 }
 
-/* 合計下面一列：有人按讚時的「♥ N」（只是數字，自己的餐不能按）、連到餐點頁的「留言 N」。 */
+/* 有人按讚時的「♥ N」（只是數字，自己的餐不能按）、連到餐點頁的「留言 N」。 */
 .social {
 	display: flex;
 	align-items: center;
 	gap: var(--space-3);
+	margin-right: auto;
 }
 
+/* 實心的愛心：空心的看起來像一顆還沒按的按鈕，而這裡不能按。 */
 .likes {
 	position: relative;
 	display: inline-flex;
@@ -148,6 +163,10 @@
 	color: var(--color-text-muted);
 	font-size: 14px;
 	font-variant-numeric: tabular-nums;
+}
+
+.likes svg {
+	fill: currentColor;
 }
 
 .comments {

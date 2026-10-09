@@ -102,9 +102,9 @@ export function LikeButton({ mealId, label, count, liked }: Props) {
 				server = await setLike(mealId, target);
 			}
 		} catch (caught) {
+			// 離開迴圈＝還沒送的意圖不送了：不知道伺服器現在怎麼了，不替使用者自己再試。
+			// （`wanted` 不用清：下一次按下去第一件事就是蓋掉它。）
 			failure = { caught };
-			// 還沒送的意圖一起丟掉：不知道伺服器現在怎麼了，不替使用者自己再送。
-			wanted.current = null;
 		}
 		sending.current = false;
 		// 從這裡到函式結束沒有 await：不會有另一次按下插在「寫快取」與「換掉樂觀狀態」中間。
