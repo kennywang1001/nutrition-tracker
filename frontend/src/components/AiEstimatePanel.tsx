@@ -7,11 +7,15 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { type AnalyzeResponse, analyzeImage, analyzeText } from "../api/ai";
+import {
+	type AnalyzeResponse,
+	analyzeImage,
+	analyzeText,
+	describeAnalyzeError,
+} from "../api/ai";
 import { apiFetch } from "../api/client";
 import { ApiError, describeFieldErrors } from "../api/errors";
 import { type Food, searchFoods } from "../api/foods";
-import { describePhotoUploadError, PhotoTooLargeError } from "../api/photos";
 import { queryKeys } from "../api/queries";
 import {
 	type AiFoodBody,
@@ -46,33 +50,6 @@ const SAME_NAME_SEARCH_LIMIT = 200;
 
 function defaultTextButtonLabel(text: string): string {
 	return `用 AI 估算「${text}」`;
-}
-
-function describeAnalyzeError(error: unknown): string {
-	if (error instanceof PhotoTooLargeError) return error.message;
-	if (error instanceof ApiError) {
-		switch (error.code) {
-			case "AI_DAILY_LIMIT":
-				// 後端的訊息含「今天用了 N/20」。
-				return error.message;
-			case "AI_NOT_CONFIGURED":
-				// 後端的訊息說缺什麼（「AI 分析未設定：缺 GEMINI_API_KEY」），
-				// 部署手冊叫操作者照著它補。
-				return error.message;
-			case "AI_MISCONFIGURED":
-			case "AI_UPSTREAM_ERROR":
-				// 後端把供應商的錯誤分成兩類（AI 與編輯畫面的收尾規格 §2 第 2 項）：
-				// 「設定有問題，請管理員檢查」與「暫時無法使用，請稍後再試」——
-				// 該做的事不同，通用的「再試一次」對前者是錯的指示。
-				return error.message;
-			case "AI_BAD_RESPONSE":
-				return "AI 這次的回答看不懂，可以再試一次";
-			case "PHOTO_TOO_LARGE":
-			case "INVALID_PHOTO":
-				return describePhotoUploadError(error);
-		}
-	}
-	return "AI 估算失敗，請再試一次";
 }
 
 function describeSaveError(error: unknown): string {

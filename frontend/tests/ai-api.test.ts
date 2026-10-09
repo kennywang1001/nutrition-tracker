@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { analyzeImage, analyzeText } from "../src/api/ai";
+import {
+	analyzeImage,
+	analyzeMealImage,
+	analyzeMealText,
+	analyzeText,
+} from "../src/api/ai";
 import { MAX_PHOTO_BYTES, PhotoTooLargeError } from "../src/api/photos";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
@@ -23,6 +28,10 @@ beforeEach(() => {
 function sentBody(fetchMock: ReturnType<typeof mockApi>): unknown {
 	const call = fetchMock.mock.calls[0];
 	return JSON.parse(String(call?.[1]?.body));
+}
+
+function sentUrl(fetchMock: ReturnType<typeof mockApi>): string {
+	return String(fetchMock.mock.calls[0]?.[0]);
 }
 
 describe("AI 估算的 API", () => {
@@ -65,6 +74,66 @@ describe("AI 估算的 API", () => {
 		Object.defineProperty(file, "size", { value: MAX_PHOTO_BYTES + 1 });
 
 		await expect(analyzeImage(file)).rejects.toBeInstanceOf(PhotoTooLargeError);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	// mockApi 用 includes 比對：`/api/ai/analyze` 這條路由也會接住 `/api/ai/analyze-meal`。
+	// 所以下面每一條都另外斷言**實際打的網址**——只給路由分不出打的是哪一支。
+	it("文字（單樣）：打的是 /api/ai/analyze，不是多樣的那一支", async () => {
+		const fetchMock = mockApi([
+			{ method: "POST", path: "/api/ai/analyze", handler: () => json({}) },
+		]);
+
+		await analyzeText("一碗牛肉麵");
+
+		expect(sentUrl(fetchMock)).toBe("/api/ai/analyze");
+	});
+
+	it("一餐的文字：POST /api/ai/analyze-meal，送 kind=text", async () => {
+		const fetchMock = mockApi([
+			{
+				method: "POST",
+				path: "/api/ai/analyze-meal",
+				handler: () => json({ description: "便當", items: [] }),
+			},
+		]);
+
+		const result = await analyzeMealText("雞腿便當");
+
+		expect(sentUrl(fetchMock)).toBe("/api/ai/analyze-meal");
+		expect(sentBody(fetchMock)).toEqual({ kind: "text", text: "雞腿便當" });
+		expect(result.description).toBe("便當");
+	});
+
+	it("一餐的照片：同一套前處理（先擋大小、縮到 1280），送 kind=image 與 base64", async () => {
+		vi.mocked(shrinkToLongestEdge).mockClear();
+		const fetchMock = mockApi([
+			{
+				method: "POST",
+				path: "/api/ai/analyze-meal",
+				handler: () => json({ description: "便當", items: [] }),
+			},
+		]);
+		const file = new File(["fake-jpeg"], "lunch.jpg", { type: "image/jpeg" });
+
+		await analyzeMealImage(file);
+
+		expect(sentUrl(fetchMock)).toBe("/api/ai/analyze-meal");
+		expect(sentBody(fetchMock)).toEqual({
+			kind: "image",
+			image_base64: btoa("fake-jpeg"),
+		});
+		expect(vi.mocked(shrinkToLongestEdge)).toHaveBeenCalledWith(file, 1280);
+	});
+
+	it("一餐的照片太大：送出前就擋，不打網路", async () => {
+		const fetchMock = mockApi([]);
+		const file = new File(["x"], "big.jpg", { type: "image/jpeg" });
+		Object.defineProperty(file, "size", { value: MAX_PHOTO_BYTES + 1 });
+
+		await expect(analyzeMealImage(file)).rejects.toBeInstanceOf(
+			PhotoTooLargeError,
+		);
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 });
