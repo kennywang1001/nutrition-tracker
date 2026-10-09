@@ -1510,3 +1510,734 @@ git commit -F "$S/aimulti-t2-msg.txt"
 訊息：`feat(backend): 兩家 estimator 多一組「一餐多樣」的估算——同一套錯誤分類，回覆由一份 Pydantic 驗證把關`。
 
 ---
+
+## Task 3：後端——`POST /api/ai/analyze-meal`（額度、記錄、食物庫比對）
+
+**Files:**
+- Create: `tests/test_ai_analyze_meal.py`
+- Modify: `app/schemas/ai.py`、`app/api/routes/ai.py`、`frontend/src/api/schema.d.ts`
+
+**寫計畫時跑過的部分**：下面的路由程式碼掛在一個 scratch router 上、配 Task 2 的 `RawMealEstimate`，用下面這份測試檔（只換了匯入）跑過——**18 passed**。`_call_estimator_or_record_failure[T]` 的 PEP 695 寫法 `mypy` 接受（專案是 `requires-python >= 3.12`）。突變沒有跑。
+
+- [ ] **Step 1：測試（紅）**
+
+`tests/test_ai_analyze_meal.py`：
+
+```python
+"""`POST /api/ai/analyze-meal`（AI 多樣估算規格 §3.1）：一次呼叫估出一餐的每一樣。
+
+LLM 一律是假的（`FakeMealEstimator`，注入 `get_estimator_factory`）。額度、記錄、錯誤分類
+跟 `/api/ai/analyze` 是同一批函式——這裡守的是「新端點真的接上了它們」，以及只有這個
+端點才有的東西：一次呼叫只算一次、每一樣各自比對食物庫、單樣的方法沒被呼叫。
+"""
+
+import base64
+import hashlib
+import io
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+from PIL import Image
+from sqlalchemy import select
+
+from app.ai.estimator import (
+    EstimatorMisconfiguredError,
+    EstimatorUpstreamError,
+    RawEstimate,
+    RawMealEstimate,
+)
+from app.api.deps import get_estimator_factory
+from app.config import settings
+from app.errors import BadGatewayError
+from app.main import app
+from app.models.ai_analysis import AiAnalysis, AnalysisKind
+from app.models.food import BaseUnit
+from app.security.tokens import create_access_token
+from tests.factories import create_food, create_user
+
+URL = "/api/ai/analyze-meal"
+# 食物庫裡不會有叫這個名字的食物——文字不會被短路。
+TEXT = {"kind": "text", "text": "今天中午的雞腿便當"}
+
+
+def auth(user):
+    return {"Authorization": f"Bearer {create_access_token(user.id)}"}
+
+
+def _raw(name: str, grams: str, kcal: str, protein: str, fat: str, carb: str) -> RawEstimate:
+    return RawEstimate(
+        name=name,
+        brand=None,
+        serving_grams=Decimal(grams),
+        serving_kcal=Decimal(kcal),
+        serving_protein_g=Decimal(protein),
+        serving_fat_g=Decimal(fat),
+        serving_carb_g=Decimal(carb),
+        confidence=Decimal("0.80"),
+        raw={"name": name},
+    )
+
+
+RICE = _raw("白飯", "200.00", "280.00", "5.00", "0.50", "62.00")
+CHICKEN = _raw("滷雞腿", "150.00", "300.00", "27.00", "20.00", "3.00")
+_DEFAULT_MEAL = RawMealEstimate(
+    description="一碗白飯、滷雞腿一隻", items=(RICE, CHICKEN), raw={"description": "…"}
+)
+
+
+class FakeMealEstimator:
+    """假的 estimator：數每一種方法被呼叫幾次、記下收到什麼。
+
+    單樣的兩個方法也在——多樣端點呼叫到它們的話，`single_calls` 不是 0。
+    """
+
+    model = "fake-meal-model"
+
+    def __init__(
+        self, *, meal: RawMealEstimate | None = None, error: Exception | None = None
+    ) -> None:
+        self._meal = meal or _DEFAULT_MEAL
+        self._error = error
+        self.single_calls = 0
+        self.texts: list[str] = []
+        self.images: list[tuple[bytes, str]] = []
+
+    async def estimate_text(self, text: str) -> RawEstimate:
+        self.single_calls += 1
+        return RICE
+
+    async def estimate_image(self, image: bytes, media_type: str) -> RawEstimate:
+        self.single_calls += 1
+        return RICE
+
+    async def estimate_meal_text(self, text: str) -> RawMealEstimate:
+        self.texts.append(text)
+        if self._error is not None:
+            raise self._error
+        return self._meal
+
+    async def estimate_meal_image(self, image: bytes, media_type: str) -> RawMealEstimate:
+        self.images.append((image, media_type))
+        if self._error is not None:
+            raise self._error
+        return self._meal
+
+    @property
+    def meal_calls(self) -> int:
+        return len(self.texts) + len(self.images)
+
+
+def _inject(fake: FakeMealEstimator) -> None:
+    app.dependency_overrides[get_estimator_factory] = lambda: lambda: fake
+
+
+async def _seed_analyses(db_session, user, count: int) -> None:
+    for _ in range(count):
+        db_session.add(
+            AiAnalysis(
+                user_id=user.id,
+                kind=AnalysisKind.TEXT,
+                model="seed-model",
+                input_hash="seed",
+                succeeded=True,
+            )
+        )
+    await db_session.commit()
+
+
+async def _rows(db_session, user_id: int):
+    """資料庫裡真的有幾列。先 rollback（第 11 種），選欄位不拿物件（第 30 種）。"""
+    await db_session.rollback()
+    return (
+        await db_session.execute(
+            select(
+                AiAnalysis.succeeded, AiAnalysis.kind, AiAnalysis.model, AiAnalysis.input_hash
+            )
+            .where(AiAnalysis.user_id == user_id)
+            .order_by(AiAnalysis.id)
+        )
+    ).all()
+
+
+def _png() -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (2, 2), color=(255, 0, 0)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _photo_files(photo_dir: Path) -> list[Path]:
+    return sorted(path for path in photo_dir.rglob("*") if path.is_file())
+
+
+# ── 成功 ──────────────────────────────────────────────────────────────────────
+
+
+async def test_a_text_estimate_returns_the_description_and_every_item(client, db_session):
+    user = await create_user(db_session)
+    fake = FakeMealEstimator()
+    _inject(fake)
+
+    response = await client.post(URL, headers=auth(user), json=TEXT)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["description"] == "一碗白飯、滷雞腿一隻"
+    assert body["analysis_id"] is not None
+    assert body["remaining_today"] == settings.ai_daily_limit - 1
+    assert [item["name"] for item in body["items"]] == ["白飯", "滷雞腿"]
+    rice, chicken = body["items"]
+    # 每 100g 與一份：跟單樣端點同一個算法（280 kcal／200 g → 140／100 g）。
+    assert rice["nutrition"] == {
+        "base_unit": "g",
+        "serving_grams": "200.00",
+        "kcal": "140.00",
+        "protein_g": "2.50",
+        "fat_g": "0.25",
+        "carb_g": "31.00",
+        "serving_kcal": "280.00",
+        "serving_protein_g": "5.00",
+        "serving_fat_g": "0.50",
+        "serving_carb_g": "62.00",
+    }
+    assert chicken["nutrition"]["serving_grams"] == "150.00"
+    assert chicken["nutrition"]["kcal"] == "200.00"
+    assert rice["confidence"] == "0.80"
+    assert rice["brand"] is None
+    # 食物庫裡沒有同名的。
+    assert rice["library_food"] is None
+    assert chicken["library_food"] is None
+    assert set(rice) == {
+        "name", "brand", "nutrition", "confidence", "consistency", "library_food",
+    }  # fmt: skip
+    # 呼叫的是多樣的方法，一次；單樣的沒被碰到。
+    assert fake.texts == ["今天中午的雞腿便當"]
+    assert fake.meal_calls == 1
+    assert fake.single_calls == 0
+
+
+async def test_an_image_estimate_passes_the_decoded_photo_and_does_not_write_to_disk(
+    client, db_session
+):
+    user = await create_user(db_session)
+    fake = FakeMealEstimator()
+    _inject(fake)
+    photo = _png()
+    photo_dir = Path(settings.photo_dir)
+    before = _photo_files(photo_dir)
+
+    response = await client.post(
+        URL,
+        headers=auth(user),
+        json={"kind": "image", "image_base64": base64.b64encode(photo).decode()},
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()["items"]) == 2
+    assert fake.images == [(photo, "image/png")]
+    assert fake.single_calls == 0
+    assert _photo_files(photo_dir) == before
+    [row] = await _rows(db_session, user.id)
+    assert row.kind is AnalysisKind.IMAGE
+    assert row.input_hash == hashlib.sha256(photo).hexdigest()
+
+
+async def test_a_bad_photo_is_rejected_before_the_llm_is_called(client, db_session):
+    user = await create_user(db_session)
+    fake = FakeMealEstimator()
+    _inject(fake)
+
+    response = await client.post(
+        URL, headers=auth(user), json={"kind": "image", "image_base64": "不是 base64"}
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "INVALID_PHOTO"
+    assert fake.meal_calls == 0
+    assert await _rows(db_session, user.id) == []
+
+
+async def test_a_flagged_item_is_still_returned(client, db_session):
+    """一致性的標記不擋人（P2 規格 §2.2），一樣一個、各算各的。"""
+    odd = _raw("怪東西", "100.00", "900.00", "1.00", "1.00", "1.00")
+    user = await create_user(db_session)
+    _inject(FakeMealEstimator(meal=RawMealEstimate("怪東西與白飯", (odd, RICE), {})))
+
+    response = await client.post(URL, headers=auth(user), json=TEXT)
+
+    assert response.status_code == 200
+    flags = [item["consistency"]["flagged"] for item in response.json()["items"]]
+    assert flags == [True, False]
+
+
+async def test_the_endpoint_requires_login(client, db_session):
+    _inject(FakeMealEstimator())
+
+    response = await client.post(URL, json=TEXT)
+
+    assert response.status_code == 401
+
+
+# ── 一次呼叫算一次 ─────────────────────────────────────────────────────────────
+
+
+async def test_one_call_writes_one_row_no_matter_how_many_items(client, db_session):
+    user = await create_user(db_session)
+    user_id = user.id
+    _inject(FakeMealEstimator())
+
+    response = await client.post(URL, headers=auth(user), json=TEXT)
+
+    assert len(response.json()["items"]) == 2
+    rows = await _rows(db_session, user_id)
+    assert len(rows) == 1
+    assert rows[0].succeeded is True
+    assert rows[0].kind is AnalysisKind.TEXT
+    assert rows[0].model == "fake-meal-model"
+    assert rows[0].input_hash == hashlib.sha256("今天中午的雞腿便當".encode()).hexdigest()
+
+
+async def test_the_last_allowed_call_goes_through_and_the_next_one_is_blocked(
+    client, db_session
+):
+    user = await create_user(db_session)
+    user_id = user.id
+    await _seed_analyses(db_session, user, settings.ai_daily_limit - 1)
+    fake = FakeMealEstimator()
+    _inject(fake)
+
+    last = await client.post(URL, headers=auth(user), json=TEXT)
+    blocked = await client.post(URL, headers=auth(user), json=TEXT)
+
+    assert last.status_code == 200
+    assert last.json()["remaining_today"] == 0
+    assert blocked.status_code == 429
+    assert blocked.json()["error"]["code"] == "AI_DAILY_LIMIT"
+    assert "retry-after" in blocked.headers
+    # 被擋下來的那一次沒有呼叫 LLM，也沒有多一列。
+    assert fake.meal_calls == 1
+    assert len(await _rows(db_session, user_id)) == settings.ai_daily_limit
+
+
+async def test_the_single_and_meal_endpoints_share_one_quota(client, db_session):
+    """額度是同一張表數出來的：多樣用掉的，單樣也看得到。"""
+    user = await create_user(db_session)
+    _inject(FakeMealEstimator())
+
+    meal = await client.post(URL, headers=auth(user), json=TEXT)
+    single = await client.post("/api/ai/analyze", headers=auth(user), json=TEXT)
+
+    assert meal.json()["remaining_today"] == settings.ai_daily_limit - 1
+    assert single.json()["remaining_today"] == settings.ai_daily_limit - 2
+
+
+# ── 失敗 ──────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("error", "status", "code", "recorded"),
+    [
+        (EstimatorUpstreamError("overloaded"), 502, "AI_UPSTREAM_ERROR", True),
+        (BadGatewayError("AI_BAD_RESPONSE", "AI 看不出這一餐有什麼食物"), 502, "AI_BAD_RESPONSE", True),
+        (EstimatorMisconfiguredError("bad key"), 503, "AI_MISCONFIGURED", False),
+    ],
+    ids=["upstream", "bad-response", "misconfigured"],
+)
+async def test_failures_are_classified_and_recorded_like_the_single_endpoint(
+    client, db_session, error, status, code, recorded
+):
+    user = await create_user(db_session)
+    user_id = user.id
+    fake = FakeMealEstimator(error=error)
+    _inject(fake)
+
+    response = await client.post(URL, headers=auth(user), json=TEXT)
+
+    assert response.status_code == status
+    assert response.json()["error"]["code"] == code
+    assert fake.meal_calls == 1
+    rows = await _rows(db_session, user_id)
+    assert [row.succeeded for row in rows] == ([False] if recorded else [])
+
+
+async def test_a_failed_call_uses_up_the_quota(client, db_session):
+    user = await create_user(db_session)
+    _inject(FakeMealEstimator(error=EstimatorUpstreamError("overloaded")))
+    await client.post(URL, headers=auth(user), json=TEXT)
+    _inject(FakeMealEstimator())
+
+    response = await client.post(URL, headers=auth(user), json=TEXT)
+
+    assert response.json()["remaining_today"] == settings.ai_daily_limit - 2
+
+
+async def test_not_configured_is_503_and_wins_over_the_quota(client, db_session, monkeypatch):
+    """刻意不注入假的：走真的 `build_estimator()`。額度用完時也要說「未設定」。"""
+    monkeypatch.setattr(settings, "ai_provider", None)
+    user = await create_user(db_session)
+    await _seed_analyses(db_session, user, settings.ai_daily_limit)
+
+    response = await client.post(URL, headers=auth(user), json=TEXT)
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "AI_NOT_CONFIGURED"
+
+
+# ── 每一樣各自比對食物庫 ───────────────────────────────────────────────────────
+
+
+async def test_an_item_with_the_same_name_as_a_library_food_reports_it(client, db_session):
+    """`library_food.serving_kcal` 是**食物庫**的每 100 × **AI** 估的量；`nutrition` 仍是
+    AI 的數字。兩個熱量刻意不同（130 對 140／100 g）——寫反了看得出來。"""
+    user = await create_user(db_session)
+    mine = await create_food(
+        db_session, created_by=user, owner=user, name="白飯", kcal=130, base_unit=BaseUnit.G
+    )
+    _inject(FakeMealEstimator())
+
+    response = await client.post(URL, headers=auth(user), json=TEXT)
+
+    rice, chicken = response.json()["items"]
+    assert rice["library_food"] == {
+        "food_id": mine.id,
+        "name": "白飯",
+        "base_unit": "g",
+        "serving_kcal": "260.00",
+    }
+    assert rice["nutrition"]["serving_kcal"] == "280.00"
+    assert rice["nutrition"]["kcal"] == "140.00"
+    assert chicken["library_food"] is None
+
+
+async def test_the_match_ignores_case_and_prefers_my_own_food(client, db_session):
+    user = await create_user(db_session)
+    admin = await create_user(db_session)
+    await create_food(db_session, created_by=admin, owner=None, name="Latte", kcal=60)
+    mine = await create_food(
+        db_session, created_by=user, owner=user, name="LATTE", kcal=45, base_unit=BaseUnit.ML
+    )
+    latte = _raw("latte", "300.00", "150.00", "8.00", "8.00", "12.00")
+    _inject(FakeMealEstimator(meal=RawMealEstimate("一杯拿鐵", (latte,), {})))
+
+    response = await client.post(URL, headers=auth(user), json=TEXT)
+
+    [item] = response.json()["items"]
+    # 名稱與單位是食物庫那一筆的；45 × 300 / 100。
+    assert item["library_food"] == {
+        "food_id": mine.id,
+        "name": "LATTE",
+        "base_unit": "ml",
+        "serving_kcal": "135.00",
+    }
+    assert item["name"] == "latte"
+
+
+async def test_someone_elses_private_food_is_never_a_match(client, db_session):
+    user = await create_user(db_session)
+    stranger = await create_user(db_session)
+    await create_food(db_session, created_by=stranger, owner=stranger, name="白飯")
+    await create_food(db_session, created_by=stranger, owner=stranger, name="滷雞腿")
+    _inject(FakeMealEstimator())
+
+    response = await client.post(URL, headers=auth(user), json=TEXT)
+
+    assert [item["library_food"] for item in response.json()["items"]] == [None, None]
+
+
+# ── 文字剛好是食物庫裡的名稱：不呼叫 LLM ────────────────────────────────────────
+
+
+async def test_text_that_is_exactly_a_library_food_never_reaches_the_llm(client, db_session):
+    user = await create_user(db_session)
+    user_id = user.id
+    food = await create_food(db_session, created_by=user, owner=user, name="牛肉麵", kcal=113)
+    await _seed_analyses(db_session, user, 3)
+    built = {"n": 0}
+
+    def factory():
+        built["n"] += 1
+        return FakeMealEstimator()
+
+    app.dependency_overrides[get_estimator_factory] = lambda: factory
+
+    response = await client.post(
+        URL, headers=auth(user), json={"kind": "text", "text": " 牛肉麵 "}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["analysis_id"] is None
+    assert body["description"] == "牛肉麵"
+    [item] = body["items"]
+    assert item["name"] == "牛肉麵"
+    assert item["library_food"] == {
+        "food_id": food.id,
+        "name": "牛肉麵",
+        "base_unit": "g",
+        "serving_kcal": "113.00",
+    }
+    assert item["nutrition"]["kcal"] == "113.00"
+    assert item["nutrition"]["serving_grams"] == "100"
+    # 連建實作的函式都沒被呼叫；沒有多一列；額度沒少。
+    assert built["n"] == 0
+    assert body["remaining_today"] == settings.ai_daily_limit - 3
+    assert len(await _rows(db_session, user_id)) == 3
+
+
+async def test_the_library_shortcut_works_without_ai_configured(client, db_session, monkeypatch):
+    monkeypatch.setattr(settings, "ai_provider", None)
+    user = await create_user(db_session)
+    await create_food(db_session, created_by=user, owner=user, name="牛肉麵")
+
+    response = await client.post(
+        URL, headers=auth(user), json={"kind": "text", "text": "牛肉麵"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["analysis_id"] is None
+```
+
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_ai_analyze_meal.py -q -W error`
+Expected: FAIL——全部（路由不存在：404；`test_the_endpoint_requires_login` 也是 404 不是 401）。沒有任何一條應該是綠的；有的話停下來看它為什麼不需要這個端點就能過。
+
+- [ ] **Step 2：回應的形狀（`app/schemas/ai.py`）**
+
+檔尾加：
+
+```python
+class LibraryFoodMatch(BaseModel):
+    """食物庫裡跟這一樣**名稱完全相同**的食物（看得到的、有生效版本的；AI 多樣估算規格 D4、D5）。
+
+    前端預設用它，不另外建食物。`serving_kcal` 是「用它的話這一樣會記成多少」：
+    食物庫那一版的每 100 熱量 × AI 估的量——由後端算，前端不乘（同 `AnalyzedNutrition`）。
+    AI 估的量一律當 g；`base_unit` 是 ml 的食物數字照搬（規格 §9.2 第 4 點）。
+    """
+
+    food_id: int
+    name: str
+    base_unit: BaseUnit
+    serving_kcal: Decimal
+
+
+class AnalyzedMealItem(BaseModel):
+    """一餐裡的一樣。前五個欄位跟 `AnalyzeResponse` 同名同義——前端把它跟外層的
+    `analysis_id`／`remaining_today` 拼回一個 `AnalyzeResponse`，單樣流程存食物的程式碼
+    原樣重用。
+
+    **`nutrition` 永遠是 AI 的估算**，就算食物庫有同名的：使用者可以選「改用 AI 的數字」。
+    例外是整段文字命中食物庫、沒有呼叫 AI 的那一種回應（`analysis_id` 是 null）：
+    那時 `nutrition` 是食物庫那一版的值、`serving_grams` 是 100（同 `/api/ai/analyze`）。
+    """
+
+    name: str
+    brand: str | None
+    nutrition: AnalyzedNutrition
+    # ⚠️ 同 AnalyzeResponse.confidence：模型自己說的，不顯示給使用者。
+    confidence: Decimal
+    consistency: ConsistencyResult
+    library_food: LibraryFoodMatch | None
+
+
+class AnalyzeMealResponse(BaseModel):
+    # 整段文字命中食物庫時是 None——沒有呼叫 LLM、沒有寫 ai_analyses、不扣次數。
+    analysis_id: int | None
+    # 這一餐有什麼的一句話（單行、最多 500 字）。前端拿它預填這一餐的「描述」。
+    description: str
+    # 1 到 8 樣。
+    items: list[AnalyzedMealItem]
+    # 一次呼叫只扣一次，不管估出幾樣。
+    remaining_today: int
+```
+
+- [ ] **Step 3：路由（`app/api/routes/ai.py`）**
+
+1. 檔頭 docstring 的標題改成「`POST /api/ai/analyze` 與 `POST /api/ai/analyze-meal`」，結尾補一段：
+
+```
+`/analyze-meal`（AI 多樣估算規格 §3.1）是同一個流程的多樣版：①～③ 用的是同一批函式
+（食物庫短路、額度、記錄與錯誤分類），差別只有呼叫的是 estimator 的 `estimate_meal_*`、
+回的是一句描述＋每一樣各一份估算，而且每一樣再各自比對一次食物庫。**一次呼叫只寫一列**。
+```
+
+2. 匯入：`app.ai.estimator` 補 `RawMealEstimate`；`app.schemas.ai` 補 `AnalyzedMealItem`、`AnalyzeMealResponse`、`LibraryFoodMatch`。
+
+3. `_call_estimator_or_record_failure` 改成泛型——**只動簽名的三處**（`[T]`、`Awaitable[T]`、`-> T`），函式本體與 docstring 一個字不改：
+
+```python
+async def _call_estimator_or_record_failure[T](
+    db: AsyncSession,
+    *,
+    user_id: int,
+    kind: AnalysisKind,
+    input_hash: str,
+    model: str,
+    call: Callable[[], Awaitable[T]],
+) -> T:
+```
+
+4. `analyze` 之後加：
+
+```python
+def _library_match(
+    food: Food, revision: FoodRevision, serving_grams: Decimal
+) -> LibraryFoodMatch:
+    return LibraryFoodMatch(
+        food_id=food.id,
+        name=food.name,
+        base_unit=revision.base_unit,
+        # 用食物庫那一筆的話，這一樣會記成多少熱量：它的每 100 × AI 估的量。
+        serving_kcal=_serving_from_per_100g(revision.kcal, serving_grams),
+    )
+
+
+async def _to_meal_item(db: AsyncSession, user: User, raw: RawEstimate) -> AnalyzedMealItem:
+    """一樣的估算 → 回應裡的一樣：一致性檢查＋比對食物庫（跟文字短路同一個
+    `_find_in_food_library`，「同名」只有這一種定義）。"""
+    consistency = check_consistency(
+        kcal=raw.serving_kcal,
+        protein_g=raw.serving_protein_g,
+        fat_g=raw.serving_fat_g,
+        carb_g=raw.serving_carb_g,
+    )
+    hit = await _find_in_food_library(db, user, raw.name)
+    return AnalyzedMealItem(
+        name=raw.name,
+        brand=raw.brand,
+        nutrition=_to_analyzed_nutrition(raw),
+        confidence=raw.confidence,
+        consistency=ConsistencyResult.model_validate(consistency),
+        library_food=None if hit is None else _library_match(hit[0], hit[1], raw.serving_grams),
+    )
+
+
+@router.post("/analyze-meal", response_model=AnalyzeMealResponse)
+async def analyze_meal(
+    payload: AnalyzeRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    make_estimator: EstimatorFactory = Depends(get_estimator_factory),
+) -> AnalyzeMealResponse:
+    """文字或照片 → 這一餐的每一樣食物（最多 8 樣）＋一句描述。算一次額度。"""
+    if isinstance(payload, AnalyzeTextRequest):
+        hit = await _find_in_food_library(db, user, payload.text)
+        if hit is not None:
+            # 整段文字就是一個食物的名稱：跟 /analyze 一樣不呼叫 LLM、不記一列、不扣次數。
+            # 直接重用那邊組回應的函式——兩個端點對「命中食物庫」回的數字不會不一樣。
+            food, revision = hit
+            used_today = await _count_used_today(db, user)
+            single = _library_hit_response(
+                food, revision, remaining_today=_remaining(used_today)
+            )
+            return AnalyzeMealResponse(
+                analysis_id=None,
+                description=food.name,
+                items=[
+                    AnalyzedMealItem(
+                        name=single.name,
+                        brand=single.brand,
+                        nutrition=single.nutrition,
+                        confidence=single.confidence,
+                        consistency=single.consistency,
+                        library_food=_library_match(food, revision, _BASE_AMOUNT),
+                    )
+                ],
+                remaining_today=single.remaining_today,
+            )
+
+    # 順序同 /analyze：先建實作（沒設定 → 503），再看額度。
+    estimator = make_estimator()
+    used_today = await _assert_quota_available(db, user)
+
+    kind: AnalysisKind
+    input_hash: str
+    raw: RawMealEstimate
+    if isinstance(payload, AnalyzeTextRequest):
+        kind = AnalysisKind.TEXT
+        input_hash = hashlib.sha256(payload.text.encode()).hexdigest()
+        text = payload.text
+        raw = await _call_estimator_or_record_failure(
+            db,
+            user_id=user.id,
+            kind=kind,
+            input_hash=input_hash,
+            model=estimator.model,
+            call=lambda: estimator.estimate_meal_text(text),
+        )
+    else:
+        kind = AnalysisKind.IMAGE
+        content, media_type = _decode_photo(payload.image_base64)
+        input_hash = hashlib.sha256(content).hexdigest()
+        raw = await _call_estimator_or_record_failure(
+            db,
+            user_id=user.id,
+            kind=kind,
+            input_hash=input_hash,
+            model=estimator.model,
+            call=lambda: estimator.estimate_meal_image(content, media_type),
+        )
+
+    # **一列**：一次呼叫就是一次計費，跟估出幾樣無關（規格 D7）。
+    analysis = AiAnalysis(
+        user_id=user.id,
+        kind=kind,
+        model=estimator.model,
+        input_hash=input_hash,
+        succeeded=True,
+    )
+    db.add(analysis)
+    await db.commit()
+    await db.refresh(analysis)
+
+    items = [await _to_meal_item(db, user, item) for item in raw.items]
+    return AnalyzeMealResponse(
+        analysis_id=analysis.id,
+        description=raw.description,
+        items=items,
+        remaining_today=_remaining(used_today + 1),
+    )
+```
+
+Run: `./.venv/Scripts/python.exe -m pytest tests/test_ai_analyze_meal.py tests/test_ai_analyze.py tests/test_ai_provider_errors.py -q -W error`
+Expected: PASS（新檔 18 條；另外兩個檔案條數不變——`_call_estimator_or_record_failure` 的本體沒動）。
+
+- [ ] **Step 4：突變**
+
+| # | 突變 | 預期紅的（`tests/test_ai_analyze_meal.py`） |
+|---|---|---|
+| 1 | 成功那一列搬進 `for item in raw.items` 迴圈（一樣一列） | `…one_row_no_matter_how_many_items`、`…last_allowed_call…`（列數不對）、`…share_one_quota` |
+| 2 | `remaining_today=_remaining(used_today + len(raw.items))` | `…returns_the_description_and_every_item`、`…share_one_quota`。`…last_allowed_call…` **仍綠是預期的**（`max(0, …)` 把負數夾成 0） |
+| 3 | `_assert_quota_available` 換成 `_count_used_today`（不擋） | `…last_allowed_call…`（第二次沒被擋） |
+| 4 | `make_estimator()` 與 `_assert_quota_available` 對調 | `…not_configured_is_503_and_wins_over_the_quota`（變 429） |
+| 5 | 文字分支呼叫 `estimator.estimate_text`（單樣的） | 幾乎全部——回的是 `RawEstimate`，沒有 `.items`（500）。**紅在崩潰**（規矩 8）。有鑑別力的那一行是 `fake.single_calls == 0`：把假實作的 `estimate_text` 暫時改成回 `_DEFAULT_MEAL` 再跑一次這個突變，確認 `…returns_the_description_and_every_item` 紅在那一行 |
+| 6 | `_to_meal_item` 的 `library_food` 用 `_library_match(hit[0], hit[1], _BASE_AMOUNT)` | `…same_name_as_a_library_food…`（130.00 不是 260.00）、`…ignores_case…` |
+| 7 | `_library_match` 的熱量改用 AI 的（把 `raw.serving_kcal` 傳進去） | 同上兩條 |
+| 8 | `_to_meal_item` 的 `nutrition` 在命中時改用食物庫的值 | `…same_name_as_a_library_food…`（`nutrition` 那兩行） |
+| 9 | `_to_meal_item` 不查食物庫（`hit = None`） | `…same_name…`、`…ignores_case…` |
+| 10 | 文字短路整段拿掉 | `…never_reaches_the_llm`、`…works_without_ai_configured` |
+| 11 | 短路之前先 `make_estimator()` | `…never_reaches_the_llm`（`built["n"]`）、`…works_without_ai_configured`（503） |
+| 12 | 圖片分支拿掉 `_decode_photo`（直接 `base64.b64decode`） | `…bad_photo_is_rejected…`、`…passes_the_decoded_photo…`（`media_type`）——實際紅成什麼樣照實記 |
+| 13 | `_find_in_food_library` 的 `or_(Food.owner_id.is_(None), Food.owner_id == user.id)` 拿掉 | `…someone_elses_private_food…`，**以及單樣那邊既有的測試**——這個函式是共用的，兩邊都要紅 |
+
+- [ ] **Step 5：整套、靜態檢查、`schema.d.ts`**
+
+```bash
+./.venv/Scripts/python.exe -m pytest -q -W error
+./.venv/Scripts/python.exe -m ruff check . && ./.venv/Scripts/python.exe -m mypy app
+grep -c "@router\." app/api/routes/*.py | awk -F: '{s+=$2} END {print s}'
+```
+
+Expected：全綠（Task 2 之後的條數＋18）；端點數 **79**。
+
+重新產生 `schema.d.ts`：多一條路徑 `/api/ai/analyze-meal`、一個 operation、三個 schema（`AnalyzeMealResponse`、`AnalyzedMealItem`、`LibraryFoodMatch`）。`cd frontend && npm run -s typecheck` 乾淨。
+
+- [ ] **Step 6：Commit**
+
+```bash
+S=C:/Users/user/AppData/Local/Temp/claude/f--wallet/e7b60c93-fbd5-4a61-9c85-74550ff7244b/scratchpad
+git add app/schemas/ai.py app/api/routes/ai.py tests/test_ai_analyze_meal.py frontend/src/api/schema.d.ts
+git commit -F "$S/aimulti-t3-msg.txt"
+```
+
+訊息：`feat(backend): POST /api/ai/analyze-meal——一次估出一餐的每一樣，算一次額度`。
+
+---
