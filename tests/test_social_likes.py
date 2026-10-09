@@ -8,7 +8,7 @@ from PIL import Image
 from sqlalchemy import select
 
 from app.models.meal import MealItem
-from app.models.social import MealLike
+from app.models.social import MealLike, Notification, NotificationType
 from app.ratelimit import LIKE_LIMIT
 from tests.factories import create_comment, create_friendship, create_like, create_meal
 from tests.social_helpers import MISSING, auth, make_cast, unfriend
@@ -284,3 +284,30 @@ async def test_my_own_endpoints_still_refuse_a_friends_meal(client, db_session, 
 
     assert own.status_code == 404
     assert listed.json() == []
+
+
+async def test_both_writes_are_committed(client, db_session, cast):
+    """共用 session 的夾具看得到沒 commit 的寫入——端點把 commit 寫成 flush 也會綠
+    （審查 M1：原本只有 e2e 守著這兩個 commit）。這裡在端點回來之後 rollback 一次：
+    沒 commit 的東西會跟著不見（handover §6 第 11 種）。讚與它的通知是同一個交易，兩個都看。"""
+    meal_id, alice_id, bob_id = cast.meal.id, cast.alice.id, cast.bob.id
+    bob = auth(cast.bob)
+
+    async def stored() -> tuple[list[int], list[tuple[int, int]]]:
+        likers = await db_session.scalars(
+            select(MealLike.user_id).where(MealLike.meal_id == meal_id)
+        )
+        notices = await db_session.execute(
+            select(Notification.user_id, Notification.actor_id).where(
+                Notification.meal_id == meal_id, Notification.type == NotificationType.LIKE
+            )
+        )
+        return list(likers), [tuple(row) for row in notices]
+
+    assert (await client.put(_url(meal_id), headers=bob)).status_code == 200
+    await db_session.rollback()
+    assert await stored() == ([bob_id], [(alice_id, bob_id)])
+
+    assert (await client.delete(_url(meal_id), headers=bob)).status_code == 200
+    await db_session.rollback()
+    assert await stored() == ([], [])
