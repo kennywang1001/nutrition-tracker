@@ -1,0 +1,33 @@
+.title {
+	margin: 0;
+}
+
+/* 「N 則新通知」在左、「看通知」在右，同一列：這張卡片在「我的」最上面，不該佔兩列。 */
+.row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-3);
+}
+
+.row p {
+	margin: 0;
+}
+
+/* 有新的：粗體。沒有：灰色。 */
+.fresh {
+	font-weight: 600;
+}
+
+.none {
+	color: var(--color-text-muted);
+}
+
+/* 連結也是點擊目標：至少 44px 高。 */
+.link {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+	font-weight: 600;
+}

@@ -22,3 +22,12 @@ export const NAV_TABS: readonly NavTab[] = [
 	{ to: "/diet", label: "飲食", icon: Salad },
 	{ to: "/me", label: "我的", icon: CircleUser },
 ];
+
+/** 未讀通知的數字掛在哪一個目的地上（社群規格 §6.4：通知在「我的」裡）。 */
+export const UNREAD_TAB = "/me";
+
+/** 標記上看得到的字：10 則以上寫「9+」（標記只放得下兩個字）。唸給螢幕閱讀器的是
+ *  真的數字，不是這個（見 `TabBar` 的 `TabLink`）。 */
+export function unreadBadgeText(unread: number): string {
+	return unread > 9 ? "9+" : String(unread);
+}

@@ -1,8 +1,10 @@
 import { Plus } from "lucide-react";
+import { useId } from "react";
 import { NavLink } from "react-router";
 import { AddSheet } from "./AddSheet";
-import { NAV_TABS, type NavTab } from "./nav-tabs";
+import { NAV_TABS, type NavTab, UNREAD_TAB, unreadBadgeText } from "./nav-tabs";
 import styles from "./TabBar.module.css";
+import ui from "./ui.module.css";
 import { useAddSheet } from "./use-add-sheet";
 
 /** 底部導覽：總覽｜報表｜＋｜飲食｜我的（介面改版規格 §3.1）。
@@ -21,29 +23,58 @@ import { useAddSheet } from "./use-add-sheet";
 const LEFT_TABS = NAV_TABS.slice(0, 2);
 const RIGHT_TABS = NAV_TABS.slice(2);
 
-function TabLink({ tab }: { tab: NavTab }) {
+/** `unread`：這一格上的未讀數字，0＝不畫（只有「我的」會拿到非 0，見下面）。
+ *
+ *  **連結的可及名稱永遠是 `tab.label`**（社群規格 D17）——單元測試與 e2e 有 20 多處用
+ *  `getByRole("link", { name: "我的" })` 找它。所以：
+ *
+ *  - 看得到的數字是 `aria-hidden`：不進名稱；
+ *  - 唸出來的「N 則新通知」是連結的**描述**（`aria-describedby`），而且那段字放在連結
+ *    **外面**——放裡面會併進名稱。螢幕閱讀器唸「我的，連結，3 則新通知」。 */
+function TabLink({ tab, unread }: { tab: NavTab; unread: number }) {
+	const badgeId = useId();
 	const Icon = tab.icon;
 	return (
-		<NavLink
-			to={tab.to}
-			end={tab.end}
-			className={({ isActive }) =>
-				isActive ? `${styles.tab} ${styles.active}` : styles.tab
-			}
-		>
-			<Icon aria-hidden="true" size={22} />
-			<span>{tab.label}</span>
-		</NavLink>
+		<>
+			<NavLink
+				to={tab.to}
+				end={tab.end}
+				aria-describedby={unread > 0 ? badgeId : undefined}
+				className={({ isActive }) =>
+					isActive ? `${styles.tab} ${styles.active}` : styles.tab
+				}
+			>
+				<Icon aria-hidden="true" size={22} />
+				<span>{tab.label}</span>
+				{unread > 0 && (
+					<span aria-hidden="true" className={styles.badge}>
+						{unreadBadgeText(unread)}
+					</span>
+				)}
+			</NavLink>
+			{/* srOnly 是 position: absolute：不佔分頁列的一格。 */}
+			{unread > 0 && (
+				<span id={badgeId} className={ui.srOnly}>
+					{unread} 則新通知
+				</span>
+			)}
+		</>
 	);
 }
 
-export function TabBar() {
+/** `unread`：未讀通知數，由外框（`App.tsx` 的 `LoggedInShell`）查好傳進來。
+ *  **這個元件自己不碰 query**——它的測試沒有 `QueryClientProvider`。 */
+export function TabBar({ unread = 0 }: { unread?: number }) {
 	const sheet = useAddSheet();
 	return (
 		<>
 			<nav className={styles.bar} aria-label="主要導覽">
 				{LEFT_TABS.map((tab) => (
-					<TabLink key={tab.to} tab={tab} />
+					<TabLink
+						key={tab.to}
+						tab={tab}
+						unread={tab.to === UNREAD_TAB ? unread : 0}
+					/>
 				))}
 				<div className={styles.addSlot}>
 					<button
@@ -59,7 +90,11 @@ export function TabBar() {
 					</button>
 				</div>
 				{RIGHT_TABS.map((tab) => (
-					<TabLink key={tab.to} tab={tab} />
+					<TabLink
+						key={tab.to}
+						tab={tab}
+						unread={tab.to === UNREAD_TAB ? unread : 0}
+					/>
 				))}
 			</nav>
 			{sheet.open && (

@@ -23,6 +23,31 @@
 	text-decoration: none;
 	color: var(--color-text-muted);
 	font-size: 12px;
+	/* 未讀數字（.badge）用它定位。 */
+	position: relative;
+}
+
+/* 「我的」上的未讀數字：圖示右上角的一顆小藥丸。位置從這一格的正中間往右算——
+   圖示在正中間、22px 寬，藥丸的左緣落在圖示偏右的地方，蓋住它的右上角。
+   顏色用 action／on-action 這一組：兩種模式的對比度都有測試守著
+   （css-tokens.test.ts）。danger 配白字在深色模式只有約 2.6:1，數字讀不到。 */
+.badge {
+	position: absolute;
+	top: 4px;
+	left: 50%;
+	margin-left: 4px;
+	box-sizing: border-box;
+	min-width: 18px;
+	height: 18px;
+	padding: 0 5px;
+	border-radius: 9px;
+	background: var(--color-action);
+	color: var(--color-on-action);
+	font-size: 11px;
+	font-weight: 700;
+	line-height: 18px;
+	text-align: center;
+	font-variant-numeric: tabular-nums;
 }
 
 .active {

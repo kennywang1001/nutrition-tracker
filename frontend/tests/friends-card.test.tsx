@@ -360,4 +360,55 @@ describe("好友卡片", () => {
 		expect(client.getQueryData(queryKeys.friendDay(9, null))).toBe(otherDay);
 		expect(client.getQueryData(queryKeys.friendPhoto(9, 1))).toBe(otherPhoto);
 	});
+
+	it.each([
+		["接受", "POST", "/api/friends/requests/31/accept", "接受卡蘿的邀請"],
+		["拒絕", "DELETE", "/api/friends/requests/31", "拒絕卡蘿的邀請"],
+		["收回", "DELETE", "/api/friends/requests/32", "收回給戴夫的邀請"],
+	] as const)(
+		"%s邀請之後：通知、未讀數、自己的餐點清單標成過期",
+		async (_label, method, path, button) => {
+			// 接受、拒絕、收回之後，收件人那一則「想加你為好友」的通知後端就不再回了
+			// （不是變成已讀）：通知的清單與分頁上的數字要重抓。重新加回來的好友以前
+			// 留下的讚與留言也會再算進去：自己的餐點清單上的數字跟著變。
+			const { spy } = backend([
+				{
+					method,
+					path,
+					handler: () =>
+						method === "POST"
+							? json({
+									id: 3,
+									display_name: "卡蘿",
+									since: "2026-10-07T00:00:00Z",
+								})
+							: new Response(null, { status: 204 }),
+				},
+			]);
+			const client = new QueryClient({
+				defaultOptions: { queries: { retry: false } },
+			});
+			const refreshed = [
+				queryKeys.notifications,
+				queryKeys.unreadCount,
+				queryKeys.meals,
+			] as const;
+			for (const key of refreshed) client.setQueryData<unknown>(key, []);
+			renderCard(client);
+
+			const target = await screen.findByRole("button", { name: button });
+			// 按之前還沒有：過期是這個動作造成的，不是畫出來就有。
+			for (const key of refreshed) {
+				expect(client.getQueryState(key)?.isInvalidated).toBe(false);
+			}
+			await userEvent.click(target);
+
+			await waitFor(() => expect(sent(spy, method, path)).toHaveLength(1));
+			await waitFor(() => {
+				for (const key of refreshed) {
+					expect(client.getQueryState(key)?.isInvalidated).toBe(true);
+				}
+			});
+		},
+	);
 });

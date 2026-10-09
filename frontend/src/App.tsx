@@ -1,5 +1,6 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
 	BrowserRouter,
 	Navigate,
@@ -9,16 +10,17 @@ import {
 	useMatch,
 	useNavigate,
 } from "react-router";
-// 離線 L2（計畫三 Task 4）：跟下面的 queryClient 一樣是模組層單例，不是
-// 這裡的元件 render 裡——建在 render 裡每次重繪都會建一個新的 persister，
-// 節流狀態跟著重置。
-import { offlinePersistOptions } from "./api/persist";
 // 建在 api/queries.ts 的模組層，不是這裡的元件 render 裡——直接寫在 render
 // 裡每次重繪都會建一個新的 QueryClient，快取等於沒有。放在 queries.ts
 // 而不是這個檔案，是為了讓 auth/session.ts 的 logout() 與 auth/refresh.ts
 // 的 refresh 失敗路徑也能拿到同一個 instance 去清快取（規格 §6.5），
 // 又不必回頭 import 這個檔案（那會兜出循環依賴）。
-import { queryClient } from "./api/queries";
+import { useUnreadCount } from "./api/notifications";
+// 離線 L2（計畫三 Task 4）：跟下面的 queryClient 一樣是模組層單例，不是
+// 這裡的元件 render 裡——建在 render 裡每次重繪都會建一個新的 persister，
+// 節流狀態跟著重置。
+import { offlinePersistOptions } from "./api/persist";
+import { queryClient, queryKeys } from "./api/queries";
 import { followLogoutFromOtherTabs } from "./auth/session";
 import { getRefreshToken, onLoggedOut } from "./auth/store";
 import { SideNav } from "./components/SideNav";
@@ -40,6 +42,7 @@ import { LogMeal, PHOTO_UPLOAD_FAILED_NOTICE } from "./screens/LogMeal";
 import { Me } from "./screens/Me";
 import { MealDetail } from "./screens/MealDetail";
 import { NewFood } from "./screens/NewFood";
+import { Notifications } from "./screens/Notifications";
 import { Overview } from "./screens/Overview";
 import {
 	ResetPassword,
@@ -77,6 +80,45 @@ function AddExpenseRoute() {
 	return <AddExpense onDone={() => navigate("/")} />;
 }
 
+/** 未讀通知數（社群規格 §6.4、D16），給分頁列／左側導覽上「我的」的數字用。
+ *
+ *  查詢放在外框、數字當 prop 傳下去：`TabBar`、`SideNav` 自己不碰 query。新鮮度有三個
+ *  來源——回到這個視窗、畫面看得到時每分鐘一次（這兩個在 `useUnreadCount` 裡），以及
+ *  **每換一頁重抓一次**（這裡）：沒有推播，而手機上的 PWA 很少有「視窗取得焦點」，
+ *  最常發生的事是換頁。
+ *
+ *  **數字變多＝有人對我的餐按了讚、留了言，或送來邀請**：順便讓三個地方過期——
+ *  自己的餐點清單（卡片上的讚與留言數；它用 app 預設的 `staleTime`，同一次載入裡
+ *  不會自己重抓）、通知的清單、餐點頁（正開著的那一餐會多一則留言）。掛著的才會
+ *  真的重抓。數字變少（看過了、對方收回了）不做事：收回的讚等那一頁下一次重抓。 */
+function useUnreadNotifications(pathname: string): number {
+	const client = useQueryClient();
+	const unread = useUnreadCount().data;
+
+	// 記住上一次的路徑，不是「是不是第一次」：StrictMode 把 effect 跑兩次時，第二次
+	// 路徑沒變，不會多抓。第一次掛載也不抓——`useUnreadCount` 自己正在抓。
+	const lastPath = useRef(pathname);
+	useEffect(() => {
+		if (lastPath.current === pathname) return;
+		lastPath.current = pathname;
+		void client.invalidateQueries({ queryKey: queryKeys.unreadCount });
+	}, [pathname, client]);
+
+	// `undefined`＝還不知道（剛載入、抓不到）：第一次拿到數字不算「變多」。
+	const lastUnread = useRef(unread);
+	useEffect(() => {
+		const previous = lastUnread.current;
+		lastUnread.current = unread;
+		if (previous === undefined || unread === undefined) return;
+		if (unread <= previous) return;
+		void client.invalidateQueries({ queryKey: queryKeys.meals });
+		void client.invalidateQueries({ queryKey: queryKeys.notifications });
+		void client.invalidateQueries({ queryKey: queryKeys.socialMeals });
+	}, [unread, client]);
+
+	return unread ?? 0;
+}
+
 /** 登入後的外框（電腦版版面規格 §3）。
  *
  *  **電腦版（≥ 1024px）**：最外層 `app-desktop`，左側 `SideNav`，每一頁都有
@@ -99,11 +141,12 @@ function LoggedInShell({ children }: { children: ReactNode }) {
 	const isDesktop = useIsDesktop();
 	const { pathname } = useLocation();
 	const onAddExpense = useMatch("/expenses/new") !== null;
+	const unread = useUnreadNotifications(pathname);
 
 	if (isDesktop) {
 		return (
 			<div className="app-desktop">
-				<SideNav />
+				<SideNav unread={unread} />
 				<main className="app-main">
 					<div
 						className={`app-content app-content-${contentWidthFor(pathname)}`}
@@ -122,7 +165,7 @@ function LoggedInShell({ children }: { children: ReactNode }) {
 			>
 				{children}
 			</main>
-			{!onAddExpense && <TabBar />}
+			{!onAddExpense && <TabBar unread={unread} />}
 		</>
 	);
 }
@@ -199,6 +242,8 @@ export function App() {
 							<Route path="/me/targets" element={<Targets />} />
 							{/* 修改密碼（帳號設定規格 §5.3），入口是「我的」帳號卡片的「修改密碼」。 */}
 							<Route path="/me/password" element={<ChangePassword />} />
+							{/* 通知（社群規格 §6.4），入口是「我的」最上面的通知卡片。 */}
+							<Route path="/notifications" element={<Notifications />} />
 							<Route path="/expenses/new" element={<AddExpenseRoute />} />
 							<Route path="/meals/new" element={<LogMealRoute />} />
 							{/* 修改或刪除一筆已經記下的餐（編輯餐點規格 §4.2）。入口：飲食頁

@@ -67,3 +67,21 @@
 	color: var(--color-action);
 	font-weight: 600;
 }
+
+/* 「我的」上的未讀數字：靠右的一顆小藥丸（同手機分頁列的 .badge，顏色的理由也在那裡）。
+   它自己有底色與字色，不跟著那一列的狀態（滑過、目前那一頁）變。 */
+.badge {
+	box-sizing: border-box;
+	min-width: 20px;
+	height: 20px;
+	margin-left: auto;
+	padding: 0 6px;
+	border-radius: 10px;
+	background: var(--color-action);
+	color: var(--color-on-action);
+	font-size: 12px;
+	font-weight: 700;
+	line-height: 20px;
+	text-align: center;
+	font-variant-numeric: tabular-nums;
+}

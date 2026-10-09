@@ -9,10 +9,11 @@ import { Card } from "../components/Card";
 import { ExportCard } from "../components/ExportCard";
 import { FriendsCard } from "../components/FriendsCard";
 import { InviteFriends } from "../components/InviteFriends";
+import { NotificationsCard } from "../components/NotificationsCard";
 import { TargetsCard } from "../components/TargetsCard";
 import styles from "./Me.module.css";
 
-/** 我的：帳號、每日目標、好友、匯出資料、管理員的審核、邀請與所有帳號、登出
+/** 我的：通知、帳號、每日目標、好友、匯出資料、管理員的審核、邀請與所有帳號、登出
  *  （介面改版規格 §5.7、帳號設定規格 §5.1、報表月份與匯出規格 §4.2）。 */
 export function Me() {
 	// 帳號卡片自己讀 useMe；這裡只剩「是不是管理員」要用它（同一個 query，不會多打一次）。
@@ -35,6 +36,10 @@ export function Me() {
 	return (
 		<section>
 			<h1>我的</h1>
+
+			{/* 最上面：分頁上的數字把人帶到這一頁，一進來就要看得到它指的是什麼
+			    （社群規格 §6.4）。 */}
+			<NotificationsCard />
 
 			<AccountCard />
 

@@ -34,6 +34,12 @@ export function FriendsCard() {
 		void queryClient.invalidateQueries({ queryKey: queryKeys.friendRequests });
 		void queryClient.invalidateQueries({ queryKey: queryKeys.friends });
 		void queryClient.invalidateQueries({ queryKey: queryKeys.friendFeed });
+		// 邀請被接受、拒絕或收回之後，那一則「想加你為好友」的通知後端就不再回了
+		// （不是變成已讀）：通知的清單與分頁上的數字要重抓，不然數字會停在舊的。
+		void queryClient.invalidateQueries({ queryKey: queryKeys.notifications });
+		void queryClient.invalidateQueries({ queryKey: queryKeys.unreadCount });
+		// 加回來的好友以前留下的讚與留言又算數了：自己的餐點清單上的數字跟著變。
+		void queryClient.invalidateQueries({ queryKey: queryKeys.meals });
 	}
 
 	const reset = useMutation({

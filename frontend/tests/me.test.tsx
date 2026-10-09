@@ -452,3 +452,88 @@ describe("我的：匯出資料", () => {
 		).toEqual([]);
 	});
 });
+
+describe("我的：通知卡片（社群規格 §6.4）", () => {
+	function unreadRoute(handler: () => Response) {
+		return {
+			method: "GET",
+			path: "/api/notifications/unread-count",
+			handler,
+		};
+	}
+
+	it("有新通知：寫幾則，「看通知」連到通知頁；是「我的」裡的第一張卡片", async () => {
+		mockApi([
+			unreadRoute(() => json({ count: 3 })),
+			statsRoute(),
+			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
+		]);
+
+		render(wrap(<Me />));
+
+		const card = screen.getByTestId("notifications-card");
+		expect(await within(card).findByText("3 則新通知")).toBeInTheDocument();
+		expect(
+			within(card).getByRole("heading", { level: 2, name: "通知" }),
+		).toBeInTheDocument();
+		// 數字不在連結的名稱裡：名稱固定。
+		expect(within(card).getByRole("link", { name: "看通知" })).toHaveAttribute(
+			"href",
+			"/notifications",
+		);
+		// 最上面：緊接在標題後面，帳號卡片之前。
+		expect(
+			screen.getByRole("heading", { level: 1, name: "我的" })
+				.nextElementSibling,
+		).toBe(card);
+		const account = await screen.findByText("kenny@example.com");
+		expect(
+			card.compareDocumentPosition(account) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+	});
+
+	it("沒有新通知：「沒有新通知」，連結照樣在", async () => {
+		let answered = false;
+		mockApi([
+			unreadRoute(() => {
+				answered = true;
+				return json({ count: 0 });
+			}),
+			statsRoute(),
+			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
+		]);
+
+		render(wrap(<Me />));
+
+		const card = screen.getByTestId("notifications-card");
+		// 先等未讀數真的回來：一開始（還沒回來）畫的也是「沒有新通知」。
+		await waitFor(() => expect(answered).toBe(true));
+		await screen.findByText("kenny@example.com");
+		expect(within(card).getByText("沒有新通知")).toBeInTheDocument();
+		expect(within(card).queryByText(/則新通知/)).not.toBeInTheDocument();
+		expect(within(card).getByRole("link", { name: "看通知" })).toHaveAttribute(
+			"href",
+			"/notifications",
+		);
+	});
+
+	it("未讀數抓不到（斷線）：當成沒有新通知，不顯示錯誤", async () => {
+		let answered = false;
+		mockApi([
+			unreadRoute(() => {
+				answered = true;
+				return json({ error: { code: "X", message: "x", details: {} } }, 500);
+			}),
+			statsRoute(),
+			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
+		]);
+
+		render(wrap(<Me />));
+
+		await waitFor(() => expect(answered).toBe(true));
+		await screen.findByText("kenny@example.com");
+		const card = screen.getByTestId("notifications-card");
+		expect(within(card).getByText("沒有新通知")).toBeInTheDocument();
+		expect(within(card).queryByRole("alert")).not.toBeInTheDocument();
+	});
+});

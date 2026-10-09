@@ -75,6 +75,9 @@ function mockBackend(
 			// 為真——順序反過來，總覽的餐點清單會拿到使用者物件然後當掉。
 			if (url.includes("/api/meals")) return jsonResponse([]);
 			if (url.includes("/api/me")) return jsonResponse(ME);
+			// 外框一掛上去就會問未讀通知數（社群規格 §6.4）。
+			if (url.includes("/api/notifications/unread-count"))
+				return jsonResponse({ count: 0 });
 			if (url.includes("/api/stats/daily")) return jsonResponse(STATS);
 			if (url.includes("/api/expenses/summary"))
 				return jsonResponse(EMPTY_SUMMARY);
@@ -1046,5 +1049,234 @@ describe("App 的未登入畫面（電腦版版面規格 §3）", () => {
 		expect(await screen.findByLabelText("再輸入一次密碼")).toBeInTheDocument();
 		expect(screen.getAllByRole("main")).toHaveLength(1);
 		expect(screen.getByRole("main")).toHaveClass("app-auth");
+	});
+});
+
+describe("App：未讀通知（社群規格 §6.4、D16、D17）", () => {
+	const UNREAD_URL = "/api/notifications/unread-count";
+
+	beforeEach(() => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+	});
+
+	/** 某個網址被請求了幾次（只看 GET）。 */
+	function requested(spy: ReturnType<typeof mockBackend>, path: string) {
+		return spy.mock.calls.filter(
+			([url, init]) =>
+				String(url).includes(path) &&
+				(init?.method ?? "GET").toUpperCase() === "GET",
+		).length;
+	}
+
+	it("有未讀：分頁列的「我的」名稱不變，描述是幾則新通知", async () => {
+		mockBackend((url) =>
+			url.includes(UNREAD_URL) ? jsonResponse({ count: 2 }) : undefined,
+		);
+		render(<App />);
+
+		const link = await screen.findByRole("link", { name: "我的" });
+		await waitFor(() => expect(link).toHaveAccessibleDescription("2 則新通知"));
+		expect(link).toHaveTextContent(/^我的2$/);
+	});
+
+	it("電腦版：左側導覽的「我的」也有", async () => {
+		setDesktop(true);
+		mockBackend((url) =>
+			url.includes(UNREAD_URL) ? jsonResponse({ count: 12 }) : undefined,
+		);
+		render(<App />);
+
+		const link = await screen.findByRole("link", { name: "我的" });
+		await waitFor(() =>
+			expect(link).toHaveAccessibleDescription("12 則新通知"),
+		);
+		expect(link.closest(".app-desktop")).not.toBeNull();
+	});
+
+	it("沒有未讀（或抓不到）：沒有描述、沒有數字", async () => {
+		const spy = mockBackend((url) =>
+			url.includes(UNREAD_URL)
+				? new Response("{}", { status: 500 })
+				: undefined,
+		);
+		render(<App />);
+
+		const link = await screen.findByRole("link", { name: "我的" });
+		await waitFor(() => expect(requested(spy, UNREAD_URL)).toBe(1));
+		expect(link).not.toHaveAttribute("aria-describedby");
+		expect(link.textContent).toBe("我的");
+	});
+
+	it("剛載入只問一次未讀數；每換一頁再問一次", async () => {
+		// 手機上的 PWA 很少有「視窗取得焦點」，最常發生的事是換頁（規格 D16）。
+		const spy = mockBackend();
+		render(<App />);
+		expect(
+			await screen.findByRole("heading", { name: "總覽" }),
+		).toBeInTheDocument();
+		await waitFor(() => expect(requested(spy, UNREAD_URL)).toBe(1));
+		// 等一下再看：第一次掛載不該另外重抓一次（那一次本來就在抓）。
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		expect(requested(spy, UNREAD_URL)).toBe(1);
+
+		await userEvent.click(screen.getByRole("link", { name: "報表" }));
+		expect(
+			await screen.findByRole("heading", { name: "報表" }),
+		).toBeInTheDocument();
+		await waitFor(() => expect(requested(spy, UNREAD_URL)).toBe(2));
+
+		await userEvent.click(screen.getByRole("link", { name: "飲食" }));
+		expect(
+			await screen.findByRole("heading", { name: "飲食" }),
+		).toBeInTheDocument();
+		await waitFor(() => expect(requested(spy, UNREAD_URL)).toBe(3));
+	});
+
+	it("未讀數變多了：自己的餐點清單跟著重抓（上面的讚與留言數變了）；沒變多就不抓", async () => {
+		// `["meals"]` 用 app 預設的 staleTime（60 秒），同一次載入裡不會自己重抓：
+		// 別人剛按的讚、剛留的言要有東西通知它。未讀數變多就是那個訊號。
+		let count = 0;
+		const spy = mockBackend((url) =>
+			url.includes(UNREAD_URL) ? jsonResponse({ count }) : undefined,
+		);
+		render(<App />);
+		expect(
+			await screen.findByRole("heading", { name: "總覽" }),
+		).toBeInTheDocument();
+		await waitFor(() => expect(requested(spy, UNREAD_URL)).toBe(1));
+		await waitFor(() => expect(requested(spy, "/api/meals")).toBe(1));
+
+		// 再問一次，數字一樣：餐點清單不動。
+		await act(() =>
+			queryClient.refetchQueries({ queryKey: queryKeys.unreadCount }),
+		);
+		expect(requested(spy, UNREAD_URL)).toBe(2);
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		expect(requested(spy, "/api/meals")).toBe(1);
+
+		// 有人按了讚。
+		count = 1;
+		await act(() =>
+			queryClient.refetchQueries({ queryKey: queryKeys.unreadCount }),
+		);
+		await waitFor(() => expect(requested(spy, "/api/meals")).toBe(2));
+		// 通知的清單與餐點頁也標成過期（沒有人掛著，所以不會真的抓）。
+		expect(
+			screen.getByRole("link", { name: "我的" }),
+		).toHaveAccessibleDescription("1 則新通知");
+
+		// 數字變少（看過了）：不抓。
+		count = 0;
+		await act(() =>
+			queryClient.refetchQueries({ queryKey: queryKeys.unreadCount }),
+		);
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		expect(requested(spy, "/api/meals")).toBe(2);
+	});
+
+	it("未讀數變多了：快取裡的通知清單與餐點頁標成過期；第一次拿到數字不算變多", async () => {
+		let count = 3;
+		mockBackend((url) =>
+			url.includes(UNREAD_URL) ? jsonResponse({ count }) : undefined,
+		);
+		queryClient.setQueryData(queryKeys.notifications, []);
+		queryClient.setQueryData(queryKeys.socialMeal(7), { comments: [] });
+		render(<App />);
+		const link = await screen.findByRole("link", { name: "我的" });
+		await waitFor(() => expect(link).toHaveAccessibleDescription("3 則新通知"));
+		// 剛載入：還不知道 → 3 不是「變多」。
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		expect(
+			queryClient.getQueryState(queryKeys.notifications)?.isInvalidated,
+		).toBe(false);
+		expect(
+			queryClient.getQueryState(queryKeys.socialMeal(7))?.isInvalidated,
+		).toBe(false);
+
+		count = 4;
+		await act(() =>
+			queryClient.refetchQueries({ queryKey: queryKeys.unreadCount }),
+		);
+
+		await waitFor(() =>
+			expect(
+				queryClient.getQueryState(queryKeys.notifications)?.isInvalidated,
+			).toBe(true),
+		);
+		expect(
+			queryClient.getQueryState(queryKeys.socialMeal(7))?.isInvalidated,
+		).toBe(true);
+	});
+
+	it("從「我的」的通知卡片進通知頁：看到清單、送已讀，分頁上的數字消失", async () => {
+		const NOTICE = {
+			id: 53,
+			type: "like",
+			actor_name: "鮑伯",
+			meal: { id: 7, meal_type: "lunch", eaten_at: "2026-10-02T04:00:00Z" },
+			comment_preview: null,
+			created_at: "2026-10-02T05:00:00Z",
+			is_read: false,
+		};
+		let read = false;
+		const spy = mockBackend((url, method, body) => {
+			// 越具體的排越前面：這兩個網址都「包含」清單的網址。
+			if (url.includes(UNREAD_URL)) {
+				return jsonResponse({ count: read ? 0 : 1 });
+			}
+			if (url.includes("/api/notifications/read-all") && method === "POST") {
+				expect(body).toEqual({ up_to: 53 });
+				read = true;
+				return jsonResponse({ count: 0 });
+			}
+			if (url.includes("/api/notifications")) {
+				return jsonResponse({ items: [NOTICE] });
+			}
+			return undefined;
+		});
+		render(<App />);
+
+		const tab = await screen.findByRole("link", { name: "我的" });
+		await waitFor(() => expect(tab).toHaveAccessibleDescription("1 則新通知"));
+		await userEvent.click(tab);
+		const card = await screen.findByTestId("notifications-card");
+		expect(card).toHaveTextContent("1 則新通知");
+
+		await userEvent.click(screen.getByRole("link", { name: "看通知" }));
+
+		expect(
+			await screen.findByRole("heading", { level: 1, name: "通知" }),
+		).toBeInTheDocument();
+		expect(window.location.pathname).toBe("/notifications");
+		expect(
+			await screen.findByRole("link", { name: /鮑伯 對你的午餐按了讚/ }),
+		).toHaveAttribute("href", "/meals/7");
+		// 已讀送出去之後，分頁上的數字不見了（名稱從頭到尾都是「我的」）。
+		await waitFor(() =>
+			expect(screen.getByRole("link", { name: "我的" })).not.toHaveAttribute(
+				"aria-describedby",
+			),
+		);
+		expect(
+			spy.mock.calls.filter(([url]) =>
+				String(url).includes("/api/notifications/read-all"),
+			),
+		).toHaveLength(1);
+	});
+
+	it("電腦版的通知頁是窄的內容寬度", async () => {
+		setDesktop(true);
+		mockBackend((url) =>
+			url.includes("/api/notifications") && !url.includes(UNREAD_URL)
+				? jsonResponse({ items: [] })
+				: undefined,
+		);
+		window.history.replaceState(null, "", "/notifications");
+		render(<App />);
+
+		expect(await screen.findByText("還沒有通知")).toBeInTheDocument();
+		expect(
+			screen.getByRole("main").querySelector(".app-content-narrow"),
+		).not.toBeNull();
 	});
 });

@@ -21,6 +21,7 @@ describe("contentWidthFor", () => {
 		// 餐點頁（社群規格 §6.1）：唯讀的一餐與留言，不是 `/meals/new` 那種表單寬度。
 		["/meals/5", "narrow"],
 		["/meals/5/", "narrow"],
+		["/notifications", "narrow"],
 		["/friends/2", "narrow"],
 		["/admin/revisions", "narrow"],
 		["/join", "narrow"],
