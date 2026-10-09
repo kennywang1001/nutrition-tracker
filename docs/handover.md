@@ -29,7 +29,7 @@
 | 項目 | 數字 |
 |---|---|
 | 端點 | **78**（OpenAPI 的 operation 數，跟 `grep -c "@router\." app/api/routes/*.py` 的加總一樣；2026-10-09） |
-| 測試 | 後端 **980**（`pytest -q -W error` 全綠，約 2 分 20 秒）；前端 `Test Files 138`、`Tests 1633`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **44** 條（Playwright）。2026-10-09 在 `feat/reports-month-export` 量的 |
+| 測試 | 後端 **998**（`pytest -q -W error` 全綠，約 2 分 20 秒）；前端 `Test Files 138`、`Tests 1649`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **45** 條（Playwright）。2026-10-09 在 `feat/reports-month-export` 量的（審查修正之後） |
 | 覆蓋率 | 96%（2026-09 量的，之後沒再量） |
 | 資料表 | 16（+ `alembic_version`） |
 | Migration | `0001` ~ `0016` |
@@ -54,7 +54,7 @@
 | 部署改成 CI 做映像 | CI 的 `publish` job 把兩個映像推到 GHCR（多架構）；NAS 上 `sudo ./scripts/deploy.sh` 拉映像、備份、migration、等 healthy、起不來自動退版（規格 `docs/superpowers/specs/2026-10-08-image-deploy-design.md`；部署手冊「二、更新」） | ✅（`publish` job 要等第一次 push 到 master 才驗得到） |
 | 電腦版版面 | 寬度 ≥ 1024px 左側導覽＋總覽／報表／飲食兩欄；比較窄維持手機版、內容最寬 600px 置中。只改版面，不動後端（規格 `docs/superpowers/specs/2026-10-08-desktop-layout-design.md`、計畫 `docs/superpowers/plans/2026-10-08-desktop-layout.md`；見第 10 節「電腦版版面」） | ✅（`feat/desktop-layout`） |
 | 帳號與目標設定 | 「我的」的每日目標卡片＋`/me/targets`（**從今天起**生效，過去的日子維持原本的目標）；帳號卡片的行內「修改名稱」；`/me/password` 改密碼（**其他裝置全部登出**，這台換一組新票繼續用）；管理員在「所有帳號」替一般使用者產生**重設密碼連結**（24 小時、只能用一次、不給管理員帳號），朋友打開 `/reset-password#<碼>` 設新密碼——取代 SSH 跑 `create-user`（規格 `docs/superpowers/specs/2026-10-08-account-settings-design.md`、計畫 `docs/superpowers/plans/2026-10-08-account-settings.md`；見第 10 節「帳號與目標設定」） | ✅（`feat/account-settings`） |
-| 報表看其他月份、匯出資料 | 報表頂端的「‹ 上個月｜月份｜下個月 ›」（`?month=YYYY-MM`，沒有就是這個月；**這個月是哪個月由後端決定**）；「我的」的匯出資料：餐點／花費／補劑各下載一個 CSV（UTF-8＋BOM、帳號時區、分塊串流、每人每分鐘 6 次）。沒有 migration（規格 `docs/superpowers/specs/2026-10-09-reports-month-export-design.md`、計畫 `docs/superpowers/plans/2026-10-09-reports-month-export.md`；見第 10 節「報表看其他月份與匯出資料」） | ✅（`feat/reports-month-export`） |
+| 報表看其他月份、匯出資料 | 報表頂端的「‹ 上個月｜月份｜下個月 ›」（`?month=YYYY-MM`，沒有就是這個月；**這個月是哪個月由後端決定**）；「我的」的匯出資料：餐點／花費／補劑各下載一個 CSV（UTF-8＋BOM、帳號時區、分塊串流、每人每分鐘 6 次、同時一個）。沒有 migration（規格 `docs/superpowers/specs/2026-10-09-reports-month-export-design.md`、計畫 `docs/superpowers/plans/2026-10-09-reports-month-export.md`；見第 10 節「報表看其他月份與匯出資料」） | ✅（`feat/reports-month-export`） |
 | UI 改版 第三階段 | 社群（P7）：第一步「開帳號的路」、第二步「好友關係」已完成。按讚、留言、通知刻意沒做——等真的用過再說 | 🟡 |
 
 > **P4 早於 P2/P3 完成是刻意的，但當初的理由有瑕疵。**
@@ -82,7 +82,7 @@ app/
   days.py              day_bounds() / today_in_timezone()  ← 時區的單一來源
   nutrition.py         營養素換算（每 100 單位的「100」只存在這裡）
   stats.py             統計彙總核心（SQL 分桶）
-  ratelimit.py         登入速率限制（記憶體，單容器）
+  ratelimit.py         登入速率限制、KeyedRateLimiter（換票／登出、匯出）、InFlightLimiter（匯出同時一個）——都在記憶體，單容器
   csv_export.py        CSV 的唯一寫法：BOM、RFC 4180 的引號、公式字元（儲存格的型別決定怎麼寫）
   export.py            匯出的三支分塊 async generator（餐點、花費、補劑；keyset 分塊）
   food_visibility.py   食物/份量的分層可見性（共用）
@@ -898,6 +898,29 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
 - **測試全綠，但那個工具本來就不看型別。** 計畫的 e2e spec 在 Playwright 底下三條全綠，卻過不了 `tsc -b`
   （8 個 `TS18048`，見 §7「Playwright 不做型別檢查」），而且就這樣進了一個 commit（`ac2372b`，下一個 `81f0df7` 修掉）。
 
+**審查修正（I1）又長出兩條，都是「測試全綠、對真的伺服器跑才看到」：**
+
+- **修一個洞，開了另一個洞。** 「每一塊之後把連線還回去」的測試全綠（每一次 `send` 的那一刻借出數是 0）。對真的 uvicorn
+  跑斷線探針，結束時 `checkedout` 卻是 1：每一塊都重新借連線之後，斷線的取消有機會落在「借」（pre-ping）的中間，而
+  SQLAlchemy 在被取消的 anyio scope 裡關不掉那條連線、也就沒有把它登記回去——要等垃圾回收。原本整個串流只借一次
+  （在認證的時候，不在會被取消的範圍裡），所以這條路以前不存在。**把一個資源從「借一次」改成「借很多次」，
+  每一次借都是一個新的可以被打斷的地方。**
+- **有限的資料讓「取消沒有送達」看起來像「正常結束」。** 上一條的修法是把「借 → 查 → commit」擋住取消（shield）。
+  測試全綠（連線是同一條、沒有 ERROR）。再跑探針：斷線之後串流**根本沒有停**——generator 在兩個 `yield` 之間做的事全在
+  shield 裡，外面只剩 `yield`，而斷線後 uvicorn 的 `send` 馬上回來、不等任何東西，取消永遠沒有地方可以送達。測試裡
+  只有三列資料：讀完就結束了，跟「被取消了」分不出來；探針的假 generator 是無限的，才看得出來。補的斷言是
+  **「斷線之後一塊都沒有再送」**（`sent == ["start", "chunk"]`），不是「請求有結束」。
+- 寫那幾條測試時量到的：**事件 hook 測不到「資料庫操作被打斷」**——`before_cursor_execute`、`commit` 的 hook 在
+  SQLAlchemy 處理 DBAPI 例外的那一層外面，在 hook 裡被取消不會讓連線作廢（第一版的測試因此假綠）。要停在
+  dialect 的方法裡（`_do_ping_w_event`、`do_execute`、`do_commit`）。
+- **第 17 種又一次，而且是這個分支自己的 spec。** `reports-export.spec.ts` 的月份那一條 `page.reload()` 之前沒有清離線
+  快取。驗證審查修正時完整跑一輪紅了一次：翻回這個月看到「總計 0.00／這個月還沒有支出」。那是**記帳之前**總覽存進
+  localStorage 的那一份「這個月」——離線快取是節流寫入的（一秒一次），reload 還原回來的可以是記帳之前的快照，而它還在
+  60 秒的 `staleTime` 裡、不會重抓。單獨重跑 12 次全綠（平常 reload 的那一刻快照裡根本還沒有這個 query：16 次裡 15 次）；
+  把「之後的寫入都還沒發生」固定下來（擋掉 `setItem`）就**每次**都是那個畫面。修法照第 17 種：reload 前清掉那一個 key。
+  **這不只是測試的事**：使用者記完一筆、一秒內重新整理，也可能看到舊的總額，最多 60 秒（或到下一次失效為止）——
+  沒有修，記在這裡。
+
 ---
 
 ## 7. 踩過的技術坑（節錄，完整版在各計畫文件）
@@ -947,6 +970,12 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
 | `StreamingResponse` 與 `yield` 依賴 | **FastAPI ≥ 0.118** 才是「回應送完才收尾」；更早、或 `Depends(get_db, scope="function")`，session 在第一塊送出之前就關了（`pyproject.toml` 的下限、`tests/test_export.py` 的收尾順序測試）。另外 `httpx.ASGITransport` **把整個回應收完才交回來**：「一塊一塊吐」在端點層看不到，分塊要直接測 generator |
 | 原始碼裡看不見的 BOM（U+FEFF） | 計畫的程式碼片段把 BOM 直接寫成字面值：複製、重打、經過工具轉手都可能**無聲地掉了**，而那幾條測試守的正是「BOM 還在」。一律寫成跳脫字元——Python `"\ufeff".encode()`、TypeScript `"\uFEFF"`；`grep -n $'\xef\xbb\xbf'` 找得到漏網的。**反方向也會**：寫這一列的時候，編輯工具把打進去的跳脫字元換成了真的 BOM——動到它的檔案，commit 前數一次位元組 |
 | **Playwright 不做型別檢查** | spec 用 esbuild 轉譯就跑，型別錯了照樣綠；`npm run typecheck`（`tsc -b`，含 `tsconfig.e2e.json`）才看得到。`noUncheckedIndexedAccess` 底下從陣列解構出來的每一個都多一個 `undefined`，只擋 `null` 的 `if` 縮不掉（`reports-export.spec.ts` 第一版就這樣進了一個 commit）。**加了 spec 之後 typecheck 要重跑**，而且檢查與 `git commit` 之間用 `&&` 串，不要用 `;` |
+| **串流 generator 的 `finally`** | **不保證會跑**。Starlette 不會 `aclose()` 交給 `StreamingResponse` 的 generator：用戶端斷線時它取消的是卡在 `send` 的那個 task，generator 停在 `yield` 上，`finally` 要等垃圾回收；標頭就送不出去時 generator **從來沒被迭代**，`finally` 永遠不跑。`background=` 只在送成功之後才跑。**要在回應結束時一定收尾的東西，放在 `yield` 的依賴裡**（FastAPI ≥ 0.118 在送完、失敗、被取消、沒開始之後都會收尾；`export_slot`） |
+| anyio 的 shield | `with anyio.CancelScope(shield=True):` 擋的是 anyio cancel scope 的取消（Starlette 斷線時用的那種），**擋不住直接對 task 的 `cancel()`**。擋完之後取消在「下一個真的會等的 await」才送達——如果外面只剩 `yield` 與一個不等任何東西的 `send`，它永遠送不達：擋完自己 `await anyio.lowlevel.checkpoint_if_cancelled()`。`with` 裡面不能有 `yield`（cancel scope 不能跨 yield） |
+| SQLAlchemy：取消落在資料庫操作中間 | 被取消打斷的 execute／commit，連線會被**作廢**；在 anyio 已取消的 scope 裡連終止都會再被取消一次，log 一個 `Exception terminating connection … CancelledError` 的 ERROR。落在**借連線**（pool checkout、pre-ping）的中間更糟：那條連線沒有人握著、也沒被登記回去，`pool.checkedout()` 多一條，直到垃圾回收（那時再 log 一個 `garbage collector is trying to clean up non-checked-in connection`）。2.0.52 實測 |
+| `session.commit()`／`rollback()`／`close()` 結束一個只讀的交易 | 對資料庫都一樣，連線都回到池子。差別在 session 裡的物件：`rollback()` **一律**讓它們過期（`expire_on_commit=False` 管不到），之後碰屬性就是 `MissingGreenlet`；`close()` 把它們踢出 session。共用一個 session 的測試夾具會踩到——匯出用 `commit()` |
+| `httpx.ASGITransport` 與斷線 | 它的 `receive()` 要等回應送完才回 `http.disconnect`，測不到「送到一半斷線」；而且 app 沒送結尾就回來時它自己 `assert response_complete`。要模擬斷線：在 `app` 外面包一層 ASGI，換掉 `receive`（事件 set 之後回 `http.disconnect`）、app 回來之後替它補一個結尾（`tests/test_export.py` 的 `_on_the_wire`）。同一層換掉 `send` 就能看到「每一次送的那一刻」——這是端點層唯一看得到分塊的地方 |
+| jsdom 與 `inert`、`disabled` 的焦點 | jsdom **不實作 `inert`**（`userEvent.click` 照樣點得到），也**不會因為按鈕變成 `disabled` 把焦點移走**（Chromium 會）。單元測試只能守機制（屬性在不在、是不是原生 `disabled`）；行為要在 Playwright 守——用座標 `page.mouse.click`，因為 `locator.click()` 會等到元素點得到為止。另外 jest-dom 的 `toBeDisabled()` **不認** `aria-disabled`，Playwright 的 `toBeDisabled()` **認** |
 | Playwright 抓下載 | `page.waitForEvent("download")` 抓得到 `<a download href="blob:…">` 的點擊；`suggestedFilename()` 就是 `download` 屬性——沒有它時檔名是一串 UUID。內容用 `download.path()` 讀成位元組再比（BOM 要比位元組，轉成字串就看不到了） |
 
 ---
@@ -1511,8 +1540,16 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
   回了這個月才清。**剛好等於這個月不清**（「這個月」可能來自離線快取、是舊的）；**從過去翻回這個月時把參數拿掉**
   （不寫 `?month=這個月`，才會跟著後端走）。換月份是 push：上一頁回到剛才看的月份。
 - **`keepPreviousData` 在 `useExpenses`／`useExpenseSummary` 裡**；換月份時摘要與清單的內容層各自 `aria-busy`＋`.stale`
-  （同趨勢頁），月份標籤與標題已經是新的月份。query key 沒動（`["expenses","list"｜"summary", month]`），改刪之後失效
+  （同趨勢頁）**＋`inert`**，月份標籤與標題已經是新的月份。query key 沒動（`["expenses","list"｜"summary", month]`），改刪之後失效
   `expensesAll` 本來就打到每一個月；**離線持久化沒改**。
+- **留著的上一個月只能看**（審查 M3）：那幾列的「修改」「刪除」是上一個月的，`inert` 讓整層點不到、Tab 不到。
+  **離線而且沒看過那個月**（query 是 `paused`，不會自己結束）算「讀不到」，跟請求失敗顯示同樣的文字，不留上一個月的資料
+  （`Expenses.tsx` 的 `isUnavailable`；同 `Targets.tsx` 對 `paused` 的處理）。**之後用 `keepPreviousData` 的畫面，
+  留著的那一層有按鈕就要 `inert`，而且要想 `paused` 的時候畫什麼。**
+- **停用而可能正在焦點上的按鈕用 `aria-disabled`**（審查 M5）：報表的「上個月」「下個月」、匯出的三顆。原生 `disabled`
+  會讓那顆按鈕失去焦點（Chromium 實測：e2e 的 `toBeFocused`）。代價是瀏覽器不再擋 click，元件自己擋；長相在 `ui.module.css` 的
+  `.secondary[aria-disabled="true"]`。**其他畫面的按鈕還是原生 `disabled`**（送出鍵 pending 時停用之類）——同樣會丟焦點，
+  這次沒有動。
 - **之後有別的畫面要「看某個月／某一天」，照這個形狀：網址放明確的值、沒有值就讓後端決定、界線問後端。**
 - **CSV 的寫法只有一份**（`app/csv_export.py`）：`csv.writer`、CRLF、開頭一個 BOM。**儲存格的型別決定怎麼寫**——
   `str` 是文字（第一個字元是 `=` `+` `-` `@` Tab CR LF 的前面加 `'`，擋 CSV injection）、`Decimal` 是數字
@@ -1523,23 +1560,32 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
   跨整個下載的 cursor，在測試的 savepoint 夾具裡也照常運作。
 - **串流用的就是 `Depends(get_db)` 那個 session，靠 FastAPI ≥ 0.118 活到串流結束**（`yield` 依賴在回應送完之後才收尾）。
   `Depends(get_db, scope="function")` 會在第一塊之前就把它關掉；`pyproject.toml` 的下限是 `fastapi>=0.118`
-  （lock 是 0.141.1），`tests/test_export.py` 有一條測試守著「塊、塊、收尾」的順序。
+  （lock 是 0.141.1），`tests/test_export.py` 有一條測試守著「塊、塊、收尾」的順序（三個端點都守）。
+- **session 活著，但送的時候不握連線**（審查 I1，`app/api/routes/export.py`）：讀的人不讀了，伺服器就卡在 `send` 上。
+  `_csv_response` 回傳之前、`_release_between_chunks` 每一塊（與結尾）交出去之前都先 `commit()`，連線回到池子，下一塊再借。
+  「借 → 查 → commit」整段用 anyio 的 shield 擋住斷線的取消，擋完 `checkpoint_if_cancelled()`（為什麼兩個都要：§6 的
+  審查修正那一段）。**之後任何會串流的端點都要問同一個問題：卡在 `send` 的時候手上握著什麼。**
 - **匯出的內容**：只有呼叫者自己的（`user_id` 一律來自 token，沒有任何「誰的資料」參數）；時間是帳號時區的當地時間；
   餐點的營養素用 `item_join_query()`＋`scale()`（跟 `GET /api/meals` 同一份實作）；`photo_path` 根本沒有被 SELECT；
   內部 id 只有「餐點編號」。分類、餐別是中文標籤（後端自己一份對照表，測試守「每個 enum 成員都有標籤」）。
-- **限速**：`export_rate_limiter`（`KeyedRateLimiter`），**每人每分鐘 6 次、三個端點共用**，鍵是 `str(user.id)`，`hit` 在
-  handler 裡、碰資料庫之前；超過是 `429 TOO_MANY_EXPORTS`＋`Retry-After`。記憶體、單容器（同 §5.2）。
+- **限速**：`export_rate_limiter`（`KeyedRateLimiter`），**每人每分鐘 6 次、三個端點共用**，鍵是 `str(user.id)`；超過是
+  `429 TOO_MANY_EXPORTS`＋`Retry-After`。**外加一個人同時一個**（審查 I1）：`export_in_flight`（`InFlightLimiter`），
+  前一個還沒結束是 `429 EXPORT_IN_PROGRESS`、**不帶 `Retry-After`**（`TooManyRequestsError` 的秒數可以是 `None`）。
+  兩個都在 router 上的 `export_slot` 依賴裡（先算次數、再看有沒有在跑），位子在 `yield` 之後的 `finally` 放掉——
+  **不在串流 generator 的 `finally` 裡**（§7「串流 generator 的 `finally`」）。記憶體、單容器（同 §5.2）。
 - **前端下載**：`<a href>` 帶不了 `Authorization`（同照片），所以 `api/client.ts` 的 `fetchDownload()`（跟 `apiFetch`、
   `fetchPhotoBlob` 共用 `fetchWithAuthRetry`）先拿成 `Blob`、檔名讀 `Content-Disposition`；`lib/save-file.ts` 的 `saveBlob()`
   用暫時的 object URL＋`<a download>` 存檔、40 秒後才 `revokeObjectURL`。**iOS 主畫面模式**（`navigator.standalone === true`
   而且 `canShare({ files })`）改用 `navigator.share`——桌面與 Android 也有 `canShare`，但那裡下載是好的，不分享。
   檔名的日期是後端算的（前端不算今天）。卡片不用 `useMutation`（離線時暫停、恢復連線才送的下載會在人離開之後自己冒出來），
-  下載中三顆一起停用。
+  下載中三顆一起不能按（`aria-disabled`＋一個 ref 擋 click）；「已下載 …」的 `role="status"` 區塊一直都在、先是空的。
 
 **新的東西在哪裡：**
 
 - 後端：`app/csv_export.py`、`app/export.py`、`app/api/routes/export.py`（`GET /api/export/{meals,expenses,supplements}.csv`，
-  在 `app/main.py` 註冊）、`app/ratelimit.py` 的 `export_rate_limiter`（`tests/conftest.py` 的 autouse fixture 每個測試重置）；
+  在 `app/main.py` 註冊；`export_slot`、`_release_between_chunks` 也在這裡）、`app/ratelimit.py` 的 `export_rate_limiter`、
+  `InFlightLimiter`／`export_in_flight`（`tests/conftest.py` 的 autouse fixture 每個測試重置）、`app/errors.py`
+  （`TooManyRequestsError` 可以不帶秒數）、`pyproject.toml` 多一行 `anyio`（lock 沒變）；
   測試 `tests/test_csv_export.py`、`tests/test_export.py`、`tests/test_expenses_summary.py`（月界線的兩條釘子）。
 - 前端：`lib/months.ts`；`screens/Expenses.tsx`／`Expenses.module.css`（月份切換，`role="group"`「切換月份」、月份是
   `role="status"`；內容層 `data-testid="month-summary"`、`month-list`）；`api/expenses.ts`（`keepPreviousData`）；
@@ -1547,10 +1593,13 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
   `components/ExportCard.tsx`（`data-testid="export-card"`，放在「好友」之後、管理員的卡片之前）。測試
   `tests/months.test.ts`、`expenses-month.test.tsx`、`offline.test.tsx`、`save-file.test.ts`、`export-card.test.tsx`、
   `client.test.ts`、`me.test.tsx`。
-- e2e：`e2e/reports-export.spec.ts`（換月份、匯出花費、手機尺寸三條）。**會記帳的兩條各自開新帳號**——總額與 CSV 的列數
-  才是確定的（示範帳號同時有別的 worker 在記帳）。
+- e2e：`e2e/reports-export.spec.ts`（換月份、匯出花費、留著的上一個月點不到、手機尺寸四條）。**會記帳的三條各自開新帳號**
+  ——總額與 CSV 的列數才是確定的（示範帳號同時有別的 worker 在記帳）。
+- **審查的斷線探針**不在 repo 裡（它起一個真的 uvicorn、對開發資料庫只讀）：三種斷線的時間點＋一個不讀的用戶端，印
+  `engine.pool.checkedout()`。修正前「不讀的用戶端」是 1，修正後是 0，卡住時第二個匯出是 429、斷線後下一個是 200。
+  之後動 `app/api/routes/export.py` 的串流，單元測試之外**再對真的 uvicorn 跑一次**——§6 那兩條都是這樣才看到的。
 
-**已知限制**（規格 §8 的 17 點，編號相同）：
+**已知限制**（規格 §8 的 20 點，編號相同）：
 
 1. **清單最多 100 筆**（既有落差）：報表的總額算整個月，清單被 `limit` 截斷時兩者對不起來，而且沒有訊號。看過去的月份一樣。
 2. 一次只能翻一個月，沒有月份選擇器；翻到這個月為止。
@@ -1563,16 +1612,26 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
    就從 localStorage 拿掉。照預設值推論的，沒有另外量。
 8. 匯出是「全部歷史、一種一個檔」：沒有日期範圍；餐點的檔沒有餐費，花費的檔沒有餐點編號，兩個檔之間沒有可以對起來的鍵。
 9. **後端的記憶體是平的，瀏覽器的不是**：整份 CSV 先變成一個 Blob 才存檔。
-10. **匯出期間握著一條資料庫連線**（連線池 5＋10）；下載很慢的用戶端會一直佔著。
+10. **卡住的下載不佔資料庫連線，但佔著那個人的位子**（審查 I1）：連線只在查一塊的那一下被借走。讀得很慢或不讀的用戶端
+    還是佔著一個 task、uvicorn 的寫入緩衝、與「這個人正在匯出」的位子，直到連線斷掉——**伺服器不會主動踢掉卡住的下載**
+    （uvicorn 沒有寫入逾時），那個人在那之前再按是 `429 EXPORT_IN_PROGRESS`。偷到 access token 的人可以這樣讓本人
+    匯出不了，直到那條連線斷掉或容器重啟（`docker compose restart api` 清得掉）；票過期不會中斷已經開始的串流。
 11. **不是同一個時間點的快照**：每一塊是分開的查詢，匯出途中新增、刪除、改時間的列可能有、可能沒有、可能出現兩次。
 12. 串流開始之後才出錯（例如資料庫斷線）：狀態碼已經是 200，只能中斷連線。前端顯示「下載失敗」；用 curl 的人會拿到
-    被截斷的檔案。**沒有測試。**
+    被截斷的檔案。**前端那一段沒有測試**；後端只測了「串流中途失敗之後位子有放掉」。
 13. 食物、補劑的名稱與品牌是**現在的**（名稱不版本化）；營養素與份量是當時的。
 14. 分類與餐別的中文標籤前後端各一份；加分類時兩邊都要改（後端有測試會紅，前端是編譯錯誤）。
 15. 開頭是公式字元的文字，匯出之後前面多一個看得到的 `'`。全形的 `＝＋－＠` 不擋。
 16. **iOS 主畫面模式沒有實機驗證，到交接時仍然沒有**：分享面板與退回的 `<a download>` 兩條路都只有單元測試
     （守的是「走哪一條路」）。**要請使用者在 iPhone 上從主畫面打開、實際按一次「花費」**，結果補在這裡。
-17. 匯出的限速在記憶體裡，重啟歸零（同其他限速器）。
+17. 匯出的限速在記憶體裡，重啟歸零（同其他限速器）。「一個人同時一個」也是；多容器的話每個容器各算各的。
+18. **用戶端斷線時，正在做的那一塊會做完才停**（最多多讀 500 列／200 餐）。擋的是 Starlette 斷線時用的 anyio cancel
+    scope；**伺服器關機時直接取消 task 擋不住**——那時 log 裡可能有 `Exception terminating connection … CancelledError`
+    的 traceback，是已知的雜訊（審查 M4；用戶端斷線的那條路已經不會出現）。
+19. **換月份時留著的上一個月是 `inert`**，請求重試的期間（預設 3 次，約 7 秒）也是：看得到但不能操作。jsdom 不實作
+    `inert`，單元測試守的是屬性；真的點不到由 e2e 守。
+20. **「離線」是瀏覽器說的**（`fetchStatus === "paused"`）。連得上網路但連不到後端（tailnet 不通）不是 paused：請求照常
+    失敗、重試，重試期間是調淡、不能操作的上一個月，全部失敗之後才顯示讀不到。
 
 ---
 

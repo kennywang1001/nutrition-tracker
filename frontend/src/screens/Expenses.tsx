@@ -369,8 +369,8 @@ export function Expenses() {
 			    月份是 role="status"：換月份時螢幕閱讀器會唸出新的月份。
 
 			    不能按的時候是 aria-disabled，不是原生的 disabled（審查 M5）：從過去翻到
-			    這個月的那一下，「下個月」正在焦點上——原生停用會讓它把焦點弄丟，用鍵盤的人
-			    得從頁首 Tab 回來。兩顆用同一種作法（「上個月」到 1900-01 為止也一樣）。
+			    這個月的那一下，「下個月」正在焦點上——原生停用會讓它失去焦點（Chromium 實測，
+			    e2e 守著）。兩顆用同一種作法（「上個月」到 1900-01 為止也一樣）。
 			    瀏覽器不再替我們擋 click：onClick 裡的 `!== null` 就是那道擋。 */}
 			{/* biome-ignore lint/a11y/useSemanticElements: role=group 與 fieldset 語意相同；fieldset 要另外重設 border、padding、min-inline-size（同 MoneyKeypad） */}
 			<div className={styles.monthSwitch} role="group" aria-label="切換月份">

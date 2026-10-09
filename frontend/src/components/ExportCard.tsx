@@ -28,9 +28,9 @@ function describeError(caught: unknown): string {
  *  把每分鐘的額度用掉。
  *
  *  **「不能按」是 `aria-disabled`，不是原生的 `disabled`**（審查 M5）：三顆裡有一顆正在
- *  焦點上（剛按下去的那顆），原生停用會讓它把焦點弄丟——用鍵盤的人得從頭 Tab 回來，
- *  螢幕閱讀器的人不知道自己在哪。代價是瀏覽器不再替我們擋 click：`busy` 這個 ref 擋
- *  （不用 `pending` 這個 state 擋：它要等下一次 render 才更新）。 */
+ *  焦點上（剛按下去的那顆），原生停用會讓它失去焦點，下載完也不會回來（Chromium 實測，
+ *  e2e 守著）。代價是瀏覽器不再替我們擋 click：`busy` 這個 ref 擋（不用 `pending` 這個
+ *  state 擋：它要等下一次 render 才更新）。 */
 export function ExportCard() {
 	const titleId = useId();
 	const [pending, setPending] = useState<ExportKind | null>(null);
