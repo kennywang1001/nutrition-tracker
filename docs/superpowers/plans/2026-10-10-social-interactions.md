@@ -2085,3 +2085,785 @@ git commit -F "$S/social-plan-task4-msg.txt"   # feat(backend): 留言——清�
 
 ---
 
+## Task 5：後端——讚與留言的通知、通知的三個端點
+
+**Files:**
+- Create: `app/notifications.py`、`app/api/routes/notifications.py`、`tests/test_notifications.py`
+- Modify: `app/social_visibility.py`、`app/schemas/social.py`、`app/api/routes/social.py`、`app/main.py`、`tests/test_social_likes_concurrency.py`、`frontend/src/api/schema.d.ts`
+
+- [ ] **Step 1：測試。** `tests/test_notifications.py`（檔頭的 `cast` 夾具同 Task 3；這裡的通知**都經過端點產生**，不直接寫表——要測的就是端點有沒有寫）：
+
+```python
+"""通知：誰收到、什麼時候消失、已讀（社群規格 §4.3、§5.5、D11–D15）。"""
+
+from datetime import UTC, datetime
+
+import pytest
+from sqlalchemy import func, select, update
+
+from app.models.social import Notification, NotificationType
+from tests.factories import create_comment, create_friendship
+from tests.social_helpers import auth, make_cast, unfriend
+
+
+@pytest.fixture
+async def cast(db_session):
+    return await make_cast(db_session)
+
+
+async def _like(client, user, meal):
+    response = await client.put(f"/api/social/meals/{meal.id}/like", headers=auth(user))
+    assert response.status_code == 200
+
+
+async def _unlike(client, user, meal):
+    response = await client.delete(f"/api/social/meals/{meal.id}/like", headers=auth(user))
+    assert response.status_code == 200
+
+
+async def _comment(client, user, meal, body="好吃嗎") -> int:
+    response = await client.post(
+        f"/api/social/meals/{meal.id}/comments", headers=auth(user), json={"body": body}
+    )
+    assert response.status_code == 201
+    return response.json()["id"]
+
+
+async def _inbox(client, user) -> list[dict]:
+    response = await client.get("/api/notifications", headers=auth(user))
+    assert response.status_code == 200
+    assert set(response.json()) == {"items"}
+    return response.json()["items"]
+
+
+async def _unread(client, user) -> int:
+    response = await client.get("/api/notifications/unread-count", headers=auth(user))
+    assert response.status_code == 200
+    return response.json()["count"]
+
+
+def _who_did_what(items) -> list[tuple[str, str]]:
+    return [(item["actor_name"], item["type"]) for item in items]
+
+
+# ---------- 寫入 ----------
+
+
+async def test_a_like_tells_the_owner_and_nobody_else(client, cast):
+    await _like(client, cast.bob, cast.meal)
+
+    [item] = await _inbox(client, cast.alice)
+    assert set(item) == {
+        "id", "type", "actor_name", "meal", "comment_preview", "created_at", "is_read",
+    }
+    assert (item["type"], item["actor_name"], item["is_read"]) == ("like", "鮑伯", False)
+    assert item["meal"] == {
+        "id": cast.meal.id,
+        "meal_type": "lunch",
+        "eaten_at": "2026-10-06T04:00:00Z",
+    }
+    assert item["comment_preview"] is None
+    assert await _unread(client, cast.alice) == 1
+    # 按的人自己、同一餐上的另一個好友：都沒有通知。
+    assert await _inbox(client, cast.bob) == [] and await _inbox(client, cast.carol) == []
+
+
+async def test_liking_twice_or_unliking_and_reliking_never_piles_up(client, db_session, cast):
+    await _like(client, cast.bob, cast.meal)
+    await _like(client, cast.bob, cast.meal)
+    assert _who_did_what(await _inbox(client, cast.alice)) == [("鮑伯", "like")]
+
+    await _unlike(client, cast.bob, cast.meal)
+    assert await _inbox(client, cast.alice) == []
+    assert await db_session.scalar(select(func.count()).select_from(Notification)) == 0
+
+    await _like(client, cast.bob, cast.meal)
+    assert _who_did_what(await _inbox(client, cast.alice)) == [("鮑伯", "like")]
+
+
+async def test_unliking_only_removes_my_like_notification(client, cast):
+    await _like(client, cast.bob, cast.meal)
+    await _like(client, cast.carol, cast.meal)
+    await _comment(client, cast.bob, cast.meal)
+
+    await _unlike(client, cast.bob, cast.meal)
+
+    assert _who_did_what(await _inbox(client, cast.alice)) == [("鮑伯", "comment"), ("小卡", "like")]
+
+
+async def test_a_comment_tells_only_the_owner(client, cast):
+    """不做「跟著這串留言」（D11）：小卡先留過言，鮑伯再留，小卡不會收到。
+    主人在自己的餐留言：沒有人收到。"""
+    await _comment(client, cast.carol, cast.meal, "先留的")
+    await _comment(client, cast.bob, cast.meal, "後留的")
+    await _comment(client, cast.alice, cast.meal, "主人回覆")
+
+    items = await _inbox(client, cast.alice)
+    assert [(i["actor_name"], i["type"], i["comment_preview"]) for i in items] == [
+        ("鮑伯", "comment", "後留的"),
+        ("小卡", "comment", "先留的"),
+    ]
+    assert await _inbox(client, cast.carol) == [] and await _inbox(client, cast.bob) == []
+
+
+@pytest.mark.parametrize(("length", "preview"), [(40, "字" * 40), (41, "字" * 40 + "…")])
+async def test_the_preview_is_the_first_forty_characters(client, cast, length, preview):
+    await _comment(client, cast.bob, cast.meal, "字" * length)
+
+    [item] = await _inbox(client, cast.alice)
+    assert item["comment_preview"] == preview
+
+
+async def test_nothing_private_rides_along(client, cast):
+    await _like(client, cast.bob, cast.meal)
+    await _comment(client, cast.bob, cast.meal, "看得到的預覽")
+
+    response = await client.get("/api/notifications", headers=auth(cast.alice))
+
+    assert "看得到的預覽" in response.text  # 預覽在（下面那些才不是空轉）
+    for secret in ("@example.com", "actor_id", "user_id", "今天心情很差", "4321.75"):
+        assert secret not in response.text
+
+
+# ---------- 什麼時候消失（§4.3） ----------
+
+
+async def test_deleting_the_comment_or_the_meal_takes_the_notifications(client, cast):
+    comment_id = await _comment(client, cast.bob, cast.meal)
+    await _like(client, cast.carol, cast.meal)
+
+    deleted = await client.delete(
+        f"/api/social/meals/{cast.meal.id}/comments/{comment_id}", headers=auth(cast.bob)
+    )
+    assert deleted.status_code == 204
+    assert _who_did_what(await _inbox(client, cast.alice)) == [("小卡", "like")]
+
+    assert (
+        await client.delete(f"/api/meals/{cast.meal.id}", headers=auth(cast.alice))
+    ).status_code == 204
+    assert await _inbox(client, cast.alice) == []
+    assert await _unread(client, cast.alice) == 0
+
+
+async def test_unfriending_hides_their_notifications_until_they_are_back(client, db_session, cast):
+    await _like(client, cast.bob, cast.meal)
+    await _comment(client, cast.bob, cast.meal, "不該留在通知裡的預覽")
+    await _like(client, cast.carol, cast.meal)
+    assert await _unread(client, cast.alice) == 3
+
+    await unfriend(db_session, cast.alice, cast.bob)
+
+    response = await client.get("/api/notifications", headers=auth(cast.alice))
+    assert _who_did_what(response.json()["items"]) == [("小卡", "like")]
+    assert "不該留在通知裡的預覽" not in response.text
+    assert await _unread(client, cast.alice) == 1
+
+    await create_friendship(db_session, cast.alice, cast.bob)
+    assert len(await _inbox(client, cast.alice)) == 3
+
+
+async def test_going_private_keeps_the_owners_notifications(client, db_session, cast):
+    await _like(client, cast.bob, cast.meal)
+    cast.meal.is_private = True
+    await db_session.commit()
+
+    assert _who_did_what(await _inbox(client, cast.alice)) == [("鮑伯", "like")]
+
+
+# ---------- 清單的上限與順序 ----------
+
+
+async def test_the_latest_fifty_newest_first(client, db_session, cast):
+    for index in range(51):
+        comment = await create_comment(
+            db_session, meal=cast.meal, user=cast.bob, body=f"第{index}則"
+        )
+        db_session.add(
+            Notification(
+                user_id=cast.alice.id,
+                actor_id=cast.bob.id,
+                type=NotificationType.COMMENT,
+                meal_id=cast.meal.id,
+                comment_id=comment.id,
+            )
+        )
+    await db_session.commit()
+
+    items = await _inbox(client, cast.alice)
+
+    assert [item["comment_preview"] for item in items] == [
+        f"第{index}則" for index in range(50, 0, -1)
+    ]
+    assert await _unread(client, cast.alice) == 51  # 未讀數不受 50 則的上限影響
+
+
+# ---------- 已讀 ----------
+
+
+async def _read_all(client, user, up_to):
+    return await client.post(
+        "/api/notifications/read-all", headers=auth(user), json={"up_to": up_to}
+    )
+
+
+async def test_read_all_marks_up_to_what_was_seen_and_no_further(client, cast):
+    await _like(client, cast.bob, cast.meal)
+    await _comment(client, cast.bob, cast.meal)
+    seen = await _inbox(client, cast.alice)
+    await _like(client, cast.carol, cast.meal)  # 清單載入之後才到的
+
+    response = await _read_all(client, cast.alice, seen[0]["id"])
+
+    assert response.status_code == 200
+    assert response.json() == {"count": 1}
+    after = await _inbox(client, cast.alice)
+    assert [(i["actor_name"], i["is_read"]) for i in after] == [
+        ("小卡", False),
+        ("鮑伯", True),
+        ("鮑伯", True),
+    ]
+    assert await _unread(client, cast.alice) == 1
+
+
+async def test_read_all_cannot_touch_someone_elses(client, db_session, cast):
+    await _like(client, cast.bob, cast.meal)
+    [item] = await _inbox(client, cast.alice)
+
+    response = await _read_all(client, cast.bob, item["id"] + 1000)
+
+    assert response.json() == {"count": 0}
+    assert await _unread(client, cast.alice) == 1
+
+
+async def test_reading_again_does_not_restamp_what_was_already_read(client, db_session, cast):
+    """共用交易裡 `now()` 不會動（整條測試是同一個外層交易）——比兩次的時間看不出差別。
+    所以直接把已讀時間改成很久以前，看它有沒有被蓋掉。"""
+    await _like(client, cast.bob, cast.meal)
+    [item] = await _inbox(client, cast.alice)
+    long_ago = datetime(2020, 1, 1, tzinfo=UTC)
+    await db_session.execute(update(Notification).values(read_at=long_ago))
+    await db_session.commit()
+
+    await _read_all(client, cast.alice, item["id"])
+
+    assert await db_session.scalar(select(Notification.read_at)) == long_ago
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{}, {"up_to": 0}, {"up_to": -1}, {"up_to": 2**63}, {"up_to": "x"}],
+    ids=["missing", "zero", "negative", "too-big", "not-a-number"],
+)
+async def test_read_all_validates_its_body(client, cast, payload):
+    response = await client.post(
+        "/api/notifications/read-all", headers=auth(cast.alice), json=payload
+    )
+    assert response.status_code == 422
+
+
+async def test_all_three_need_a_login(client):
+    assert (await client.get("/api/notifications")).status_code == 401
+    assert (await client.get("/api/notifications/unread-count")).status_code == 401
+    assert (await client.post("/api/notifications/read-all", json={"up_to": 1})).status_code == 401
+```
+
+`tests/test_social_likes_concurrency.py`：`check` 那一段多數一次通知（import `Notification`）：
+
+```python
+            notes = await check.scalar(
+                select(func.count())
+                .select_from(Notification)
+                .where(Notification.meal_id == meal.id)
+            )
+            # 第一個「PUT」是測試自己寫的列（沒寫通知）；第二個什麼都沒新增，所以也不該寫。
+            assert notes == 0
+```
+
+Run → Expected：FAIL（`/api/notifications` 404；寫入那幾條是「清單是空的」）。
+
+- [ ] **Step 2：寫通知。** `app/notifications.py`：
+
+```python
+"""寫通知（社群規格 D11、D12、§5.7）。
+
+**這裡的函式都不 commit**：通知跟著呼叫端的那個交易一起成立、一起消失——讚寫進去了
+通知就一定在，讚被 rollback 了通知也不會留下。「誰看得到通知」不在這裡，在讀的那一層。
+"""
+
+from sqlalchemy import delete
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.social import Notification, NotificationType
+
+
+async def notify_like(db: AsyncSession, *, owner_id: int, actor_id: int, meal_id: int) -> None:
+    """同一個人對同一餐只有一則（`uq_notifications_like`）；已經有就什麼都不做。"""
+    if owner_id == actor_id:
+        return
+    await db.execute(
+        pg_insert(Notification)
+        .values(user_id=owner_id, actor_id=actor_id, type=NotificationType.LIKE, meal_id=meal_id)
+        .on_conflict_do_nothing()
+    )
+
+
+async def forget_like(db: AsyncSession, *, owner_id: int, actor_id: int, meal_id: int) -> None:
+    """收回讚：那一則通知跟著消失——不然「按了又收回」會留下一則指向不存在的讚的通知。"""
+    await db.execute(
+        delete(Notification).where(
+            Notification.user_id == owner_id,
+            Notification.actor_id == actor_id,
+            Notification.meal_id == meal_id,
+            Notification.type == NotificationType.LIKE,
+        )
+    )
+
+
+def notify_comment(
+    db: AsyncSession, *, owner_id: int, actor_id: int, meal_id: int, comment_id: int
+) -> None:
+    """只通知餐的主人；主人自己留言不通知自己。留言被刪時由 FK cascade 帶走。"""
+    if owner_id == actor_id:
+        return
+    db.add(
+        Notification(
+            user_id=owner_id,
+            actor_id=actor_id,
+            type=NotificationType.COMMENT,
+            meal_id=meal_id,
+            comment_id=comment_id,
+        )
+    )
+```
+
+`app/api/routes/social.py` 接上去：
+
+```python
+    # like_meal：原本的 execute 換成這一段
+    inserted = await db.scalar(
+        pg_insert(MealLike)
+        .values(meal_id=meal.id, user_id=user.id)
+        .on_conflict_do_nothing()
+        .returning(MealLike.id)
+    )
+    if inserted is not None:
+        # 真的新增了才通知。重複的 PUT 不會走到這裡（衝突時 RETURNING 沒有列）。
+        await notify_like(db, owner_id=meal.user_id, actor_id=user.id, meal_id=meal.id)
+    await db.commit()
+
+    # unlike_meal：delete 之後、commit 之前
+    await forget_like(db, owner_id=meal.user_id, actor_id=user.id, meal_id=meal.id)
+
+    # add_comment：db.add(comment) 之後
+    await db.flush()  # 要先拿到留言的 id
+    notify_comment(
+        db, owner_id=meal.user_id, actor_id=user.id, meal_id=meal.id, comment_id=comment.id
+    )
+    await db.commit()
+```
+
+- [ ] **Step 3：讀通知的過濾。** `app/social_visibility.py` 檔尾加（import `Notification`、`NotificationType`；寫計畫時跑過）：
+
+```python
+def notification_visible() -> ColumnElement[bool]:
+    """這則通知現在還看不看得到（規格 §4.3）。跟 `Notification` 一起用在 WHERE 裡。
+
+    - 好友邀請：那個邀請**還在等**（接受、拒絕、收回之後就不顯示）。
+    - 其他三種：做這件事的人現在是我的好友——解除之後，他留言的預覽不會留在我的通知裡。
+
+    餐或留言被刪的情況不用管：FK cascade 已經把那一列帶走了。"""
+    pair = (Notification.user_id, Notification.actor_id)
+    still_pending = exists().where(
+        Friendship.status == FriendshipStatus.PENDING,
+        Friendship.requested_by == Notification.actor_id,
+        *_pair(*pair),
+    )
+    is_request = Notification.type == NotificationType.FRIEND_REQUEST
+    return or_(and_(is_request, still_pending), and_(~is_request, _are_friends(*pair)))
+```
+
+- [ ] **Step 4：schema 與端點。** `app/schemas/social.py` 加（import `MealType`、`NotificationType`）：
+
+```python
+class NotificationMeal(BaseModel):
+    """畫「你的午餐」與連結所需要的最少欄位。"""
+
+    id: int
+    meal_type: MealType
+    eaten_at: datetime
+
+
+class NotificationItem(BaseModel):
+    id: int
+    type: NotificationType
+    # 只有名字（D9）。
+    actor_name: str
+    # 讚與留言才有；好友的兩種是 None。
+    meal: NotificationMeal | None
+    comment_preview: str | None
+    created_at: datetime
+    is_read: bool
+
+
+class NotificationsResponse(BaseModel):
+    items: list[NotificationItem]
+
+
+class UnreadCount(BaseModel):
+    count: int
+
+
+class ReadAllRequest(BaseModel):
+    # 清單裡最新那一則的 id：之後才到的通知不會沒被看過就變成已讀（D15）。
+    up_to: int = Field(gt=0, lt=2**63)
+```
+
+`app/api/routes/notifications.py`（`app/main.py` 註冊在 `social` 後面）：
+
+```python
+"""通知（社群規格 §5.5）。三個端點都只碰「收件人是我」的列。"""
+
+from fastapi import APIRouter, Depends
+from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.deps import get_current_user
+from app.db import get_db
+from app.models.meal import Meal
+from app.models.social import MealComment, Notification
+from app.models.user import User
+from app.schemas.social import (
+    NotificationItem,
+    NotificationMeal,
+    NotificationsResponse,
+    ReadAllRequest,
+    UnreadCount,
+)
+from app.social_visibility import notification_visible
+
+router = APIRouter(prefix="/notifications", tags=["notifications"])
+
+# 清單只回最近這麼多則（規格 D22）；這一版不自動刪舊的。
+NOTIFICATIONS_SHOWN = 50
+PREVIEW_LENGTH = 40
+
+
+def _preview(body: str | None) -> str | None:
+    if body is None or len(body) <= PREVIEW_LENGTH:
+        return body
+    return body[:PREVIEW_LENGTH] + "…"
+
+
+@router.get("", response_model=NotificationsResponse)
+async def list_notifications(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> NotificationsResponse:
+    """最近 50 則，新的在前。一次查詢：動作者的名字、餐、留言都 join 回來。"""
+    rows = (
+        await db.execute(
+            select(Notification, User.display_name, Meal.meal_type, Meal.eaten_at, MealComment.body)
+            .join(User, User.id == Notification.actor_id)
+            .outerjoin(Meal, Meal.id == Notification.meal_id)
+            .outerjoin(MealComment, MealComment.id == Notification.comment_id)
+            .where(Notification.user_id == user.id, notification_visible())
+            .order_by(Notification.id.desc())
+            .limit(NOTIFICATIONS_SHOWN)
+        )
+    ).all()
+    return NotificationsResponse(
+        items=[
+            NotificationItem(
+                id=note.id,
+                type=note.type,
+                actor_name=actor_name,
+                meal=(
+                    None
+                    if note.meal_id is None or meal_type is None or eaten_at is None
+                    else NotificationMeal(id=note.meal_id, meal_type=meal_type, eaten_at=eaten_at)
+                ),
+                comment_preview=_preview(body),
+                created_at=note.created_at,
+                is_read=note.read_at is not None,
+            )
+            for note, actor_name, meal_type, eaten_at, body in rows
+        ]
+    )
+
+
+async def _unread(db: AsyncSession, user_id: int) -> int:
+    count = await db.scalar(
+        select(func.count())
+        .select_from(Notification)
+        .where(
+            Notification.user_id == user_id,
+            Notification.read_at.is_(None),
+            notification_visible(),
+        )
+    )
+    return count or 0
+
+
+@router.get("/unread-count", response_model=UnreadCount)
+async def unread_count(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UnreadCount:
+    """分頁上的數字。跟清單同一個過濾，但不受 50 則的上限影響。"""
+    return UnreadCount(count=await _unread(db, user.id))
+
+
+@router.post("/read-all", response_model=UnreadCount)
+async def read_all(
+    payload: ReadAllRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UnreadCount:
+    """把我的、`id <= up_to`、還沒讀的標成已讀；回剩下的未讀數。
+
+    不套可見性的過濾：現在看不到的（對方已經解除好友）一起標掉沒有壞處。"""
+    await db.execute(
+        update(Notification)
+        .where(
+            Notification.user_id == user.id,
+            Notification.id <= payload.up_to,
+            Notification.read_at.is_(None),
+        )
+        .values(read_at=func.now())
+    )
+    await db.commit()
+    return UnreadCount(count=await _unread(db, user.id))
+```
+
+- [ ] **Step 5：跑。** `./.venv/Scripts/python.exe -m pytest -q -W error tests/test_notifications.py tests/test_social_likes.py tests/test_social_comments.py tests/test_social_likes_concurrency.py tests/test_friend_meals.py`
+Expected：`test_notifications.py` **20 passed**（寫入 1＋1＋1＋1＋2＋1；消失 1＋1＋1；上限 1；已讀 1＋1＋1＋5＋1）；其餘照舊。`eaten_at` 的字串如果是 `+00:00` 結尾而不是 `Z`，照實改測試裡的那一個字串。
+
+- [ ] **Step 6：突變。**
+
+| 突變 | 該紅的 |
+|---|---|
+| `like_meal` 拿掉 `if inserted is not None`（沒新增也通知） | 並行那一條（`notes == 1`） |
+| `notify_like` 的 `.on_conflict_do_nothing()` 拿掉 | **預期存活**：有上面那個 `if`，經過端點寫不出「讚是新的、通知已經在」的狀態。它是第二道防線（哪天有別的路徑寫通知），照實記 |
+| 兩個一起拿掉 | `test_liking_twice…`（`uq_notifications_like` 擋成例外） |
+| `unlike_meal` 不呼叫 `forget_like` | `test_liking_twice…`（收回之後還在） |
+| `forget_like` 拿掉 `type == LIKE`；拿掉 `actor_id == …` | `test_unliking_only_removes_my_like_notification`（留言的通知、小卡的讚也被刪） |
+| `notify_comment`／`notify_like` 拿掉 `owner_id == actor_id` 的 return | `test_a_comment_tells_only_the_owner`（CHECK `not_self` 擋成例外——照實記）；讚那一個沒有路徑走得到（主人按讚先 422），**預期存活** |
+| `notify_comment` 的 `user_id=owner_id` 改成通知所有留過言的人 | 不用做——`test_a_comment_tells_only_the_owner` 的小卡那一半守著 |
+| `notification_visible` 的 `_are_friends(*pair)` 換成 `true()` | `test_unfriending_hides_their_notifications…` |
+| `list_notifications` 拿掉 `Notification.user_id == user.id` | `test_a_like_tells_the_owner_and_nobody_else`（鮑伯也看到） |
+| `.order_by(Notification.id.desc())` 改 `.asc()`；`NOTIFICATIONS_SHOWN = 51` | `test_the_latest_fifty_newest_first` |
+| `_unread` 拿掉 `read_at.is_(None)`；拿掉 `notification_visible()` | `test_read_all_marks…`；`test_unfriending_hides…` |
+| `PREVIEW_LENGTH = 41`；`<=` 改 `<` | `test_the_preview…[41]`；`[40]` |
+| `read_all` 拿掉 `id <= payload.up_to`；拿掉 `user_id == user.id`；拿掉 `read_at.is_(None)` | `test_read_all_marks…`；`…cannot_touch_someone_elses`；`test_reading_again_does_not_restamp…` |
+| `ReadAllRequest` 的 `gt=0` 拿掉；`lt=2**63` 拿掉 | `test_read_all_validates_its_body[zero]`、`[negative]`；`[too-big]`（asyncpg 的 `DataError` 冒出來） |
+
+- [ ] **Step 7：`schema.d.ts`、整套、commit。** 重新產生（三條路徑、五個 schema）→ `cd frontend && npm run -s typecheck`。
+
+```bash
+./.venv/Scripts/python.exe -m pytest -q -W error && ./.venv/Scripts/python.exe -m ruff check . && ./.venv/Scripts/python.exe -m mypy app
+git add app/notifications.py app/api/routes/notifications.py app/social_visibility.py app/schemas/social.py app/api/routes/social.py app/main.py tests/test_notifications.py tests/test_social_likes_concurrency.py frontend/src/api/schema.d.ts
+git commit -F "$S/social-plan-task5-msg.txt"   # feat(backend): 通知——讚與留言寫給餐的主人；清單、未讀數、已讀
+```
+
+---
+
+## Task 6：後端——好友邀請與接受的通知
+
+這個 task 可以整個不做（規格 D14 是「便宜才做」）：不做的話前端 Task 10 的四種文字少兩種，其餘不受影響。做的話只動 `friends.py` 的兩個函式。
+
+**Files:**
+- Modify: `app/notifications.py`、`app/api/routes/friends.py`、`tests/test_notifications.py`
+
+- [ ] **Step 1：測試。** `tests/test_notifications.py` 檔尾加（import `format_friend_code`）：
+
+```python
+# ---------- 好友的通知（規格 D14、§5.7） ----------
+
+
+async def _send_request(client, sender, target):
+    response = await client.post(
+        "/api/friends/requests",
+        headers=auth(sender),
+        json={"code": format_friend_code(target.friend_code)},
+    )
+    assert response.status_code in (200, 201), response.text
+    return response
+
+
+async def _pending_id(client, user, box: str, other) -> int:
+    """`user` 的收件匣（incoming）或寄件匣（outgoing）裡，跟 `other` 的那一個邀請。
+    用人去找：`make_cast` 裡阿丁給愛麗絲的邀請一直都在。"""
+    requests = (await client.get("/api/friends/requests", headers=auth(user))).json()
+    [request] = [r for r in requests[box] if r["person"]["id"] == other.id]
+    return request["id"]
+
+
+async def test_a_friend_request_tells_the_receiver(client, cast):
+    await _send_request(client, cast.eve, cast.alice)
+
+    [item] = await _inbox(client, cast.alice)
+    assert (item["type"], item["actor_name"], item["meal"], item["comment_preview"]) == (
+        "friend_request", "伊芙", None, None,
+    )
+    assert await _inbox(client, cast.eve) == []
+
+
+async def test_accepting_tells_the_sender_and_retires_the_request_notice(client, cast):
+    await _send_request(client, cast.eve, cast.alice)
+    request_id = await _pending_id(client, cast.alice, "incoming", cast.eve)
+
+    accepted = await client.post(
+        f"/api/friends/requests/{request_id}/accept", headers=auth(cast.alice)
+    )
+
+    assert accepted.status_code == 200
+    assert _who_did_what(await _inbox(client, cast.eve)) == [("愛麗絲", "friend_accepted")]
+    # 邀請不在等了：收件人那一則不再顯示，未讀數也不算它。
+    assert await _inbox(client, cast.alice) == []
+    assert await _unread(client, cast.alice) == 0
+
+
+@pytest.mark.parametrize(
+    ("who_deletes", "box", "other"),
+    [("alice", "incoming", "eve"), ("eve", "outgoing", "alice")],
+)
+async def test_rejecting_or_withdrawing_hides_the_request_notice(
+    client, cast, who_deletes, box, other
+):
+    await _send_request(client, cast.eve, cast.alice)
+    assert len(await _inbox(client, cast.alice)) == 1
+    actor = getattr(cast, who_deletes)
+    request_id = await _pending_id(client, actor, box, getattr(cast, other))
+
+    deleted = await client.delete(f"/api/friends/requests/{request_id}", headers=auth(actor))
+
+    assert deleted.status_code == 204
+    assert await _inbox(client, cast.alice) == []
+
+
+async def test_sending_to_someone_who_already_asked_makes_friends_and_tells_them(client, cast):
+    """阿丁的邀請還在等（`make_cast`）；愛麗絲用他的好友碼送邀請 → 直接成立。"""
+    response = await _send_request(client, cast.alice, cast.dan)
+
+    assert response.json()["status"] == "accepted"
+    assert _who_did_what(await _inbox(client, cast.dan)) == [("愛麗絲", "friend_accepted")]
+    assert await _inbox(client, cast.alice) == []
+
+
+async def test_asking_again_after_a_rejection_leaves_one_fresh_notice(client, db_session, cast):
+    await _send_request(client, cast.eve, cast.alice)
+    [first] = await _inbox(client, cast.alice)
+    await client.post(
+        "/api/notifications/read-all", headers=auth(cast.alice), json={"up_to": first["id"]}
+    )
+    request_id = await _pending_id(client, cast.alice, "incoming", cast.eve)
+    await client.delete(f"/api/friends/requests/{request_id}", headers=auth(cast.alice))
+
+    await _send_request(client, cast.eve, cast.alice)
+
+    [again] = await _inbox(client, cast.alice)  # 一則，不是兩則
+    assert again["id"] != first["id"] and again["is_read"] is False
+    total = await db_session.scalar(select(func.count()).select_from(Notification))
+    assert total == 1
+
+
+async def test_unfriending_hides_the_accepted_notice(client, db_session, cast):
+    await _send_request(client, cast.eve, cast.alice)
+    request_id = await _pending_id(client, cast.alice, "incoming", cast.eve)
+    await client.post(f"/api/friends/requests/{request_id}/accept", headers=auth(cast.alice))
+    assert len(await _inbox(client, cast.eve)) == 1
+
+    await unfriend(db_session, cast.alice, cast.eve)
+
+    assert await _inbox(client, cast.eve) == []
+
+
+async def test_becoming_friends_again_keeps_their_older_notifications(client, db_session, cast):
+    """好友通知「只留最新一則」的那個 DELETE 不能掃到讚與留言的通知。"""
+    await _like(client, cast.bob, cast.meal)
+    await unfriend(db_session, cast.alice, cast.bob)
+    await _send_request(client, cast.bob, cast.alice)
+    request_id = await _pending_id(client, cast.alice, "incoming", cast.bob)
+    await client.post(f"/api/friends/requests/{request_id}/accept", headers=auth(cast.alice))
+
+    assert _who_did_what(await _inbox(client, cast.alice)) == [("鮑伯", "like")]
+```
+
+Run → Expected：FAIL（清單是空的）。
+
+- [ ] **Step 2：實作。** `app/notifications.py` 加：
+
+```python
+_FRIEND_TYPES = (NotificationType.FRIEND_REQUEST, NotificationType.FRIEND_ACCEPTED)
+
+
+async def notify_friend(
+    db: AsyncSession, *, to: int, actor: int, kind: NotificationType
+) -> None:
+    """好友邀請（`to` 收到 `actor` 的邀請）或接受（`actor` 接受了 `to` 的邀請）。
+
+    先刪掉同一個方向的舊好友通知：拒絕之後再邀請、解除之後再加回來，都只有最新的一則。"""
+    await db.execute(
+        delete(Notification).where(
+            Notification.user_id == to,
+            Notification.actor_id == actor,
+            Notification.type.in_(_FRIEND_TYPES),
+        )
+    )
+    db.add(Notification(user_id=to, actor_id=actor, type=kind))
+```
+
+`app/api/routes/friends.py`（import `notify_friend`、`NotificationType`）：
+
+```python
+# _insert_request：try 區塊改成
+    try:
+        # 先 flush 讓唯一約束說話：下面的 DELETE 會觸發 autoflush，IntegrityError 要落在這個 try 裡。
+        await db.flush()
+        await notify_friend(
+            db,
+            to=user_b if requested_by == user_a else user_a,
+            actor=requested_by,
+            kind=NotificationType.FRIEND_REQUEST,
+        )
+        await db.commit()
+    except IntegrityError:
+        # （原本的處理不動）
+
+# _accept：`accepted_at, user_a, user_b = row` 之後、return 之前
+    other_id = user_b if user_a == receiver_id else user_a
+    # 跟接受在同一個交易：呼叫端 commit 才成立，接受落空（rollback）就不會留下通知。
+    await notify_friend(
+        db, to=other_id, actor=receiver_id, kind=NotificationType.FRIEND_ACCEPTED
+    )
+    return _Accepted(since=accepted_at, other_id=other_id)
+```
+
+- [ ] **Step 3：跑。** `./.venv/Scripts/python.exe -m pytest -q -W error tests/test_notifications.py tests/test_friend_requests.py tests/test_friend_meals.py`
+Expected：`test_notifications.py` **28 passed**（20＋8）；`test_friend_requests.py` **一條都不能紅**——它有三條用 monkeypatch 建構競態的測試（`_load_pair` 第一次看不到、`_accept` 落空），`_insert_request` 的 `IntegrityError` 路徑變了就會在那裡現形。掃描測試照舊綠（`friends.py` 本來就在兩份名單裡）。
+
+- [ ] **Step 4：突變。**
+
+| 突變 | 該紅的 |
+|---|---|
+| `_insert_request` 的 `to=` 寫反（通知寄給送邀請的人） | `test_a_friend_request_tells_the_receiver`（CHECK `not_self` 擋成例外——照實記） |
+| `_insert_request` 拿掉 `await db.flush()` | `test_friend_requests.py` 的並行互送那一條**可能仍然綠**（autoflush 的例外也落在 try 裡）——那行是讓順序明確，不是唯一的保證；照實記 |
+| `notify_friend` 拿掉前面的 `delete` | `test_asking_again_after_a_rejection…` |
+| `delete` 拿掉 `type.in_(…)` | `test_becoming_friends_again_keeps_their_older_notifications` |
+| `_accept` 不寫通知 | `test_accepting_tells_the_sender…`、`test_sending_to_someone_who_already_asked…` |
+| `notification_visible` 的 `still_pending` 拿掉 `requested_by == actor_id` | **預期存活**（一對人只有一列 pending，方向不對的通知寫不出來）；照實記 |
+| `still_pending` 的 `PENDING` 改成 `ACCEPTED` | `test_a_friend_request_tells_the_receiver`、`test_accepting_tells_the_sender…` |
+
+- [ ] **Step 5：整套、commit。** 這個 task 動了 `routes/friends.py`（沒有改 docstring 的話 `schema.d.ts` 不會變——**照樣重新產生一次**確認 `git diff --stat frontend/src/api/schema.d.ts` 是空的）。
+
+```bash
+./.venv/Scripts/python.exe -m pytest -q -W error && ./.venv/Scripts/python.exe -m ruff check . && ./.venv/Scripts/python.exe -m mypy app
+git add app/notifications.py app/api/routes/friends.py tests/test_notifications.py
+git commit -F "$S/social-plan-task6-msg.txt"   # feat(backend): 好友邀請與接受也有通知
+```
+
+後端到這裡做完。量一次：`./.venv/Scripts/python.exe -m pytest -q -W error` 的條數、`grep -c "@router\." app/api/routes/*.py` 的加總（Expected：79＋8＝**87**），記下來給 Task 12。
+
+---
+
