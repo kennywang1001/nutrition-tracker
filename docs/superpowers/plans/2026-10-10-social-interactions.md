@@ -420,6 +420,71 @@
 - **截圖時量到的觸控目標（390×844）**：讚 49×44、「留言 N」44×44、送出 62×44、留言框 264×44、刪除 44×44、確定刪除 94×44、編輯 48×44、好友的名字 45×44、回飲食 82×46、通知的一列 334×60、看通知 48×44、分頁的「我的」78×56。
 - **Task 12（文件）要寫的：** 前端 152／2083；新的路由 `/meals/:id`、`/notifications`（都是 `narrow`，`lib/layout.ts` 沒有動）；`api/social.ts` 多了 `refreshIfMealGone`；`queryKeys.socialMeals`；`nav-tabs.ts` 的 `UNREAD_TAB`、`unreadBadgeText`。已知限制要改寫的一條：「自己的餐點清單上的數字最多慢 60 秒」現在是「未讀數變多時會重抓；**對方收回讚、刪掉留言**時仍然要等那一頁下一次重抓（最多 60 秒，或重新整理）」。另外加兩條：餐點頁的照片是裁成 4:3 的縮圖；`/notifications` 不在任何一個分頁底下（在那一頁時分頁列沒有亮的那一格）。handover §7 的表格可以加：`invalidateQueries` 對「還沒有資料、正在抓」的 query 會併進同一個請求，對有資料的是取消重抓；`PersistQueryClientProvider` 還原期間 observer 不訂閱（所以掛載那一刻的失效不會多一個請求）；effect 的依賴沒變就不會再跑——「下一次再試」要有一個每次都會變的依賴（`dataUpdatedAt`）。
 
+**Task 11 的數字與工具**
+
+- e2e：47 → **50 條、20 個檔案**（`social.spec.ts` 三條；計畫寫的是一條、48）。整套用預設的 workers（6）連跑兩次：`50 passed (36.2s)`、`50 passed (33.0s)`；`friends.spec.ts` 也在裡面，綠的。`social.spec.ts` 單獨跑約 8 秒，`--repeat-each=3` 全綠。前端仍然是 152／2083，後端沒有動。
+- 開跑前：`docker compose up -d --build api`，再 `docker compose exec -T api python -m alembic upgrade head`（dev 已經在 `0018`，沒有東西要跑；`alembic current` 是 `0018 (head)`）。
+- 日誌：兩次整套跑完之後 `docker compose logs api --since 20m | grep 重用` 是 **0 行**（那 20 分鐘的日誌 2699 行，也沒有 `WARNING`／`ERROR`）。api 容器在跑整套之前才因為後端的突變重建過，所以這 20 分鐘就是這個容器的全部。
+- 突變用 scratchpad 的 `social-e2e-mutate.py`：改 bytes →（後端的 `docker compose up -d --build api`、等 healthy）→ 跑 `social.spec.ts` → 寫回原本的 bytes、比對；後端那幾個跑完再重建一次回到原本的映像。每批最多四個，在前景跑（被砍的時候最多留下一個檔案的一行）。跑的時候沒有別的行程在用 dev server。
+- **每跑一次 `social.spec.ts`，dev 資料庫多 7 個帳號**（`e2e.social-a.*`、`-b`、`-c`、`social-owner`、`social-stranger`、`social-wide-a`、`-b`），三個私人食物、三餐、幾列讚／留言／通知。沒有動任何示範帳號。
+
+**Task 11（`026b20f`、`915011c`、`ce7c9de`）**
+
+| 原本寫的 | 實際 | 為什麼 |
+|---|---|---|
+| 一條測試 | **三條**：兩個人的整圈（手機）、陌生人用網址開不了、電腦版 | 陌生人那一條是執行時加的要求；電腦版是 Step 2 的「另外開一個 context 看一次」——分成自己一條，好友、讚、留言用 API 做（那一條量的是版面） |
+| `getByLabel("留言", { exact: true })`（四處） | `getByRole("textbox", { name: "寫留言", exact: true })` | Task 9 的提醒：「留言」是清單的名稱 |
+| 點留言那一則通知：`getByRole("link", { name: /^.*名字 在你的點心留言：/ })` | `清單.getByText("{名字} 在你的點心留言：{內容}", { exact: true })` | 句子自己一個元素，可以整句比對（連內容）；整列的名稱還帶「未讀」與跟語系走的時間 |
+| 數字不見：`not.toHaveAttribute("aria-describedby", /.+/)` | `toHaveAccessibleDescription("")` | 同一件事，跟前面「N 則新通知」的斷言同一個寫法 |
+| `go()` 用 `page.getByRole("link", { name: tab })` | 先縮到 `navigation`「主要導覽」 | 飲食頁有一個單選鈕也叫「我的」（不是連結，不會撞），餐點頁的標題是「我的點心」；縮起來不用逐頁想 |
+| 讚的按鈕直接 `pageB.getByRole("button", …)` | 先縮到卡片：`動態.getByRole("listitem").filter({ hasText: 食物 }).first()` | Task 8 的提醒（同名的按鈕）。`.first()`：卡片是外層的 `listitem`，裡面每一項食物也是 `listitem`，兩個都含食物的名字 |
+| B 的結尾：回飲食 → 好友 → 「還沒有好友」 | B **留在那一餐的頁面上**，A 解除之後 B 按讚 → 整頁換成「看不到這一餐」→「回飲食」→ 好友 →「還沒有好友」 | Task 9 做的 `refreshIfMealGone` 只有 e2e 看得到兩邊真的接起來；「回飲食」順便量觸控目標 |
+| A 解除之後：`說讚` 與 `1 個讚` 都 `toHaveCount(0)` | 解除之前**多一個人 C**（API：加 A 為好友、按讚）；解除之後是「`C 說讚`」看得到、`1 個讚` 一個、整頁沒有 B 的名字 | 見下面「第一次跑存活的」 |
+| A 只在最後去飲食頁 | A 另外去兩次：B 動手之前（留言 0、沒有讚）、解除之前（留言 0、兩個讚） | 讓快取裡先有一份 60 秒內算新鮮的清單。這樣「未讀數變多時清單重抓」「解除時清單過期」才是讓數字變的唯一原因——只在最後去一次的話，那是第一次抓，兩個失效拿掉都是綠的 |
+| A 刪完留言就去解除 | 中間再開一次通知：剩兩列、沒有「未讀」、留言那一則不見了 | 「這一次還標著未讀、離開再回來才沒有」的後半；留言的通知跟著留言 cascade |
+| B 接受邀請之後沒有斷言 | 分頁上的數字歸零、卡片是「沒有新通知」 | Task 6 的提醒：那一則 `friend_request` 是不見，不是已讀——`FriendsCard` 要讓未讀數重抓 |
+| Step 2「有現成的清單就加（`touch-targets.spec.ts`）」 | 在這條 spec 裡量，`touch-targets.spec.ts` 沒有動 | 那個檔案沒有共用的清單，每條各量一個用示範帳號走得到的畫面；這裡的畫面要兩個人互動過才有東西 |
+| Step 2 的電腦版：「內容寬度是 `narrow`、側邊導覽的『我的』有標記」 | 照做，另外斷言已讀之後側邊的數字也不見、兩頁都沒有橫向捲軸 | — |
+| `seedMeal(request, owner, food)` 自己登入、不回東西 | `apiLogin` 另外一個函式；`seedMeal` 回餐的 id | 陌生人那一條要拿 id 組網址；C 的讚也要 |
+| 整套 `48 passed` | `50 passed` | 多兩條 |
+
+量到的觸控目標（390×844，`expectTouchTargets` 只量高度 ≥ 44）：好友卡片上的讚、名字、「留言 N」；自己卡片上的「留言 N」；餐點頁的讚、好友的名字、留言框、送出、自己留言的刪除、主人刪別人的留言、確認框的兩顆（確定刪除、取消）、編輯；「看不到這一餐」的「回飲食」；「我的」的「看通知」；通知的每一列；有未讀數字時分頁列的「我的」。
+
+陌生人那一條的寫法：兩個 context 各只有一次 `goto`，而且是**還沒登入**時直接打開 `/meals/{id}`——畫面是登入表單，登入之後留在那個網址（`App.tsx` 登入只是換外框，不導頁）。主人先開一次同一個網址看得到（標題「我的點心」與食物），陌生人才開：只斷言看不到的話，網址組錯也會綠。
+
+突變（16 個；★＝要重建 api 映像）：
+
+| 突變 | 紅在哪 |
+|---|---|
+| ★ `read_social_meal` 的名單拿掉 `like_counts(…)`（計畫的第 1 個） | **第一次存活**（見下面）；補了 C 之後紅在「`C 說讚`」看不到（畫面上是「B、C 說讚」） |
+| ★ `notify_comment` 一律不寫（計畫的第 2 個） | 「3 則新通知」（收到 2）——手機那一條與電腦版那一條都紅 |
+| `Notifications.tsx` 不送已讀（計畫的第 3 個） | 打開通知頁之後的 `toHaveAccessibleDescription("")`（還是「3 則新通知」）——兩條都紅 |
+| `App.tsx` 換頁不讓未讀數失效（計畫的第 4 個） | B 的「1 則新通知」 |
+| `CommentForm` 的 `finally` 不把焦點放回輸入框（計畫的第 5 個） | 留言框的 `toBeFocused()` |
+| `App.tsx` 未讀數變多時不讓 `meals` 過期 | A 的卡片「留言 1 則」找不到 |
+| `Notifications.tsx` 已讀之後順便重抓清單 | 「未讀」三個（收到 0） |
+| `LikeButton.module.css` 的 `min-height: 44px` → `20px` | 「好友卡片上的讚」的高度（20） |
+| `NotificationsCard.module.css` 的 `min-height: 44px` → `20px` | 「『我的』的『看通知』」的高度（20） |
+| `refreshIfMealGone` 不做事 | B 按讚之後的標題「餐點」沒有出現 |
+| `FriendsCard` 接受之後不讓未讀數失效 | B 接受之後的 `toHaveAccessibleDescription("")`（還是「1 則新通知」） |
+| `forgetFriend` 不讓 `meals` 過期 | 解除之後卡片上的「1 個讚」（還是「2 個讚」） |
+| `SideNav` 不把未讀數傳給「我的」 | 電腦版的「3 則新通知」 |
+| `contentWidthFor` 的預設值改成 `wide` | 電腦版通知頁的內容寬度（1032） |
+| ★ `meal_visible_to` 拿掉好友的條件（公開的餐誰都看得到） | 陌生人那一條的標題「餐點」；手機那一條 B 按讚之後的標題「餐點」（讚成功了） |
+| ★ `social_counts` 的讚拿掉 `like_counts(…)` | 解除之後卡片上的「1 個讚」（還是 2） |
+
+第一次跑存活的（已補）：
+
+- **名單不過濾前好友**。計畫預測紅在「`說讚` 的 `toHaveCount(0)`」；實際全綠。原因是 Task 9 的「主人而且還沒有人按讚時整列不畫」：解除之後 `like_count`（另一個查詢、有過濾）是 0，那一列連同名單根本不在畫面上——名單裡有沒有 B 看不出來。「開工前必讀」第 3 點的同一件事（要測 A 過濾，資料必須讓 B 過濾無效），這次遮住它的是**畫面**的條件。補法：多一個也按了讚的好友 C，解除 B 之後那一列還在。
+
+**沒有測試守住的事（Task 11，已知）**
+
+- 解除好友時餐點頁的快取整個拿掉（`forgetFriend` 的 `removeQueries(socialMeals)`）：e2e 守不到——餐點頁 `staleTime: 0`，留著舊的也會馬上被重抓的蓋掉，`toHaveCount(0)` 等得到。單元測試（`friends-card.test.tsx`）守。
+- 未讀數「回到視窗重抓」「每 60 秒一次」：e2e 走的都是換頁那一條。
+- 觸控目標只量高度；寬度與排列沒有量。
+- 陌生人那一條只有「不是好友」一格；邀請中、解除之後、私人的餐在後端的表格化測試裡（`test_social_meal.py`）。解除之後那一格在第一條 e2e 有（B 按讚 404）。
+- 10 則以上的「9+」、留言的字數提示、429：都只在單元測試。
+
 ## 檔案結構
 
 | 檔案 | Task | 內容 |
