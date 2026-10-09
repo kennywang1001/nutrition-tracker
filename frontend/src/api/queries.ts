@@ -120,6 +120,9 @@ export const queryKeys = {
 	 *  存進 localStorage——別人的名字與留言不留在這台裝置上（社群規格 D21）。
 	 *  新的社群 query 也放這裡；要離線可用的請放別的命名空間。 */
 	socialMeal: (mealId: number) => ["social", "meal", mealId] as const,
+	/** 每一餐的餐點頁（`socialMeal` 的前綴）：解除好友時整組移除——手上只有好友的 id，
+	 *  不知道快取裡哪幾餐是他的、哪幾餐底下有他的留言。 */
+	socialMeals: ["social", "meal"] as const,
 	notifications: ["social", "notifications"] as const,
 	unreadCount: ["social", "unread"] as const,
 	/** 某個月的花費清單。`month` 是 `"YYYY-MM"`，或 `null` 代表

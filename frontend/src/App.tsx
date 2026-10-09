@@ -38,6 +38,7 @@ import { Join, JoinWhileLoggedIn } from "./screens/Join";
 import { Login } from "./screens/Login";
 import { LogMeal, PHOTO_UPLOAD_FAILED_NOTICE } from "./screens/LogMeal";
 import { Me } from "./screens/Me";
+import { MealDetail } from "./screens/MealDetail";
 import { NewFood } from "./screens/NewFood";
 import { Overview } from "./screens/Overview";
 import {
@@ -203,6 +204,10 @@ export function App() {
 							{/* 修改或刪除一筆已經記下的餐（編輯餐點規格 §4.2）。入口：飲食頁
 									餐點卡片的「編輯」、總覽時間線的餐點列。 */}
 							<Route path="/meals/:id/edit" element={<EditMeal />} />
+							{/* 一餐的唯讀畫面，底下是讚與留言（社群規格 §6.3）：自己的餐與看得到的
+									好友的餐都能開。入口：兩種卡片上的「留言 N」、通知。`/meals/new`
+									仍然命中上面靜態的那一條（react-router 依具體程度排名）。 */}
+							<Route path="/meals/:id" element={<MealDetail />} />
 							{/* 舊網址轉址（規格 §3.3）：手機上可能有書籤或 PWA 的舊
 									狀態。`replace`：上一頁不會回到一個只會再轉走的網址。 */}
 							<Route path="/today" element={<Navigate to="/diet" replace />} />

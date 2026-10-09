@@ -931,6 +931,66 @@ describe("App 的電腦版外框（電腦版版面規格 §3）", () => {
 		).not.toBeNull();
 	});
 
+	it("/meals/7 是餐點頁（唯讀的一餐與留言），窄的內容寬度；/meals/new 仍然是記一餐", async () => {
+		// 路由的接線只有 App 層看得到：兩種卡片上的「留言 N」連到 /meals/:id
+		// （社群規格 §6.3）。`/meals/new` 與 `/meals/:id` 長得一樣，靠 react-router
+		// 的排名分（靜態的比動態的具體）。
+		setDesktop(true);
+		const spy = mockBackend((url) =>
+			url.includes("/api/social/meals/7")
+				? jsonResponse({
+						meal: {
+							id: 7,
+							user: { id: 1, display_name: "Kenny" },
+							eaten_at: "2026-10-02T04:00:00Z",
+							meal_type: "lunch",
+							description: null,
+							items: [],
+							kcal: "0.00",
+							protein_g: "0.00",
+							fat_g: "0.00",
+							carb_g: "0.00",
+							has_photo: false,
+							like_count: 0,
+							comment_count: 0,
+							liked_by_me: false,
+						},
+						is_mine: true,
+						likes: [],
+						comments: [],
+						comments_truncated: false,
+					})
+				: undefined,
+		);
+		window.history.replaceState(null, "", "/meals/7");
+		const { unmount } = render(<App />);
+
+		expect(
+			await screen.findByRole("heading", { level: 1, name: "我的午餐" }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("heading", { level: 2, name: "留言（0）" }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("main").querySelector(".app-content-narrow"),
+		).not.toBeNull();
+		unmount();
+
+		spy.mockClear();
+		window.history.replaceState(null, "", "/meals/new");
+		render(<App />);
+
+		expect(
+			await screen.findByRole("heading", { level: 1, name: "記一餐" }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("main").querySelector(".app-content-form"),
+		).not.toBeNull();
+		expect(
+			spy.mock.calls.some(([url]) => String(url).includes("/api/social/")),
+		).toBe(false);
+	});
+
 	it("視窗從寬拉窄：換回手機版（沒有 app-desktop，記帳頁沒有導覽）", async () => {
 		setDesktop(true);
 		mockBackend();

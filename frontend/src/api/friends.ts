@@ -127,11 +127,19 @@ export function useFriendDay(friendId: number, day: string | null) {
 }
 
 /** 解除好友之後：這個人的好友資料一律**移除**，不是失效——失效只會標成過期，
- *  資料還在快取與 localStorage 裡（規格 §5.3）。動態整個移除（它混著所有好友）。 */
+ *  資料還在快取與 localStorage 裡（規格 §5.3）。動態整個移除（它混著所有好友）。
+ *
+ *  餐點頁的快取也整組移除（社群規格 §6.3）：他的餐看不到了，而我的餐、共同好友的餐
+ *  底下還留著他的名字、讚與留言。通知與未讀數重抓（他的通知後端不再回）；自己的餐點
+ *  清單重抓（上面的讚與留言數少了他的）。 */
 export function forgetFriend(queryClient: QueryClient, friendId: number): void {
 	queryClient.removeQueries({ queryKey: queryKeys.friendFeed });
 	queryClient.removeQueries({ queryKey: queryKeys.friendDayAll(friendId) });
 	queryClient.removeQueries({ queryKey: queryKeys.friendPhotos(friendId) });
+	queryClient.removeQueries({ queryKey: queryKeys.socialMeals });
 	void queryClient.invalidateQueries({ queryKey: queryKeys.friends });
 	void queryClient.invalidateQueries({ queryKey: queryKeys.friendRequests });
+	void queryClient.invalidateQueries({ queryKey: queryKeys.notifications });
+	void queryClient.invalidateQueries({ queryKey: queryKeys.unreadCount });
+	void queryClient.invalidateQueries({ queryKey: queryKeys.meals });
 }

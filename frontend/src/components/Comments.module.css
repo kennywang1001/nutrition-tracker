@@ -1,0 +1,125 @@
+/* 留言的清單與輸入框（CommentList、CommentForm）。放在餐點頁的 ui.screen 底下：
+   li 的分隔線、p 的 margin、按鈕與輸入框的基本樣子從那裡來（權重 0）。 */
+
+/* 「只顯示最近 100 則」「還沒有留言」。 */
+.note {
+	color: var(--color-text-muted);
+	font-size: 13px;
+}
+
+.list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+/* 名字、時間、（能刪的）刪除鈕在同一列。 */
+.meta {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-2);
+}
+
+.author {
+	font-size: 14px;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+.when {
+	flex: none;
+	color: var(--color-text-muted);
+	font-size: 12px;
+}
+
+/* 「刪除」：文字按鈕，靠右。觸控目標 44px，但上下往外退——不然有刪除鈕的那一列
+   比沒有的高一截。退出去的部分疊在這一列自己的內距與下面的內文上（內文不能按）。 */
+.delete {
+	flex: none;
+	align-self: center;
+	min-width: 44px;
+	min-height: 44px;
+	margin: calc(-1 * var(--space-3)) calc(-1 * var(--space-2))
+		calc(-1 * var(--space-3)) auto;
+	padding: 0 var(--space-2);
+	border: 0;
+	background: none;
+	color: var(--color-danger);
+	font-size: 13px;
+	font-weight: 600;
+}
+
+/* 留言的內容：別人打的字，可能很長、可能沒有空白可以斷行。 */
+.body {
+	overflow-wrap: anywhere;
+}
+
+/* 行內的確認：問句一整列，下面兩顆按鈕。 */
+.confirm {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2);
+	margin-top: var(--space-2);
+}
+
+.confirm p {
+	flex-basis: 100%;
+	font-size: 14px;
+}
+
+/* 送出中：看起來停用，但還收得到焦點（aria-disabled，見 CommentList.tsx）。 */
+.confirmDelete[aria-disabled="true"],
+.submit[aria-disabled="true"] {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
+.error {
+	color: var(--color-danger);
+	font-size: 13px;
+}
+
+/* 留言框：標籤、輸入框與送出鍵一列、下面是提示與訊息。
+   class 的權重贏過 ui.screen 給 form 的通用排法（gap 會讓空的提示也佔一格）。 */
+.form {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	margin-top: var(--space-3);
+}
+
+.row {
+	display: flex;
+	gap: var(--space-2);
+}
+
+.row input {
+	flex: 1;
+	min-width: 0;
+}
+
+.submit {
+	flex: none;
+}
+
+/* 提示、錯誤、「已送出」。先留一行的高度：提示在剩 20 個字時才冒出來，
+   不留的話卡片會在打字打到一半的時候長高一截。 */
+.feedback {
+	min-height: 20px;
+}
+
+/* 還沒有字的提示不佔位置（它一直都在 DOM 裡：輸入框的 aria-describedby 指著它）。 */
+.feedback p:empty {
+	display: none;
+}
+
+.hint {
+	color: var(--color-text-muted);
+	font-size: 13px;
+}
+
+.over {
+	color: var(--color-danger);
+	font-size: 13px;
+}

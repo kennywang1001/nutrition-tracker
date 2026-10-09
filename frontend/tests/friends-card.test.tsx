@@ -303,6 +303,19 @@ describe("好友卡片", () => {
 		// 看過的其他日期也要移除——不是只移除「今天」那一個 key。
 		client.setQueryData(queryKeys.friendDay(2, "2026-10-05"), { meals: [] });
 		client.setQueryData(queryKeys.friendPhoto(2, 7), new Blob());
+		// 餐點頁的快取（社群規格 §6.3）：他的餐，還有我自己的餐——底下可能有他的留言。
+		client.setQueryData(queryKeys.socialMeal(7), { comments: [] });
+		client.setQueryData(queryKeys.socialMeal(11), { comments: [] });
+		// 這三份留著但要重抓：他的通知後端不再回、我的餐上少了他的讚與留言。
+		const refreshed = [
+			queryKeys.notifications,
+			queryKeys.unreadCount,
+			queryKeys.meals,
+		] as const;
+		for (const key of refreshed) client.setQueryData<unknown>(key, []);
+		for (const key of refreshed) {
+			expect(client.getQueryState(key)?.isInvalidated).toBe(false);
+		}
 		// 另一個好友的資料不受影響。
 		const otherDay = { meals: [] };
 		const otherPhoto = new Blob();
@@ -337,7 +350,13 @@ describe("好友卡片", () => {
 				client.getQueryData(queryKeys.friendDay(2, "2026-10-05")),
 			).toBeUndefined();
 			expect(client.getQueryData(queryKeys.friendPhoto(2, 7))).toBeUndefined();
+			expect(client.getQueryData(queryKeys.socialMeal(7))).toBeUndefined();
+			expect(client.getQueryData(queryKeys.socialMeal(11))).toBeUndefined();
 		});
+		for (const key of refreshed) {
+			expect(client.getQueryData(key)).toEqual([]);
+			expect(client.getQueryState(key)?.isInvalidated).toBe(true);
+		}
 		expect(client.getQueryData(queryKeys.friendDay(9, null))).toBe(otherDay);
 		expect(client.getQueryData(queryKeys.friendPhoto(9, 1))).toBe(otherPhoto);
 	});

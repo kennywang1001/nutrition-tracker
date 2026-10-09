@@ -1,0 +1,173 @@
+/* 餐點頁（/meals/:id）。外層是 ui.screen：直接底下的 <section> 自動是卡片，
+   裡面的 li、p、button、input 的基本樣子也從那裡來（權重 0），這裡只寫不一樣的。 */
+
+/* 標題那一塊不是卡片（ui.screen 只把 section/form/fieldset/div/ul 當卡片）。 */
+.header {
+	display: flex;
+	flex-direction: column;
+}
+
+/* 標題在左、「編輯」在右（同飲食頁卡片的標題列）。 */
+.titleRow {
+	display: flex;
+	align-items: flex-end;
+	justify-content: space-between;
+	gap: var(--space-2);
+}
+
+.titleRow h1 {
+	overflow-wrap: anywhere;
+}
+
+.edit {
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+	padding: 0 var(--space-2);
+	color: var(--color-action);
+	font-weight: 600;
+	text-decoration: none;
+	/* 44px 的觸控目標比標題的字高：往下退，標題列不會被它撐高。 */
+	margin-bottom: calc(-1 * var(--space-2));
+}
+
+/* 誰的、什麼時候吃的。好友的名字是連結（44px 的觸控目標），所以這一列用 flex 對齊。 */
+.byline {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0 var(--space-2);
+	min-height: 44px;
+	color: var(--color-text-muted);
+	font-size: 13px;
+}
+
+.name {
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+	color: var(--color-action);
+	font-size: 15px;
+	font-weight: 700;
+	text-decoration: none;
+}
+
+/* 這一餐的內容。 */
+.meal {
+	display: flex;
+	flex-direction: column;
+}
+
+/* 描述：一句話，可能很長、可能沒有空白可以斷行。 */
+.description {
+	margin-bottom: var(--space-2);
+	overflow-wrap: anywhere;
+}
+
+/* 縮圖最寬 360px：電腦版的內容區有 600px 寬，拉滿的話一張方形照片就佔掉整個視窗；
+   要看大圖點下去（ZoomablePhoto）。手機上卡片比它窄，就是滿版。 */
+.photo {
+	max-width: 360px;
+	margin-bottom: var(--space-2);
+}
+
+.photo p {
+	color: var(--color-text-muted);
+	font-size: 13px;
+}
+
+/* 項目：名稱（粗）、份量（灰）、右邊是熱量。 */
+.items li {
+	display: flex;
+	align-items: baseline;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+.quantity {
+	/* flex 的子元素開頭的空白會被吃掉：「 · 350 g」前面的距離用 margin 補。 */
+	margin-left: var(--space-1);
+	flex: none;
+	color: var(--color-text-muted);
+	font-size: 13px;
+	font-weight: 400;
+	font-variant-numeric: tabular-nums;
+}
+
+.kcal {
+	flex: none;
+	margin-left: auto;
+	padding-left: var(--space-3);
+	color: var(--color-text-muted);
+	font-size: 13px;
+	font-weight: 400;
+	font-variant-numeric: tabular-nums;
+}
+
+/* 合計：上面一條線跟項目分開。 */
+.total {
+	padding-top: var(--space-2);
+	border-top: 1px solid var(--color-border);
+	font-size: 14px;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+/* 讚與「誰按了讚」。會換行：LikeButton 失敗時的錯誤訊息（flex-basis: 100%）落在下面。
+   下緣往外退一點：44px 的按鈕比字高，不退的話卡片底下比上面空。 */
+.social {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0 var(--space-2);
+	margin-top: var(--space-1);
+	margin-bottom: calc(-1 * var(--space-2));
+	min-height: 44px;
+}
+
+/* 主人看到的「♥ N」：只是數字，不能按——實心的愛心（空心的像一顆還沒按的按鈕）。 */
+.likes {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
+	color: var(--color-text-muted);
+	font-variant-numeric: tabular-nums;
+}
+
+.likes svg {
+	fill: currentColor;
+}
+
+.likers {
+	flex: 1;
+	min-width: 0;
+	color: var(--color-text-muted);
+	font-size: 13px;
+	overflow-wrap: anywhere;
+}
+
+/* 留言的標題：刪掉一則之後焦點會移到這裡（tabIndex=-1）。它不是一顆按鈕，
+   用程式移過來的焦點不畫框。 */
+.commentsTitle:focus {
+	outline: none;
+}
+
+/* 看不到這一餐（404）。 */
+.goneTitle {
+	margin: var(--space-3) 0 var(--space-1);
+	font-weight: 600;
+}
+
+.goneWhy {
+	margin: 0 0 var(--space-2);
+	color: var(--color-text-muted);
+	font-size: 14px;
+}
+
+.back {
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+	font-weight: 600;
+}
