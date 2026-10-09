@@ -85,7 +85,7 @@
 | `app/api/routes/meals.py`、`app/schemas/meal.py` | 3 | `MealResponse` 多兩個數字 |
 | `app/notifications.py`（新） | 5、6 | 寫通知的三個函式 |
 | `app/api/routes/notifications.py`（新） | 5 | `/api/notifications` 三個端點 |
-| `tests/test_social_meal.py`、`test_social_likes.py`、`test_social_likes_concurrency.py`、`test_social_comments.py`、`test_notifications.py`（新）、`tests/test_friend_meals.py`、`tests/test_friend_requests.py` | 2–6 | |
+| `tests/social_helpers.py`、`test_social_meal.py`、`test_social_likes.py`、`test_social_likes_concurrency.py`、`test_social_comments.py`、`test_notifications.py`（新）、`tests/test_friend_meals.py`、`tests/test_friend_requests.py` | 2–6 | |
 | `frontend/src/api/schema.d.ts` | 2–6 | 每個後端 task 重新產生 |
 | `frontend/src/api/{social,notifications}.ts`（新）、`queries.ts`、`persist.ts` | 7 | API 層 |
 | `frontend/src/components/LikeButton.tsx`（新）、`FriendMealCard.tsx`、`screens/MealList.tsx`、`ui.module.css` | 8 | |
@@ -616,7 +616,7 @@ git commit -F "$S/social-plan-task1-msg.txt"   # feat(backend): 讚、留言、�
 ## Task 2：後端——可見性模組、`FriendMeal` 的組法搬家、單一餐點的讀取
 
 **Files:**
-- Create: `app/social_visibility.py`、`app/friend_meals.py`、`app/schemas/social.py`、`app/api/routes/social.py`、`tests/test_social_meal.py`
+- Create: `app/social_visibility.py`、`app/friend_meals.py`、`app/schemas/social.py`、`app/api/routes/social.py`、`tests/social_helpers.py`、`tests/test_social_meal.py`
 - Modify: `app/schemas/friend.py`、`app/api/routes/friends.py`、`app/main.py`、`tests/test_friend_meals.py`、`frontend/src/api/schema.d.ts`
 
 - [ ] **Step 1：`app/social_visibility.py`**（整份；寫計畫時對真的資料庫跑過）：
@@ -947,27 +947,26 @@ def test_only_the_social_modules_widen_who_can_read_a_meal():
     assert offenders == []
 ```
 
-- [ ] **Step 6：`tests/test_social_meal.py`。**
+- [ ] **Step 6：`tests/social_helpers.py` 與 `tests/test_social_meal.py`。** 這一組人之後四個測試檔都要用，所以放在一個普通的模組裡（不是 `conftest.py`：只有社群的測試需要）。
+
+`tests/social_helpers.py`：
 
 ```python
-"""`GET /api/social/meals/{id}`：誰看得到一餐、看到什麼（社群規格 §4.1、§4.2、§5.1）。"""
+"""社群測試共用的一組人與小工具。"""
 
 from datetime import datetime
 from decimal import Decimal
 from types import SimpleNamespace
 
-import pytest
-from sqlalchemy import event
+from sqlalchemy import delete
 
 from app.models.food import FoodRevision
 from app.models.friendship import Friendship, FriendshipStatus
 from app.security.tokens import create_access_token
 from tests.factories import (
-    create_comment,
     create_expense,
     create_food,
     create_friendship,
-    create_like,
     create_meal,
     create_user,
 )
@@ -979,10 +978,10 @@ def auth(user):
     return {"Authorization": f"Bearer {create_access_token(user.id)}"}
 
 
-@pytest.fixture
-async def cast(db_session):
+async def make_cast(db_session) -> SimpleNamespace:
     """愛麗絲是主人。鮑伯與小卡是她的好友、**彼此不是**；阿丁的邀請還在等；伊芙是陌生人。
-    那一餐真的有餐費、備註、私人食物——「沒有外流」才不是空轉。"""
+    那一餐真的有餐費、備註、私人食物——「沒有外流」才不是空轉。
+    餐費刻意是 4321.75：短的數字（180）會剛好出現在 id 或熱量裡。"""
     alice, bob, carol, dan, eve = [
         await create_user(db_session, display_name=name)
         for name in ("愛麗絲", "鮑伯", "小卡", "阿丁", "伊芙")
@@ -1002,28 +1001,42 @@ async def cast(db_session):
     )
     await create_expense(db_session, user=alice, amount=Decimal("4321.75"), meal=meal)
     return SimpleNamespace(
-        alice=alice, bob=bob, carol=carol, dan=dan, eve=eve, meal=meal, revision=revision
+        alice=alice, bob=bob, carol=carol, dan=dan, eve=eve, meal=meal, food=food, revision=revision
     )
+
+
+async def unfriend(db_session, one, other) -> None:
+    user_a, user_b = sorted((one.id, other.id))
+    deleted = await db_session.scalar(
+        delete(Friendship)
+        .where(Friendship.user_a == user_a, Friendship.user_b == user_b)
+        .returning(Friendship.id)
+    )
+    assert deleted is not None  # 真的有東西可以解除
+    await db_session.commit()
+```
+
+`tests/test_social_meal.py`：
+
+```python
+"""`GET /api/social/meals/{id}`：誰看得到一餐、看到什麼（社群規格 §4.1、§4.2、§5.1）。"""
+
+from datetime import datetime
+
+import pytest
+from sqlalchemy import event
+
+from tests.factories import create_comment, create_friendship, create_like, create_meal
+from tests.social_helpers import MISSING, auth, make_cast, unfriend
+
+
+@pytest.fixture
+async def cast(db_session):
+    return await make_cast(db_session)
 
 
 async def _read(client, viewer, meal_id):
     return await client.get(f"/api/social/meals/{meal_id}", headers=auth(viewer))
-
-
-async def _unfriend(db_session, one, other):
-    user_a, user_b = sorted((one.id, other.id))
-    row = await db_session.scalar(
-        Friendship.__table__.select().where(
-            Friendship.user_a == user_a, Friendship.user_b == user_b
-        )
-    )
-    assert row is not None  # 真的有東西可以解除
-    await db_session.execute(
-        Friendship.__table__.delete().where(
-            Friendship.user_a == user_a, Friendship.user_b == user_b
-        )
-    )
-    await db_session.commit()
 
 
 # ---------- §4.1：看不看得到 ----------
@@ -1064,7 +1077,7 @@ async def test_it_needs_a_login(client, cast):
 
 async def test_unfriending_closes_the_door(client, db_session, cast):
     assert (await _read(client, cast.bob, cast.meal.id)).status_code == 200
-    await _unfriend(db_session, cast.alice, cast.bob)
+    await unfriend(db_session, cast.alice, cast.bob)
     assert (await _read(client, cast.bob, cast.meal.id)).status_code == 404
     # 小卡不受影響：關的是鮑伯那一扇，不是整個端點。
     assert (await _read(client, cast.carol, cast.meal.id)).status_code == 200
@@ -1090,7 +1103,6 @@ async def test_a_friend_sees_the_whitelisted_meal_and_nothing_private(client, db
         "id", "display_name", "is_me", "can_delete", "body", "created_at",
     }
     # 描述在（上面斷言過），備註、餐費、email、食物 id 不在——同一個回應裡兩種都有才算數。
-    # 餐費刻意是 4321.75：短的數字（180）會剛好出現在 id 或熱量裡。
     secrets = ("今天心情很差", "4321.75", "food_id", "note", "cost", "photo_path", "@example.com")
     for secret in secrets:
         assert secret not in response.text
@@ -1155,7 +1167,7 @@ async def test_an_unfriended_persons_likes_and_comments_vanish_for_everyone_then
 
     assert await seen() == (["鮑伯", "小卡"], ["鮑伯說", "小卡說"], 2, 2)
 
-    await _unfriend(db_session, cast.alice, cast.bob)
+    await unfriend(db_session, cast.alice, cast.bob)
     assert await seen() == (["小卡"], ["小卡說"], 1, 1)
     # 主人看到的也一樣。
     owner_view = (await _read(client, cast.alice, cast.meal.id)).json()
@@ -1304,8 +1316,771 @@ Expected：全部 PASS（`test_social_meal.py` 是 **20** 條：8＋4＋4＋4）
 
 ```bash
 ./.venv/Scripts/python.exe -m pytest -q -W error && ./.venv/Scripts/python.exe -m ruff check . && ./.venv/Scripts/python.exe -m mypy app
-git add app/social_visibility.py app/friend_meals.py app/schemas/social.py app/schemas/friend.py app/api/routes/social.py app/api/routes/friends.py app/main.py tests/test_social_meal.py tests/test_friend_meals.py frontend/src/api/schema.d.ts
+git add app/social_visibility.py app/friend_meals.py app/schemas/social.py app/schemas/friend.py app/api/routes/social.py app/api/routes/friends.py app/main.py tests/social_helpers.py tests/test_social_meal.py tests/test_friend_meals.py frontend/src/api/schema.d.ts
 git commit -F "$S/social-plan-task2-msg.txt"   # feat(backend): 單一餐點的讀取——主人與好友同一個白名單、解除好友用讀取時過濾
+```
+
+---
+
+## Task 3：後端——讚的端點、自己的餐點清單上的數字
+
+**Files:**
+- Create: `tests/test_social_likes.py`、`tests/test_social_likes_concurrency.py`
+- Modify: `app/ratelimit.py`、`tests/conftest.py`、`app/schemas/social.py`、`app/api/routes/social.py`、`app/schemas/meal.py`、`app/api/routes/meals.py`、`frontend/src/api/schema.d.ts`、`frontend/tests/timeline.test.ts`
+
+- [ ] **Step 1：限速器。** `app/ratelimit.py` 檔尾（兩個一起加，Task 4 用第二個）：
+
+```python
+LIKE_LIMIT = 60
+COMMENT_LIMIT = 20
+SOCIAL_WINDOW_SECONDS = 60.0
+
+# 按讚與收回**共用**（社群規格 D20），鍵是使用者 id（`str(user.id)`）。分開算的話額度實際上
+# 是兩倍。60：連按、反悔、一口氣滑過一頁動態都在額度內——擋的是寫壞的迴圈與拿 id 亂試的人
+# （限速在可見性檢查之前）。
+like_rate_limiter = KeyedRateLimiter(
+    limit=LIKE_LIMIT,
+    window_seconds=SOCIAL_WINDOW_SECONDS,
+    code="TOO_MANY_LIKES",
+    message="按得太快了，請稍後再試",
+)
+
+# 留言：每一則都會通知餐的主人，所以比讚緊。刪留言不算。
+comment_rate_limiter = KeyedRateLimiter(
+    limit=COMMENT_LIMIT,
+    window_seconds=SOCIAL_WINDOW_SECONDS,
+    code="TOO_MANY_COMMENTS",
+    message="留言太頻繁，請稍後再試",
+)
+```
+
+`tests/conftest.py`：import 這兩個，`_reset_login_rate_limiter` 裡加 `like_rate_limiter.reset()`、`comment_rate_limiter.reset()`（docstring 補一句）。
+
+- [ ] **Step 2：測試（先寫，看它紅）。** `tests/test_social_likes.py`：
+
+```python
+"""`PUT`／`DELETE /api/social/meals/{id}/like`（社群規格 §5.2）與卡片上的數字（§5.6）。"""
+
+import pytest
+from sqlalchemy import select
+
+from app.models.social import MealLike
+from app.ratelimit import LIKE_LIMIT
+from tests.factories import create_comment, create_friendship, create_like
+from tests.social_helpers import MISSING, auth, make_cast, unfriend
+
+
+@pytest.fixture
+async def cast(db_session):
+    return await make_cast(db_session)
+
+
+def _url(meal_id) -> str:
+    return f"/api/social/meals/{meal_id}/like"
+
+
+async def _likers(db_session, meal) -> list[int]:
+    rows = await db_session.scalars(
+        select(MealLike.user_id).where(MealLike.meal_id == meal.id).order_by(MealLike.id)
+    )
+    return list(rows)
+
+
+async def test_like_then_take_it_back(client, db_session, cast):
+    first = await client.put(_url(cast.meal.id), headers=auth(cast.bob))
+    second = await client.put(_url(cast.meal.id), headers=auth(cast.carol))
+
+    assert first.status_code == 200
+    assert first.json() == {"like_count": 1, "liked_by_me": True}
+    assert second.json() == {"like_count": 2, "liked_by_me": True}
+
+    gone = await client.delete(_url(cast.meal.id), headers=auth(cast.bob))
+
+    assert gone.status_code == 200
+    assert gone.json() == {"like_count": 1, "liked_by_me": False}
+    # 刪的是「我的」那一列，不是這一餐全部的讚。
+    assert await _likers(db_session, cast.meal) == [cast.carol.id]
+
+
+async def test_both_directions_are_idempotent(client, db_session, cast):
+    for _ in range(2):
+        liked = await client.put(_url(cast.meal.id), headers=auth(cast.bob))
+        assert (liked.status_code, liked.json()["like_count"]) == (200, 1)
+    assert await _likers(db_session, cast.meal) == [cast.bob.id]
+
+    for _ in range(2):
+        gone = await client.delete(_url(cast.meal.id), headers=auth(cast.bob))
+        assert (gone.status_code, gone.json()) == (200, {"like_count": 0, "liked_by_me": False})
+    never = await client.delete(_url(cast.meal.id), headers=auth(cast.carol))
+    assert never.status_code == 200
+
+
+async def test_the_owner_cannot_like_their_own_meal(client, db_session, cast):
+    response = await client.put(_url(cast.meal.id), headers=auth(cast.alice))
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "CANNOT_LIKE_OWN_MEAL"
+    assert await _likers(db_session, cast.meal) == []
+    # 收回沒有東西可以收，照樣是 200（冪等）。
+    assert (await client.delete(_url(cast.meal.id), headers=auth(cast.alice))).status_code == 200
+
+
+@pytest.mark.parametrize("method", ["put", "delete"])
+@pytest.mark.parametrize("who", ["dan", "eve"])
+async def test_who_cannot_see_the_meal_cannot_touch_its_likes(
+    client, db_session, cast, method, who
+):
+    viewer = getattr(cast, who)
+    await create_like(db_session, meal=cast.meal, user=viewer)  # DELETE 有東西可以刪才算數
+
+    hidden = await client.request(method, _url(cast.meal.id), headers=auth(viewer))
+    missing = await client.request(method, _url(MISSING), headers=auth(viewer))
+
+    assert hidden.status_code == missing.status_code == 404
+    assert hidden.content == missing.content
+    assert await _likers(db_session, cast.meal) == [viewer.id]  # 沒有多一列、也沒有被刪
+
+
+async def test_a_meal_gone_private_can_be_neither_liked_nor_unliked(client, db_session, cast):
+    assert (await client.put(_url(cast.meal.id), headers=auth(cast.bob))).status_code == 200
+    cast.meal.is_private = True
+    await db_session.commit()
+
+    assert (await client.put(_url(cast.meal.id), headers=auth(cast.carol))).status_code == 404
+    assert (await client.delete(_url(cast.meal.id), headers=auth(cast.bob))).status_code == 404
+    assert await _likers(db_session, cast.meal) == [cast.bob.id]
+
+
+async def test_after_unfriending_the_like_stays_hidden_until_they_are_friends_again(
+    client, db_session, cast
+):
+    await client.put(_url(cast.meal.id), headers=auth(cast.bob))
+    await unfriend(db_session, cast.alice, cast.bob)
+
+    assert (await client.delete(_url(cast.meal.id), headers=auth(cast.bob))).status_code == 404
+    assert (await client.put(_url(cast.meal.id), headers=auth(cast.bob))).status_code == 404
+    # 小卡按讚拿到的數字不含鮑伯那一個。
+    as_carol = await client.put(_url(cast.meal.id), headers=auth(cast.carol))
+    assert as_carol.json() == {"like_count": 1, "liked_by_me": True}
+
+    await create_friendship(db_session, cast.alice, cast.bob)
+    again = await client.put(_url(cast.meal.id), headers=auth(cast.bob))
+    assert again.json() == {"like_count": 2, "liked_by_me": True}
+    assert len(await _likers(db_session, cast.meal)) == 2  # 鮑伯原本那一列一直都在，沒有多一列
+
+
+async def test_it_needs_a_login(client, cast):
+    assert (await client.put(_url(cast.meal.id))).status_code == 401
+    assert (await client.delete(_url(cast.meal.id))).status_code == 401
+
+
+async def test_likes_and_unlikes_share_one_budget_per_person(client, cast):
+    for index in range(LIKE_LIMIT):
+        method = "put" if index % 2 == 0 else "delete"
+        ok = await client.request(method, _url(cast.meal.id), headers=auth(cast.bob))
+        assert ok.status_code == 200
+
+    for method in ("put", "delete"):
+        blocked = await client.request(method, _url(cast.meal.id), headers=auth(cast.bob))
+        assert blocked.status_code == 429
+        assert blocked.json()["error"]["code"] == "TOO_MANY_LIKES"
+        assert 1 <= int(blocked.headers["Retry-After"]) <= 60
+    # 額度是每個人的。
+    assert (await client.put(_url(cast.meal.id), headers=auth(cast.carol))).status_code == 200
+
+
+async def test_guessing_ids_runs_into_the_limit_before_the_lookup(client, cast):
+    for _ in range(LIKE_LIMIT):
+        assert (await client.put(_url(MISSING), headers=auth(cast.eve))).status_code == 404
+    assert (await client.put(_url(MISSING), headers=auth(cast.eve))).status_code == 429
+
+
+# ---------- 自己的餐點清單（`MealResponse`） ----------
+
+
+async def _own_views(client, cast) -> dict[str, tuple[int, int]]:
+    """每一條回 `MealResponse` 的路徑看到的 (讚, 留言)。"""
+    me = auth(cast.alice)
+    meal_id = cast.meal.id
+    responses = {
+        "read": await client.get(f"/api/meals/{meal_id}", headers=me),
+        "list": await client.get("/api/meals?date=2026-10-06", headers=me),
+        "patch": await client.patch(f"/api/meals/{meal_id}", headers=me, json={"note": "改"}),
+        "add_item": await client.post(
+            f"/api/meals/{meal_id}/items",
+            headers=me,
+            json={"food_id": cast.food.id, "quantity": "50"},
+        ),
+    }
+    views = {}
+    for name, response in responses.items():
+        assert response.status_code in (200, 201), (name, response.text)
+        body = response.json()[0] if name == "list" else response.json()
+        assert "liked_by_me" not in body  # 規格「與原始決定的差異」第 3 點
+        views[name] = (body["like_count"], body["comment_count"])
+    return views
+
+
+async def test_every_path_that_returns_my_meal_carries_the_numbers(client, db_session, cast):
+    await create_like(db_session, meal=cast.meal, user=cast.bob)
+    await create_like(db_session, meal=cast.meal, user=cast.eve)  # 陌生人的列：不算
+    await create_comment(db_session, meal=cast.meal, user=cast.carol)
+    await create_comment(db_session, meal=cast.meal, user=cast.alice)
+
+    assert set((await _own_views(client, cast)).values()) == {(1, 2)}
+
+    await unfriend(db_session, cast.alice, cast.bob)
+    await unfriend(db_session, cast.alice, cast.carol)
+    assert set((await _own_views(client, cast)).values()) == {(0, 1)}
+
+
+async def test_a_new_meal_starts_at_zero(client, cast):
+    response = await client.post(
+        "/api/meals",
+        headers=auth(cast.alice),
+        json={"eaten_at": "2026-10-06T05:00:00+00:00", "meal_type": "snack", "items": []},
+    )
+
+    assert response.status_code == 201
+    assert (response.json()["like_count"], response.json()["comment_count"]) == (0, 0)
+```
+
+`tests/test_social_likes_concurrency.py`（兩條真的連線；照 `tests/test_invites_concurrency.py` 的骨架）：
+
+```python
+"""兩個同時到的 PUT（連按兩下、兩台裝置）——都成功，只有一列（社群規格 D8）。
+
+不用 `db_session`：共用一個交易的夾具看不見「第二個 INSERT 卡在唯一索引上等第一個」
+（handover §6 第 14 種）。資料真的 commit，`finally` 自己清。"""
+
+import asyncio
+import uuid
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
+
+import pytest_asyncio
+from sqlalchemy import delete, func, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from app.api.routes.social import like_meal
+from app.models.friendship import Friendship, FriendshipStatus
+from app.models.meal import Meal, MealType
+from app.models.social import MealLike
+from app.models.user import User
+from tests.conftest import TEST_DATABASE_URL
+from tests.test_sessions_concurrency import _wait_until_someone_else_is_lock_waiting
+
+
+@pytest_asyncio.fixture
+async def independent_sessions(
+    migrated_database: None,
+) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    engine = create_async_engine(TEST_DATABASE_URL)
+    try:
+        yield async_sessionmaker(engine, expire_on_commit=False)
+    finally:
+        await engine.dispose()
+
+
+def _user(label: str) -> User:
+    return User(
+        email=f"like-race-{label}-{uuid.uuid4().hex}@example.com",
+        password_hash="not-a-real-hash",
+        display_name=label,
+    )
+
+
+async def test_the_second_of_two_simultaneous_likes_waits_then_does_nothing(independent_sessions):
+    alice, bob = _user("alice"), _user("bob")
+    async with independent_sessions() as setup:
+        setup.add_all([alice, bob])
+        await setup.flush()
+        user_a, user_b = sorted((alice.id, bob.id))
+        setup.add(
+            Friendship(
+                user_a=user_a,
+                user_b=user_b,
+                requested_by=alice.id,
+                status=FriendshipStatus.ACCEPTED,
+                accepted_at=datetime.now(UTC),
+            )
+        )
+        meal = Meal(user_id=alice.id, eaten_at=datetime.now(UTC), meal_type=MealType.LUNCH)
+        setup.add(meal)
+        await setup.commit()
+
+    try:
+        async with independent_sessions() as first, independent_sessions() as second:
+            # 第一個 PUT 做到一半：那一列寫了、還沒 commit。
+            first.add(MealLike(meal_id=meal.id, user_id=bob.id))
+            await first.flush()
+            first_pid = await first.scalar(select(func.pg_backend_pid()))
+
+            bob_again = await second.get(User, bob.id)
+            assert bob_again is not None
+            attempt = asyncio.create_task(like_meal(meal.id, user=bob_again, db=second))
+            async with asyncio.timeout(5.0):
+                await _wait_until_someone_else_is_lock_waiting(first_pid)
+            await first.commit()
+
+            state = await attempt
+            assert (state.like_count, state.liked_by_me) == (1, True)
+
+        async with independent_sessions() as check:
+            rows = await check.scalar(
+                select(func.count()).select_from(MealLike).where(MealLike.meal_id == meal.id)
+            )
+            assert rows == 1
+    finally:
+        async with independent_sessions() as cleanup:
+            # 餐、讚、好友關係都跟著使用者 cascade。
+            await cleanup.execute(delete(User).where(User.id.in_([alice.id, bob.id])))
+            await cleanup.commit()
+```
+
+Run：`./.venv/Scripts/python.exe -m pytest -q -W error tests/test_social_likes.py tests/test_social_likes_concurrency.py`
+Expected：FAIL——端點不存在是 405／404，`like_meal` 的 import 是 collection error。
+
+- [ ] **Step 3：端點。** `app/schemas/social.py` 加：
+
+```python
+class LikeState(BaseModel):
+    """按讚與收回都回這個：過濾後的數字，前端拿它對帳（規格 D19）。"""
+
+    like_count: int
+    liked_by_me: bool
+```
+
+`app/api/routes/social.py` 加（import `delete`、`from sqlalchemy.dialects.postgresql import insert as pg_insert`、`UnprocessableEntityError`、`like_rate_limiter`、`LikeState`、`social_counts`）：
+
+```python
+async def _like_state(db: AsyncSession, user_id: int, meal_id: int) -> LikeState:
+    counts = (await social_counts(db, user_id, [meal_id]))[meal_id]
+    return LikeState(like_count=counts.like_count, liked_by_me=counts.liked_by_me)
+
+
+@router.put("/meals/{meal_id}/like", response_model=LikeState)
+async def like_meal(
+    meal_id: ResourceId,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LikeState:
+    """按讚。冪等：已經按過就什麼都不做，照樣回 200 與目前的數字。
+
+    限速在最前面（查不查得到都算一次）。`ON CONFLICT DO NOTHING`：兩個同時到的 PUT，
+    第二個等第一個 commit 之後什麼都不寫——不是 IntegrityError。"""
+    like_rate_limiter.hit(str(user.id))
+    meal = await load_visible_meal(db, user, meal_id, lock=True)
+    if meal.user_id == user.id:
+        raise UnprocessableEntityError("CANNOT_LIKE_OWN_MEAL", "不能對自己的餐點按讚")
+    await db.execute(
+        pg_insert(MealLike).values(meal_id=meal.id, user_id=user.id).on_conflict_do_nothing()
+    )
+    await db.commit()
+    return await _like_state(db, user.id, meal.id)
+
+
+@router.delete("/meals/{meal_id}/like", response_model=LikeState)
+async def unlike_meal(
+    meal_id: ResourceId,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LikeState:
+    """收回讚。冪等。回 200 與目前的數字（不是 204）：跟按讚同一個形狀。
+    看不到這一餐（包含已經解除好友）就是 404——那個讚本來就被藏起來了。"""
+    like_rate_limiter.hit(str(user.id))
+    meal = await load_visible_meal(db, user, meal_id, lock=True)
+    await db.execute(
+        delete(MealLike).where(MealLike.meal_id == meal.id, MealLike.user_id == user.id)
+    )
+    await db.commit()
+    return await _like_state(db, user.id, meal.id)
+```
+
+- [ ] **Step 4：`MealResponse` 的兩個數字。**
+
+`app/schemas/meal.py` 的 `MealResponse` 最後加：
+
+```python
+    # 這一餐有幾個讚、幾則留言（社群規格 §5.6；只算現在的好友）。沒有預設值，理由同
+    # description：每一條回 MealResponse 的路徑都要帶真的數字。主人不能讚自己，所以沒有
+    # 「我按了沒」。
+    like_count: int
+    comment_count: int
+```
+
+`app/api/routes/meals.py`：
+
+1. import **一字不差**（掃描測試比對這一行）：`from app.social_visibility import SocialCounts, social_counts`（放在 `app.schemas.meal` 與 `app.storage.photos` 之間）。
+2. `_build_meal_response(meal, item_rows, cost, counts: SocialCounts)`：多一個**必填**參數，`MealResponse(…, like_count=counts.like_count, comment_count=counts.comment_count)`。
+3. 六個呼叫點。單一餐的五個（`read_meal`、`update_meal`、`add_meal_item`、`update_meal_item`、`upload_meal_photo`）：
+
+   ```python
+       costs = await _costs_by_meal(db, [meal.id])
+       counts = await social_counts(db, user.id, [meal.id])
+       return _build_meal_response(meal, rows, costs.get(meal.id), counts[meal.id])
+   ```
+
+   `list_meals`：`counts = await social_counts(db, user.id, meal_ids)`，迴圈裡傳 `counts[meal.id]`。
+4. `create_meal` 直接組 `MealResponse` 的那一處：`like_count=0, comment_count=0,`，上面一行註解「剛建立的餐不會有讚與留言」。
+5. `read_meal`、`list_meals` 的 docstring 把查詢次數改對（3 → 5：多了讚與留言各一次，一樣跟餐數無關）。
+
+- [ ] **Step 5：跑。**
+
+```bash
+./.venv/Scripts/python.exe -m pytest -q -W error tests/test_social_likes.py tests/test_social_likes_concurrency.py tests/test_friend_meals.py
+```
+
+Expected：`test_social_likes.py` **14 passed**（1＋1＋1＋4＋1＋1＋1＋1＋1＋1＋1）、並行 1 條、掃描測試仍然綠（`meals.py` 那一行 import 被允許）。
+
+- [ ] **Step 6：突變。**
+
+| 突變 | 該紅的 |
+|---|---|
+| `like_meal` 的 `.on_conflict_do_nothing()` 拿掉 | 並行那一條（`IntegrityError`）；`test_both_directions_are_idempotent`（共用 session 裡是 500／例外） |
+| `like_meal` 拿掉「主人」的檢查 | `test_the_owner_cannot_like_their_own_meal` |
+| 兩個端點的 `load_visible_meal` 換成 `db.get(Meal, meal_id)` | `test_who_cannot_see…` 四條、`…gone_private…`、`…after_unfriending…` |
+| `unlike_meal` 的 `delete` 拿掉 `MealLike.user_id == user.id` | `test_like_then_take_it_back`（小卡的也被刪） |
+| `like_rate_limiter.hit` 搬到 `load_visible_meal` 後面 | `test_guessing_ids_runs_into_the_limit…` |
+| `unlike_meal` 改用另一個新的限速器 | `test_likes_and_unlikes_share_one_budget…` |
+| `LIKE_LIMIT = 61` | 同上（第 61 次是 200） |
+| `conftest.py` 拿掉 `like_rate_limiter.reset()` | 這個檔案單獨跑不一定紅（每條測試的使用者 id 都不同）——**預期存活**，理由同 `export_rate_limiter`（`conftest.py` 的 docstring）。照實記下 |
+| `read_meal`／`list_meals`／`update_meal`／`add_meal_item` 各自改傳 `SocialCounts()` | `test_every_path…`（`_own_views` 的那一個名字） |
+| `update_meal_item`、`upload_meal_photo` 改傳 `SocialCounts()` | **沒有測試會紅**（`_own_views` 沒有走這兩條）。在 `_own_views` 補上這兩條路徑之後再突變一次——需要一個項目 id 與一張 JPEG（照 `tests/test_friend_meals.py` 的 `_jpeg()`）；補不上就照實寫進「與規格的差異」 |
+| `meals.py` 的 import 改成 `from app.social_visibility import SocialCounts, load_visible_meal, social_counts` | `test_only_the_social_modules_widen…` |
+
+- [ ] **Step 7：`schema.d.ts` 與前端的型別。** 重新產生 → `cd frontend && npm run -s typecheck`。
+Expected：**紅一處**——`tests/timeline.test.ts` 的 `meal()`（唯一有型別標註的 `Meal` 測試資料）少了兩個欄位。加上 `like_count: 0, comment_count: 0,`，再跑 `npm run -s typecheck && npm run -s test`，全綠、數字跟基準線一樣。
+
+- [ ] **Step 8：整套、commit。**
+
+```bash
+./.venv/Scripts/python.exe -m pytest -q -W error && ./.venv/Scripts/python.exe -m ruff check . && ./.venv/Scripts/python.exe -m mypy app
+git add app/ratelimit.py tests/conftest.py app/schemas/social.py app/api/routes/social.py app/schemas/meal.py app/api/routes/meals.py tests/test_social_likes.py tests/test_social_likes_concurrency.py frontend/src/api/schema.d.ts frontend/tests/timeline.test.ts
+git commit -F "$S/social-plan-task3-msg.txt"   # feat(backend): 按讚與收回（冪等、並行不會 500）；自己的餐點清單帶讚與留言數
+```
+
+---
+
+## Task 4：後端——留言
+
+**Files:**
+- Create: `tests/test_social_comments.py`
+- Modify: `app/schemas/social.py`、`app/api/routes/social.py`、`frontend/src/api/schema.d.ts`
+
+- [ ] **Step 1：測試。** `tests/test_social_comments.py`（`cast` 夾具、`auth` 等照 Task 3 的檔頭）：
+
+```python
+"""留言的新增與刪除（社群規格 §5.3、§5.4）。"""
+
+import pytest
+from sqlalchemy import select
+
+from app.models.social import MealComment
+from app.ratelimit import COMMENT_LIMIT
+from tests.factories import create_comment, create_meal
+from tests.social_helpers import MISSING, auth, make_cast, unfriend
+
+
+@pytest.fixture
+async def cast(db_session):
+    return await make_cast(db_session)
+
+
+def _url(meal_id, comment_id=None) -> str:
+    base = f"/api/social/meals/{meal_id}/comments"
+    return base if comment_id is None else f"{base}/{comment_id}"
+
+
+async def _post(client, user, meal_id, body="看起來好好吃"):
+    return await client.post(_url(meal_id), headers=auth(user), json={"body": body})
+
+
+async def _bodies(db_session, meal) -> list[str]:
+    rows = await db_session.scalars(
+        select(MealComment.body).where(MealComment.meal_id == meal.id).order_by(MealComment.id)
+    )
+    return list(rows)
+
+
+# ---------- 新增 ----------
+
+
+async def test_a_friend_comments_and_everyone_who_can_see_the_meal_reads_it(client, cast):
+    response = await _post(client, cast.bob, cast.meal.id, "好吃嗎")
+
+    assert response.status_code == 201
+    created = response.json()
+    assert set(created) == {"id", "display_name", "is_me", "can_delete", "body", "created_at"}
+    assert (created["display_name"], created["is_me"], created["can_delete"]) == ("鮑伯", True, True)
+    assert created["created_at"].endswith(("Z", "+00:00"))
+
+    seen = await client.get(f"/api/social/meals/{cast.meal.id}", headers=auth(cast.carol))
+    assert [(c["id"], c["body"], c["is_me"]) for c in seen.json()["comments"]] == [
+        (created["id"], "好吃嗎", False)
+    ]
+
+
+async def test_the_owner_can_comment_even_on_a_private_meal(client, db_session, cast):
+    cast.meal.is_private = True
+    await db_session.commit()
+
+    assert (await _post(client, cast.alice, cast.meal.id, "自己的筆記")).status_code == 201
+    assert (await _post(client, cast.bob, cast.meal.id)).status_code == 404
+    assert await _bodies(db_session, cast.meal) == ["自己的筆記"]
+
+
+async def test_the_body_is_cleaned_into_one_safe_line(client, db_session, cast):
+    """換行、Tab、NUL、雙向控制字元都變成空白並壓成一個；ZWJ 的表情符號留著。"""
+    family = "".join(chr(code) for code in (0x1F468, 0x200D, 0x1F469, 0x200D, 0x1F467))
+    raw = "  好吃\n\t嗎" + chr(0x202E) + "真的" + chr(0) + " " + family + "  "
+
+    response = await _post(client, cast.bob, cast.meal.id, raw)
+
+    assert response.status_code == 201
+    assert response.json()["body"] == f"好吃 嗎 真的 {family}"
+    assert await _bodies(db_session, cast.meal) == [f"好吃 嗎 真的 {family}"]
+
+
+@pytest.mark.parametrize(
+    ("body", "status"),
+    [
+        ("字" * 200, 201),
+        ("字" * 201, 422),
+        # 上限算的是清理之後：200 個字＋一堆會被清掉的空白仍然是 200。
+        ("字" * 200 + " \n" * 100, 201),
+        (chr(0x1F600) * 200, 201),  # 一個表情符號算一個字（code point），不是兩個
+        (chr(0x1F600) * 201, 422),
+        ("", 422),
+        ("   \n\t ", 422),
+        (chr(0x202E) + chr(0), 422),  # 清完是空的
+        ("字" * 1001, 422),  # 清理之前的上限
+    ],
+    # 明寫 id：參數裡有控制字元與一千個字，不要讓 pytest 自己拿去當測試名稱。
+    ids=["200", "201", "200-padded", "emoji-200", "emoji-201", "empty", "blank", "control", "raw"],
+)
+async def test_the_length_limit_applies_after_cleaning(client, db_session, cast, body, status):
+    response = await _post(client, cast.bob, cast.meal.id, body)
+
+    assert response.status_code == status
+    assert len(await _bodies(db_session, cast.meal)) == (1 if status == 201 else 0)
+
+
+async def test_the_body_must_be_a_string(client, cast):
+    for payload in ({}, {"body": None}, {"body": 5}, {"body": ["a"]}):
+        response = await client.post(_url(cast.meal.id), headers=auth(cast.bob), json=payload)
+        assert response.status_code == 422, payload
+
+
+@pytest.mark.parametrize("who", ["dan", "eve"])
+async def test_who_cannot_see_the_meal_cannot_comment(client, db_session, cast, who):
+    viewer = getattr(cast, who)
+
+    hidden = await _post(client, viewer, cast.meal.id)
+    missing = await _post(client, viewer, MISSING)
+
+    assert hidden.status_code == missing.status_code == 404
+    assert hidden.content == missing.content
+    assert await _bodies(db_session, cast.meal) == []
+
+
+async def test_after_unfriending_no_more_comments(client, db_session, cast):
+    assert (await _post(client, cast.bob, cast.meal.id, "之前")).status_code == 201
+    await unfriend(db_session, cast.alice, cast.bob)
+
+    assert (await _post(client, cast.bob, cast.meal.id, "之後")).status_code == 404
+    assert await _bodies(db_session, cast.meal) == ["之前"]
+
+
+async def test_comments_are_limited_per_person(client, cast):
+    for index in range(COMMENT_LIMIT):
+        assert (await _post(client, cast.bob, cast.meal.id, f"第{index}則")).status_code == 201
+
+    blocked = await _post(client, cast.bob, cast.meal.id, "太多了")
+
+    assert blocked.status_code == 429
+    assert blocked.json()["error"]["code"] == "TOO_MANY_COMMENTS"
+    assert 1 <= int(blocked.headers["Retry-After"]) <= 60
+    assert (await _post(client, cast.carol, cast.meal.id)).status_code == 201
+
+
+# ---------- 刪除 ----------
+
+
+async def _delete(client, user, meal_id, comment_id):
+    return await client.delete(_url(meal_id, comment_id), headers=auth(user))
+
+
+async def test_the_author_deletes_their_own_and_only_that_one(client, db_session, cast):
+    mine = await create_comment(db_session, meal=cast.meal, user=cast.bob, body="我的")
+    await create_comment(db_session, meal=cast.meal, user=cast.bob, body="也是我的")
+
+    response = await _delete(client, cast.bob, cast.meal.id, mine.id)
+
+    assert response.status_code == 204 and response.content == b""
+    assert await _bodies(db_session, cast.meal) == ["也是我的"]
+    # 再刪一次：已經不在了。
+    assert (await _delete(client, cast.bob, cast.meal.id, mine.id)).status_code == 404
+
+
+async def test_the_owner_deletes_anyones_comment_on_their_meal(client, db_session, cast):
+    theirs = await create_comment(db_session, meal=cast.meal, user=cast.carol)
+
+    assert (await _delete(client, cast.alice, cast.meal.id, theirs.id)).status_code == 204
+    assert await _bodies(db_session, cast.meal) == []
+
+
+async def test_a_third_person_cannot_delete_someone_elses_comment(client, db_session, cast):
+    """小卡看得到鮑伯的留言（所以「看不到這一餐」那道過濾無效），但那不是她的、餐也不是她的。"""
+    theirs = await create_comment(db_session, meal=cast.meal, user=cast.bob, body="鮑伯的")
+
+    refused = await _delete(client, cast.carol, cast.meal.id, theirs.id)
+    missing = await _delete(client, cast.carol, cast.meal.id, MISSING)
+
+    assert refused.status_code == missing.status_code == 404
+    assert refused.content == missing.content
+    assert refused.json()["error"]["code"] == "COMMENT_NOT_FOUND"
+    assert await _bodies(db_session, cast.meal) == ["鮑伯的"]
+
+
+async def test_owning_another_meal_does_not_let_you_delete_through_it(client, db_session, cast):
+    """IDOR：小卡是**她自己那一餐**的主人；把別的餐的留言 id 掛在自己的餐底下刪。"""
+    theirs = await create_comment(db_session, meal=cast.meal, user=cast.bob, body="鮑伯的")
+    carols_meal = await create_meal(db_session, user=cast.carol)
+
+    response = await _delete(client, cast.carol, carols_meal.id, theirs.id)
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "COMMENT_NOT_FOUND"
+    assert await _bodies(db_session, cast.meal) == ["鮑伯的"]
+
+
+@pytest.mark.parametrize("who", ["dan", "eve"])
+async def test_who_cannot_see_the_meal_cannot_delete(client, db_session, cast, who):
+    viewer = getattr(cast, who)
+    own = await create_comment(db_session, meal=cast.meal, user=viewer, body="混進來的")
+
+    response = await _delete(client, viewer, cast.meal.id, own.id)
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "MEAL_NOT_FOUND"
+    assert await _bodies(db_session, cast.meal) == ["混進來的"]
+
+
+async def test_an_unfriended_author_can_no_longer_delete(client, db_session, cast):
+    """規格 §9.1 第 2 點（已知限制）：看不到那一餐了，留言被藏起來、也收不回來。"""
+    mine = await create_comment(db_session, meal=cast.meal, user=cast.bob)
+    await unfriend(db_session, cast.alice, cast.bob)
+
+    assert (await _delete(client, cast.bob, cast.meal.id, mine.id)).status_code == 404
+    # 主人還是刪得掉——就算它現在不顯示。
+    assert (await _delete(client, cast.alice, cast.meal.id, mine.id)).status_code == 204
+
+
+async def test_comments_need_a_login(client, cast):
+    assert (await client.post(_url(cast.meal.id), json={"body": "嗨"})).status_code == 401
+    assert (await client.delete(_url(cast.meal.id, 1))).status_code == 401
+```
+
+Run → Expected：FAIL（405／404）。
+
+- [ ] **Step 2：schema。** `app/schemas/social.py` 加（import `Annotated`、`AfterValidator`、`Field`、`single_line`）：
+
+```python
+COMMENT_MAX_LENGTH = 200
+
+
+def _clean_comment(value: str) -> str:
+    """留言是不可信的文字、會顯示給別人：先清成一行，**清完之後**才量長度。"""
+    cleaned = single_line(value)
+    if not cleaned:
+        raise ValueError("留言不能是空的")
+    if len(cleaned) > COMMENT_MAX_LENGTH:
+        raise ValueError(f"留言最多 {COMMENT_MAX_LENGTH} 個字")
+    return cleaned
+
+
+class CommentCreate(BaseModel):
+    # 1000 是清理**之前**的長度（同 MealCreateRequest.description 的寫法）：擋掉超大的 body，
+    # 又不會因為貼上的文字多了幾個換行就 422。
+    body: Annotated[str, AfterValidator(_clean_comment)] = Field(max_length=1000)
+```
+
+- [ ] **Step 3：端點。** `app/api/routes/social.py` 加（import `status`、`comment_rate_limiter`、`CommentCreate`）：
+
+```python
+@router.post(
+    "/meals/{meal_id}/comments",
+    status_code=status.HTTP_201_CREATED,
+    response_model=CommentResponse,
+)
+async def add_comment(
+    meal_id: ResourceId,
+    payload: CommentCreate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> CommentResponse:
+    """留言。看得到這一餐的人都可以，包含主人自己。不能改，只能刪掉重寫。"""
+    comment_rate_limiter.hit(str(user.id))
+    meal = await load_visible_meal(db, user, meal_id, lock=True)
+    comment = MealComment(meal_id=meal.id, user_id=user.id, body=payload.body)
+    db.add(comment)
+    await db.commit()
+    await db.refresh(comment)
+    return _comment_response(
+        comment, user.display_name, viewer_id=user.id, owner_id=meal.user_id
+    )
+
+
+@router.delete(
+    "/meals/{meal_id}/comments/{comment_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_comment(
+    meal_id: ResourceId,
+    comment_id: ResourceId,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """刪留言：作者刪自己的，餐的主人刪這一餐底下任何一則。
+
+    條件全部在一個 DELETE 的 WHERE 裡——留言 id、**它屬於路徑上的這一餐**、我有權刪。
+    不存在、屬於另一餐、看得到但不是我的，都是同一個 404。"""
+    meal = await load_visible_meal(db, user, meal_id)
+    conditions = [MealComment.id == comment_id, MealComment.meal_id == meal.id]
+    if meal.user_id != user.id:
+        # 不是主人：只能刪自己寫的。
+        conditions.append(MealComment.user_id == user.id)
+    deleted = await db.scalar(delete(MealComment).where(*conditions).returning(MealComment.id))
+    if deleted is None:
+        raise NotFoundError("COMMENT_NOT_FOUND", "找不到這則留言")
+    await db.commit()
+```
+
+- [ ] **Step 4：跑。** `./.venv/Scripts/python.exe -m pytest -q -W error tests/test_social_comments.py`
+Expected：**25 passed**（新增 1＋1＋1＋9＋1＋2＋1＋1＝17；刪除 1＋1＋1＋1＋2＋1＋1＝8）。
+
+- [ ] **Step 5：突變。**
+
+| 突變 | 該紅的 |
+|---|---|
+| `_clean_comment` 不清理（`cleaned = value.strip()`） | `…cleaned_into_one_safe_line`、`…after_cleaning[200-padded]`、`[control]` |
+| 長度改量清理之前（`len(value)`） | `…after_cleaning[200-padded]` |
+| `COMMENT_MAX_LENGTH = 201` | `[201]`——而且是**資料庫的 CHECK** 把它擋成 500（`IntegrityError` 從 `client.post` 冒出來）。那是另一道防線：照實記下紅的樣子（規矩 8） |
+| 拿掉 `if not cleaned` | `[empty]`、`[blank]`、`[control]`（同上，是 CHECK 擋的） |
+| `Field(max_length=1000)` 拿掉 | `[raw]`？**不會**——清理之後的 200 上限先擋。這個上限守的是「不要把 10 MB 的字串送進正規表示式」，沒有測試看得到；**預期存活**，照實記下 |
+| `add_comment`、`delete_comment` 的 `load_visible_meal` 換成 `db.get(Meal, meal_id)` | `…cannot_comment` 兩條、`…no_more_comments`、`…cannot_delete` 兩條、`…unfriended_author…` |
+| `delete_comment` 拿掉 `MealComment.meal_id == meal.id` | `test_owning_another_meal…` |
+| 拿掉「不是主人只能刪自己的」那個 `if` | `test_a_third_person…` |
+| `if meal.user_id != user.id` 反過來 | `test_the_owner_deletes_anyones…`、`test_a_third_person…` |
+| `comment_rate_limiter.hit` 拿掉；`COMMENT_LIMIT = 21` | `test_comments_are_limited_per_person` |
+| `_comment_response` 的 `display_name` 傳成 `user.email` | `test_a_friend_comments…` |
+
+- [ ] **Step 6：`schema.d.ts`、整套、commit。** 重新產生（多兩個 operation、一個 schema）→ `cd frontend && npm run -s typecheck`（綠）。
+
+```bash
+./.venv/Scripts/python.exe -m pytest -q -W error && ./.venv/Scripts/python.exe -m ruff check . && ./.venv/Scripts/python.exe -m mypy app
+git add app/schemas/social.py app/api/routes/social.py tests/test_social_comments.py frontend/src/api/schema.d.ts
+git commit -F "$S/social-plan-task4-msg.txt"   # feat(backend): 留言——清成一行、1 到 200 字；作者與餐的主人可以刪
 ```
 
 ---
