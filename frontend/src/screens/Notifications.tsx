@@ -100,13 +100,30 @@ export function Notifications() {
 		if (marked.current === newest) return;
 		marked.current = newest;
 		// 帶清單裡最新那一則的 id（規格 D15）：清單載入之後才到的通知不會沒被看過就
-		// 變成已讀。只更新未讀數，**不重抓清單**——這一次的畫面上，剛看到的還標著未讀。
+		// 變成已讀。平常只更新未讀數，**不重抓清單**——這一次的畫面上，剛看到的還標著未讀。
 		markAllRead(newest).then(
 			async (count) => {
 				// 還在路上的未讀數重抓先取消：它可能在已讀寫進資料庫之前就讀完了、卻比
 				// 這個回應晚到（換到這一頁的那一刻外框才剛重抓一次），會把數字蓋回去。
 				await queryClient.cancelQueries({ queryKey: queryKeys.unreadCount });
 				queryClient.setQueryData(queryKeys.unreadCount, count);
+				// **還剩沒讀的＝有通知落在「清單的 GET」與這個 POST 中間**（社群審查 M5）：
+				// 比 `newest` 舊的這一次都標掉了，剩下的只會是更新的。分頁上的數字會是它，
+				// 開著的清單卻沒有它——而數字是變少的，外框（`useUnreadNotifications`）
+				// 只在變多時才讓清單過期。所以這裡重抓一次清單；新的那一則回來之後
+				// `newest` 變了，上面的 effect 照平常的路再送一次已讀。
+				//
+				// 不會繞圈：重抓只跟在「已讀成功而且還剩」後面，已讀只在 `newest` 變了
+				// 才送（`marked`）。重抓回來沒有新的（那一則剛好又看不到了）就停在這裡；
+				// 一直有新的進來，就是每到一則多一輪。離開這一頁之後清單沒有人在看，
+				// `invalidateQueries` 只會把它標成過期，不會去抓。
+				// 代價：重抓回來的那一份裡，剛看到的那幾則已經是已讀，「未讀」的標記
+				// 會提早消失——只發生在這個空檔真的有東西進來的時候。
+				if (count > 0) {
+					void queryClient.invalidateQueries({
+						queryKey: queryKeys.notifications,
+					});
+				}
 			},
 			() => {
 				// 失敗：分頁上的數字不動；下一次清單回來時再試。不是畫面上的錯誤——

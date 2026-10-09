@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+	cleanup,
+	render,
+	screen,
+	waitFor,
+	within,
+} from "@testing-library/react";
 import { StrictMode } from "react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -252,16 +258,15 @@ describe("通知頁：清單", () => {
 });
 
 describe("通知頁：已讀", () => {
-	it("清單載入之後送一次已讀，帶最新那一則的 id；未讀數換成回來的數字；清單不重抓、剛看到的還標著未讀", async () => {
+	it("清單載入之後送一次已讀，帶最新那一則的 id；未讀數換成回來的數字；回來是 0 就不重抓清單、剛看到的還標著未讀", async () => {
 		const page = setup({
 			list: () => json({ items: FOUR }),
-			// 剩 1 則：清單載入之後才到的那一則（id 比 54 大），沒有被這一次標掉。
-			read: () => json({ count: 1 }),
+			read: () => json({ count: 0 }),
 		});
 		// 分頁上原本的數字。
 		page.client.setQueryData(queryKeys.unreadCount, 3);
 
-		await waitFor(() => expect(page.unread()).toBe(1));
+		await waitFor(() => expect(page.unread()).toBe(0));
 		expect(page.reads()).toEqual(['{"up_to":54}']);
 		await settle();
 		// 已讀之後不重抓清單：這一次的畫面上，剛看到的兩則還標著未讀。
@@ -270,6 +275,130 @@ describe("通知頁：已讀", () => {
 		expect(
 			rows().map((row) => within(row).queryByText("未讀") !== null),
 		).toEqual([true, true, false, false]);
+	});
+
+	it("已讀回來說還剩 1 則（清單載入之後才到的）：清單重抓一次、新的那一則出現、再送一次已讀帶它的 id、數字變成 0", async () => {
+		// 審查 M5：通知落在「清單的 GET」與「已讀的 POST」中間。已讀帶的是清單裡最新的
+		// id，標不到它——分頁上的數字是 1，開著的清單卻沒有它；數字是變少的（2 → 1），
+		// 外框不會因此重抓清單。
+		const refetches = gate();
+		let listed = 0;
+		let reads = 0;
+		const page = setup({
+			// 第一次馬上回；之後的重抓掛著，等測試放行。
+			list: () => {
+				listed += 1;
+				return listed === 1 ? json({ items: FOUR }) : refetches.handler();
+			},
+			// 第一次：54 以前的都標了，還剩那一則新的。第二次（帶 55）：0。
+			read: () => {
+				reads += 1;
+				return json({ count: reads === 1 ? 1 : 0 });
+			},
+		});
+		page.client.setQueryData(queryKeys.unreadCount, 2);
+
+		// 第一輪：已讀帶 54，數字是伺服器回的 1（不是寫死的 0），清單開始重抓。
+		await waitFor(() => expect(page.unread()).toBe(1));
+		expect(page.reads()).toEqual(['{"up_to":54}']);
+		await waitFor(() => expect(refetches.waiting()).toBe(1));
+		expect(screen.queryByText("伊芙 對你的午餐按了讚")).not.toBeInTheDocument();
+
+		// 重抓回來：多了一則 55，原本那兩則現在是已讀。
+		refetches.answer(
+			json({
+				items: [
+					item({ id: 55, actor_name: "伊芙", is_read: false }),
+					...FOUR.map((one) => ({ ...one, is_read: true })),
+				],
+			}),
+		);
+
+		expect(
+			await screen.findByRole("link", { name: /^未讀.*伊芙 對你的午餐按了讚/ }),
+		).toBeInTheDocument();
+		// 第二輪：照平常的路——新的最新 id 送一次已讀，回 0。
+		await waitFor(() =>
+			expect(page.reads()).toEqual(['{"up_to":54}', '{"up_to":55}']),
+		);
+		await waitFor(() => expect(page.unread()).toBe(0));
+		// 到此為止：0 不再重抓，沒有第三次已讀。
+		await settle();
+		expect(page.lists()).toBe(2);
+		expect(refetches.waiting()).toBe(0);
+		expect(page.reads()).toHaveLength(2);
+	});
+
+	it("已讀一直回「還剩 1 則」而重抓回來的清單沒有新的：只重抓一次，不會繞圈", async () => {
+		// 不該發生、但不能靠它不發生：例如那一則在重抓之前又看不到了（對方解除好友）。
+		// 清單的最新 id 沒變，就不會再送已讀；沒有已讀的回應，就沒有下一次重抓。
+		const page = setup({
+			list: () => json({ items: FOUR }),
+			read: () => json({ count: 1 }),
+		});
+		page.client.setQueryData(queryKeys.unreadCount, 3);
+
+		await waitFor(() => expect(page.lists()).toBe(2));
+		await settle();
+		await settle();
+		expect(page.lists()).toBe(2);
+		expect(page.reads()).toEqual(['{"up_to":54}']);
+		expect(page.unread()).toBe(1);
+		expect(rows()).toHaveLength(4);
+	});
+
+	it("「還剩 1 則」回來時人已經離開通知頁：數字照樣更新，清單不去抓（沒有人在看）", async () => {
+		const held = gate();
+		const page = setup({
+			list: () => json({ items: FOUR }),
+			read: held.handler,
+		});
+		page.client.setQueryData(queryKeys.unreadCount, 2);
+		await waitFor(() => expect(held.waiting()).toBe(1));
+
+		// 換到別頁：通知頁卸載，清單的 query 沒有人訂閱了。
+		cleanup();
+		held.answer(json({ count: 1 }));
+
+		await waitFor(() => expect(page.unread()).toBe(1));
+		await settle();
+		expect(page.lists()).toBe(1);
+		// 標成過期了：下一次打開通知頁會重抓（本來 `staleTime: 0` 就會）。
+		expect(
+			page.client.getQueryState(queryKeys.notifications)?.isInvalidated,
+		).toBe(true);
+	});
+
+	it("StrictMode 底下「還剩 1 則」：照樣只重抓一次、兩次已讀", async () => {
+		let reads = 0;
+		let listed = 0;
+		const page = setup({
+			list: () => {
+				listed += 1;
+				return json({
+					items:
+						reads === 0
+							? FOUR
+							: [
+									item({ id: 55, actor_name: "伊芙", is_read: false }),
+									...FOUR.map((one) => ({ ...one, is_read: true })),
+								],
+				});
+			},
+			read: () => {
+				reads += 1;
+				return json({ count: reads === 1 ? 1 : 0 });
+			},
+			strict: true,
+		});
+
+		await waitFor(() =>
+			expect(page.reads()).toEqual(['{"up_to":54}', '{"up_to":55}']),
+		);
+		await waitFor(() => expect(page.unread()).toBe(0));
+		await settle();
+		expect(listed).toBe(2);
+		expect(page.reads()).toHaveLength(2);
 	});
 
 	it("全部都讀過了：不送已讀", async () => {
