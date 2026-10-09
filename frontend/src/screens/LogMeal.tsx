@@ -342,21 +342,25 @@ export function LogMeal({ onSaved }: Props) {
 
 					{selectedFood !== null && (
 						<>
-							<p ref={selectedRef} tabIndex={-1} className={styles.selected}>
-								已選擇：{selectedFood.name}
-							</p>
-							{/* 只有同時有 AI 的項目時才需要：不然不記這一樣＝整張表單收起來，
-							    而且沒有 AI 項目時畫面要跟以前一模一樣。 */}
-							{aiItems.length > 0 && (
-								<button
-									type="button"
-									className={ui.secondary}
-									disabled={saveMeal.isPending}
-									onClick={() => setSelectedFood(null)}
-								>
-									不記這一樣
-								</button>
-							)}
+							{/* 名稱與「不記這一樣」同一列（窄的時候按鈕換行）。沒有按鈕時這一層只是
+							    包著那一行字，畫面跟以前一樣。 */}
+							<div className={styles.selectedRow}>
+								<p ref={selectedRef} tabIndex={-1} className={styles.selected}>
+									已選擇：{selectedFood.name}
+								</p>
+								{/* 只有同時有 AI 的項目時才需要：不然不記這一樣＝整張表單收起來，
+								    而且沒有 AI 項目時畫面要跟以前一模一樣。 */}
+								{aiItems.length > 0 && (
+									<button
+										type="button"
+										className={ui.secondary}
+										disabled={saveMeal.isPending}
+										onClick={() => setSelectedFood(null)}
+									>
+										不記這一樣
+									</button>
+								)}
+							</div>
 							<PortionQuantityFields
 								state={portion}
 								unit={selectedFood.nutrition?.base_unit ?? "g"}

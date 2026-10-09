@@ -7,6 +7,18 @@
 	overflow-wrap: anywhere;
 }
 
+/* 一直掛著的 live region：沒有字的時候不佔高度（記一餐不在 ui 的 .screen 裡，
+   段落的預設邊距會在入口按鈕下面留一大塊空白）。 */
+.status,
+.error {
+	margin: 0;
+}
+
+.error,
+.item [role="alert"] {
+	color: var(--color-danger);
+}
+
 .items {
 	display: flex;
 	flex-direction: column;
@@ -50,6 +62,11 @@
 	overflow-wrap: anywhere;
 }
 
+/* 靠右：窄的時候按鈕換到下一行，仍然跟其他列的按鈕在同一欄。 */
+.rowActions {
+	margin-left: auto;
+}
+
 .rowActions button {
 	min-height: 44px;
 	padding: 0 var(--space-3);
@@ -64,8 +81,33 @@
 	flex-basis: 100%;
 }
 
+/* 衝突的提問自成一塊：它的兩顆按鈕是這一樣的，不是整張清單的
+   （不框起來的話，跟底下的「加入這 N 樣／收起」排成同一組）。 */
+.conflict {
+	padding: var(--space-3);
+	border-radius: var(--radius-button);
+	background: var(--color-bg);
+}
+
 .conflict p {
 	margin: 0;
+}
+
+/* 修改表單的輸入框也是點擊目標：至少 44px（共用的 .form input 沒有設高度）。 */
+.editForm input {
+	box-sizing: border-box;
+	min-height: 44px;
+}
+
+.editForm {
+	padding-bottom: var(--space-2);
+}
+
+/* 整張清單的動作，跟最後一樣之間隔一條線。 */
+.footer {
+	margin-top: var(--space-3);
+	padding-top: var(--space-3);
+	border-top: 1px solid var(--color-border);
 }
 
 .add[aria-disabled="true"] {

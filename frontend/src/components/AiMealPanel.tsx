@@ -389,11 +389,13 @@ export function AiMealPanel({ text, onFoodPicked, onItemsReady }: Props) {
 			</div>
 
 			{/* 一直掛著、只換文字：動態插入的 live region 常被讀屏軟體略過。 */}
-			<p role="status">
+			<p role="status" className={styles.status}>
 				{analyze.isPending ? "AI 估算中…" : adding ? "加入中…" : summary}
 			</p>
 			{analyze.isError && (
-				<p role="alert">{describeAnalyzeError(analyze.error)}</p>
+				<p role="alert" className={styles.error}>
+					{describeAnalyzeError(analyze.error)}
+				</p>
 			)}
 
 			{libraryHit !== undefined && (
@@ -461,14 +463,6 @@ export function AiMealPanel({ text, onFoodPicked, onItemsReady }: Props) {
 									{!item.added && usingLibrary && (
 										<span className={ui.tag}>用食物庫的</span>
 									)}
-									{!item.added &&
-										!usingLibrary &&
-										item.draft === null &&
-										item.estimate.consistency.flagged && (
-											<p className={base.warning}>
-												⚠ 熱量跟三大營養素對不太起來，建議看一眼
-											</p>
-										)}
 									{!item.added && !isEditing && conflict === null && (
 										<div className={styles.rowActions}>
 											{usingLibrary ? (
@@ -505,6 +499,16 @@ export function AiMealPanel({ text, onFoodPicked, onItemsReady }: Props) {
 											)}
 										</div>
 									)}
+									{/* 放在那一列的按鈕後面：提示佔一整行，放前面的話「修改」會被擠到
+									    下一行的左邊，跟其他列的位置不一樣。 */}
+									{!item.added &&
+										!usingLibrary &&
+										item.draft === null &&
+										item.estimate.consistency.flagged && (
+											<p className={base.warning}>
+												⚠ 熱量跟三大營養素對不太起來，建議看一眼
+											</p>
+										)}
 									{item.error !== null && <p role="alert">{item.error}</p>}
 									{conflict !== null && !isEditing && (
 										<div className={styles.conflict}>
@@ -602,7 +606,7 @@ export function AiMealPanel({ text, onFoodPicked, onItemsReady }: Props) {
 							);
 						})}
 					</ul>
-					<div className={base.actions}>
+					<div className={`${base.actions} ${styles.footer}`}>
 						{/* aria-disabled 而不是原生 disabled：按下去的當下它正在焦點上，
 						    原生停用會讓它把焦點弄丟（同 ExportCard、報表的月份切換）。 */}
 						<button

@@ -28,6 +28,20 @@
 	font-weight: 700;
 }
 
+/* 「已選擇：X」＋（有 AI 的項目時）「不記這一樣」。 */
+.selectedRow {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-2);
+}
+
+.selectedRow .selected {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
 .preview {
 	display: flex;
 	align-items: center;
@@ -84,11 +98,13 @@
 	min-height: 44px;
 }
 
-/* AI 估的項目：一列是名稱、量、移除。 */
+/* AI 估的項目：一列是名稱、量、移除。底下一條線，跟這一餐其他的欄位分開。 */
 .aiItems {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-2);
+	padding-bottom: var(--space-3);
+	border-bottom: 1px solid var(--color-border);
 }
 
 .aiItems h2 {
