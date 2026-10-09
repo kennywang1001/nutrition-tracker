@@ -38,7 +38,7 @@
 1. 「Expected: FAIL」沒有如預期失敗 → 停下來回報。預測的紅燈數對不上 → 照實回報是哪幾條、為什麼。
 2. 引用的程式碼對不上現況 → 以現況為準並回報。
 3. 先寫測試、看它紅，再寫實作。**紅燈要問為什麼紅**（規矩 8）：新模組或新欄位還不存在時，紅的是 import／`TypeError`／500，不是斷言——斷言有沒有咬合力由每個 task 的突變步驟證明。
-4. **這份計畫的程式碼沒有整份跑過**（跟上一份計畫不同）。只有「開工前已經查證過的事實」那張表是實測的。每個「Expected: PASS」的條數是**預測**；突變表的「紅的測試」也是預測——對不上照實寫回這份文件的「執行中發現的差異」。
+4. **這份計畫的程式碼不是整份跑過的**（跟上一份計畫不同；沒有開 worktree 從頭走一遍）。跑過的與沒跑過的分開記在下一節「哪些跑過」。沒跑過的部分，「Expected: PASS」的條數與突變表的「紅的測試」是**預測**——對不上照實寫回這份文件的「執行中發現的差異」。
 5. `client` 夾具跟測試共用一個 session（第 11、30 種）：驗「真的寫進資料庫」要先 `await db_session.rollback()`，再**選欄位**讀（`select(Meal.description)`），不要拿 ORM 物件。
 6. 要證明一層過濾有用，測試資料必須讓其他每一層都放行（第 5 種）：好友看不到「備註」的測試，那一餐要**同時有描述**，而且不是私人的。
 7. `tests/helpers/mock-api.ts` 用 `url.includes(path)` **依序**比對（第 43 種）：`/api/ai/analyze` 會吃掉 `/api/ai/analyze-meal`；`/api/foods` 會吃掉 `/api/foods/7`、`/api/foods?q=`——**越具體的排越前面，而且兩個 AI 端點都要給 `method` 與完整路徑**。新面板的測試如果不小心打到單樣端點，mock 要讓它炸（不要兩條都回成功）。
@@ -53,6 +53,23 @@
 16. **模型加了欄位之後 dev 的 API 會壞到 dev 資料庫也跑過 migration 為止**（`--reload` 掛的是 `./app`，查 `meals` 會撞 `column meals.description does not exist`）。Task 1 寫完 migration 就對 dev 資料庫 `alembic upgrade head`。
 17. `transform_schema()` 會把 Pydantic 類別的 docstring 放進送給模型的 JSON schema（實測）：新的 LLM schema 類別**用 `#` 註解，不寫 docstring**。
 18. 計畫裡的控制字元一律寫成跳脫（`"\x00"`、`"\u202e"`）——真的字元會在複製、轉手時無聲消失（handover §7 的 BOM 那一格）。
+
+## 哪些跑過
+
+寫計畫時沒有把整份計畫從頭走一遍，但把風險最高的幾段各自拿出來跑過（跑完都還原了，repo 裡沒有留下任何東西）：
+
+| 部分 | 怎麼跑的 | 結果 |
+|---|---|---|
+| Task 1 的 migration | 模型暫時加上欄位跑 `alembic check` | 差異只有 `add_column meals.description` |
+| Task 1 的 `OptionalSingleLine`、Task 2 的 `LLMMeal*Schema` 與 `parse_raw_meal_estimate()` | scratch 腳本 | 行為如各 task 所寫；`mypy` 乾淨 |
+| Task 2 兩家的 `_complete`／`estimate_meal_*` | scratch 模組接假傳輸層，兩家各打文字與圖片 | 解析成功、錯誤分類正確、送出去的上限是 4096（單樣仍是 1024） |
+| Task 3 的路由與 `tests/test_ai_analyze_meal.py` | 路由掛在 scratch router 上，測試檔只換匯入 | **18 passed** |
+| Task 4～6 的前端（全部的程式碼與測試） | 照抄進工作目錄，`schema.d.ts` 用手寫的等價型別頂替 | `biome`、`tsc -b` 乾淨；`npm run -s test`：`Test Files 142 passed`、`Tests 1786 passed`、`Type Errors no errors` |
+| Task 5、6 的前端突變 | 38 個（Task 5 九個、Task 6 二十九個） | 一個存活（Task 6 的 P1，已改測試）、一個突變本身寫錯重做（L4）；其餘全部紅 |
+
+**沒跑過的**：Task 1 的後端程式碼與測試（除了上面兩格）、Task 2 的測試檔、Task 1～3 的突變、`schema.d.ts` 真的重新產生、Task 7 的 e2e、Task 8。
+
+**前端那一輪是用頂替的型別跑的**：`AnalyzeMealResponse` 等三個型別當時是手寫的（跟 Task 3 的 Pydantic model 對照過）。真的 `schema.d.ts` 產生出來之後如果有出入（例如某個欄位變成可選），`tsc -b` 會在 Task 4 就說。
 
 ## 開工前已經查證過的事實
 
@@ -79,7 +96,11 @@
 
 ## 與規格的差異
 
-寫計畫時沒有發現要改規格的地方。
+寫計畫時（把程式碼拿出來跑的時候）改了規格三處，規格已經是改過的樣子（它的「與原始決定的差異」第 10、11 點與 §5.1、§6.2）：
+
+1. **`LLMMealEstimateSchema.items` 只有上限、沒有下限**；「至少一樣」移到 `parse_raw_meal_estimate()`。原本寫 1～8：下限會變成送給 Anthropic 的 `minItems: 1`，模型沒辦法回空陣列。
+2. **勾選框的名稱與量之間要有一個空白字元**，以及「改用 AI 的數字」的可及名稱帶食物名（一頁可能有好幾顆）。
+3. **記一餐表單的輸入框一起補到 44px**（Task 5）。
 
 ### 執行中發現的差異
 
@@ -104,6 +125,7 @@
 | `app/api/routes/ai.py` | 改：`analyze_meal` | 3 |
 | `tests/test_ai_analyze_meal.py` | 新增 | 3 |
 | `frontend/src/api/schema.d.ts` | 重新產生 | 1、3 |
+| `frontend/tests/timeline.test.ts` | 改：有型別標註的測試資料補 `description` | 1 |
 | `frontend/src/api/ai.ts` | 改：`analyzeMealText`、`analyzeMealImage`、`describeAnalyzeError` | 4 |
 | `frontend/src/lib/ai-meal.ts` | 新增 | 4 |
 | `frontend/tests/ai-api.test.ts` | 改 | 4 |
@@ -128,7 +150,7 @@
 
 **Files:**
 - Create: `migrations/versions/0017_add_meals_description.py`、`tests/test_meals_description.py`、`tests/test_schema_validators.py`
-- Modify: `app/models/meal.py`、`app/schemas/validators.py`、`app/schemas/meal.py`、`app/schemas/friend.py`、`app/api/routes/meals.py`、`app/api/routes/friends.py`、`app/export.py`、`tests/factories.py`、`tests/test_friend_meals.py`、`tests/test_export.py`、`frontend/src/api/schema.d.ts`
+- Modify: `app/models/meal.py`、`app/schemas/validators.py`、`app/schemas/meal.py`、`app/schemas/friend.py`、`app/api/routes/meals.py`、`app/api/routes/friends.py`、`app/export.py`、`tests/factories.py`、`tests/test_friend_meals.py`、`tests/test_export.py`、`frontend/src/api/schema.d.ts`、`frontend/tests/timeline.test.ts`
 
 - [ ] **Step 1：`single_line` 的測試（純函式）**
 
@@ -667,13 +689,13 @@ Expected：`1033 passed`（1004＋12＋15＋2；匯出與既有好友測試條�
 cd frontend && npm run -s typecheck && npm run -s test 2>&1 | grep -E "Test Files|Tests |FAIL|Unhandled"
 ```
 
-Expected：typecheck 乾淨；測試數字跟基準線一樣（前端的測試資料是沒有型別標註的物件，多一個必填欄位不會讓它們編譯失敗；畫面還沒讀這一欄）。
+Expected：**typecheck 紅一處**——`tests/timeline.test.ts(7)`：`Property 'description' is missing`（寫計畫時實測）。那個檔案的 `meal()` 工廠有型別標註（`: Meal`），`MealResponse` 多了必填欄位它就不完整了；其他測試資料都是沒有標註的物件，不受影響。在 `meal()` 回傳的物件裡 `note: null,` 後面加一行 `description: null,`（**只有 `meal()`**，同一個檔案的 `expense()` 也有 `note: null`，那個不要動）。改完 typecheck 乾淨、測試數字跟基準線一樣（畫面還沒讀這一欄）。vitest 的型別那一輪在這裡也會報 `Unhandled Source Error`——同一件事。
 
 - [ ] **Step 10：Commit**
 
 ```bash
 S=C:/Users/user/AppData/Local/Temp/claude/f--wallet/e7b60c93-fbd5-4a61-9c85-74550ff7244b/scratchpad
-git add migrations/versions/0017_add_meals_description.py app/models/meal.py app/schemas/validators.py app/schemas/meal.py app/schemas/friend.py app/api/routes/meals.py app/api/routes/friends.py app/export.py tests/factories.py tests/test_meals_description.py tests/test_schema_validators.py tests/test_friend_meals.py tests/test_export.py frontend/src/api/schema.d.ts
+git add migrations/versions/0017_add_meals_description.py app/models/meal.py app/schemas/validators.py app/schemas/meal.py app/schemas/friend.py app/api/routes/meals.py app/api/routes/friends.py app/export.py tests/factories.py tests/test_meals_description.py tests/test_schema_validators.py tests/test_friend_meals.py tests/test_export.py frontend/src/api/schema.d.ts frontend/tests/timeline.test.ts
 git commit -F "$S/aimulti-t1-msg.txt"
 ```
 
@@ -2250,7 +2272,7 @@ git commit -F "$S/aimulti-t3-msg.txt"
 
 `schema.d.ts` 在 Task 1、Task 3 已經重新產生；這裡先確認型別在：`grep -n "AnalyzeMealResponse\|LibraryFoodMatch" frontend/src/api/schema.d.ts | head`（各至少一處）。沒有就回去補，不要手寫型別。
 
-**這個 task 起的前端程式碼都沒有跑過**（必讀第 4 點）。
+**這個 task 的程式碼與測試跑過**（見「哪些跑過」）：`tests/ai-api.test.ts` 印 `Tests 18 passed`、`tests/ai-meal.test.ts` 印 `Tests 14 passed`。突變表沒有跑（第 8 個等同 Task 6 的 P17，那個跑過）。貼上計畫裡的測試片段之後跑一次 `npx biome check --write <檔案>`——片段的斷行不一定跟 biome 的一樣。
 
 - [ ] **Step 1：API 的測試（紅）**
 
@@ -2466,7 +2488,11 @@ const RESULT: AnalyzeMealResponse = {
 				serving_carb_g: "62.00",
 			},
 			confidence: "0.80",
-			consistency: { atwater_kcal: "272.50", deviation: "7.50", flagged: false },
+			consistency: {
+				atwater_kcal: "272.50",
+				deviation: "7.50",
+				flagged: false,
+			},
 			library_food: {
 				food_id: 7,
 				name: "白飯（食物庫）",
@@ -2490,7 +2516,11 @@ const RESULT: AnalyzeMealResponse = {
 				serving_carb_g: "3.00",
 			},
 			confidence: "0.60",
-			consistency: { atwater_kcal: "300.00", deviation: "0.00", flagged: false },
+			consistency: {
+				atwater_kcal: "300.00",
+				deviation: "0.00",
+				flagged: false,
+			},
 			library_food: null,
 		},
 	],
@@ -2527,7 +2557,10 @@ describe("AI 多樣估算的清單", () => {
 
 		expect(items.map((item) => item.key)).toEqual([0, 1]);
 		expect(items.map((item) => item.checked)).toEqual([true, true]);
-		expect(items.map((item) => item.library?.food_id ?? null)).toEqual([7, null]);
+		expect(items.map((item) => item.library?.food_id ?? null)).toEqual([
+			7,
+			null,
+		]);
 		for (const item of items) {
 			expect(item).toMatchObject({
 				draft: null,
@@ -2546,7 +2579,11 @@ describe("AI 多樣估算的清單", () => {
 		if (rice === undefined) throw new Error("測試資料要有兩樣");
 
 		expect(itemName(rice)).toBe("白飯（食物庫）");
-		expect(itemAmount(rice)).toEqual({ quantity: "200", unit: "ml", kcal: "260" });
+		expect(itemAmount(rice)).toEqual({
+			quantity: "200",
+			unit: "ml",
+			kcal: "260",
+		});
 	});
 
 	it("改用 AI 的數字（library 是 null）：名稱、單位、熱量都是 AI 的", () => {
@@ -2566,7 +2603,11 @@ describe("AI 多樣估算的清單", () => {
 		const edited = { ...chicken, draft: DRAFT };
 
 		expect(itemName(edited)).toBe("烤雞腿");
-		expect(itemAmount(edited)).toEqual({ quantity: "180", unit: "g", kcal: "333" });
+		expect(itemAmount(edited)).toEqual({
+			quantity: "180",
+			unit: "g",
+			kcal: "333",
+		});
 	});
 
 	it("pendingItems：勾著而且還沒加入的", () => {
@@ -2575,14 +2616,23 @@ describe("AI 多樣估算的清單", () => {
 			throw new Error("測試資料要有兩樣");
 		}
 
-		expect(pendingItems([rice, chicken]).map((item) => item.key)).toEqual([0, 1]);
+		expect(pendingItems([rice, chicken]).map((item) => item.key)).toEqual([
+			0, 1,
+		]);
 		expect(
-			pendingItems([{ ...rice, checked: false }, chicken]).map((item) => item.key),
+			pendingItems([{ ...rice, checked: false }, chicken]).map(
+				(item) => item.key,
+			),
 		).toEqual([1]);
 		expect(
 			pendingItems([{ ...rice, added: true }, chicken]).map((item) => item.key),
 		).toEqual([1]);
-		expect(pendingItems([{ ...rice, added: true }, { ...chicken, checked: false }])).toEqual([]);
+		expect(
+			pendingItems([
+				{ ...rice, added: true },
+				{ ...chicken, checked: false },
+			]),
+		).toEqual([]);
 	});
 
 	it("wasRenamed：只有草稿的名稱跟 AI 的不同才算（去頭尾空白、不分大小寫）", () => {
@@ -2591,7 +2641,9 @@ describe("AI 多樣估算的清單", () => {
 
 		expect(wasRenamed(chicken)).toBe(false);
 		expect(wasRenamed({ ...chicken, draft: DRAFT })).toBe(true);
-		expect(wasRenamed({ ...chicken, draft: { ...DRAFT, name: " 滷雞腿 " } })).toBe(false);
+		expect(
+			wasRenamed({ ...chicken, draft: { ...DRAFT, name: " 滷雞腿 " } }),
+		).toBe(false);
 		expect(nameKey("  Latte ")).toBe("latte");
 	});
 });
@@ -2777,6 +2829,8 @@ cd frontend && npm run -s typecheck && cd .. && git add frontend/src/api/ai.ts f
 - Modify（測試）: `frontend/tests/log-meal.test.tsx`、`edit-meal.test.tsx`、`meal-list.test.tsx`、`friend-feed.test.tsx`、`friend-day.test.tsx`、`overview.test.tsx`
 
 這個 task 不碰 AI：做完之後「手打一段描述」整條路是通的。
+
+**這個 task 的程式碼與 12 條測試跑過**（見「哪些跑過」）；突變表的第 1、2、5、6、9、10、11 個與「拿掉備註的 `aria-describedby`」「卡片顯示 `meal.note`」是實測的，紅的就是表裡寫的那幾條。貼上測試片段之後跑 `npx biome check --write <檔案>`。
 
 **先 grep**（必讀第 11 點）：`grep -rn "描述" frontend/e2e frontend/tests | grep -v "描述這個食物"`——新增食物頁有一個「描述這個食物」的欄位，e2e 或測試如果用沒有 `exact` 的 `getByLabel("描述")`／`getByLabelText(/描述/)`，新欄位會讓它對到兩個。有就先改成 `exact`，記在「執行中發現的差異」。
 
@@ -3064,7 +3118,17 @@ Expected: FAIL——新增的 12 條裡 11 條紅（找不到「描述（選填�
 	font-size: 12px;
 	color: var(--color-text-muted);
 }
+
+/* 輸入框與下拉也是點擊目標：至少 44px（同編輯這一餐，Task 7 的 e2e 會量）。
+   勾選框除外——它的點擊目標是整個 .privateToggle 標籤；檔案選擇是 PhotoPickerButton 的標籤。 */
+.form input:not([type="file"]):not([type="checkbox"]),
+.form select {
+	box-sizing: border-box;
+	min-height: 44px;
+}
 ```
+
+（這一條會讓既有的金額、餐別、份量欄位高一點——從大約 37px 到 44px。這是補上本來就該有的點擊目標，不是這個功能獨有的。`PortionQuantityFields` 自己的 CSS 如果把高度寫死，Task 7 量的時候會紅在「記一餐：輸入框」——那時到它的 module.css 修，並記在「執行中發現的差異」。）
 
 - [ ] **Step 3：編輯這一餐**
 
@@ -3173,7 +3237,7 @@ Expected: PASS（12 條新的全綠；既有的不變）。
 | 8 | 編輯畫面的 `value` 寫成 `description ?? meal.description`（沒有 `?? ""`） | 「舊快取…欄位是空的」——React 會警告 uncontrolled；看它紅在哪一行，照實記 |
 | 9 | 編輯畫面的描述欄位綁到 `note`（`value={note ?? meal.note ?? ""}`） | 「描述：顯示伺服器的值」（值不對） |
 | 10 | `MealCard` 改成 `meal.description !== null` | 「…不留空行」（id 13 那一行） |
-| 11 | `FriendMealCard` 改成 `meal.description !== null` | 好友動態「…不留空行」（id 9 那一行） |
+| 11 | `FriendMealCard` 改成 `meal.description !== null` | 好友動態「…不留空行」（id 9 那一行）。`friend-day` 那一條**不會紅**（它只有「有描述」的情況）——預期的，同一個元件由動態那一條守 |
 | 12 | `Overview`（或 `lib/timeline.ts`）把 `meal.description` 加進餐點列的文字 | 總覽「時間線不顯示這一餐的描述」——證明那條釘子有咬合力；改回 |
 
 - [ ] **Step 6：整套、Commit**
@@ -3192,3 +3256,3237 @@ cd frontend && npm run -s typecheck && cd .. && git add frontend/src/screens/Log
 訊息：`feat(frontend): 這一餐的「描述」——記一餐與編輯畫面可以填，飲食頁與好友的卡片看得到`。
 
 ---
+
+## Task 6：前端——記一餐的多樣面板（`AiMealPanel`）與「AI 估的項目」
+
+**Files:**
+- Create: `frontend/src/components/EstimateDraftFields.tsx`、`frontend/src/components/AiMealPanel.tsx`、`frontend/src/components/AiMealPanel.module.css`、`frontend/tests/ai-meal-panel.test.tsx`
+- Modify: `frontend/src/components/AiEstimatePanel.tsx`（欄位換成 `EstimateDraftFields`）、`frontend/src/screens/LogMeal.tsx`、`frontend/src/screens/LogMeal.module.css`
+- Rewrite: `frontend/tests/log-meal-ai.test.tsx`
+
+**寫計畫時跑過的部分**（這個 task 與 Task 4、5 的前端程式碼）：把下面的檔案照抄進工作目錄（`schema.d.ts` 用手寫的等價型別頂替——那時後端還沒做），`biome check`、`tsc -b` 乾淨，`npm run -s test` 是 `Test Files 142 passed`、`Tests 1786 passed`、`Type Errors no errors`；跑完整個還原。**下面的程式碼就是跑過、而且 biome 排過版的那一份**——照抄，不要重排。突變表是那時實測的（29 個，除了表裡寫明的那一個以外全部紅）。
+
+跑的時候改掉的三件事（已經反映在下面）：
+
+- **勾選框的可及名稱少一個空白。** `<label>` 裡名稱與「200 g · 260 kcal」是兩個相鄰的 `<span>`，JSX 把中間的換行吃掉，名稱變成「白飯200 g · 260 kcal」——照名稱找勾選框的五條測試紅。兩個 `<span>` 中間補 `{" "}`。
+- **`tests/timeline.test.ts` 的型別**（Task 1 已經補上）。
+- **「連按兩下只跑一輪」第一版守不住 `runningRef`**（突變 P1 存活）：兩次 `fireEvent.click` 之間 React 已經重畫，按鈕 handler 的 `adding` 檢查自己就擋住了。改成同一個 `act` 裡點兩下。元件裡那段註解也跟著改成實際的情況（平常 `adding` 擋得住，ref 是不靠重畫時機的那一半）。
+
+### 這個 task 的設計重點（先讀，再抄程式碼）
+
+1. **不會加兩次**靠三件事，缺一不可：`added` 的那一樣不在 `pendingItems()` 裡；`runningRef`（同步的 ref，不是 state）擋住還在跑的時候再進來的第二次；`onItemsReady` 一輪只呼叫一次、只帶這一輪成功的。按鈕的 `aria-disabled` 只是外觀。
+2. **依序**（`for … await`）：同一輪兩樣同名時第二樣用 `made` 裡第一樣剛建的食物。改成 `Promise.all` 會讓它們同時 POST、第二個 409。
+3. **`update()` 回傳新的清單**：衝突的兩顆按鈕要「改狀態、馬上用新狀態跑那一樣」，等不到 `setItems` 生效。
+4. **焦點**：開修改表單 → 「食物名稱」；套用／放棄／「改用 AI 的數字」→ 那一列的「修改」；加入成功 → 記一餐的「AI 估的項目」標題（由記一餐移）。都是旗標，只在那一次移。
+5. **短路（`analysis_id === null`）不進清單**：畫面與文字跟原本單樣面板的食物庫命中卡片一模一樣（`e2e/ai-estimate.spec.ts` 靠這些文字）。
+6. **`AiEstimatePanel` 的行為一個字都不能變**：`tests/ai-estimate-panel.test.tsx`、`new-food-ai.test.tsx`、`edit-meal.test.tsx` 不改、照樣綠，就是抽出 `EstimateDraftFields` 的守衛。
+
+- [ ] **Step 1：抽出 `EstimateDraftFields`（重構，測試不動）**
+
+`frontend/src/components/EstimateDraftFields.tsx`：
+
+```tsx
+import type { Ref } from "react";
+import type { EstimateDraft } from "../lib/ai-food";
+
+type Props = {
+	/** 六個欄位的 id 前綴（呼叫端的 `useId()`）——同一頁只會開一組。 */
+	idPrefix: string;
+	/** 一份重量的單位（g 或 ml）。 */
+	unit: string;
+	draft: EstimateDraft;
+	onChange: (patch: Partial<EstimateDraft>) => void;
+	/** 表單打開時焦點要到「食物名稱」：呼叫端自己決定什麼時候 focus。 */
+	nameInputRef?: Ref<HTMLInputElement>;
+};
+
+/** 修改 AI 估算的六個欄位：名稱、一份的重量、一份的四個營養素。
+ *
+ *  單樣面板（`AiEstimatePanel`）與多樣面板（`AiMealPanel`）共用——欄位、標籤、
+ *  `maxLength` 只有這一份。驗證與換算在 `lib/ai-food.ts` 的 `editedFoodRequest`，
+ *  兩邊也是同一個。回 fragment：欄位直接落在呼叫端的 `<form>` 版面裡。 */
+export function EstimateDraftFields({
+	idPrefix,
+	unit,
+	draft,
+	onChange,
+	nameInputRef,
+}: Props) {
+	return (
+		<>
+			<label htmlFor={`${idPrefix}-name`}>食物名稱</label>
+			<input
+				ref={nameInputRef}
+				id={`${idPrefix}-name`}
+				type="text"
+				maxLength={100}
+				value={draft.name}
+				onChange={(event) => onChange({ name: event.target.value })}
+			/>
+			<label
+				htmlFor={`${idPrefix}-serving-grams`}
+			>{`一份的重量（${unit}）`}</label>
+			<input
+				id={`${idPrefix}-serving-grams`}
+				type="text"
+				inputMode="decimal"
+				value={draft.servingGrams}
+				onChange={(event) => onChange({ servingGrams: event.target.value })}
+			/>
+			<label htmlFor={`${idPrefix}-kcal`}>一份的熱量（kcal）</label>
+			<input
+				id={`${idPrefix}-kcal`}
+				type="text"
+				inputMode="decimal"
+				value={draft.kcal}
+				onChange={(event) => onChange({ kcal: event.target.value })}
+			/>
+			<label htmlFor={`${idPrefix}-protein`}>一份的蛋白質（g）</label>
+			<input
+				id={`${idPrefix}-protein`}
+				type="text"
+				inputMode="decimal"
+				value={draft.protein_g}
+				onChange={(event) => onChange({ protein_g: event.target.value })}
+			/>
+			<label htmlFor={`${idPrefix}-fat`}>一份的脂肪（g）</label>
+			<input
+				id={`${idPrefix}-fat`}
+				type="text"
+				inputMode="decimal"
+				value={draft.fat_g}
+				onChange={(event) => onChange({ fat_g: event.target.value })}
+			/>
+			<label htmlFor={`${idPrefix}-carb`}>一份的碳水化合物（g）</label>
+			<input
+				id={`${idPrefix}-carb`}
+				type="text"
+				inputMode="decimal"
+				value={draft.carb_g}
+				onChange={(event) => onChange({ carb_g: event.target.value })}
+			/>
+		</>
+	);
+}
+```
+
+`AiEstimatePanel.tsx`：
+
+1. 匯入加 `import { EstimateDraftFields } from "./EstimateDraftFields";`（放在 `./AiEstimatePanel.module.css` 那一行後面；biome 會檢查順序）。
+2. 修改表單裡從 `<label htmlFor={`${id}-name`}>食物名稱</label>` 到「一份的碳水化合物」那個 `<input … />` 為止的六組 `<label>`＋`<input>`，整段換成：
+
+```tsx
+					<EstimateDraftFields
+						idPrefix={id}
+						unit={unit}
+						draft={draft}
+						nameInputRef={nameInputRef}
+						onChange={updateDraft}
+					/>
+```
+
+`{formError !== null && …}` 以下不動。
+
+Run: `npx vitest run tests/ai-estimate-panel.test.tsx tests/new-food-ai.test.tsx tests/edit-meal.test.tsx`
+Expected: PASS，條數跟動工前一樣（寫計畫時實測）。**這三個檔案在這個 task 裡一行都不改。**
+
+突變（確認那三個檔案真的守著這次抽出）：把 `EstimateDraftFields` 裡「一份的熱量」的 `onChange` 改成 `onChange({ fat_g: … })` → `ai-estimate-panel` 有紅；把 `nameInputRef` 那個 prop 拿掉不傳 → 「切到表單焦點到食物名稱」那一條紅。改回。
+
+- [ ] **Step 2：面板的測試（紅）**
+
+`frontend/tests/ai-meal-panel.test.tsx`：
+
+```tsx
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+	act,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+	within,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetRefreshStateForTests } from "../src/auth/refresh";
+import { clearTokens, setTokens } from "../src/auth/store";
+import { AiMealPanel } from "../src/components/AiMealPanel";
+import { json, mockApi, type Route } from "./helpers/mock-api";
+
+// 照片會先經過 shrinkToLongestEdge。**回另一個 File**：這樣才分得出交回的是
+// 原始的那一張，還是縮過的（handover §6 第 51 種）。
+const SHRUNK = new File(["shrunk"], "shrunk.jpg", { type: "image/jpeg" });
+vi.mock("../src/lib/resize-image", () => ({
+	shrinkToLongestEdge: vi.fn(() => Promise.resolve(SHRUNK)),
+}));
+
+// 白飯：食物庫有同名的，而且熱量跟 AI 估的不同（260 對 280）——分得出清單上顯示的
+// 是哪一個。滷雞腿：食物庫沒有。
+const RICE = {
+	name: "白飯",
+	brand: null,
+	nutrition: {
+		base_unit: "g",
+		serving_grams: "200.00",
+		kcal: "140.00",
+		protein_g: "2.50",
+		fat_g: "0.25",
+		carb_g: "31.00",
+		serving_kcal: "280.00",
+		serving_protein_g: "5.00",
+		serving_fat_g: "0.50",
+		serving_carb_g: "62.00",
+	},
+	confidence: "0.80",
+	consistency: { atwater_kcal: "272.50", deviation: "7.50", flagged: false },
+	library_food: {
+		food_id: 7,
+		name: "白飯",
+		base_unit: "g",
+		serving_kcal: "260.00",
+	},
+};
+
+const CHICKEN = {
+	name: "滷雞腿",
+	brand: null,
+	nutrition: {
+		base_unit: "g",
+		serving_grams: "150.00",
+		kcal: "200.00",
+		protein_g: "18.00",
+		fat_g: "13.33",
+		carb_g: "2.00",
+		serving_kcal: "300.00",
+		serving_protein_g: "27.00",
+		serving_fat_g: "20.00",
+		serving_carb_g: "3.00",
+	},
+	confidence: "0.60",
+	consistency: { atwater_kcal: "300.00", deviation: "0.00", flagged: false },
+	library_food: null,
+};
+
+const ESTIMATE = {
+	analysis_id: 41,
+	description: "一碗白飯、滷雞腿一隻",
+	items: [RICE, CHICKEN],
+	remaining_today: 18,
+};
+
+const LIBRARY_RICE = {
+	id: 7,
+	name: "白飯",
+	brand: null,
+	is_global: true,
+	nutrition: {
+		base_unit: "g",
+		kcal: "130.00",
+		protein_g: "2.50",
+		fat_g: "0.30",
+		carb_g: "28.00",
+	},
+};
+
+const CREATED_CHICKEN = {
+	id: 30,
+	name: "滷雞腿",
+	brand: null,
+	is_global: false,
+	nutrition: {
+		base_unit: "g",
+		kcal: "200.00",
+		protein_g: "18.00",
+		fat_g: "13.33",
+		carb_g: "2.00",
+	},
+};
+
+function serverError() {
+	return json(
+		{ error: { code: "INTERNAL_ERROR", message: "壞了", details: {} } },
+		500,
+	);
+}
+
+function apiError(status: number, code: string, message: string) {
+	return json({ error: { code, message, details: {} } }, status);
+}
+
+type Options = {
+	estimate?: () => Response;
+	/** `POST /api/foods`。 */
+	createFood?: () => Response | Promise<Response>;
+	/** `GET /api/foods?q=`（改名之後的同名檢查）。 */
+	search?: () => Response;
+	extra?: Route[];
+};
+
+/** 路徑順序：mockApi 依序用 `url.includes` 比對，具體的排前面。
+ *  **沒有 `/api/ai/analyze` 的路由**——這個面板打到單樣端點的話，mock 會直接炸
+ *  （`/api/ai/analyze-meal` 這個路徑只接得住它自己）。 */
+function mockPanel(options: Options = {}) {
+	return mockApi([
+		...(options.extra ?? []),
+		{
+			method: "POST",
+			path: "/api/ai/analyze-meal",
+			handler: options.estimate ?? (() => json(ESTIMATE)),
+		},
+		{
+			method: "GET",
+			path: "/api/foods?q=",
+			handler: options.search ?? (() => json([])),
+		},
+		{ method: "GET", path: "/api/foods/7", handler: () => json(LIBRARY_RICE) },
+		{
+			method: "GET",
+			path: "/api/foods/30",
+			handler: () => json(CREATED_CHICKEN),
+		},
+		{
+			method: "POST",
+			path: "/api/foods",
+			handler: options.createFood ?? (() => json(CREATED_CHICKEN, 201)),
+		},
+	]);
+}
+
+type FetchMock = ReturnType<typeof mockApi>;
+
+function calls(fetchMock: FetchMock, method: string, path: string) {
+	return fetchMock.mock.calls.filter(
+		([input, init]) =>
+			(init?.method ?? "GET").toUpperCase() === method &&
+			String(input).includes(path),
+	);
+}
+
+function createdBodies(fetchMock: FetchMock): Array<Record<string, unknown>> {
+	return fetchMock.mock.calls
+		.filter(
+			([input, init]) =>
+				(init?.method ?? "GET").toUpperCase() === "POST" &&
+				String(input).endsWith("/api/foods"),
+		)
+		.map(([, init]) => JSON.parse(String(init?.body)));
+}
+
+function renderPanel(text = "雞腿便當") {
+	const onFoodPicked = vi.fn();
+	const onItemsReady = vi.fn();
+	const client = new QueryClient({
+		defaultOptions: { queries: { retry: false } },
+	});
+	render(
+		<QueryClientProvider client={client}>
+			<AiMealPanel
+				text={text}
+				onFoodPicked={onFoodPicked}
+				onItemsReady={onItemsReady}
+			/>
+		</QueryClientProvider>,
+	);
+	return { onFoodPicked, onItemsReady };
+}
+
+/** 按文字估算，等清單出來。 */
+async function estimate(text = "雞腿便當") {
+	await userEvent.click(
+		screen.getByRole("button", { name: `用 AI 估算「${text}」` }),
+	);
+	return screen.findByRole("region", { name: "AI 估算結果" });
+}
+
+function checkbox(name: RegExp) {
+	return screen.getByRole("checkbox", { name });
+}
+
+/** 等到面板收起：勾著的都加入了、食物已經交回。 */
+async function waitUntilClosed() {
+	await waitFor(() =>
+		expect(
+			screen.queryByRole("region", { name: "AI 估算結果" }),
+		).not.toBeInTheDocument(),
+	);
+}
+
+beforeEach(() => {
+	localStorage.clear();
+	clearTokens();
+	resetRefreshStateForTests();
+	vi.restoreAllMocks();
+	setTokens({ access_token: "a", refresh_token: "r" });
+});
+
+describe("AI 多樣估算面板：清單", () => {
+	it("文字估算打 /api/ai/analyze-meal；清單有描述、每一樣的量與熱量、今天還能用幾次", async () => {
+		const fetchMock = mockPanel();
+		renderPanel();
+
+		const card = await estimate();
+
+		const [call] = calls(fetchMock, "POST", "/api/ai/analyze-meal");
+		expect(String(call?.[0])).toBe("/api/ai/analyze-meal");
+		expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+			kind: "text",
+			text: "雞腿便當",
+		});
+		expect(within(card).getByText("一碗白飯、滷雞腿一隻")).toBeInTheDocument();
+		expect(within(card).getByText("今天還能用 18 次")).toBeInTheDocument();
+		// 白飯用食物庫的：顯示的是食物庫的 260，不是 AI 的 280。
+		expect(checkbox(/^白飯 200 g · 260 kcal$/)).toBeChecked();
+		expect(checkbox(/^滷雞腿 150 g · 300 kcal$/)).toBeChecked();
+		expect(within(card).getAllByText("用食物庫的")).toHaveLength(1);
+		expect(
+			within(card).getByRole("button", { name: "加入這 2 樣" }),
+		).toHaveAttribute("aria-disabled", "false");
+		// 不顯示模型自己說的信心值。
+		expect(card).not.toHaveTextContent("0.8");
+	});
+
+	it("一致性有疑慮的那一樣標出來；用食物庫的那一樣不標（記下去的不是 AI 的數字）", async () => {
+		const flagged = {
+			atwater_kcal: "100.00",
+			deviation: "200.00",
+			flagged: true,
+		};
+		mockPanel({
+			estimate: () =>
+				json({
+					...ESTIMATE,
+					items: [
+						{ ...RICE, consistency: flagged },
+						{ ...CHICKEN, consistency: flagged },
+					],
+				}),
+		});
+		renderPanel();
+
+		const card = await estimate();
+
+		expect(
+			within(card).getAllByText("⚠ 熱量跟三大營養素對不太起來，建議看一眼"),
+		).toHaveLength(1);
+	});
+
+	it("取消勾選的那一樣不算在「加入這 N 樣」裡；全部取消就不能按", async () => {
+		const fetchMock = mockPanel();
+		const { onItemsReady } = renderPanel();
+		const card = await estimate();
+
+		await userEvent.click(checkbox(/^滷雞腿/));
+		expect(
+			within(card).getByRole("button", { name: "加入這 1 樣" }),
+		).toBeInTheDocument();
+		await userEvent.click(checkbox(/^白飯/));
+
+		const add = within(card).getByRole("button", { name: "加入這 0 樣" });
+		expect(add).toHaveAttribute("aria-disabled", "true");
+		// aria-disabled 不擋點擊：點了也不能有任何事發生。
+		await userEvent.click(add);
+		expect(calls(fetchMock, "GET", "/api/foods/")).toHaveLength(0);
+		expect(calls(fetchMock, "POST", "/api/foods")).toHaveLength(0);
+		expect(onItemsReady).not.toHaveBeenCalled();
+	});
+
+	it("「收起」清掉結果，不建任何東西", async () => {
+		const fetchMock = mockPanel();
+		const { onItemsReady } = renderPanel();
+		const card = await estimate();
+
+		await userEvent.click(within(card).getByRole("button", { name: "收起" }));
+
+		expect(
+			screen.queryByRole("region", { name: "AI 估算結果" }),
+		).not.toBeInTheDocument();
+		expect(calls(fetchMock, "POST", "/api/foods")).toHaveLength(0);
+		expect(onItemsReady).not.toHaveBeenCalled();
+	});
+});
+
+describe("AI 多樣估算面板：加入", () => {
+	it("用食物庫的那一樣拿食物庫的食物（不建）；其餘各建一個私人食物；一次交回", async () => {
+		const fetchMock = mockPanel();
+		const { onItemsReady, onFoodPicked } = renderPanel();
+		const card = await estimate();
+
+		await userEvent.click(
+			within(card).getByRole("button", { name: "加入這 2 樣" }),
+		);
+		await waitUntilClosed();
+
+		expect(calls(fetchMock, "GET", "/api/foods/7")).toHaveLength(1);
+		// 只建了一個：滷雞腿。內容跟單樣流程的「確認」同一個形狀。
+		expect(createdBodies(fetchMock)).toEqual([
+			{
+				name: "滷雞腿",
+				brand: null,
+				nutrition: {
+					base_unit: "g",
+					kcal: "200.00",
+					protein_g: "18.00",
+					fat_g: "13.33",
+					carb_g: "2.00",
+				},
+				default_portion: { label: "一份", grams: "150.00" },
+				source: "ai",
+				ai_confidence: "0.60",
+				ai_raw_response: {
+					analysis_id: 41,
+					food_id: null,
+					name: "滷雞腿",
+					brand: null,
+					nutrition: CHICKEN.nutrition,
+					confidence: "0.60",
+					consistency: CHICKEN.consistency,
+					remaining_today: 18,
+				},
+			},
+		]);
+		expect(onItemsReady).toHaveBeenCalledTimes(1);
+		expect(onItemsReady).toHaveBeenCalledWith(
+			[
+				{ food: LIBRARY_RICE, quantity: "200" },
+				{ food: CREATED_CHICKEN, quantity: "150" },
+			],
+			{ image: null, description: "一碗白飯、滷雞腿一隻" },
+		);
+		expect(onFoodPicked).not.toHaveBeenCalled();
+	});
+
+	it("沒勾的那一樣不會被加入，也不會被建成食物", async () => {
+		const fetchMock = mockPanel();
+		const { onItemsReady } = renderPanel();
+		const card = await estimate();
+
+		await userEvent.click(checkbox(/^滷雞腿/));
+		await userEvent.click(
+			within(card).getByRole("button", { name: "加入這 1 樣" }),
+		);
+		await waitUntilClosed();
+
+		expect(createdBodies(fetchMock)).toEqual([]);
+		expect(onItemsReady).toHaveBeenCalledWith(
+			[{ food: LIBRARY_RICE, quantity: "200" }],
+			expect.anything(),
+		);
+	});
+
+	it("「改用 AI 的數字」：那一樣改成建一個食物，用的是 AI 的營養素；焦點到它的「修改」", async () => {
+		const fetchMock = mockPanel({
+			createFood: () =>
+				json({ ...LIBRARY_RICE, id: 31, is_global: false }, 201),
+		});
+		renderPanel();
+		const card = await estimate();
+		await userEvent.click(checkbox(/^滷雞腿/));
+
+		await userEvent.click(
+			within(card).getByRole("button", { name: "白飯：改用 AI 的數字" }),
+		);
+
+		expect(within(card).queryByText("用食物庫的")).not.toBeInTheDocument();
+		expect(checkbox(/^白飯 200 g · 280 kcal$/)).toBeChecked();
+		expect(
+			within(card).getByRole("button", { name: "修改 白飯" }),
+		).toHaveFocus();
+		await userEvent.click(
+			within(card).getByRole("button", { name: "加入這 1 樣" }),
+		);
+		await waitUntilClosed();
+		expect(calls(fetchMock, "GET", "/api/foods/7")).toHaveLength(0);
+		expect(createdBodies(fetchMock)).toMatchObject([
+			{ name: "白飯", source: "ai", nutrition: { kcal: "140.00" } },
+		]);
+	});
+
+	it("拍照估算：交回的是原始的那一張照片，不是縮過的", async () => {
+		const fetchMock = mockPanel();
+		const { onItemsReady } = renderPanel("");
+		const photo = new File(["fake-jpeg"], "lunch.jpg", { type: "image/jpeg" });
+
+		await userEvent.upload(screen.getByLabelText("拍照估算"), photo);
+		const card = await screen.findByRole("region", { name: "AI 估算結果" });
+		// 送去估算的是縮過的那一張。
+		const [call] = calls(fetchMock, "POST", "/api/ai/analyze-meal");
+		expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+			kind: "image",
+			image_base64: btoa("shrunk"),
+		});
+		await userEvent.click(
+			within(card).getByRole("button", { name: "加入這 2 樣" }),
+		);
+		await waitUntilClosed();
+
+		expect(onItemsReady.mock.calls[0]?.[1].image).toBe(photo);
+	});
+
+	it("同一輪有兩樣同名：只建一次，兩樣用同一個食物", async () => {
+		const egg = { ...CHICKEN, name: "滷蛋" };
+		const created = { ...CREATED_CHICKEN, id: 32, name: "滷蛋" };
+		const fetchMock = mockPanel({
+			estimate: () =>
+				json({
+					...ESTIMATE,
+					items: [
+						egg,
+						{
+							...egg,
+							name: " 滷蛋 ",
+							nutrition: { ...egg.nutrition, serving_grams: "55.00" },
+						},
+					],
+				}),
+			createFood: () => json(created, 201),
+		});
+		const { onItemsReady } = renderPanel();
+		const card = await estimate();
+
+		await userEvent.click(
+			within(card).getByRole("button", { name: "加入這 2 樣" }),
+		);
+		await waitUntilClosed();
+
+		expect(createdBodies(fetchMock)).toHaveLength(1);
+		expect(onItemsReady).toHaveBeenCalledWith(
+			[
+				{ food: created, quantity: "150" },
+				{ food: created, quantity: "55" },
+			],
+			expect.anything(),
+		);
+	});
+
+	it("連按兩下只跑一輪：每一樣只建一次、只交回一次", async () => {
+		let release: (response: Response) => void = () => {};
+		const fetchMock = mockPanel({
+			createFood: () =>
+				new Promise<Response>((resolve) => {
+					release = resolve;
+				}),
+		});
+		const { onItemsReady } = renderPanel();
+		const card = await estimate();
+		const add = within(card).getByRole("button", { name: "加入這 2 樣" });
+
+		// **同一個 act 裡點兩下**：兩下之間 React 沒有重畫，第二下的 handler 看到的
+		// `adding` 還是 false——擋它的只有 ref。分開點（兩次 fireEvent）的話，React 在
+		// 兩下之間就重畫了，`adding` 自己擋得住，拿掉 ref 這條測試照樣綠（寫計畫時
+		// 實測：突變存活）。
+		act(() => {
+			add.click();
+			add.click();
+		});
+		// 跑的時候：按鈕是 aria-disabled（它正在焦點上，不用原生 disabled）、勾選框停用。
+		await waitFor(() =>
+			expect(calls(fetchMock, "POST", "/api/foods")).toHaveLength(1),
+		);
+		const running = within(card).getByRole("button", { name: "加入中…" });
+		expect(running).toHaveAttribute("aria-disabled", "true");
+		expect(running).not.toBeDisabled();
+		expect(checkbox(/^滷雞腿/)).toBeDisabled();
+		expect(screen.getByRole("status")).toHaveTextContent("加入中…");
+		// 跑到一半再點一次也不會開第二輪。
+		fireEvent.click(running);
+		release(json(CREATED_CHICKEN, 201));
+		await waitUntilClosed();
+
+		expect(calls(fetchMock, "GET", "/api/foods/7")).toHaveLength(1);
+		expect(calls(fetchMock, "POST", "/api/foods")).toHaveLength(1);
+		expect(onItemsReady).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("AI 多樣估算面板：部分失敗", () => {
+	it("一樣失敗：成功的照樣交回並標「已加入」，失敗的留著；再按一次只做失敗的那一樣", async () => {
+		let attempts = 0;
+		const fetchMock = mockPanel({
+			createFood: () => {
+				attempts += 1;
+				return attempts === 1 ? serverError() : json(CREATED_CHICKEN, 201);
+			},
+		});
+		const { onItemsReady } = renderPanel();
+		const card = await estimate();
+
+		await userEvent.click(
+			within(card).getByRole("button", { name: "加入這 2 樣" }),
+		);
+
+		expect(
+			await within(card).findByText("存成食物失敗，請再試一次"),
+		).toBeInTheDocument();
+		expect(screen.getByRole("status")).toHaveTextContent(
+			"已加入 1 樣，1 樣沒有成功",
+		);
+		expect(onItemsReady).toHaveBeenCalledTimes(1);
+		expect(onItemsReady).toHaveBeenLastCalledWith(
+			[{ food: LIBRARY_RICE, quantity: "200" }],
+			expect.anything(),
+		);
+		// 白飯：已加入，不能再勾、不能再改。
+		expect(within(card).getByText("已加入")).toBeInTheDocument();
+		expect(checkbox(/^白飯/)).toBeDisabled();
+		expect(
+			within(card).queryByRole("button", { name: "白飯：改用 AI 的數字" }),
+		).not.toBeInTheDocument();
+
+		await userEvent.click(
+			within(card).getByRole("button", { name: "加入這 1 樣" }),
+		);
+		await waitUntilClosed();
+
+		// 白飯沒有被再拿一次；滷雞腿建了兩次（第一次失敗）。
+		expect(calls(fetchMock, "GET", "/api/foods/7")).toHaveLength(1);
+		expect(calls(fetchMock, "POST", "/api/foods")).toHaveLength(2);
+		expect(onItemsReady).toHaveBeenCalledTimes(2);
+		expect(onItemsReady).toHaveBeenLastCalledWith(
+			[{ food: CREATED_CHICKEN, quantity: "150" }],
+			{ image: null, description: "一碗白飯、滷雞腿一隻" },
+		);
+	});
+
+	it("讀食物庫的那一筆失敗：說的是讀取失敗，不是存成食物失敗", async () => {
+		mockPanel({
+			extra: [{ method: "GET", path: "/api/foods/7", handler: serverError }],
+		});
+		const { onItemsReady } = renderPanel();
+		const card = await estimate();
+
+		await userEvent.click(
+			within(card).getByRole("button", { name: "加入這 2 樣" }),
+		);
+
+		expect(
+			await within(card).findByText("讀取食物失敗，請再試一次"),
+		).toBeInTheDocument();
+		// 另一樣照樣加入。
+		expect(onItemsReady).toHaveBeenCalledWith(
+			[{ food: CREATED_CHICKEN, quantity: "150" }],
+			expect.anything(),
+		);
+	});
+
+	it("撞到自己的同名食物（409）：「用現有的」拿那一筆，不再建", async () => {
+		const fetchMock = mockPanel({
+			createFood: () =>
+				json(
+					{
+						error: {
+							code: "FOOD_EXISTS",
+							message: "你已經建過同名的食物了",
+							details: { food_id: 30 },
+						},
+					},
+					409,
+				),
+		});
+		const { onItemsReady } = renderPanel();
+		const card = await estimate();
+		await userEvent.click(
+			within(card).getByRole("button", { name: "加入這 2 樣" }),
+		);
+
+		expect(
+			await within(card).findByText("你已經有「滷雞腿」了"),
+		).toBeInTheDocument();
+		expect(
+			within(card).getByRole("button", { name: "改名" }),
+		).toBeInTheDocument();
+		await userEvent.click(
+			within(card).getByRole("button", { name: "用現有的" }),
+		);
+		await waitUntilClosed();
+
+		expect(calls(fetchMock, "GET", "/api/foods/30")).toHaveLength(1);
+		expect(calls(fetchMock, "POST", "/api/foods")).toHaveLength(1);
+		expect(onItemsReady).toHaveBeenLastCalledWith(
+			[{ food: CREATED_CHICKEN, quantity: "150" }],
+			expect.anything(),
+		);
+	});
+
+	it("撞到自己的同名食物：「改名」開修改表單，改完再加入就建得出來", async () => {
+		let attempts = 0;
+		const renamed = { ...CREATED_CHICKEN, id: 33, name: "滷雞腿（便當店）" };
+		const fetchMock = mockPanel({
+			createFood: () => {
+				attempts += 1;
+				return attempts === 1
+					? json(
+							{
+								error: {
+									code: "FOOD_EXISTS",
+									message: "你已經建過同名的食物了",
+									details: { food_id: 30 },
+								},
+							},
+							409,
+						)
+					: json(renamed, 201);
+			},
+		});
+		const { onItemsReady } = renderPanel();
+		const card = await estimate();
+		await userEvent.click(
+			within(card).getByRole("button", { name: "加入這 2 樣" }),
+		);
+
+		await userEvent.click(
+			await within(card).findByRole("button", { name: "改名" }),
+		);
+		const name = within(card).getByLabelText("食物名稱");
+		expect(name).toHaveFocus();
+		await userEvent.clear(name);
+		await userEvent.type(name, "滷雞腿（便當店）");
+		await userEvent.click(within(card).getByRole("button", { name: "套用" }));
+		// 改過就不是剛才問的那一樣了：提問收起來。
+		expect(
+			within(card).queryByText("你已經有「滷雞腿」了"),
+		).not.toBeInTheDocument();
+		await userEvent.click(
+			within(card).getByRole("button", { name: "加入這 1 樣" }),
+		);
+		await waitUntilClosed();
+
+		expect(createdBodies(fetchMock)[1]).toMatchObject({
+			name: "滷雞腿（便當店）",
+			source: "user",
+		});
+		expect(onItemsReady).toHaveBeenLastCalledWith(
+			[{ food: renamed, quantity: "150" }],
+			expect.anything(),
+		);
+	});
+});
+
+describe("AI 多樣估算面板：修改一樣", () => {
+	async function openChickenForm() {
+		const card = await estimate();
+		await userEvent.click(
+			within(card).getByRole("button", { name: "修改 滷雞腿" }),
+		);
+		return {
+			card,
+			form: within(card).getByRole("form", { name: "修改 滷雞腿" }),
+		};
+	}
+
+	async function retype(form: HTMLElement, label: string, value: string) {
+		const field = within(form).getByLabelText(label);
+		await userEvent.clear(field);
+		await userEvent.type(field, value);
+	}
+
+	it("開表單焦點到「食物名稱」；套用之後清單顯示改過的值，加入時送的每一個欄位都是改過的", async () => {
+		const created = { ...CREATED_CHICKEN, id: 34, name: "烤雞腿" };
+		const fetchMock = mockPanel({ createFood: () => json(created, 201) });
+		const { onItemsReady } = renderPanel();
+		const { card, form } = await openChickenForm();
+
+		expect(within(form).getByLabelText("食物名稱")).toHaveFocus();
+		// 表單的初始值是 AI 的那一組。
+		expect(within(form).getByLabelText("一份的重量（g）")).toHaveValue("150");
+		// **每一個欄位都改**（handover §6 第 52 種）：只改一個的話，其他欄位送 AI 的原值
+		// 也看不出來。
+		await retype(form, "食物名稱", "烤雞腿");
+		await retype(form, "一份的重量（g）", "180");
+		await retype(form, "一份的熱量（kcal）", "333");
+		await retype(form, "一份的蛋白質（g）", "30");
+		await retype(form, "一份的脂肪（g）", "22");
+		await retype(form, "一份的碳水化合物（g）", "1");
+		await userEvent.click(within(form).getByRole("button", { name: "套用" }));
+
+		expect(checkbox(/^烤雞腿 180 g · 333 kcal$/)).toBeChecked();
+		expect(
+			within(card).getByRole("button", { name: "修改 烤雞腿" }),
+		).toHaveFocus();
+		// 套用只是記在清單上：還沒建任何東西。
+		expect(createdBodies(fetchMock)).toEqual([]);
+
+		await userEvent.click(checkbox(/^白飯/));
+		await userEvent.click(
+			within(card).getByRole("button", { name: "加入這 1 樣" }),
+		);
+		await waitUntilClosed();
+
+		// 改了名稱：加入前查一次同名（食物庫沒有）。
+		expect(calls(fetchMock, "GET", "/api/foods?q=")).toHaveLength(1);
+		expect(createdBodies(fetchMock)).toMatchObject([
+			{
+				name: "烤雞腿",
+				// 一份的值換算成每 100：333／30／22／1 ÷ 180 × 100。
+				nutrition: {
+					base_unit: "g",
+					kcal: "185.00",
+					protein_g: "16.67",
+					fat_g: "12.22",
+					carb_g: "0.56",
+				},
+				default_portion: { label: "一份", grams: "180" },
+				source: "user",
+				ai_confidence: "0.60",
+			},
+		]);
+		expect(onItemsReady).toHaveBeenCalledWith(
+			[{ food: created, quantity: "180" }],
+			expect.anything(),
+		);
+	});
+
+	it("表單驗證不過：顯示訊息、表單留著、清單不變", async () => {
+		mockPanel();
+		renderPanel();
+		const { form } = await openChickenForm();
+
+		await userEvent.clear(within(form).getByLabelText("食物名稱"));
+		await userEvent.click(within(form).getByRole("button", { name: "套用" }));
+
+		expect(within(form).getByRole("alert")).toHaveTextContent("請輸入名稱");
+		expect(checkbox(/^滷雞腿 150 g · 300 kcal$/)).toBeInTheDocument();
+	});
+
+	it("放棄修改：清單不變，焦點回到那一列的「修改」", async () => {
+		mockPanel();
+		renderPanel();
+		const { card, form } = await openChickenForm();
+
+		await retype(form, "食物名稱", "烤雞腿");
+		await userEvent.click(
+			within(form).getByRole("button", { name: "放棄修改" }),
+		);
+
+		expect(checkbox(/^滷雞腿 150 g · 300 kcal$/)).toBeInTheDocument();
+		expect(
+			within(card).getByRole("button", { name: "修改 滷雞腿" }),
+		).toHaveFocus();
+	});
+
+	it("只改數字、沒改名稱：加入前不查同名", async () => {
+		const fetchMock = mockPanel();
+		renderPanel();
+		const { card, form } = await openChickenForm();
+
+		await retype(form, "一份的熱量（kcal）", "333");
+		await userEvent.click(within(form).getByRole("button", { name: "套用" }));
+		await userEvent.click(
+			within(card).getByRole("button", { name: "加入這 2 樣" }),
+		);
+		await waitUntilClosed();
+
+		expect(calls(fetchMock, "GET", "/api/foods?q=")).toHaveLength(0);
+		expect(createdBodies(fetchMock)).toMatchObject([{ source: "user" }]);
+	});
+
+	const LIBRARY_LEG = {
+		...CREATED_CHICKEN,
+		id: 44,
+		name: "雞腿",
+		is_global: true,
+	};
+
+	async function renameToLibraryName() {
+		const { card, form } = await openChickenForm();
+		await retype(form, "食物名稱", "雞腿");
+		await userEvent.click(within(form).getByRole("button", { name: "套用" }));
+		await userEvent.click(checkbox(/^白飯/));
+		await userEvent.click(
+			within(card).getByRole("button", { name: "加入這 1 樣" }),
+		);
+		expect(
+			await within(card).findByText("食物庫裡已經有「雞腿」"),
+		).toBeInTheDocument();
+		return card;
+	}
+
+	it("改名之後跟食物庫的同名：先問；「用食物庫的」拿那一筆，不建", async () => {
+		const fetchMock = mockPanel({
+			search: () => json([LIBRARY_LEG]),
+			extra: [
+				{
+					method: "GET",
+					path: "/api/foods/44",
+					handler: () => json(LIBRARY_LEG),
+				},
+			],
+		});
+		const { onItemsReady } = renderPanel();
+		const card = await renameToLibraryName();
+
+		// 問的時候還沒建、也還沒交回。
+		expect(createdBodies(fetchMock)).toEqual([]);
+		expect(onItemsReady).not.toHaveBeenCalled();
+		await userEvent.click(
+			within(card).getByRole("button", { name: "用食物庫的" }),
+		);
+		await waitUntilClosed();
+
+		expect(createdBodies(fetchMock)).toEqual([]);
+		expect(onItemsReady).toHaveBeenCalledWith(
+			[{ food: LIBRARY_LEG, quantity: "150" }],
+			expect.anything(),
+		);
+	});
+
+	it("改名之後跟食物庫的同名：「還是建一個」照改過的內容建，不再問", async () => {
+		const created = { ...CREATED_CHICKEN, id: 35, name: "雞腿" };
+		const fetchMock = mockPanel({
+			search: () => json([LIBRARY_LEG]),
+			createFood: () => json(created, 201),
+		});
+		const { onItemsReady } = renderPanel();
+		const card = await renameToLibraryName();
+
+		await userEvent.click(
+			within(card).getByRole("button", { name: "還是建一個" }),
+		);
+		await waitUntilClosed();
+
+		expect(createdBodies(fetchMock)).toMatchObject([
+			{ name: "雞腿", source: "user" },
+		]);
+		// 第二次沒有再查同名。
+		expect(calls(fetchMock, "GET", "/api/foods?q=")).toHaveLength(1);
+		expect(onItemsReady).toHaveBeenCalledWith(
+			[{ food: created, quantity: "150" }],
+			expect.anything(),
+		);
+	});
+
+	it("同名檢查失敗（查不到）：照樣建——那只是提醒，不是守衛", async () => {
+		const fetchMock = mockPanel({ search: serverError });
+		renderPanel();
+		const { card, form } = await openChickenForm();
+		await retype(form, "食物名稱", "雞腿");
+		await userEvent.click(within(form).getByRole("button", { name: "套用" }));
+
+		await userEvent.click(
+			within(card).getByRole("button", { name: "加入這 2 樣" }),
+		);
+		await waitUntilClosed();
+
+		expect(createdBodies(fetchMock)).toMatchObject([{ name: "雞腿" }]);
+	});
+});
+
+describe("AI 多樣估算面板：不呼叫 AI 的路與錯誤", () => {
+	const SHORTCUT = {
+		analysis_id: null,
+		description: "白飯",
+		items: [
+			{
+				...RICE,
+				nutrition: {
+					...RICE.nutrition,
+					kcal: "130.00",
+					serving_grams: "100",
+					serving_kcal: "130.00",
+				},
+				library_food: { ...RICE.library_food, serving_kcal: "130.00" },
+			},
+		],
+		remaining_today: 20,
+	};
+
+	it("整段文字就是食物庫裡的食物：「用這個」交回那個食物，不進清單", async () => {
+		const fetchMock = mockPanel({ estimate: () => json(SHORTCUT) });
+		const { onFoodPicked, onItemsReady } = renderPanel("白飯");
+
+		await userEvent.click(
+			screen.getByRole("button", { name: "用 AI 估算「白飯」" }),
+		);
+		const hit = await screen.findByRole("region", { name: "食物庫裡的食物" });
+		expect(hit).toHaveTextContent("食物庫裡已經有「白飯」");
+		expect(hit).toHaveTextContent("每 100 g：130 kcal");
+		expect(
+			screen.queryByRole("region", { name: "AI 估算結果" }),
+		).not.toBeInTheDocument();
+		await userEvent.click(within(hit).getByRole("button", { name: "用這個" }));
+
+		await waitFor(() =>
+			expect(onFoodPicked).toHaveBeenCalledWith(LIBRARY_RICE),
+		);
+		expect(calls(fetchMock, "GET", "/api/foods/7")).toHaveLength(1);
+		expect(onItemsReady).not.toHaveBeenCalled();
+		expect(
+			screen.queryByRole("region", { name: "食物庫裡的食物" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("搜尋框沒有字：只有拍照估算", () => {
+		mockPanel();
+		renderPanel("   ");
+
+		expect(screen.queryByRole("button", { name: /用 AI 估算/ })).toBeNull();
+		expect(screen.getByLabelText("拍照估算")).toBeInTheDocument();
+	});
+
+	it.each([
+		[
+			"AI_BAD_RESPONSE",
+			() => apiError(502, "AI_BAD_RESPONSE", "AI 看不出這一餐有什麼食物"),
+			"AI 這次的回答看不懂，可以再試一次",
+		],
+		[
+			"AI_DAILY_LIMIT",
+			() => apiError(429, "AI_DAILY_LIMIT", "今天用了 20/20 次，請明天再試"),
+			"今天用了 20/20 次，請明天再試",
+		],
+		[
+			"AI_UPSTREAM_ERROR",
+			() =>
+				apiError(502, "AI_UPSTREAM_ERROR", "AI 服務暫時無法使用，請稍後再試"),
+			"AI 服務暫時無法使用，請稍後再試",
+		],
+	])(
+		"估算失敗（%s）：顯示跟單樣面板同一句話",
+		async (_code, respond, message) => {
+			mockPanel({ estimate: respond });
+			renderPanel();
+
+			await userEvent.click(
+				screen.getByRole("button", { name: "用 AI 估算「雞腿便當」" }),
+			);
+
+			expect(await screen.findByRole("alert")).toHaveTextContent(message);
+			expect(
+				screen.queryByRole("region", { name: "AI 估算結果" }),
+			).not.toBeInTheDocument();
+		},
+	);
+
+	it("AI 沒設定：顯示後端的訊息，並停用拍照估算（文字仍可按——命中食物庫不用 AI）", async () => {
+		mockPanel({
+			estimate: () => apiError(503, "AI_NOT_CONFIGURED", "AI 分析未設定"),
+		});
+		renderPanel();
+
+		await userEvent.click(
+			screen.getByRole("button", { name: "用 AI 估算「雞腿便當」" }),
+		);
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("AI 分析未設定");
+		expect(screen.getByLabelText("拍照估算")).toBeDisabled();
+		expect(
+			screen.getByRole("button", { name: "用 AI 估算「雞腿便當」" }),
+		).toBeEnabled();
+	});
+
+	it("再估算一次：上一次的清單與錯誤都換掉", async () => {
+		let round = 0;
+		mockPanel({
+			estimate: () => {
+				round += 1;
+				return round === 1
+					? json(ESTIMATE)
+					: json({ ...ESTIMATE, description: "只有白飯", items: [RICE] });
+			},
+		});
+		renderPanel();
+		await estimate();
+
+		const card = await estimate();
+
+		await waitFor(() =>
+			expect(within(card).getByText("只有白飯")).toBeInTheDocument(),
+		);
+		expect(screen.queryByRole("checkbox", { name: /^滷雞腿/ })).toBeNull();
+		expect(
+			screen.getByRole("button", { name: "加入這 1 樣" }),
+		).toBeInTheDocument();
+	});
+});
+```
+
+Run: `npx vitest run tests/ai-meal-panel.test.tsx`
+Expected: FAIL（`FAIL tests/ai-meal-panel.test.tsx`：找不到 `../src/components/AiMealPanel`）。
+
+- [ ] **Step 3：面板**
+
+`frontend/src/components/AiMealPanel.module.css`：
+
+```css
+/* 多樣面板自己的部分。面板外框、入口按鈕、卡片、主要／次要按鈕、表單欄位的外觀
+   都用 AiEstimatePanel.module.css 的（兩個面板同一套）。 */
+
+.description {
+	margin: 0;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+.items {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin: var(--space-2) 0 0;
+	padding: 0;
+	list-style: none;
+}
+
+/* 一樣一列：勾選框＋名稱＋量，右邊是標籤與按鈕；窄的時候按鈕換到下一行。 */
+.item {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-1) var(--space-2);
+	padding-top: var(--space-2);
+	border-top: 1px solid var(--color-border);
+}
+
+/* 整個標籤是勾選框的點擊目標。 */
+.check {
+	display: flex;
+	flex: 1 1 12rem;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-1) var(--space-2);
+	min-width: 0;
+	min-height: 44px;
+}
+
+.check input {
+	flex: none;
+	width: 20px;
+	height: 20px;
+	margin: 0;
+	accent-color: var(--color-action);
+}
+
+.name {
+	font-weight: 700;
+	overflow-wrap: anywhere;
+}
+
+.rowActions button {
+	min-height: 44px;
+	padding: 0 var(--space-3);
+	border-radius: var(--radius-button);
+	font-weight: 600;
+}
+
+/* 錯誤、衝突的提問、修改表單各佔一整行。 */
+.item > p,
+.conflict,
+.editForm {
+	flex-basis: 100%;
+}
+
+.conflict p {
+	margin: 0;
+}
+
+.add[aria-disabled="true"] {
+	opacity: 0.4;
+}
+```
+
+`frontend/src/components/AiMealPanel.tsx`：
+
+```tsx
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+	type ChangeEvent,
+	type FormEvent,
+	useEffect,
+	useId,
+	useRef,
+	useState,
+} from "react";
+import {
+	type AnalyzeMealResponse,
+	analyzeMealImage,
+	analyzeMealText,
+	describeAnalyzeError,
+} from "../api/ai";
+import { apiFetch } from "../api/client";
+import { ApiError, describeFieldErrors } from "../api/errors";
+import { type Food, searchFoods } from "../api/foods";
+import { queryKeys } from "../api/queries";
+import {
+	confirmedFoodRequest,
+	draftFromEstimate,
+	type EstimateDraft,
+	editedFoodRequest,
+	findSameNameFood,
+} from "../lib/ai-food";
+import {
+	type ChecklistItem,
+	initialChecklist,
+	itemAmount,
+	itemName,
+	nameKey,
+	pendingItems,
+	wasRenamed,
+} from "../lib/ai-meal";
+import { formatMacro } from "../lib/decimal";
+import base from "./AiEstimatePanel.module.css";
+import styles from "./AiMealPanel.module.css";
+import { EstimateDraftFields } from "./EstimateDraftFields";
+import { PhotoPickerButton } from "./PhotoPickerButton";
+import ui from "./ui.module.css";
+
+type AnalyzeInput =
+	| { kind: "text"; text: string }
+	| { kind: "image"; file: File };
+
+/** 交給記一餐的一樣：食物＋量（g 或 ml——直接輸入的那種，不是「幾份」）。 */
+export type ReadyItem = { food: Food; quantity: string };
+
+type Props = {
+	/** 文字估算要用的字（記一餐搜尋框的字）。trim 之後是空的就只有拍照估算。 */
+	text: string;
+	/** 整段文字就是食物庫裡的一個食物（沒有呼叫 AI）：「用這個」交回那個食物——
+	 *  跟從搜尋結果選一個一樣，由記一餐接成「已選擇」。 */
+	onFoodPicked: (food: Food) => void;
+	/** 「加入這 N 樣」每一輪成功的那幾樣（至少一樣才呼叫）。`image` 是估算用的照片
+	 *  （文字估算是 null）、`description` 是 AI 說的那句話——記一餐拿去當這一餐的
+	 *  照片與描述，已經有就不覆蓋（AI 多樣估算規格 D20）。 */
+	onItemsReady: (
+		items: ReadyItem[],
+		source: { image: File | null; description: string },
+	) => void;
+};
+
+/** 同名檢查搜尋的筆數（同 `AiEstimatePanel`：用後端的上限）。 */
+const SAME_NAME_SEARCH_LIMIT = 200;
+
+/** 改過名稱的那一樣，跟看得到的某個食物同名：停下來問使用者。 */
+class SameNameError extends Error {
+	readonly food: Food;
+
+	constructor(food: Food) {
+		super("食物庫裡已經有同名的食物");
+		this.food = food;
+	}
+}
+
+/** 一樣 → 一個可以記的食物。**依序**的四種來源（規格 §6.2「加入」）：
+ *  使用者在衝突時選的那一筆、食物庫同名的那一筆、（改過名稱的先查同名）、新建一個。 */
+async function resolveFood(item: ChecklistItem): Promise<Food> {
+	const foodId =
+		item.pickedFoodId ??
+		(item.draft === null ? (item.library?.food_id ?? null) : null);
+	if (foodId !== null) {
+		const food = await apiFetch<Food>(`/api/foods/${foodId}`);
+		if (food === null) throw new Error("讀取食物沒有回傳結果");
+		return food;
+	}
+
+	let body = confirmedFoodRequest(item.estimate);
+	if (item.draft !== null) {
+		// 「套用」的時候驗過了；這裡再驗一次是為了拿到換算好的 body。
+		const edited = editedFoodRequest(item.estimate, item.draft);
+		if (!edited.ok) throw new Error(edited.error);
+		body = edited.body;
+	}
+
+	if (wasRenamed(item) && !item.skipSameNameCheck) {
+		let match: Food | null = null;
+		try {
+			match = findSameNameFood(
+				await searchFoods(body.name, "all", SAME_NAME_SEARCH_LIMIT),
+				body.name,
+			);
+		} catch {
+			// 同名檢查只是提醒：查不到（多半是暫時的）不擋使用者存（同單樣面板）。
+		}
+		if (match !== null) throw new SameNameError(match);
+	}
+
+	const created = await apiFetch<Food>("/api/foods", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(body),
+	});
+	if (created === null) throw new Error("建立食物沒有回傳結果");
+	return created;
+}
+
+/** 這一樣為什麼沒加進去：要使用者決定的（衝突），或一句錯誤。 */
+function failureOf(
+	item: ChecklistItem,
+	error: unknown,
+): Partial<ChecklistItem> {
+	if (error instanceof SameNameError) {
+		return {
+			error: null,
+			conflict: {
+				source: "library",
+				foodId: error.food.id,
+				name: error.food.name,
+			},
+		};
+	}
+	if (error instanceof ApiError && error.code === "FOOD_EXISTS") {
+		const foodId = error.details.food_id;
+		if (typeof foodId === "number") {
+			return {
+				error: null,
+				conflict: { source: "own", foodId, name: itemName(item) },
+			};
+		}
+		return { error: error.message, conflict: null };
+	}
+	if (error instanceof ApiError && error.code === "VALIDATION_ERROR") {
+		return { error: describeFieldErrors(error).join("；"), conflict: null };
+	}
+	const reading =
+		item.pickedFoodId !== null ||
+		(item.library !== null && item.draft === null);
+	return {
+		error: reading ? "讀取食物失敗，請再試一次" : "存成食物失敗，請再試一次",
+		conflict: null,
+	};
+}
+
+/** 記一餐的 AI 入口（AI 多樣估算規格 §6.2）：文字或照片 → 一句描述＋這一餐的每一樣，
+ *  勾選、必要時修改，「加入這 N 樣」把每一樣變成食物並交回給記一餐。
+ *
+ *  **跟 `AiEstimatePanel` 的分工**：那個是「估一樣、存成一個食物」（新增食物、
+ *  編輯這一餐的加一項）；這個是「估一餐」。兩者共用錯誤訊息（`describeAnalyzeError`）、
+ *  修改表單的欄位（`EstimateDraftFields`）、存食物的內容（`lib/ai-food.ts`）與外觀
+ *  （`AiEstimatePanel.module.css`）。
+ *
+ *  **什麼都還沒存成餐**：這裡只建食物（或拿食物庫的）。餐由記一餐的「記錄」存。
+ *
+ *  **不顯示 `confidence`**（同單樣面板）：那是模型自己說的。 */
+export function AiMealPanel({ text, onFoodPicked, onItemsReady }: Props) {
+	const queryClient = useQueryClient();
+	const id = useId();
+	const trimmed = text.trim();
+
+	const [result, setResult] = useState<AnalyzeMealResponse | null>(null);
+	// 估算用的照片——加入之後跟食物一起交回。
+	const [image, setImage] = useState<File | null>(null);
+	const [items, setItems] = useState<ChecklistItem[]>([]);
+	// 正在修改哪一樣（一次只開一個）。草稿「套用」之後才寫回那一樣。
+	const [editing, setEditing] = useState<{
+		key: number;
+		draft: EstimateDraft;
+		error: string | null;
+	} | null>(null);
+	const [adding, setAdding] = useState(false);
+	// 一輪加入之後的結果（有沒成功的才寫）。
+	const [summary, setSummary] = useState("");
+	// 這一次畫面上已經知道 AI 沒設定：只停用拍照（文字仍可按——命中食物庫不用 AI）。
+	const [aiUnavailable, setAiUnavailable] = useState(false);
+
+	// 同一時間只跑一輪「加入」。平常 React 在兩次點擊之間就會重畫，下面按鈕的
+	// `adding` 檢查擋得住；這個 ref 是**不靠重畫時機**的那一半——同一批更新裡進來的
+	// 第二次呼叫（看到的 `adding` 還是舊的）、以及衝突按鈕直接呼叫 `addItems`。
+	const runningRef = useRef(false);
+	// 卸載之後不再碰 state、不再交回食物（使用者已經離開記一餐）。
+	const mountedRef = useRef(true);
+	useEffect(() => {
+		mountedRef.current = true;
+		return () => {
+			mountedRef.current = false;
+		};
+	}, []);
+
+	// 修改表單 ↔ 那一列的按鈕切換時，按下去的那顆按鈕會消失、焦點掉到 body。
+	// 開表單 → 焦點到「食物名稱」；關表單（或「改用 AI 的數字」）→ 焦點到那一列的
+	// 「修改」。只在切換那一次移（旗標），不是每次 render——剛估算完不搶焦點。
+	const focusNextRef = useRef<"form" | { editButton: number } | null>(null);
+	const nameInputRef = useRef<HTMLInputElement>(null);
+	const editButtonsRef = useRef(new Map<number, HTMLButtonElement>());
+	useEffect(() => {
+		const next = focusNextRef.current;
+		if (next === null) return;
+		const target =
+			next === "form"
+				? nameInputRef.current
+				: (editButtonsRef.current.get(next.editButton) ?? null);
+		if (target !== null) {
+			focusNextRef.current = null;
+			target.focus();
+		}
+	});
+
+	const pickExisting = useMutation({
+		mutationFn: (foodId: number) => apiFetch<Food>(`/api/foods/${foodId}`),
+	});
+
+	function clearResult() {
+		setResult(null);
+		setImage(null);
+		setItems([]);
+		setEditing(null);
+		setSummary("");
+		pickExisting.reset();
+	}
+
+	const analyze = useMutation({
+		mutationFn: (input: AnalyzeInput) =>
+			input.kind === "text"
+				? analyzeMealText(input.text)
+				: analyzeMealImage(input.file),
+		onMutate: () => clearResult(),
+		onSuccess: (response, input) => {
+			setResult(response);
+			setItems(initialChecklist(response));
+			setImage(input.kind === "image" ? input.file : null);
+		},
+		onError: (error) => {
+			if (error instanceof ApiError && error.code === "AI_NOT_CONFIGURED") {
+				setAiUnavailable(true);
+			}
+		},
+	});
+
+	const busy = analyze.isPending || pickExisting.isPending || adding;
+
+	function close() {
+		clearResult();
+		analyze.reset();
+	}
+
+	function handlePhoto(event: ChangeEvent<HTMLInputElement>) {
+		const file = event.target.files?.[0];
+		// 清掉 input 的值：同一張再選一次，change 才會再觸發。
+		event.target.value = "";
+		if (file === undefined) return;
+		analyze.mutate({ kind: "image", file });
+	}
+
+	/** 改一樣的狀態。回傳新的清單——要接著用它跑「加入」的呼叫端不能等 state 更新。 */
+	function update(key: number, patch: Partial<ChecklistItem>): ChecklistItem[] {
+		const next = items.map((item) =>
+			item.key === key ? { ...item, ...patch } : item,
+		);
+		setItems(next);
+		return next;
+	}
+
+	/** 把 `list` 裡勾著、還沒加入的每一樣（`only` 有給就只做那一樣）**依序**變成食物。
+	 *
+	 *  依序而不是同時：同一輪兩樣同名時，第二樣直接用第一樣剛建好的食物
+	 *  （`made`），不會自己撞 409。成功的標成 `added`——之後任何一輪都不會再碰它。 */
+	async function addItems(list: ChecklistItem[], only?: number) {
+		if (runningRef.current || result === null) return;
+		const targets = pendingItems(list).filter(
+			(item) => only === undefined || item.key === only,
+		);
+		if (targets.length === 0) return;
+		runningRef.current = true;
+		setAdding(true);
+		setSummary("");
+		// 開著沒套用的修改表單收起來：這一輪用的是清單上顯示的那一組。
+		setEditing(null);
+		const source = { image, description: result.description };
+
+		const made = new Map<string, Food>();
+		const ready: ReadyItem[] = [];
+		const outcomes = new Map<number, Partial<ChecklistItem>>();
+		for (const item of targets) {
+			const key = nameKey(itemName(item));
+			try {
+				const food = made.get(key) ?? (await resolveFood(item));
+				made.set(key, food);
+				ready.push({ food, quantity: itemAmount(item).quantity });
+				outcomes.set(item.key, { added: true, error: null, conflict: null });
+			} catch (error) {
+				outcomes.set(item.key, failureOf(item, error));
+			}
+		}
+
+		runningRef.current = false;
+		if (!mountedRef.current) return;
+		setAdding(false);
+		const next = list.map((item) => ({ ...item, ...outcomes.get(item.key) }));
+		if (ready.length > 0) {
+			// 新食物要出現在食物庫與之後的搜尋裡。
+			queryClient.invalidateQueries({ queryKey: queryKeys.foodSearchAll });
+			onItemsReady(ready, source);
+		}
+		if (pendingItems(next).length === 0) {
+			// 勾著的都加入了：收起（沒勾的那幾樣是使用者不要的）。
+			close();
+			return;
+		}
+		setItems(next);
+		const failed = targets.length - ready.length;
+		if (failed > 0) {
+			setSummary(`已加入 ${ready.length} 樣，${failed} 樣沒有成功`);
+		}
+	}
+
+	function startEditing(item: ChecklistItem) {
+		setEditing({
+			key: item.key,
+			draft: item.draft ?? draftFromEstimate(item.estimate),
+			error: null,
+		});
+		focusNextRef.current = "form";
+	}
+
+	function stopEditing(key: number) {
+		setEditing(null);
+		focusNextRef.current = { editButton: key };
+	}
+
+	function applyDraft(event: FormEvent, item: ChecklistItem) {
+		event.preventDefault();
+		if (editing === null) return;
+		const checked = editedFoodRequest(item.estimate, editing.draft);
+		if (!checked.ok) {
+			setEditing({ ...editing, error: checked.error });
+			return;
+		}
+		// 改過就不是剛才問的那一樣了：衝突、錯誤、之前的選擇都清掉。
+		update(item.key, {
+			draft: editing.draft,
+			error: null,
+			conflict: null,
+			pickedFoodId: null,
+			skipSameNameCheck: false,
+		});
+		stopEditing(item.key);
+	}
+
+	const libraryHit =
+		result !== null && result.analysis_id === null
+			? result.items[0]
+			: undefined;
+	const count = pendingItems(items).length;
+
+	return (
+		<div className={base.panel}>
+			<div className={base.entry}>
+				{trimmed !== "" && (
+					<button
+						type="button"
+						className={base.aiButton}
+						disabled={busy}
+						onClick={() => analyze.mutate({ kind: "text", text: trimmed })}
+					>
+						{`用 AI 估算「${trimmed}」`}
+					</button>
+				)}
+				<PhotoPickerButton
+					id={`${id}-photo`}
+					label="拍照估算"
+					accept="image/*"
+					variant="accent"
+					disabled={busy || aiUnavailable}
+					onChange={handlePhoto}
+				/>
+			</div>
+
+			{/* 一直掛著、只換文字：動態插入的 live region 常被讀屏軟體略過。 */}
+			<p role="status">
+				{analyze.isPending ? "AI 估算中…" : adding ? "加入中…" : summary}
+			</p>
+			{analyze.isError && (
+				<p role="alert">{describeAnalyzeError(analyze.error)}</p>
+			)}
+
+			{libraryHit !== undefined && (
+				<section aria-label="食物庫裡的食物" className={base.card}>
+					<p>食物庫裡已經有「{libraryHit.name}」</p>
+					<p className={base.muted}>
+						{`每 100 ${libraryHit.nutrition.base_unit}：${formatMacro(libraryHit.nutrition.kcal)} kcal`}
+					</p>
+					<div className={base.actions}>
+						<button
+							type="button"
+							className={base.primary}
+							disabled={busy}
+							onClick={() => {
+								const foodId = libraryHit.library_food?.food_id;
+								if (foodId === undefined) return;
+								// 交回放在這一次呼叫的 onSuccess：卸載之後不會跑（TanStack v5）。
+								pickExisting.mutate(foodId, {
+									onSuccess: (food) => {
+										if (!food) return;
+										close();
+										onFoodPicked(food);
+									},
+								});
+							}}
+						>
+							用這個
+						</button>
+					</div>
+					{pickExisting.isError && <p role="alert">讀取食物失敗，請再試一次</p>}
+				</section>
+			)}
+
+			{result !== null && result.analysis_id !== null && (
+				<section aria-label="AI 估算結果" className={base.card}>
+					<p className={styles.description}>{result.description}</p>
+					<p className={base.muted}>
+						{`今天還能用 ${result.remaining_today} 次`}
+					</p>
+					<ul className={styles.items}>
+						{items.map((item) => {
+							const name = itemName(item);
+							const amount = itemAmount(item);
+							const usingLibrary = item.library !== null && item.draft === null;
+							const isEditing = editing?.key === item.key;
+							const conflict = item.conflict;
+							return (
+								<li key={item.key} className={styles.item}>
+									<label className={styles.check}>
+										<input
+											type="checkbox"
+											checked={item.checked}
+											disabled={item.added || adding}
+											onChange={(event) =>
+												update(item.key, { checked: event.target.checked })
+											}
+										/>
+										{/* 中間的空白是可及名稱的一部分：沒有它，讀屏念成「白飯200 g」。 */}
+										<span className={styles.name}>{name}</span>{" "}
+										<span className={base.muted}>
+											{`${amount.quantity} ${amount.unit} · ${amount.kcal} kcal`}
+										</span>
+									</label>
+									{item.added && <span className={ui.tag}>已加入</span>}
+									{!item.added && usingLibrary && (
+										<span className={ui.tag}>用食物庫的</span>
+									)}
+									{!item.added &&
+										!usingLibrary &&
+										item.draft === null &&
+										item.estimate.consistency.flagged && (
+											<p className={base.warning}>
+												⚠ 熱量跟三大營養素對不太起來，建議看一眼
+											</p>
+										)}
+									{!item.added && !isEditing && conflict === null && (
+										<div className={styles.rowActions}>
+											{usingLibrary ? (
+												<button
+													type="button"
+													className={base.secondary}
+													disabled={adding}
+													aria-label={`${name}：改用 AI 的數字`}
+													onClick={() => {
+														update(item.key, { library: null });
+														// 這顆按鈕會被「修改」換掉：焦點移過去。
+														focusNextRef.current = { editButton: item.key };
+													}}
+												>
+													改用 AI 的數字
+												</button>
+											) : (
+												<button
+													ref={(node) => {
+														if (node === null) {
+															editButtonsRef.current.delete(item.key);
+														} else {
+															editButtonsRef.current.set(item.key, node);
+														}
+													}}
+													type="button"
+													className={base.secondary}
+													disabled={adding}
+													aria-label={`修改 ${name}`}
+													onClick={() => startEditing(item)}
+												>
+													修改
+												</button>
+											)}
+										</div>
+									)}
+									{item.error !== null && <p role="alert">{item.error}</p>}
+									{conflict !== null && !isEditing && (
+										<div className={styles.conflict}>
+											<p role="alert">
+												{conflict.source === "own"
+													? `你已經有「${conflict.name}」了`
+													: `食物庫裡已經有「${conflict.name}」`}
+											</p>
+											<div className={base.actions}>
+												<button
+													type="button"
+													className={base.primary}
+													disabled={adding}
+													onClick={() =>
+														void addItems(
+															update(item.key, {
+																pickedFoodId: conflict.foodId,
+																conflict: null,
+															}),
+															item.key,
+														)
+													}
+												>
+													{conflict.source === "own"
+														? "用現有的"
+														: "用食物庫的"}
+												</button>
+												{conflict.source === "own" ? (
+													<button
+														type="button"
+														className={base.secondary}
+														disabled={adding}
+														onClick={() => startEditing(item)}
+													>
+														改名
+													</button>
+												) : (
+													<button
+														type="button"
+														className={base.secondary}
+														disabled={adding}
+														onClick={() =>
+															void addItems(
+																update(item.key, {
+																	skipSameNameCheck: true,
+																	conflict: null,
+																}),
+																item.key,
+															)
+														}
+													>
+														還是建一個
+													</button>
+												)}
+											</div>
+										</div>
+									)}
+									{isEditing && editing !== null && (
+										<form
+											aria-label={`修改 ${name}`}
+											className={`${base.form} ${styles.editForm}`}
+											onSubmit={(event) => applyDraft(event, item)}
+										>
+											<EstimateDraftFields
+												idPrefix={id}
+												unit={item.estimate.nutrition.base_unit}
+												draft={editing.draft}
+												nameInputRef={nameInputRef}
+												onChange={(patch) =>
+													setEditing({
+														...editing,
+														draft: { ...editing.draft, ...patch },
+														error: null,
+													})
+												}
+											/>
+											{editing.error !== null && (
+												<p role="alert">{editing.error}</p>
+											)}
+											<div className={base.actions}>
+												<button type="submit" className={base.primary}>
+													套用
+												</button>
+												<button
+													type="button"
+													className={base.secondary}
+													onClick={() => stopEditing(item.key)}
+												>
+													放棄修改
+												</button>
+											</div>
+										</form>
+									)}
+								</li>
+							);
+						})}
+					</ul>
+					<div className={base.actions}>
+						{/* aria-disabled 而不是原生 disabled：按下去的當下它正在焦點上，
+						    原生停用會讓它把焦點弄丟（同 ExportCard、報表的月份切換）。 */}
+						<button
+							type="button"
+							className={`${base.primary} ${styles.add}`}
+							aria-disabled={adding || count === 0}
+							onClick={() => {
+								if (adding || count === 0) return;
+								void addItems(items);
+							}}
+						>
+							{adding ? "加入中…" : `加入這 ${count} 樣`}
+						</button>
+						<button
+							type="button"
+							className={base.secondary}
+							disabled={adding}
+							onClick={close}
+						>
+							收起
+						</button>
+					</div>
+				</section>
+			)}
+		</div>
+	);
+}
+```
+
+Run: `npx vitest run tests/ai-meal-panel.test.tsx`
+Expected: PASS——印出 `Tests 54 passed`（寫計畫時實測；每個檔案跑執行與型別兩輪，`it.each` 在兩輪的算法不同，不要自己換算）。
+
+- [ ] **Step 4：記一餐的測試（整個檔案改寫，紅）**
+
+舊的 `tests/log-meal-ai.test.tsx` 七條測的是單樣面板在記一餐裡的行為（「確認」「一份 × 1」）——那個面板不在記一餐了。**它們測的性質沒有消失**，在新檔案裡各有對應：
+
+| 舊的 | 新的 |
+|---|---|
+| 確認後選上那個食物，份量是「一份 × 1」 | 估算 → 加入 →「AI 估的項目」每一樣一列、量是估的 |
+| 拍照估算：那張照片自動當這一餐的照片 | 同名 |
+| 已經選了別張照片：不覆蓋 | 「已經選了別張照片、已經打了描述：…都不覆蓋」 |
+| 食物還在存的時候才選的照片：不會被蓋掉 | 同上那一條的 updater（`current ?? image`）；「存到一半」的時序由面板測試的「連按兩下只跑一輪」那一條的擋板守 |
+| 原本選的食物份量打了 200：新食物回到「一份 × 1」 | 「原本選的食物份量打了 300：改用食物庫的那一個之後份量歸位」 |
+| 交回食物之後，焦點在「已選擇」 | 短路那一條（焦點在「已選擇」）＋「加入之後，焦點在『AI 估的項目』的標題」 |
+| 食物庫裡已經有同名的：「用食物庫的」 | 面板測試「用食物庫的那一樣拿食物庫的食物（不建）」＋這裡第一條（`food_id: 7`） |
+
+整個檔案換成：
+
+```tsx
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetRefreshStateForTests } from "../src/auth/refresh";
+import { clearTokens, setTokens } from "../src/auth/store";
+import { LogMeal } from "../src/screens/LogMeal";
+import { json, mockApi } from "./helpers/mock-api";
+
+vi.mock("../src/lib/resize-image", () => ({
+	shrinkToLongestEdge: vi.fn((file: File) => Promise.resolve(file)),
+}));
+
+function wrap(children: ReactNode) {
+	const client = new QueryClient({
+		defaultOptions: { queries: { retry: false } },
+	});
+	return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+}
+
+function nutrition(kcal: string) {
+	return {
+		base_unit: "g",
+		kcal,
+		protein_g: "5.00",
+		fat_g: "5.00",
+		carb_g: "5.00",
+	};
+}
+
+function estimated(name: string, grams: string, kcal: string) {
+	return {
+		name,
+		brand: null,
+		nutrition: {
+			...nutrition("100.00"),
+			serving_grams: grams,
+			serving_kcal: kcal,
+			serving_protein_g: "5.00",
+			serving_fat_g: "5.00",
+			serving_carb_g: "5.00",
+		},
+		confidence: "0.70",
+		consistency: { atwater_kcal: kcal, deviation: "0.00", flagged: false },
+		library_food: null,
+	};
+}
+
+// 白飯：食物庫有（id 7）；滷雞腿：要建（id 30）。
+const ESTIMATE = {
+	analysis_id: 41,
+	description: "一碗白飯、滷雞腿一隻",
+	items: [
+		{
+			...estimated("白飯", "200.00", "280.00"),
+			library_food: {
+				food_id: 7,
+				name: "白飯",
+				base_unit: "g",
+				serving_kcal: "260.00",
+			},
+		},
+		estimated("滷雞腿", "150.00", "300.00"),
+	],
+	remaining_today: 18,
+};
+
+const LIBRARY_RICE = {
+	id: 7,
+	name: "白飯",
+	brand: null,
+	is_global: true,
+	nutrition: nutrition("130.00"),
+};
+const CREATED_CHICKEN = {
+	id: 30,
+	name: "滷雞腿",
+	brand: null,
+	is_global: false,
+	nutrition: nutrition("200.00"),
+};
+// 常吃的食物：手選用。
+const NOODLES = {
+	id: 10,
+	name: "牛肉麵",
+	brand: null,
+	is_global: true,
+	nutrition: nutrition("110.00"),
+};
+// 整段文字命中食物庫時的回應（沒有呼叫 AI）。
+const SHORTCUT = {
+	analysis_id: null,
+	description: "白飯",
+	items: [
+		{
+			...estimated("白飯", "100", "130.00"),
+			library_food: {
+				food_id: 7,
+				name: "白飯",
+				base_unit: "g",
+				serving_kcal: "130.00",
+			},
+		},
+	],
+	remaining_today: 20,
+};
+
+/** 路徑順序：mockApi 依序用 url.includes 比對——具體的排前面。
+ *  **沒有 `/api/ai/analyze`（單樣）的路由**：記一餐打到它的話 mock 會炸。 */
+function mockLogMeal(estimate: unknown = ESTIMATE) {
+	return mockApi([
+		{ path: "/api/foods/frequent", handler: () => json([NOODLES]) },
+		{ path: "/api/foods/recent", handler: () => json([]) },
+		{ path: "/api/foods/10/portions", handler: () => json([]) },
+		{ path: "/api/foods/7/portions", handler: () => json([]) },
+		{ method: "GET", path: "/api/foods?q=", handler: () => json([]) },
+		{ method: "GET", path: "/api/foods/7", handler: () => json(LIBRARY_RICE) },
+		{
+			method: "POST",
+			path: "/api/ai/analyze-meal",
+			handler: () => json(estimate),
+		},
+		{
+			method: "POST",
+			path: "/api/foods",
+			handler: () => json(CREATED_CHICKEN, 201),
+		},
+		{
+			method: "POST",
+			path: "/api/meals/99/photo",
+			handler: () => json({ id: 99 }),
+		},
+		{
+			method: "POST",
+			path: "/api/meals",
+			handler: () => json({ id: 99 }, 201),
+		},
+	]);
+}
+
+type FetchMock = ReturnType<typeof mockApi>;
+
+function mealBody(fetchMock: FetchMock): unknown {
+	const call = fetchMock.mock.calls.find(
+		([input, init]) =>
+			(init?.method ?? "GET").toUpperCase() === "POST" &&
+			String(input).endsWith("/api/meals"),
+	);
+	return call === undefined ? undefined : JSON.parse(String(call[1]?.body));
+}
+
+function uploadedPhotoName(fetchMock: FetchMock): string | null {
+	const call = fetchMock.mock.calls.find(([input]) =>
+		String(input).includes("/api/meals/99/photo"),
+	);
+	if (call === undefined) return null;
+	const body = call[1]?.body;
+	if (!(body instanceof FormData)) return null;
+	const file = body.get("file");
+	return file instanceof File ? file.name : null;
+}
+
+/** 按「加入這 N 樣」，等到面板收起：收起＝食物（與照片、描述）已經交回給記一餐。 */
+async function addAll() {
+	const card = await screen.findByRole("region", { name: "AI 估算結果" });
+	await userEvent.click(
+		within(card).getByRole("button", { name: /^加入這 \d 樣$/ }),
+	);
+	await waitFor(() =>
+		expect(
+			screen.queryByRole("region", { name: "AI 估算結果" }),
+		).not.toBeInTheDocument(),
+	);
+}
+
+async function estimateByText(text = "雞腿便當") {
+	await userEvent.type(screen.getByLabelText("搜尋食物"), text);
+	await userEvent.click(
+		screen.getByRole("button", { name: `用 AI 估算「${text}」` }),
+	);
+}
+
+function aiItems() {
+	return screen.getByRole("region", { name: "AI 估的項目" });
+}
+
+beforeEach(() => {
+	localStorage.clear();
+	clearTokens();
+	resetRefreshStateForTests();
+	vi.restoreAllMocks();
+	setTokens({ access_token: "a", refresh_token: "r" });
+});
+
+describe("記一餐：AI 多樣估算", () => {
+	it("估算 → 加入 → 「AI 估的項目」每一樣一列、量是估的、描述先填好；記錄送出每一樣", async () => {
+		const fetchMock = mockLogMeal();
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+
+		await estimateByText();
+		await addAll();
+
+		const list = aiItems();
+		expect(within(list).getByLabelText("白飯（g）")).toHaveValue("200");
+		expect(within(list).getByLabelText("滷雞腿（g）")).toHaveValue("150");
+		expect(screen.getByLabelText("描述（選填）")).toHaveValue(
+			"一碗白飯、滷雞腿一隻",
+		);
+		// 沒有手選的食物：沒有「已選擇」、也沒有份量欄位。
+		expect(screen.queryByText(/^已選擇：/)).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() => expect(mealBody(fetchMock)).toBeDefined());
+		const body = mealBody(fetchMock) as Record<string, unknown>;
+		// 整個比：不能多出 portion_id 或自己算的公克數。
+		expect(body.items).toEqual([
+			{ food_id: 7, quantity: "200" },
+			{ food_id: 30, quantity: "150" },
+		]);
+		expect(body.description).toBe("一碗白飯、滷雞腿一隻");
+	});
+
+	it("加入之後，焦點在「AI 估的項目」的標題", async () => {
+		mockLogMeal();
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+
+		await estimateByText();
+		await addAll();
+
+		await waitFor(() =>
+			expect(
+				screen.getByRole("heading", { name: "AI 估的項目" }),
+			).toHaveFocus(),
+		);
+	});
+
+	it("拍照估算：那張照片自動當這一餐的照片", async () => {
+		const fetchMock = mockLogMeal();
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		const photo = new File(["fake-jpeg"], "bento.jpg", { type: "image/jpeg" });
+
+		await userEvent.upload(screen.getByLabelText("拍照估算"), photo);
+		await addAll();
+		// 預覽是 effect 裡建的 object URL——等它出現。
+		expect(await screen.findByAltText("選好的照片")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() => expect(uploadedPhotoName(fetchMock)).toBe("bento.jpg"));
+	});
+
+	it("已經選了別張照片、已經打了描述：估算的照片與 AI 的描述都不覆蓋", async () => {
+		const fetchMock = mockLogMeal();
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		const chosen = new File(["a"], "chosen.jpg", { type: "image/jpeg" });
+		const forEstimate = new File(["b"], "bento.jpg", { type: "image/jpeg" });
+
+		// 表單要先有東西才會出現：手選一個食物，選照片、打描述，再拍照估算。
+		await userEvent.click(
+			await screen.findByRole("button", { name: "牛肉麵" }),
+		);
+		await userEvent.upload(screen.getByLabelText("照片（選填）"), chosen);
+		await userEvent.type(screen.getByLabelText("描述（選填）"), "我自己寫的");
+		await userEvent.upload(screen.getByLabelText("拍照估算"), forEstimate);
+		await addAll();
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() =>
+			expect(uploadedPhotoName(fetchMock)).toBe("chosen.jpg"),
+		);
+		expect(mealBody(fetchMock)).toMatchObject({ description: "我自己寫的" });
+	});
+
+	it("手選的食物與 AI 的項目並存：AI 的在前、手選的在後；「不記這一樣」拿掉手選的", async () => {
+		const fetchMock = mockLogMeal();
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "牛肉麵" }),
+		);
+		// 沒有 AI 的項目時沒有「不記這一樣」——畫面跟以前一樣。
+		expect(screen.queryByRole("button", { name: "不記這一樣" })).toBeNull();
+		await userEvent.clear(screen.getByLabelText("份量"));
+		await userEvent.type(screen.getByLabelText("份量"), "450");
+		await estimateByText();
+		await addAll();
+		expect(screen.getByText("已選擇：牛肉麵")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() =>
+			expect(mealBody(fetchMock)).toMatchObject({
+				items: [
+					{ food_id: 7, quantity: "200" },
+					{ food_id: 30, quantity: "150" },
+					{ food_id: 10, quantity: "450" },
+				],
+			}),
+		);
+	});
+
+	it("「不記這一樣」：只送 AI 的項目", async () => {
+		const fetchMock = mockLogMeal();
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "牛肉麵" }),
+		);
+		await estimateByText();
+		await addAll();
+		await userEvent.click(screen.getByRole("button", { name: "不記這一樣" }));
+
+		expect(screen.queryByText("已選擇：牛肉麵")).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+		await waitFor(() => expect(mealBody(fetchMock)).toBeDefined());
+		expect((mealBody(fetchMock) as { items: unknown[] }).items).toEqual([
+			{ food_id: 7, quantity: "200" },
+			{ food_id: 30, quantity: "150" },
+		]);
+	});
+
+	it("改一列的量、移除另一列：送出的是改過的那一組", async () => {
+		const fetchMock = mockLogMeal();
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await estimateByText();
+		await addAll();
+
+		const rice = within(aiItems()).getByLabelText("白飯（g）");
+		await userEvent.clear(rice);
+		await userEvent.type(rice, "250");
+		await userEvent.click(screen.getByRole("button", { name: "移除 滷雞腿" }));
+
+		expect(within(aiItems()).queryByLabelText("滷雞腿（g）")).toBeNull();
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+		await waitFor(() => expect(mealBody(fetchMock)).toBeDefined());
+		expect((mealBody(fetchMock) as { items: unknown[] }).items).toEqual([
+			{ food_id: 7, quantity: "250" },
+		]);
+	});
+
+	it("最後一列也移除、又沒有手選的食物：表單收起來", async () => {
+		mockLogMeal({ ...ESTIMATE, items: [ESTIMATE.items[0]] });
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await estimateByText();
+		await addAll();
+
+		await userEvent.click(screen.getByRole("button", { name: "移除 白飯" }));
+
+		expect(screen.queryByRole("button", { name: "記錄" })).toBeNull();
+	});
+
+	it.each(["", "0", "abc", "-5"])(
+		"某一列的量是「%s」：不送出，說是哪一樣",
+		async (bad) => {
+			const fetchMock = mockLogMeal();
+			render(wrap(<LogMeal onSaved={vi.fn()} />));
+			await estimateByText();
+			await addAll();
+
+			const chicken = within(aiItems()).getByLabelText("滷雞腿（g）");
+			await userEvent.clear(chicken);
+			if (bad !== "") await userEvent.type(chicken, bad);
+			await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+			expect(await screen.findByRole("alert")).toHaveTextContent(
+				"「滷雞腿」的份量要是大於 0 的數字",
+			);
+			expect(mealBody(fetchMock)).toBeUndefined();
+		},
+	);
+
+	it("估算兩次：第二次加入的接在後面，不會蓋掉第一次的", async () => {
+		const fetchMock = mockLogMeal();
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await estimateByText();
+		await addAll();
+
+		await userEvent.click(
+			screen.getByRole("button", { name: "用 AI 估算「雞腿便當」" }),
+		);
+		const card = await screen.findByRole("region", { name: "AI 估算結果" });
+		await userEvent.click(
+			within(card).getByRole("checkbox", { name: /^滷雞腿/ }),
+		);
+		await addAll();
+
+		expect(within(aiItems()).getAllByLabelText("白飯（g）")).toHaveLength(2);
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+		await waitFor(() => expect(mealBody(fetchMock)).toBeDefined());
+		expect((mealBody(fetchMock) as { items: unknown[] }).items).toEqual([
+			{ food_id: 7, quantity: "200" },
+			{ food_id: 30, quantity: "150" },
+			{ food_id: 7, quantity: "200" },
+		]);
+	});
+
+	it("存好之後 AI 的項目與描述都清空", async () => {
+		const onSaved = vi.fn();
+		mockLogMeal();
+		render(wrap(<LogMeal onSaved={onSaved} />));
+		await estimateByText();
+		await addAll();
+
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() => expect(onSaved).toHaveBeenCalled());
+		expect(screen.queryByRole("region", { name: "AI 估的項目" })).toBeNull();
+		expect(screen.queryByLabelText("描述（選填）")).toBeNull();
+	});
+});
+
+describe("記一餐：整段文字就是食物庫裡的食物", () => {
+	it("「用這個」→ 跟從清單選一個一樣：「已選擇」＋份量欄位，焦點在「已選擇」", async () => {
+		const fetchMock = mockLogMeal(SHORTCUT);
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+
+		await estimateByText("白飯");
+		const hit = await screen.findByRole("region", { name: "食物庫裡的食物" });
+		await userEvent.click(within(hit).getByRole("button", { name: "用這個" }));
+
+		await waitFor(() =>
+			expect(document.activeElement).toBe(screen.getByText("已選擇：白飯")),
+		);
+		// 不是 AI 的項目：沒有那個清單，描述也不會被填。
+		expect(screen.queryByRole("region", { name: "AI 估的項目" })).toBeNull();
+		expect(screen.getByLabelText("描述（選填）")).toHaveValue("");
+		await userEvent.clear(screen.getByLabelText("份量"));
+		await userEvent.type(screen.getByLabelText("份量"), "180");
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() =>
+			expect(mealBody(fetchMock)).toMatchObject({
+				items: [{ food_id: 7, quantity: "180" }],
+			}),
+		);
+		expect(mealBody(fetchMock)).not.toHaveProperty("description");
+	});
+
+	it("原本選的食物份量打了 300：改用食物庫的那一個之後份量歸位", async () => {
+		mockLogMeal(SHORTCUT);
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "牛肉麵" }),
+		);
+		await userEvent.clear(screen.getByLabelText("份量"));
+		await userEvent.type(screen.getByLabelText("份量"), "300");
+		await estimateByText("白飯");
+		const hit = await screen.findByRole("region", { name: "食物庫裡的食物" });
+		await userEvent.click(within(hit).getByRole("button", { name: "用這個" }));
+
+		await screen.findByText("已選擇：白飯");
+		expect(screen.getByLabelText("份量")).not.toHaveValue("300");
+	});
+});
+```
+
+Run: `npx vitest run tests/log-meal-ai.test.tsx`
+Expected: FAIL——全部（記一餐還在用單樣面板：找不到「AI 估算結果」裡的「加入這 N 樣」，或 mock 因為沒有 `/api/ai/analyze` 的路由而炸）。
+
+- [ ] **Step 5：記一餐**
+
+`screens/LogMeal.tsx`——相對於 Task 5 做完的樣子，改這幾處（下面是寫計畫時實際的 diff，照它改；Task 5 加的描述欄位已經在了）：
+
+```diff
+--- a/frontend/src/screens/LogMeal.tsx（Task 5 之後）
++++ b/frontend/src/screens/LogMeal.tsx
+@@ -11,19 +11,25 @@ import {
+ } from "../api/photos";
+ import { queryKeys } from "../api/queries";
+ import type { components } from "../api/schema";
+-import { AiEstimatePanel } from "../components/AiEstimatePanel";
++import { AiMealPanel } from "../components/AiMealPanel";
+ import { FoodPicker } from "../components/FoodPicker";
+ import { PhotoPickerButton } from "../components/PhotoPickerButton";
+ import {
+ 	PortionQuantityFields,
+ 	usePortionQuantity,
+ } from "../components/PortionQuantityFields";
++import ui from "../components/ui.module.css";
++import { isPlainPositiveDecimal } from "../lib/decimal";
+ import styles from "./LogMeal.module.css";
+ 
+ type Food = components["schemas"]["FoodResponse"];
+ type MealResponse = components["schemas"]["MealResponse"];
+ type MealType = components["schemas"]["MealType"];
+ 
++/** AI 多樣估算加進來的一樣（AI 多樣估算規格 D19）。`quantity` 是直接輸入的量
++ *  （g 或 ml），預設 AI 估的；`key` 只給 React 與欄位的 id 用——同一個食物可以出現兩次。 */
++type AiItem = { key: number; food: Food; quantity: string };
++
+ type Props = {
+ 	/** `photoFailed`：這一餐存好了，但選的照片沒傳上去（規格 §5.4）。 */
+ 	onSaved: (result: { photoFailed: boolean }) => void;
+@@ -43,6 +49,9 @@ export function LogMeal({ onSaved }: Props) {
+ 	const [isPrivate, setIsPrivate] = useState(false);
+ 	// 這一餐吃了什麼的一句話（AI 多樣估算規格 D13）。好友看得到；跟「備註」是兩回事。
+ 	const [description, setDescription] = useState("");
++	// AI 估的項目。跟上面手選的那一樣（selectedFood）並存：存的時候兩邊都送。
++	const [aiItems, setAiItems] = useState<AiItem[]>([]);
++	const nextAiKeyRef = useRef(0);
+ 	// 選填的照片（介面改版 §5.4）。選的當下就檢查大小，不要等到存檔才發現。
+ 	const [photo, setPhoto] = useState<File | null>(null);
+ 	const [photoError, setPhotoError] = useState<string | null>(null);
+@@ -81,11 +90,44 @@ export function LogMeal({ onSaved }: Props) {
+ 			selectedRef.current.focus();
+ 		}
+ 	});
++	// AI 的項目加進來之後，面板收起、「加入」那顆按鈕消失：把焦點移到「AI 估的項目」
++	// 的標題（同上面「已選擇」的作法，旗標只在加入那一次移）。
++	const focusAiItemsRef = useRef(false);
++	const aiItemsHeadingRef = useRef<HTMLHeadingElement>(null);
++	useEffect(() => {
++		if (focusAiItemsRef.current && aiItemsHeadingRef.current !== null) {
++			focusAiItemsRef.current = false;
++			aiItemsHeadingRef.current.focus();
++		}
++	});
+ 	const [mealType, setMealType] = useState<MealType>("snack");
+ 	const [error, setError] = useState<string | null>(null);
+ 	const saveMeal = useMutation({
+ 		mutationFn: async () => {
+-			if (selectedFood === null) {
++			// AI 的幾樣在前（估算的順序），手選的那一樣在後。
++			const items = [
++				...aiItems.map((item) => ({
++					food_id: item.food.id,
++					// 直接輸入的量（g／ml）：不帶 portion_id。
++					quantity: item.quantity.trim(),
++				})),
++				...(selectedFood === null
++					? []
++					: [
++							{
++								food_id: selectedFood.id,
++								// 數值一律以字串送出（規格 §5.1），不要 Number()。
++								quantity: portion.quantity,
++								// quantity_g 不在這裡算——伺服器在寫入當下算好並凍結
++								// （交接文件 §4.3）。前端算一次就是把「凍結歷史」
++								// 這個保證從另一頭破壞掉。
++								...(portion.portionId !== null
++									? { portion_id: portion.portionId }
++									: {}),
++							},
++						]),
++			];
++			if (items.length === 0) {
+ 				throw new Error("尚未選擇食物");
+ 			}
+ 			const meal = await apiFetch<MealResponse>("/api/meals", {
+@@ -98,19 +140,7 @@ export function LogMeal({ onSaved }: Props) {
+ 					// 哪一天」才是建立第二個事實來源。
+ 					eaten_at: new Date().toISOString(),
+ 					meal_type: mealType,
+-					items: [
+-						{
+-							food_id: selectedFood.id,
+-							// 數值一律以字串送出（規格 §5.1），不要 Number()。
+-							quantity: portion.quantity,
+-							// quantity_g 不在這裡算——伺服器在寫入當下算好並凍結
+-							// （交接文件 §4.3）。前端算一次就是把「凍結歷史」
+-							// 這個保證從另一頭破壞掉。
+-							...(portion.portionId !== null
+-								? { portion_id: portion.portionId }
+-								: {}),
+-						},
+-					],
++					items,
+ 					// **留空時整個不帶這個欄位**，不是送 "" 也不是送 null。
+ 					// 後端是 `cost: Decimal | None = Field(default=None, gt=0, ...)`：
+ 					// 送 "" 會被 Pydantic 擋成 422；送 null 雖然合法但語意繞了
+@@ -167,6 +197,7 @@ export function LogMeal({ onSaved }: Props) {
+ 			portion.reset();
+ 			setCost("");
+ 			setDescription("");
++			setAiItems([]);
+ 			setPhoto(null);
+ 			setPhotoError(null);
+ 			setError(null);
+@@ -210,45 +241,128 @@ export function LogMeal({ onSaved }: Props) {
+ 			<FoodPicker
+ 				onSelect={setSelectedFood}
+ 				renderBelowSearch={(query) => (
+-					<AiEstimatePanel
++					<AiMealPanel
+ 						text={query}
+-						onFoodReady={(food, { image }) => {
+-							// 份量自動是一份 × 1（AI 估算前端規格 §5.1）：數量不會跟著
+-							// 換食物歸位，先 reset，不然上一個食物打的 200 會留下來。
++						onFoodPicked={(food) => {
++							// 整段文字就是食物庫裡的食物：跟從清單選一個一樣（份量歸位，
++							// 不然上一個食物打的 200 會留下來）。
+ 							portion.reset();
+ 							setSelectedFood(food);
+ 							focusSelectedRef.current = true;
+-							// 拍照估算的照片當這一餐的照片——但已經選了別張就不覆蓋
+-							// （AI 估算前端規格 §5.1）。放進去的是原始檔案：記一餐上傳時
+-							// 自己會縮（uploadMealPhoto）。大小已經在面板擋過。
+-							// 用 updater 看「現在」的照片：面板存食物的期間使用者還能選
+-							// 照片，閉包裡的 photo 是按下確認那一刻的舊值。
+-							// photoError 非 null 時 photo 一定是 null，所以直接清掉安全。
++						}}
++						onItemsReady={(ready, source) => {
++							// key 在 updater 外面先取：updater 可能被 React 呼叫兩次。
++							const added = ready.map((item) => ({
++								key: nextAiKeyRef.current++,
++								food: item.food,
++								quantity: item.quantity,
++							}));
++							setAiItems((current) => [...current, ...added]);
++							focusAiItemsRef.current = true;
++							// 估算用的照片當這一餐的照片、AI 的那句話當描述——**已經有就不
++							// 覆蓋**（規格 D20）。用 updater 看「現在」的值：面板建食物的期間
++							// 使用者還能選照片、打字。放進去的是原始檔案（上傳時自己會縮）。
++							const { image } = source;
+ 							if (image !== null) {
+ 								setPhoto((current) => current ?? image);
+ 								setPhotoError(null);
+ 							}
++							setDescription((current) =>
++								current.trim() === "" ? source.description : current,
++							);
+ 						}}
+ 					/>
+ 				)}
+ 			/>
+ 
+-			{selectedFood !== null && (
++			{(selectedFood !== null || aiItems.length > 0) && (
+ 				<form
+ 					className={styles.form}
+ 					onSubmit={(event) => {
+ 						event.preventDefault();
++						const bad = aiItems.find(
++							(item) => !isPlainPositiveDecimal(item.quantity),
++						);
++						if (bad !== undefined) {
++							setError(`「${bad.food.name}」的份量要是大於 0 的數字`);
++							return;
++						}
+ 						saveMeal.mutate();
+ 					}}
+ 				>
+-					<p ref={selectedRef} tabIndex={-1} className={styles.selected}>
+-						已選擇：{selectedFood.name}
+-					</p>
++					{aiItems.length > 0 && (
++						<section aria-labelledby="meal-ai-items" className={styles.aiItems}>
++							<h2 id="meal-ai-items" ref={aiItemsHeadingRef} tabIndex={-1}>
++								AI 估的項目
++							</h2>
++							<ul>
++								{aiItems.map((item) => {
++									const inputId = `meal-ai-item-${item.key}`;
++									const unit = item.food.nutrition?.base_unit ?? "g";
++									return (
++										<li key={item.key}>
++											<label htmlFor={inputId}>
++												{`${item.food.name}（${unit}）`}
++											</label>
++											<input
++												id={inputId}
++												type="text"
++												inputMode="decimal"
++												value={item.quantity}
++												onChange={(event) => {
++													const quantity = event.target.value;
++													setAiItems((current) =>
++														current.map((other) =>
++															other.key === item.key
++																? { ...other, quantity }
++																: other,
++														),
++													);
++												}}
++											/>
++											<button
++												type="button"
++												className={ui.secondary}
++												aria-label={`移除 ${item.food.name}`}
++												disabled={saveMeal.isPending}
++												onClick={() =>
++													setAiItems((current) =>
++														current.filter((other) => other.key !== item.key),
++													)
++												}
++											>
++												移除
++											</button>
++										</li>
++									);
++								})}
++							</ul>
++						</section>
++					)}
+ 
+-					<PortionQuantityFields
+-						state={portion}
+-						unit={selectedFood.nutrition?.base_unit ?? "g"}
+-					/>
++					{selectedFood !== null && (
++						<>
++							<p ref={selectedRef} tabIndex={-1} className={styles.selected}>
++								已選擇：{selectedFood.name}
++							</p>
++							{/* 只有同時有 AI 的項目時才需要：不然不記這一樣＝整張表單收起來，
++							    而且沒有 AI 項目時畫面要跟以前一模一樣。 */}
++							{aiItems.length > 0 && (
++								<button
++									type="button"
++									className={ui.secondary}
++									disabled={saveMeal.isPending}
++									onClick={() => setSelectedFood(null)}
++								>
++									不記這一樣
++								</button>
++							)}
++							<PortionQuantityFields
++								state={portion}
++								unit={selectedFood.nutrition?.base_unit ?? "g"}
++							/>
++						</>
++					)}
+ 
+ 					<label htmlFor="meal-type">餐別</label>
+ 					<select
+```
+
+`screens/LogMeal.module.css` 檔尾加：
+
+```css
+/* AI 估的項目：一列是名稱、量、移除。 */
+.aiItems {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+
+.aiItems h2 {
+	margin: 0;
+	font-size: 14px;
+	color: var(--color-text-muted);
+}
+
+.aiItems ul {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.aiItems li {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2);
+}
+
+.aiItems label {
+	flex: 1 1 8rem;
+	min-width: 0;
+	font-weight: 700;
+	overflow-wrap: anywhere;
+}
+
+.aiItems input {
+	box-sizing: border-box;
+	flex: 0 1 6rem;
+	min-width: 0;
+	min-height: 44px;
+}
+```
+
+Run: `npx vitest run tests/log-meal-ai.test.tsx tests/log-meal.test.tsx`
+Expected: PASS——`log-meal-ai` 印 `Tests 29 passed`（寫計畫時實測）；`log-meal.test.tsx` 條數跟 Task 5 之後一樣（沒有 AI 項目時記一餐的畫面與送出的內容都沒變）。
+
+- [ ] **Step 6：突變**
+
+寫計畫時實測的結果（`P`＝面板、`L`＝記一餐；跑的是 `tests/ai-meal-panel.test.tsx` 與 `tests/log-meal-ai.test.tsx`）。**執行時至少重跑打 ★ 的那幾個**，其餘抽查；結果跟這張表不一樣就照實記。
+
+| # | 突變 | 實測紅的 |
+|---|---|---|
+| P1 ★ | `addItems` 開頭拿掉 `runningRef.current` 的檢查 | 面板「連按兩下只跑一輪」。**第一版的測試（兩次 `fireEvent.click`）這個突變存活**：React 在兩次點擊之間就重畫了，按鈕 handler 的 `adding` 檢查自己擋得住，ref 那一行在測試的世界裡看不見（第 14 種）。改成同一個 `act` 裡點兩下才紅——下面的測試已經是改過的 |
+| P2 ★ | `addItems` 的對象改成「勾著的」（不排除 `added`） | 面板「一樣失敗…再按一次只做失敗的那一樣」（`GET /api/foods/7` 變成兩次）、「…『改名』開修改表單…」 |
+| P3 ★ | 不用 `made`（`const food = await resolveFood(item)`） | 面板「同一輪有兩樣同名：只建一次」 |
+| P4 | `resolveFood` 不用食物庫的那一筆（一律往下走到建食物） | 19 條：面板 9、記一餐 10（建出來的食物 id 不對、`GET /api/foods/7` 沒被呼叫） |
+| P5 | 改過的那一樣照樣送 `confirmedFoodRequest` | 面板 6 條（「…送的每一個欄位都是改過的」、改名的四條、「改名開修改表單」） |
+| P6 | 沒改名也查同名（`item.draft !== null` 就查） | 面板「只改數字、沒改名稱：加入前不查同名」 |
+| P7 | 「還是建一個」之後仍然查同名（不看 `skipSameNameCheck`） | 面板「…『還是建一個』照改過的內容建，不再問」 |
+| P8 ★ | 交回的 `image` 寫死 `null` | 面板「拍照估算：交回的是原始的那一張照片」、記一餐「拍照估算：那張照片自動當這一餐的照片」 |
+| P9 ★ | 主要按鈕的 `aria-disabled` 改成原生 `disabled` | 面板 3 條（清單那兩條的 `toHaveAttribute("aria-disabled", …)`、「連按兩下」的 `not.toBeDisabled()`） |
+| P10 | `startEditing` 不設 `focusNextRef = "form"` | 面板 2 條（「開表單焦點到食物名稱」、「改名」那一條） |
+| P11 | `stopEditing` 不設 `focusNextRef` | 面板 2 條（「放棄修改…焦點回到那一列的修改」、「開表單…」的套用之後） |
+| P12 | 「套用」不清掉 `conflict` | 面板「撞到自己的同名食物：『改名』…」 |
+| P13 | 讀食物失敗也說「存成食物失敗」 | 面板「讀食物庫的那一筆失敗：說的是讀取失敗」 |
+| P14 | 「改用 AI 的數字」不清 `library` | 面板「『改用 AI 的數字』…」 |
+| P15 | 衝突的「用…的」不記 `pickedFoodId` | 面板 2 條（409 的「用現有的」、改名的「用食物庫的」） |
+| P16 | 短路不走卡片（`libraryHit` 一律 `undefined`） | 面板「整段文字就是食物庫裡的食物」、記一餐短路的 2 條 |
+| P17 | `pendingItems` 不看 `checked` | 面板 6 條（「沒勾的那一樣不會被加入」、「取消勾選…」等） |
+| P18 ★ | `analyzeMealText` 打單樣的 `/api/ai/analyze` | 40 條——mock 沒有那條路由，全部在第一步就炸。**紅在崩潰**（規矩 8）：這裡要的正是「沒有第二條路」，但它證明不了別的 |
+| L1 ★ | `setPhoto((current) => current ?? image)` 改成 `setPhoto(image)` | 記一餐「已經選了別張照片、已經打了描述…都不覆蓋」 |
+| L2 ★ | 描述一律用 AI 的 | 同上那一條 |
+| L3 | 不預填描述（updater 回 `current`） | 記一餐第一條（「…描述先填好」） |
+| L4 | 送出的 `items` 順序反過來 | 記一餐 3 條（第一條、「並存」、「不記這一樣」） |
+| L5 ★ | 量無效照樣送（拿掉那個 `if`） | 記一餐「某一列的量是…」4 格 |
+| L6 | `onItemsReady` 不設 `focusAiItemsRef` | 記一餐「加入之後，焦點在『AI 估的項目』的標題」 |
+| L7 | 第二次加入蓋掉第一次（`setAiItems(() => [...added])`） | 記一餐「估算兩次…」 |
+| L8 | 存好之後不清 `aiItems` | 記一餐「存好之後 AI 的項目與描述都清空」 |
+| L9 | `onFoodPicked` 不 `portion.reset()` | 記一餐「原本選的食物份量打了 300…份量歸位」 |
+| L10 | AI 的項目多送 `portion_id: null` | 記一餐 4 條（整個比 `items` 的那幾條） |
+| L11 | 「移除」沒作用 | 記一餐「改一列的量、移除另一列」、「最後一列也移除…表單收起來」 |
+
+**寫計畫時沒有測試守、執行時要補的一條**：`mountedRef`（面板卸載之後不再交回食物）。拿掉 `if (!mountedRef.current) return;` 上面每一條都還是綠的。補一條面板測試：`renderPanel` 多回傳 `render()` 的 `unmount`；`createFood` 回一個不 resolve 的 Promise；按「加入這 2 樣」、等 `POST /api/foods` 出現、`unmount()`、放行、`await` 一輪（`await act(async () => {})`），斷言 `onItemsReady` 沒被呼叫。先看它在拿掉那一行時紅、放回去時綠，再把結果記回這張表。React 19 對卸載後的 `setState` 不再警告，所以這條測試守的只有「不交回」——那正是要守的。
+
+- [ ] **Step 7：整套、Commit**
+
+```bash
+cd frontend && npm run -s lint && npm run -s test 2>&1 | grep -E "Test Files|Tests |FAIL|Unhandled|Type Errors"
+```
+
+Expected：`Test Files 142 passed`、`Tests 1786 passed`（寫計畫時實測；Task 4 第 4 個突變補的斷言不增加條數）、`Type Errors no errors`。
+
+**grep 一次舊名字**：`grep -rn "AiEstimatePanel" frontend/src/screens/` 應該只剩 `NewFood.tsx` 與 `EditMealItems.tsx`。
+
+```bash
+S=C:/Users/user/AppData/Local/Temp/claude/f--wallet/e7b60c93-fbd5-4a61-9c85-74550ff7244b/scratchpad
+cd frontend && npm run -s typecheck && cd .. && git add frontend/src/components/EstimateDraftFields.tsx frontend/src/components/AiMealPanel.tsx frontend/src/components/AiMealPanel.module.css frontend/src/components/AiEstimatePanel.tsx frontend/src/screens/LogMeal.tsx frontend/src/screens/LogMeal.module.css frontend/tests/ai-meal-panel.test.tsx frontend/tests/log-meal-ai.test.tsx && git commit -F "$S/aimulti-t6-msg.txt"
+```
+
+訊息：`feat(frontend): 記一餐的 AI 一次估一餐——勾選清單、逐樣修改、加入這 N 樣`。
+
+---
+
+## Task 7：e2e
+
+**Files:**
+- Create: `frontend/e2e/ai-multi-food.spec.ts`
+- Modify: `frontend/e2e/ai-estimate.spec.ts`、`frontend/e2e/friends.spec.ts`
+
+**這個 task 的 spec 沒有跑過**（需要 Task 1～3 的後端）。選擇器照 Task 5、6 的元件寫；對不上以畫面為準，記在「執行中發現的差異」。
+
+**CI 沒有 AI 金鑰，e2e 不花錢**（規格 D22）：
+
+- 描述欄位：全部走真的後端。
+- 多樣清單：`page.route` **只假造 `POST /api/ai/analyze-meal` 的回應**。之後的 `GET /api/foods/{id}`、`POST /api/foods`、`POST /api/meals`、上傳照片、飲食頁都是真的。假的回應用 `satisfies AnalyzeMealResponse`（型別取自 `schema.d.ts`）——後端改了回應的形狀，這個 spec 在 `tsc -b` 就紅。
+- 既有的 `ai-estimate.spec.ts` 兩條改成確認打的是新端點——那是真後端的食物庫短路與 `503 AI_NOT_CONFIGURED`。
+- **模型實際回什麼，沒有任何 e2e 守得到**。
+
+先準備環境：
+
+```bash
+docker compose up -d --build api
+./.venv/Scripts/python.exe -m alembic upgrade head     # dev 資料庫；容器不會自己跑
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:8000/api/ai/analyze-meal   # 401＝端點在；404＝映像是舊的
+```
+
+- [ ] **Step 1：`e2e/ai-multi-food.spec.ts`**
+
+```ts
+import { readFile } from "node:fs/promises";
+import {
+	type APIRequestContext,
+	expect,
+	type Page,
+	test,
+} from "@playwright/test";
+import type { components } from "../src/api/schema.d.ts";
+import { generateJpegBuffer } from "./jpeg.ts";
+import { loginAs, type NewAccount, newAccount } from "./new-account.ts";
+import { expectTouchTargets } from "./touch-targets.ts";
+
+type AnalyzeMealResponse = components["schemas"]["AnalyzeMealResponse"];
+
+// 手機尺寸：44px 的點擊目標與「沒有橫向捲軸」在這個寬度才有意義；流程本身兩種寬度一樣。
+test.use({ viewport: { width: 390, height: 844 } });
+
+/** 用 API 替這個帳號建一個私人食物（每 100 g 130 kcal）。回食物的 id。
+ *  設定資料用 API、要驗的行為用畫面（同 `friends.spec.ts` 的 `seedFood`）。 */
+async function createFood(
+	request: APIRequestContext,
+	account: NewAccount,
+	name: string,
+): Promise<number> {
+	const login = await request.post("/api/auth/login", {
+		data: { email: account.email, password: account.password },
+	});
+	expect(login.ok()).toBe(true);
+	const { access_token } = (await login.json()) as { access_token: string };
+	const food = await request.post("/api/foods", {
+		headers: { authorization: `Bearer ${access_token}` },
+		data: {
+			name,
+			nutrition: {
+				base_unit: "g",
+				kcal: "130.00",
+				protein_g: "2.50",
+				fat_g: "0.30",
+				carb_g: "28.00",
+			},
+		},
+	});
+	expect(food.status()).toBe(201);
+	return ((await food.json()) as { id: number }).id;
+}
+
+async function openLogMeal(page: Page) {
+	await page.getByRole("button", { name: "新增紀錄", exact: true }).click();
+	await page.getByRole("link", { name: "記一餐", exact: true }).click();
+	await expect(
+		page.getByRole("heading", { name: "記一餐", exact: true }),
+	).toBeVisible();
+}
+
+async function openDiet(page: Page) {
+	await page.getByRole("link", { name: "飲食", exact: true }).click();
+	// 只有飲食頁才有的標題（換頁後的第一個斷言，handover §6 第 53 種）。
+	await expect(
+		page.getByRole("heading", { name: "今日餐點", exact: true }),
+	).toBeVisible();
+}
+
+test("描述：記一餐手打 → 飲食頁的卡片 → 編輯畫面改掉 → 匯出的 CSV 有「描述」欄", async ({
+	page,
+	request,
+}) => {
+	const account = await newAccount(request, "describe");
+	const stamp = Date.now();
+	const foodName = `E2E 描述的食物 ${stamp}`;
+	const first = `E2E 第一版描述 ${stamp}`;
+	// 改過的描述故意用 = 開頭：一路走到 CSV 裡要被加上單引號（不會被試算表當公式）。
+	const second = `=E2E 第二版描述 ${stamp}`;
+	await createFood(request, account, foodName);
+	await loginAs(page, account);
+
+	// 1. 記一餐，手打描述（不靠 AI）。
+	await openLogMeal(page);
+	await page.getByLabel("搜尋食物", { exact: true }).fill(foodName);
+	await page.getByRole("button", { name: foodName, exact: true }).click();
+	await page.getByLabel("份量", { exact: true }).fill("100");
+	const field = page.getByLabel("描述（選填）", { exact: true });
+	await expect(field).toHaveAccessibleDescription("好友看得到這段描述");
+	await field.fill(first);
+	// 表單的輸入框也是點擊目標（勾選框與檔案選擇除外：它們的目標是外面的標籤）。
+	await expectTouchTargets(
+		page.locator(
+			"form input:not([type=checkbox]):not([type=file]):visible, form select:visible",
+		),
+		"記一餐：輸入框",
+	);
+	await page.getByRole("button", { name: "記錄", exact: true }).click();
+	await expect(
+		page.getByRole("heading", { name: "總覽", exact: true }),
+	).toBeVisible();
+
+	// 2. 飲食頁的卡片看得到。新帳號今天只有這一餐。
+	await openDiet(page);
+	const shown = page.getByTestId(/^meal-description-\d+$/);
+	await expect(shown).toHaveCount(1);
+	await expect(shown).toHaveText(first);
+
+	// 3. 編輯畫面：帶著原本的描述；改掉、儲存。
+	await page.getByRole("link", { name: /^編輯 \d{2}:\d{2} 點心$/ }).click();
+	await expect(
+		page.getByRole("heading", { name: "編輯這一餐", exact: true }),
+	).toBeVisible();
+	const details = page.getByRole("form", { name: "這一餐", exact: true });
+	const editing = details.getByLabel("描述（選填）", { exact: true });
+	await expect(editing).toHaveValue(first);
+	await editing.fill(second);
+	const saved = page.waitForResponse(
+		(response) =>
+			/\/api\/meals\/\d+$/.test(new URL(response.url()).pathname) &&
+			response.request().method() === "PATCH",
+	);
+	await details.getByRole("button", { name: "儲存", exact: true }).click();
+	// 看伺服器的回應，不只看畫面上的「已儲存」（handover §6 第 18 種）。
+	const patched = (await (await saved).json()) as { description: string | null };
+	expect(patched.description).toBe(second);
+	await expect(details.getByRole("status")).toHaveText("已儲存");
+
+	// 4. 回飲食頁：卡片是新的描述。
+	await page.getByRole("button", { name: "關閉", exact: true }).click();
+	await expect(
+		page.getByRole("heading", { name: "今日餐點", exact: true }),
+	).toBeVisible();
+	await expect(page.getByTestId(/^meal-description-\d+$/)).toHaveText(second);
+
+	// 5. 匯出餐點：標題列有「描述」，那一列是改過的描述（前面多一個單引號）。
+	await page.getByRole("link", { name: "我的", exact: true }).click();
+	await expect(
+		page.getByRole("heading", { name: "匯出資料", exact: true }),
+	).toBeVisible();
+	const downloading = page.waitForEvent("download");
+	await page
+		.getByTestId("export-card")
+		.getByRole("button", { name: "餐點", exact: true })
+		.click();
+	const download = await downloading;
+	const bytes = await readFile(await download.path());
+	expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+	const lines = bytes.subarray(3).toString("utf8").split("\r\n");
+	// 新帳號：標題、那一餐的一個項目、結尾的空字串。
+	expect(lines).toHaveLength(3);
+	expect(lines[0]).toBe(
+		"餐點編號,日期,時間,餐別,食物,品牌,份量,單位,熱量(kcal),蛋白質(g),脂肪(g),碳水(g),描述,備註,只有我看得到",
+	);
+	expect(lines[1]).toMatch(
+		new RegExp(
+			`^\\d+,\\d{4}-\\d{2}-\\d{2},\\d{2}:\\d{2},點心,${foodName},,100\\.00,g,130\\.00,2\\.50,0\\.30,28\\.00,'${second},,否$`,
+		),
+	);
+});
+
+test("AI 多樣估算（估算的回應是假的，其餘是真的）：勾選、加入、記錄，飲食頁看到每一樣、描述與照片", async ({
+	page,
+	request,
+}) => {
+	const account = await newAccount(request, "multi");
+	const stamp = Date.now();
+	const riceName = `E2E 白飯 ${stamp}`;
+	const chickenName = `E2E 滷雞腿 ${stamp}`;
+	const description = `E2E 一碗白飯與一隻滷雞腿 ${stamp}`;
+	// 白飯：食物庫裡真的有（這個帳號的私人食物）；滷雞腿：要由畫面建出來。
+	const riceId = await createFood(request, account, riceName);
+
+	const estimate = {
+		analysis_id: 1,
+		description,
+		remaining_today: 19,
+		items: [
+			{
+				name: riceName,
+				brand: null,
+				nutrition: {
+					base_unit: "g",
+					serving_grams: "200.00",
+					kcal: "140.00",
+					protein_g: "2.50",
+					fat_g: "0.25",
+					carb_g: "31.00",
+					serving_kcal: "280.00",
+					serving_protein_g: "5.00",
+					serving_fat_g: "0.50",
+					serving_carb_g: "62.00",
+				},
+				confidence: "0.80",
+				consistency: { atwater_kcal: "272.50", deviation: "7.50", flagged: false },
+				// 食物庫那一筆每 100 g 130 kcal × 200 g。
+				library_food: {
+					food_id: riceId,
+					name: riceName,
+					base_unit: "g",
+					serving_kcal: "260.00",
+				},
+			},
+			{
+				name: chickenName,
+				brand: null,
+				nutrition: {
+					base_unit: "g",
+					serving_grams: "150.00",
+					kcal: "200.00",
+					protein_g: "18.00",
+					fat_g: "13.33",
+					carb_g: "2.00",
+					serving_kcal: "300.00",
+					serving_protein_g: "27.00",
+					serving_fat_g: "20.00",
+					serving_carb_g: "3.00",
+				},
+				confidence: "0.60",
+				consistency: { atwater_kcal: "300.00", deviation: "0.00", flagged: false },
+				library_food: null,
+			},
+		],
+	} satisfies AnalyzeMealResponse;
+
+	// 記下面板實際送了什麼，等一下在測試本體斷言（route 的 callback 裡丟的例外
+	// 不會讓測試在那一行紅）。
+	const sent: Array<{ kind?: string; image_base64?: string }> = [];
+	await page.route("**/api/ai/analyze-meal", async (route) => {
+		sent.push(route.request().postDataJSON());
+		await route.fulfill({
+			status: 200,
+			contentType: "application/json",
+			body: JSON.stringify(estimate),
+		});
+	});
+
+	await loginAs(page, account);
+	await openLogMeal(page);
+
+	// 1. 拍照估算 → 清單。
+	await page.getByLabel("拍照估算", { exact: true }).setInputFiles({
+		name: "bento.jpg",
+		mimeType: "image/jpeg",
+		buffer: await generateJpegBuffer(page),
+	});
+	const card = page.getByRole("region", { name: "AI 估算結果", exact: true });
+	await expect(card).toContainText(description);
+	await expect(card).toContainText("今天還能用 19 次");
+	// 估算只打了一次，送的是照片（base64，不是空的）。
+	expect(sent).toHaveLength(1);
+	expect(sent[0]?.kind).toBe("image");
+	expect(sent[0]?.image_base64?.length ?? 0).toBeGreaterThan(100);
+	const rice = card.getByRole("checkbox", {
+		name: `${riceName} 200 g · 260 kcal`,
+		exact: true,
+	});
+	const chicken = card.getByRole("checkbox", {
+		name: `${chickenName} 150 g · 300 kcal`,
+		exact: true,
+	});
+	await expect(rice).toBeChecked();
+	await expect(chicken).toBeChecked();
+	await expect(card.getByText("用食物庫的", { exact: true })).toHaveCount(1);
+
+	// 2. 點擊目標與版面（jsdom 量不到，只有這裡量得到）。
+	await expectTouchTargets(
+		card.locator("button:visible, label:has(input[type=checkbox]):visible"),
+		"AI 估算結果",
+	);
+	expect(
+		await page.evaluate(
+			() =>
+				document.documentElement.scrollWidth <=
+				document.documentElement.clientWidth,
+		),
+		"清單不能讓頁面橫向捲動",
+	).toBe(true);
+
+	// 3. 取消一樣再勾回來：按鈕上的數字跟著變。
+	await chicken.uncheck();
+	await expect(
+		card.getByRole("button", { name: "加入這 1 樣", exact: true }),
+	).toBeVisible();
+	await chicken.check();
+
+	// 4. 加入：白飯拿食物庫的（不建），滷雞腿真的建一個私人食物。
+	const created = page.waitForResponse(
+		(response) =>
+			new URL(response.url()).pathname === "/api/foods" &&
+			response.request().method() === "POST",
+	);
+	await card.getByRole("button", { name: "加入這 2 樣", exact: true }).click();
+	expect((await created).status()).toBe(201);
+	await expect(card).toHaveCount(0);
+
+	// 5. 記一餐的表單：兩列、量是估的、描述與照片先帶好。還沒存成餐。
+	const items = page.getByRole("region", { name: "AI 估的項目", exact: true });
+	await expect(
+		page.getByRole("heading", { name: "AI 估的項目", exact: true }),
+	).toBeFocused();
+	await expect(items.getByLabel(`${riceName}（g）`, { exact: true })).toHaveValue(
+		"200",
+	);
+	await expect(
+		items.getByLabel(`${chickenName}（g）`, { exact: true }),
+	).toHaveValue("150");
+	await expect(page.getByLabel("描述（選填）", { exact: true })).toHaveValue(
+		description,
+	);
+	await expect(page.getByRole("img", { name: "選好的照片" })).toBeVisible();
+	await expectTouchTargets(
+		items.locator("input:visible, button:visible"),
+		"AI 估的項目",
+	);
+	// 加入不會再估算一次。
+	expect(sent).toHaveLength(1);
+
+	// 6. 記錄 → 飲食頁那一餐有兩樣、描述、照片。
+	await page.getByRole("button", { name: "記錄", exact: true }).click();
+	await expect(
+		page.getByRole("heading", { name: "總覽", exact: true }),
+	).toBeVisible();
+	await openDiet(page);
+	await expect(page.getByTestId(/^meal-description-\d+$/)).toHaveText(description);
+	// 外層的 <li> 是那一餐的卡片（新帳號只有這一餐），裡面每個食物各一個 <li>。
+	const mealCard = page
+		.getByRole("listitem")
+		.filter({ has: page.getByTestId(/^meal-description-\d+$/) });
+	await expect(mealCard).toContainText(riceName);
+	await expect(mealCard).toContainText(chickenName);
+	await expect(mealCard).toContainText("200 g");
+	await expect(mealCard).toContainText("150 g");
+	// 白飯用的是食物庫那一筆（130／100 g × 200）＋滷雞腿 AI 的 300 ＝ 560，不是 280＋300。
+	await expect(mealCard).toContainText("合計 560 kcal");
+	await expect(page.getByTestId(/^meal-photo-\d+$/)).toBeVisible();
+});
+```
+
+- [ ] **Step 2：既有的兩個 spec**
+
+`e2e/ai-estimate.spec.ts`——兩條都在按「用 AI 估算」**之前**開始等回應，按了之後斷言它（面板的文字沒有變，所以原本的斷言照舊；多的是「打的是新端點、而且是真的後端回的」）：
+
+```ts
+	const analyzed = page.waitForResponse(
+		(response) =>
+			new URL(response.url()).pathname === "/api/ai/analyze-meal" &&
+			response.request().method() === "POST",
+	);
+	await page.getByRole("button", { name: `用 AI 估算「${foodName}」` }).click();
+	const response = await analyzed;
+	expect(response.status()).toBe(200);
+	// 沒有呼叫 AI：整段文字就是食物庫裡的食物。
+	expect(((await response.json()) as { analysis_id: number | null }).analysis_id).toBeNull();
+```
+
+「AI 沒設定」那一條同樣等回應，斷言 `expect((await analyzed).status()).toBe(503);`（變數名照那一條的 `text`）。檔頭的註解補一句：記一餐的 AI 入口現在是 `AiMealPanel`、打 `/api/ai/analyze-meal`；多樣清單在 `ai-multi-food.spec.ts`。
+
+`e2e/friends.spec.ts`：
+
+1. `logMeal` 的 `options` 加 `description?: string`；在勾「只有我看得到」之前：
+
+```ts
+	if (options.description !== undefined) {
+		await page
+			.getByLabel("描述（選填）", { exact: true })
+			.fill(options.description);
+	}
+```
+
+2. 第 5 步的兩餐各給一段描述（`const shared = \`E2E 好友看得到的描述 ${stamp}\`;`、`const hidden = \`E2E 私人餐的描述 ${stamp}\`;`），第 6 步在 `feed.getByText(foodY)` 那一行後面加：
+
+```ts
+	await expect(feed.getByText(shared, { exact: true })).toBeVisible();
+	await expect(feed.getByText(hidden, { exact: true })).toHaveCount(0);
+```
+
+- [ ] **Step 3：跑**
+
+```bash
+cd frontend && npx playwright test e2e/ai-multi-food.spec.ts e2e/ai-estimate.spec.ts e2e/friends.spec.ts
+```
+
+Expected：`5 passed`（新的 2 條、`ai-estimate` 2 條、`friends` 1 條）。然後整套：
+
+```bash
+npx playwright test
+```
+
+Expected：**47 passed**（45＋2）。偶發紅先看是不是第 48／53 種（名稱的子字串、換頁前就成立的斷言），不要直接重跑到綠。
+
+- [ ] **Step 4：突變（每個改完跑指定的 spec、看它紅、改回）**
+
+| # | 突變 | 跑 | 預期 |
+|---|---|---|---|
+| 1 | `MealCard` 拿掉描述那一段 | `ai-multi-food` | 兩條都紅（`meal-description-…` 找不到） |
+| 2 | `EditMeal` 的 `mealChanges` 不送 `description` | `ai-multi-food`「描述」 | 「儲存」按不下去（沒有改動）→ 等不到 PATCH 的回應 |
+| 3 | 後端 `meal_csv` 的 `tail` 拿掉 `meal.description`（標題留著） | 同上 | CSV 那一列對不上（少一格）。改回之後 `touch app/export.py`，容器是 `--reload` 會自己重載 |
+| 4 | 後端 `_clean_optional_single_line` 改成原樣回傳 | 同上 | **仍然綠**（描述沒有控制字元）——這條 e2e 不守清理，那是 `tests/test_meals_description.py` 的事。確認是綠的就改回，不用補 |
+| 5 | `AiMealPanel` 的 `resolveFood` 不用食物庫的（一律建） | `ai-multi-food`「AI 多樣估算」 | 紅：白飯建食物時撞到自己的同名食物（409）→ 面板停在「你已經有…」；或合計不是 560 |
+| 6 | 記一餐的 `onItemsReady` 不設照片 | 同上 | 「選好的照片」不出現 |
+| 7 | `LogMeal.module.css` 的 `.aiItems input` 拿掉 `min-height: 44px` | 同上 | 「AI 估的項目」的點擊目標那一行 |
+| 8 | `AiMealPanel.module.css` 的 `.check` 拿掉 `min-height: 44px` | 同上 | 「AI 估算結果」的點擊目標那一行 |
+| 9 | `friends.spec` 的私人那一餐改成公開（測試自己的突變：確認 `hidden` 那一行真的會紅） | `friends` | `toHaveCount(0)` 紅 |
+| 10 | 後端 `_friend_meals` 改成 `description=None` | `friends` | `shared` 那一行紅 |
+
+- [ ] **Step 5：typecheck、Commit**
+
+Playwright 不做型別檢查（handover §7）——`satisfies AnalyzeMealResponse` 只有 `tsc` 看得到。
+
+```bash
+S=C:/Users/user/AppData/Local/Temp/claude/f--wallet/e7b60c93-fbd5-4a61-9c85-74550ff7244b/scratchpad
+cd frontend && npm run -s lint && npm run -s typecheck && cd .. && git add frontend/e2e/ai-multi-food.spec.ts frontend/e2e/ai-estimate.spec.ts frontend/e2e/friends.spec.ts && git commit -F "$S/aimulti-t7-msg.txt"
+```
+
+訊息：`test(e2e): 餐點的描述走完整條路；AI 多樣清單用假的估算回應走到飲食頁`。
+
+---
+
+## Task 8：文件
+
+**Files:**
+- Modify: `docs/handover.md`、`docs/deployment.md`、`docs/superpowers/specs/2026-10-09-ai-multi-food-design.md`、這份計畫
+
+**寫 markdown 用 Write／Edit 工具**；用 Python 改的話一定要 `newline="\n"`（handover §7：Windows 的文字模式會把整份檔案轉成 CRLF）。改完 `git diff --stat` 看行數——整份檔案都變了就是踩到了。
+
+- [ ] **Step 1：量數字**（不要抄這份計畫的預測）
+
+```bash
+./.venv/Scripts/python.exe -m pytest -q -W error 2>&1 | tail -1
+grep -c "@router\." app/api/routes/*.py | awk -F: '{s+=$2} END {print s}'
+ls migrations/versions/*.py | wc -l
+cd frontend && npm run -s test 2>&1 | grep -E "Test Files|Tests " ; npx playwright test --list | tail -1
+```
+
+- [ ] **Step 2：`docs/handover.md`**
+
+1. **§2「目前狀態」的表**：端點數（預期 79）、後端測試數與秒數、前端 `Test Files`／`Tests`（vitest 印出來的）、e2e 條數（預期 47）、`Migration`（`0001` ~ `0017`）、在哪個分支量的與日期。資料表數不變（16）。
+2. **「階段進度」表**加一列（放在「報表看其他月份、匯出資料」後面）：
+
+   > | AI 一次估算多樣食物、餐點的描述 | 記一餐的 AI 入口改成一餐一次估（`POST /api/ai/analyze-meal`：一句描述＋最多 8 樣，**算一次額度**）；估完是勾選清單，食物庫同名的預設用食物庫的，「加入這 N 樣」把每一樣變成食物放進這一餐（部分失敗可以重試）。這一餐多一個「描述」（`meals.description`，migration `0017`）：**好友看得到**（備註仍然只有自己看得到），飲食頁與好友的卡片、餐點 CSV 都有（規格 `docs/superpowers/specs/2026-10-09-ai-multi-food-design.md`、計畫 `docs/superpowers/plans/2026-10-09-ai-multi-food.md`；見第 10 節「AI 多樣估算與餐點描述」） | ✅（`feat/ai-multi-food`） |
+
+   同一張表「好友關係」那一列的「**看不到餐費與備註**」後面補「（描述看得到，見下面那一列）」。
+3. **§4.10 或好友那一節**提到 `FriendMeal` 白名單的地方：白名單多了 `description`，一句話說明為什麼是新欄位而不是放寬 `note`（規格「與原始決定的差異」第 1 點）。
+4. **§6**：執行時每一條「突變存活」「測試綠了但不該綠」「計畫寫錯」都照這一節的格式寫一段（標題「AI 多樣估算：第 N 種又一次」，沒有新機制就不編新號碼）。寫計畫時已經知道、值得記的三條（執行時確認過再寫）：
+   - **第 43 種的新面孔**：`mockApi` 用 includes 比對，`/api/ai/analyze` 這條路由接得住 `/api/ai/analyze-meal`——「打的是哪一支端點」只給路由分不出來，要斷言實際的網址（`tests/ai-api.test.ts` 的 `sentUrl`）；新面板的測試乾脆不給單樣端點的路由。
+   - **schema 的上下限會變成模型的手銬**：`LLMMealEstimateSchema.items` 如果寫 `min_length=1`，事後驗證的結果一模一樣（突變存活），但送給 Anthropic 的 schema 多了 `minItems: 1`，模型就沒有辦法回「看不出任何食物」。守它的不是解析的測試，是「送出去的 schema 沒有 `minItems`」那一行。
+   - **可及名稱裡少一個空白**：勾選框的 `<label>` 裡兩個相鄰的 `<span>`，JSX 會把中間的換行吃掉，名稱變成「白飯200 g · 260 kcal」——畫面上因為 flex 的 `gap` 看起來是分開的，只有照名稱找元素的測試（與讀屏）看得到。
+5. **§7「踩過的技術坑」表**加兩列：
+   - `transform_schema()` 會把 Pydantic 類別的 docstring、欄位的上下限（`maxItems` 之類）放進送給模型的 schema（前者進 `description`，後者有的保留、有的變成 `description` 裡的提示）——給 LLM 用的 schema 類別不要寫給人看的 docstring。
+   - 必填欄位加進 `MealResponse` 之後，`tests/timeline.test.ts` 那種**有型別標註**的測試資料會讓 `tsc -b` 紅（其他測試資料是沒有標註的物件，不會）；而且離線快取裡的舊餐沒有那個 key——畫面判斷要用真值，不是 `!== null`。
+6. **§8.2「AI 估算的已知限制與後續」**：
+   - 第一點「一次一樣食物（P2 規格 §9）」改成：「~~一次一樣食物~~——**記一餐已完成**（AI 多樣估算規格）：`POST /api/ai/analyze-meal` 一次估一餐、最多 8 樣。新增食物與編輯這一餐的『加一項』仍然一次一樣（`/api/ai/analyze`）。」
+   - 後面接規格 §9.2 的 11 點（逐點搬過來，用執行後的實際情況改寫；被執行推翻的那幾點照實改）。
+   - 「`remaining_today` 在同時多個請求時可能多報」那一點補「兩個端點共用同一個額度（同一張表）」。
+7. **§10 加一小節「AI 多樣估算與餐點描述」**（放在「報表看其他月份與匯出資料」後面），內容：
+   - 流程一張小表：入口 → `analyze-meal` → 清單 → 加入（四種來源）→ 記一餐的「AI 估的項目」→ 記錄。
+   - 兩個欄位的分工：描述（好友看得到、CSV「描述」）對備註（只有自己、CSV「備註」）。
+   - 哪些東西是共用的（`describeAnalyzeError`、`EstimateDraftFields`、`lib/ai-food.ts`、`_find_in_food_library`、`_call_estimator_or_record_failure`、`single_line`）——之後改其中一個，兩個端點／兩個面板一起變。
+   - 沒有自動測試守的：模型實際的輸出；兩家供應商對多樣 schema 的實際反應。**部署後有金鑰的人要手動拍一張**（見部署手冊）。
+   - e2e 的多樣清單是 `page.route` 假造估算回應的（哪一條、為什麼）。
+8. **§11** 不動。
+
+- [ ] **Step 3：`docs/deployment.md`**
+
+「二、更新」底下那串各版本的說明，在「報表看其他月份與匯出資料」那一點**前面**加：
+
+> - **`0017_add_meals_description`（AI 多樣估算與餐點描述）**：只加一個可以是空的欄位（`meals.description`），`deploy.sh` 會自己跑，**可以退版**（舊版程式不讀也不寫這一欄，不在 `ROLLBACK_UNSAFE_REVISIONS` 裡；退版期間新寫的描述留在資料庫，舊畫面看不到）。**沒有新的環境變數**：多樣估算用的是既有的 `AI_PROVIDER`／`AI_MODEL`／金鑰與 `AI_DAILY_LIMIT`（一次估一餐算一次）。單次呼叫的輸出上限從 1024 提到 4096 token（只有記一餐的多樣估算）——**成本上界約是原本單樣估算的 4 倍**，實際多半遠低於此。
+>   **部署完請用有 AI 的帳號在記一餐拍一張有兩三樣菜的照片**：這條路（兩家供應商對巢狀 schema 的實際反應）沒有任何自動測試打過真的 API。拍完看三件事：清單有沒有出來、樣數合不合理、`docker compose logs api | grep "AI 供應商"` 有沒有新的錯誤。出現 `AI_BAD_RESPONSE`（畫面：「AI 這次的回答看不懂」）而且每次都是，先懷疑模型把思考算進了輸出上限（交接文件 §8.2）。
+
+如果部署手冊有「環境變數」表提到 AI 的那幾列，在 `AI_DAILY_LIMIT` 的說明補「記一餐一次估一餐算一次」。
+
+- [ ] **Step 4：規格與這份計畫**
+
+- 規格的 **狀態** 改成「已實作（`feat/ai-multi-food`）」；§2 後面加「### 執行中發現的差異」，把這份計畫同名那一節的重點寫過去（行為有出入的要同時改上面的表與各節）。
+- 這份計畫的「執行中發現的差異」填完；每個 task 的突變表把預測換成實測（紅了哪幾條、哪些存活、補了什麼）。
+
+- [ ] **Step 5：Commit**
+
+```bash
+S=C:/Users/user/AppData/Local/Temp/claude/f--wallet/e7b60c93-fbd5-4a61-9c85-74550ff7244b/scratchpad
+git add docs/handover.md docs/deployment.md docs/superpowers/specs/2026-10-09-ai-multi-food-design.md docs/superpowers/plans/2026-10-09-ai-multi-food.md
+git commit -F "$S/aimulti-t8-msg.txt"
+```
+
+訊息：`docs: AI 多樣估算與餐點描述——handover、部署手冊、規格與計畫跟上`。
+
+---
+
+## 完成條件
+
+- [ ] 後端：`pytest -q -W error` 全綠、`ruff check .`、`mypy app` 乾淨；`alembic check` 乾淨；`0017` 的 `upgrade → downgrade → upgrade` 走過。
+- [ ] 前端：`npm run -s test`（沒有 `FAIL`／`Unhandled`）、`typecheck`、`lint` 全綠。
+- [ ] `schema.d.ts` 重新產生之後 `git status` 乾淨（Task 1、Task 3 各做過一次；最後再跑一次確認沒有漏掉的 docstring 改動）。
+- [ ] e2e 整套綠（47 條）。
+- [ ] 每個 task 的突變都跑過、結果寫回這份計畫；存活的要嘛補了測試、要嘛寫明為什麼那一行不需要守。
+- [ ] `git status` 只剩 `?? lunch.jpg`；沒有 push。
+- [ ] **沒做、要告訴使用者的事**：真的 LLM 沒有打過（需要金鑰）；兩家供應商對多樣 schema 的實際反應要部署後手動驗一次。
