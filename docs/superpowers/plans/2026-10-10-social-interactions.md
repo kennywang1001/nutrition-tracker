@@ -2867,3 +2867,494 @@ git commit -F "$S/social-plan-task6-msg.txt"   # feat(backend): 好友邀請與�
 
 ---
 
+## Task 7：前端——API 層、query 鍵、不進離線快取
+
+`schema.d.ts` 在 Task 2–6 已經跟著每個後端 commit 重新產生；這裡先確認一次是最新的（照「執行環境」的指令再跑一次，`git diff --stat` 應該是空的）。
+
+**Files:**
+- Create: `frontend/src/api/social.ts`、`frontend/src/api/notifications.ts`、`frontend/tests/social-api.test.tsx`
+- Modify: `frontend/src/api/queries.ts`、`frontend/src/api/persist.ts`、`frontend/src/api/friends.ts`（`required` 加 `export`）、`frontend/tests/offline.test.tsx`
+
+- [ ] **Step 1：鍵與離線快取。** `queries.ts` 的 `queryKeys` 加：
+
+```ts
+	// 社群（讚、留言、通知）一律在 "social" 底下：`persist.ts` 靠第一個字不把它們存進
+	// localStorage——別人的名字與留言不留在這台裝置上（社群規格 D21）。
+	socialMeal: (mealId: number) => ["social", "meal", mealId] as const,
+	notifications: ["social", "notifications"] as const,
+	unreadCount: ["social", "unread"] as const,
+	// 所有好友的所有「某一天」（寫回讚的數字時用）。
+	friendDays: ["friends", "day"] as const,
+```
+
+`persist.ts` 的 `NOT_PERSISTED` 加 `"social",`（上面的註解補一句理由）。
+
+- [ ] **Step 2：`src/api/social.ts`。**
+
+```ts
+import {
+	type InfiniteData,
+	type QueryClient,
+	useQuery,
+} from "@tanstack/react-query";
+import { apiFetch } from "./client";
+import { retryUnlessNotFound } from "./errors";
+import { type FriendDay, type FriendFeedPage, required } from "./friends";
+import { queryKeys } from "./queries";
+import type { components } from "./schema";
+
+export type SocialMeal = components["schemas"]["SocialMealResponse"];
+export type MealComment = components["schemas"]["CommentResponse"];
+export type LikeState = components["schemas"]["LikeState"];
+
+/** 留言的上限（code point；後端在清理之後量，見 `app/schemas/social.py`）。 */
+export const COMMENT_MAX_LENGTH = 200;
+
+/** 一餐與它的讚、留言。自己的餐與看得到的好友的餐都用這個；看不到是 404（不重試）。
+ *  `staleTime: 0`：別人隨時會按讚、留言，每次打開都重抓。 */
+export function useSocialMeal(mealId: number) {
+	return useQuery({
+		queryKey: queryKeys.socialMeal(mealId),
+		queryFn: () =>
+			required(apiFetch<SocialMeal>(`/api/social/meals/${mealId}`), "餐點"),
+		enabled: Number.isFinite(mealId),
+		staleTime: 0,
+		retry: retryUnlessNotFound,
+	});
+}
+
+/** 按讚（`true`）或收回（`false`）。兩個方向都冪等，回伺服器現在的數字。 */
+export function setLike(mealId: number, liked: boolean) {
+	return required(
+		apiFetch<LikeState>(`/api/social/meals/${mealId}/like`, {
+			method: liked ? "PUT" : "DELETE",
+		}),
+		"讚",
+	);
+}
+
+export function postComment(mealId: number, body: string) {
+	return required(
+		apiFetch<MealComment>(`/api/social/meals/${mealId}/comments`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ body }),
+		}),
+		"留言",
+	);
+}
+
+export async function deleteComment(
+	mealId: number,
+	commentId: number,
+): Promise<void> {
+	await apiFetch(`/api/social/meals/${mealId}/comments/${commentId}`, {
+		method: "DELETE",
+	});
+}
+
+/** 把伺服器回來的讚寫回每一份快取裡的這一餐（好友動態的每一頁、好友的某一天、餐點頁）。
+ *
+ *  **不用 `invalidateQueries`**：好友動態是 infinite query，失效＝每按一次讚就把載入過的
+ *  每一頁重抓一遍。自己的餐點清單（`["meals"]`）不用管：主人不能讚自己的餐。 */
+export function patchLikes(
+	queryClient: QueryClient,
+	mealId: number,
+	state: LikeState,
+): void {
+	const apply = <T extends { id: number }>(meal: T): T =>
+		meal.id === mealId ? { ...meal, ...state } : meal;
+	queryClient.setQueriesData<InfiniteData<FriendFeedPage>>(
+		{ queryKey: queryKeys.friendFeed },
+		(data) =>
+			data && {
+				...data,
+				pages: data.pages.map((page) => ({
+					...page,
+					meals: page.meals.map(apply),
+				})),
+			},
+	);
+	queryClient.setQueriesData<FriendDay>(
+		{ queryKey: queryKeys.friendDays },
+		(data) => data && { ...data, meals: data.meals.map(apply) },
+	);
+	queryClient.setQueryData<SocialMeal>(
+		queryKeys.socialMeal(mealId),
+		(data) => data && { ...data, meal: apply(data.meal) },
+	);
+}
+
+/** 留言新增或刪除之後：這一餐重抓；各個清單上的「留言 N」標成過期（掛著的才會重抓——
+ *  在餐點頁上時清單沒掛著，回去的時候才抓）。 */
+export function afterCommentChange(
+	queryClient: QueryClient,
+	mealId: number,
+): Promise<void> {
+	void queryClient.invalidateQueries({ queryKey: queryKeys.friendFeed });
+	void queryClient.invalidateQueries({ queryKey: queryKeys.friendDays });
+	void queryClient.invalidateQueries({ queryKey: queryKeys.meals });
+	return queryClient.invalidateQueries({
+		queryKey: queryKeys.socialMeal(mealId),
+	});
+}
+```
+
+- [ ] **Step 3：`src/api/notifications.ts`。**
+
+```ts
+import { useQuery } from "@tanstack/react-query";
+import { apiFetch } from "./client";
+import { required } from "./friends";
+import { queryKeys } from "./queries";
+import type { components } from "./schema";
+
+export type NotificationItem = components["schemas"]["NotificationItem"];
+
+/** 未讀數多久重抓一次（規格 D16）。沒有推播：這就是「最慢多久看到新通知」。 */
+export const UNREAD_POLL_MS = 60_000;
+
+export function useNotifications() {
+	return useQuery({
+		queryKey: queryKeys.notifications,
+		queryFn: async () =>
+			(
+				await required(
+					apiFetch<{ items: NotificationItem[] }>("/api/notifications"),
+					"通知",
+				)
+			).items,
+		staleTime: 0,
+	});
+}
+
+/** 分頁上的數字。`staleTime: 0`＋預設的 `refetchOnWindowFocus`：回到這個視窗就重抓；
+ *  `refetchInterval`：畫面看得到時每分鐘一次（`refetchIntervalInBackground` 預設 false，
+ *  分頁在背景時不抓）。`retry: false`：下一輪自己會再試，不用疊重試。 */
+export function useUnreadCount() {
+	return useQuery({
+		queryKey: queryKeys.unreadCount,
+		queryFn: async () =>
+			(
+				await required(
+					apiFetch<{ count: number }>("/api/notifications/unread-count"),
+					"未讀數",
+				)
+			).count,
+		staleTime: 0,
+		refetchInterval: UNREAD_POLL_MS,
+		retry: false,
+	});
+}
+
+/** 把 `upTo` 以前的標成已讀，回剩下的未讀數。 */
+export async function markAllRead(upTo: number): Promise<number> {
+	const body = await required(
+		apiFetch<{ count: number }>("/api/notifications/read-all", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ up_to: upTo }),
+		}),
+		"已讀",
+	);
+	return body.count;
+}
+```
+
+- [ ] **Step 4：測試。** `tests/social-api.test.tsx`（`QueryClient` 直接操作，不用畫面；`beforeEach` 照 `tests/friend-feed.test.tsx`——沒有 `setTokens` 的話 `mockApi` 一律回 401）：
+
+1. **`patchLikes` 三種形狀**：`setQueryData` 塞一個兩頁的好友動態（`{ pages: [{ meals: [m(7), m(8)], next_cursor: "x" }, { meals: [m(9)], next_cursor: null }], pageParams: [null, "x"] }`）、一個 `friendDay(2, "2026-10-06")`、一個 `socialMeal(8)`，每一餐 `like_count: 0, liked_by_me: false`。`patchLikes(client, 8, { like_count: 3, liked_by_me: true })` 之後：三處的第 8 餐都是 `(3, true)`；**第 7、9 餐沒變**；`pageParams` 與 `next_cursor` 原封不動；`socialMeal(8)` 的 `likes`／`comments` 沒被動到。
+2. **沒有那個快取時不會憑空生一個**：空的 client 上呼叫 `patchLikes` → `getQueryData(queryKeys.socialMeal(8))` 是 `undefined`。
+3. **`setLike` 的方法**：`mockApi` 記下 `init.method`——`true` 是 `PUT`、`false` 是 `DELETE`，路徑 `/api/social/meals/8/like`。
+4. **`markAllRead`**：送出的 body 是 `{"up_to":41}`，回 `count`。
+5. **`useUnreadCount` 的設定**（釘住設定，不用假時鐘去等一分鐘）：
+
+```tsx
+it("未讀數：每 60 秒、只在前景、不重試", async () => {
+	mockApi([
+		{ path: "/api/notifications/unread-count", handler: () => json({ count: 3 }) },
+	]);
+	const client = new QueryClient();
+	const { result } = renderHook(() => useUnreadCount(), {
+		wrapper: ({ children }) => (
+			<QueryClientProvider client={client}>{children}</QueryClientProvider>
+		),
+	});
+	await waitFor(() => expect(result.current.data).toBe(3));
+
+	const options = client.getQueryCache().find({ queryKey: queryKeys.unreadCount })
+		?.observers[0]?.options;
+	expect(options?.refetchInterval).toBe(60_000);
+	expect(options?.refetchIntervalInBackground ?? false).toBe(false);
+	expect(options?.staleTime).toBe(0);
+	expect(options?.retry).toBe(false);
+});
+```
+
+`tests/offline.test.tsx`：照 798 行「好友的資料與照片都不會被寫進 localStorage」**複製一條**「讚、留言、通知都不會被寫進 localStorage」——`setQueryData` 三個鍵（`socialMeal(1)` 放一個帶留言的物件、`notifications` 放一則、`unreadCount` 放 `3`），等到 `stats` 出現在 localStorage 裡，斷言三個鍵都不在，**而且 `localStorage` 的原始字串裡沒有那則留言的文字**。
+
+Run：`npx vitest run tests/social-api.test.tsx tests/offline.test.tsx 2>&1 | grep -E "FAIL|Unhandled|Tests|Test Files"`
+Expected：全綠。
+
+- [ ] **Step 5：突變。**
+
+| 突變 | 該紅的 |
+|---|---|
+| `NOT_PERSISTED` 拿掉 `"social"` | 新的離線測試 |
+| `socialMeal` 的鍵改成 `["meals", "social", id]` | 新的離線測試（它會被存進去） |
+| `patchLikes` 的 `apply` 拿掉 `meal.id === mealId`（每一餐都改） | 第 1 條（第 7、9 餐） |
+| `patchLikes` 拿掉好友動態那一段；拿掉某一天那一段；拿掉餐點頁那一段 | 第 1 條的各一半 |
+| `setQueryData` 的 updater 拿掉 `data &&` | 第 2 條（`TypeError`） |
+| `setLike` 兩個方法對調 | 第 3 條 |
+| `refetchInterval` 拿掉 | 第 5 條 |
+
+- [ ] **Step 6：commit。** `npm run -s lint && npm run -s test 2>&1 | grep -E "FAIL|Unhandled|Tests |Test Files"`，再單獨跑 `npm run -s typecheck`。
+
+```bash
+git add frontend/src/api/social.ts frontend/src/api/notifications.ts frontend/src/api/queries.ts frontend/src/api/persist.ts frontend/src/api/friends.ts frontend/tests/social-api.test.tsx frontend/tests/offline.test.tsx
+git commit -F "$S/social-plan-task7-msg.txt"   # feat(frontend): 社群的 API 層——query 都在 social 底下、不進離線快取
+```
+
+---
+
+## Task 8：前端——讚的按鈕與卡片上的數字
+
+**Files:**
+- Create: `frontend/src/components/LikeButton.tsx`、`LikeButton.module.css`、`frontend/tests/like-button.test.tsx`
+- Modify: `frontend/src/components/ui.module.css`、`FriendMealCard.tsx`、`FriendMealCard.module.css`、`frontend/src/screens/MealList.tsx`、`MealList.module.css`、`frontend/tests/friend-feed.test.tsx`、`friend-day.test.tsx`、`meal-list.test.tsx`
+
+- [ ] **Step 1：`ui.srOnly`。** `ui.module.css` 檔尾（一般的 class，不放在 `:where()` 裡）：
+
+```css
+/* 只給螢幕閱讀器的文字（未讀數、讚的數量的完整講法）。不能用 display: none——
+   那樣 aria-describedby 指過來也唸不到。 */
+.srOnly {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	padding: 0;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
+}
+```
+
+- [ ] **Step 2：測試（先寫）。** `tests/like-button.test.tsx`。包一層 `QueryClientProvider`；回應用**可以手動放行的 Promise**（`let release!: (r: Response) => void; handler: () => new Promise<Response>((resolve) => { release = resolve; })`），這樣「第一個請求還在路上時再按一下」是確定性的，不靠時間：
+
+| # | 情境 | 斷言 |
+|---|---|---|
+| 1 | 初始 `count=2, liked=false` | `getByRole("button", { name: "讚，鮑伯的午餐", pressed: false })`；`toHaveAccessibleDescription("2 個讚")` |
+| 2 | 按一下，回應還沒放行 | 立刻 `pressed: true`、描述「3 個讚」；`spy` 只有一個 `PUT …/meals/7/like` |
+| 3 | 放行 `{ like_count: 5, liked_by_me: true }`（伺服器的數字跟樂觀的不一樣） | 事先 `setQueryData(queryKeys.socialMeal(7), …)`；放行後那份快取的 `meal.like_count` 是 **5**（`waitFor`）——證明寫回的是伺服器的數字，不是自己加一 |
+| 4 | **連按兩下**：按 → 不放行 → 再按 → 放行第一個 → 放行第二個 | 第二下之後畫面是 `pressed: false`、「2 個讚」；第一個放行**之前**只有一個請求；放行後第二個請求是 `DELETE`；最後 `mock.calls` 的方法依序是 `["PUT", "DELETE"]`，快取是第二個回應 |
+| 5 | **連按三下**（按、按、按，第一個還沒回來） | 最後的請求依序 `["PUT", "PUT"]`（最後的意圖是「讚」，中間那個「收回」沒有送）；畫面 `pressed: true` |
+| 6 | 失敗（500） | 先等 `role="alert"`「沒有送出，請再試一次」出現，再斷言 `pressed: false`、「2 個讚」 |
+| 7 | 429 帶 `retry-after: 12` | alert 是「按得太快了，請稍後再試（12 秒後可再試）」 |
+| 8 | 第二個請求失敗（連按兩下，PUT 成功、DELETE 500） | 快取被寫成 **PUT 的回應**（伺服器現在是「讚」），不是退回一開始的「沒讚」；alert 出現 |
+| 9 | 失敗之後再按一下成功 | alert 消失 |
+| 10 | 按鈕一直是可以按的 | 任何時候都沒有 `disabled`、沒有 `aria-disabled` |
+
+第 3、4、8 條的元件要從快取拿 props 才看得到寫回——測試裡包一個小元件：`const meal = useQuery({ queryKey: queryKeys.socialMeal(7), queryFn: … , staleTime: Infinity }).data.meal`，把 `like_count`／`liked_by_me` 傳給 `LikeButton`。`invalidateQueries` 會讓它重抓：`/api/social/meals/7`（GET）的路由排在 `…/7/like` **後面**（第 8 點），回跟最後一個讚的回應一致的資料。
+
+Run → Expected：FAIL（transform error：`LikeButton` 不存在）。
+
+- [ ] **Step 3：`LikeButton.tsx`。**
+
+```tsx
+import { useQueryClient } from "@tanstack/react-query";
+import { Heart } from "lucide-react";
+import { useId, useRef, useState } from "react";
+import { ApiError } from "../api/errors";
+import { queryKeys } from "../api/queries";
+import { type LikeState, patchLikes, setLike } from "../api/social";
+import styles from "./LikeButton.module.css";
+import ui from "./ui.module.css";
+
+type Props = {
+	mealId: number;
+	/** 這是誰的哪一餐（「鮑伯的午餐」）：一頁有好幾顆，螢幕閱讀器要分得出來。 */
+	label: string;
+	count: number;
+	liked: boolean;
+};
+
+function describeError(caught: unknown): string {
+	if (caught instanceof ApiError && caught.status === 429) {
+		return caught.retryAfterSeconds !== null
+			? `${caught.message}（${caught.retryAfterSeconds} 秒後可再試）`
+			: caught.message;
+	}
+	return "沒有送出，請再試一次";
+}
+
+/** 讚（社群規格 D18、D19）。
+ *
+ *  **名稱固定、狀態用 `aria-pressed`**：名稱跟著狀態換（「按讚」／「收回讚」）再加
+ *  `aria-pressed`，會唸成「收回讚，已按下」。數字用 `aria-describedby`。
+ *
+ *  **連按**：畫面立刻照最後一次按的意圖變；請求一次一個，送完再看 `wanted`——
+ *  還有沒送的意圖就再送。所以請求不會亂序，最後的狀態一定等於最後一次按的。
+ *  按鈕從來不會變成不能按。 */
+export function LikeButton({ mealId, label, count, liked }: Props) {
+	const queryClient = useQueryClient();
+	const countId = useId();
+	// 樂觀的狀態：有值就蓋過 props。伺服器的回應寫進快取（props 跟著變）之後清掉。
+	const [optimistic, setOptimistic] = useState<LikeState | null>(null);
+	const [error, setError] = useState<string | null>(null);
+	// 最後一次按下去想要的狀態；null＝沒有還沒送的意圖。
+	const wanted = useRef<boolean | null>(null);
+	const sending = useRef(false);
+	const shown = optimistic ?? { like_count: count, liked_by_me: liked };
+
+	async function toggle() {
+		const next = !shown.liked_by_me;
+		setError(null);
+		setOptimistic({
+			liked_by_me: next,
+			like_count: Math.max(0, shown.like_count + (next ? 1 : -1)),
+		});
+		wanted.current = next;
+		// 已經有一輪在送：它送完會看到上面這個 wanted。
+		if (sending.current) return;
+		sending.current = true;
+
+		// 這一輪裡最後一次**成功**的回應＝伺服器現在的狀態。
+		let server: LikeState | null = null;
+		let failure: unknown;
+		try {
+			while (wanted.current !== null) {
+				const target: boolean = wanted.current;
+				wanted.current = null;
+				server = await setLike(mealId, target);
+			}
+		} catch (caught) {
+			failure = caught ?? new Error("unknown");
+			wanted.current = null;
+		}
+		sending.current = false;
+		// 從這裡到函式結束沒有 await：不會有另一次按下插在「寫快取」與「清掉樂觀狀態」中間。
+		if (server !== null) {
+			patchLikes(queryClient, mealId, server);
+			// 餐點頁的名單（誰按了讚）要重抓；數字已經在上面寫好了。
+			void queryClient.invalidateQueries({
+				queryKey: queryKeys.socialMeal(mealId),
+			});
+		}
+		// 失敗：退回伺服器的狀態——props（一個都沒成功），或上面寫進快取的那一個。
+		setOptimistic(null);
+		if (failure !== undefined) setError(describeError(failure));
+	}
+
+	return (
+		<span className={styles.wrap}>
+			<button
+				type="button"
+				className={styles.like}
+				aria-pressed={shown.liked_by_me}
+				aria-label={`讚，${label}`}
+				aria-describedby={countId}
+				onClick={() => void toggle()}
+			>
+				<Heart
+					aria-hidden="true"
+					size={20}
+					className={shown.liked_by_me ? styles.on : undefined}
+				/>
+				<span id={countId}>
+					<span aria-hidden="true">{shown.like_count}</span>
+					<span className={ui.srOnly}>{shown.like_count} 個讚</span>
+				</span>
+			</button>
+			{error !== null && (
+				<p role="alert" className={styles.error}>
+					{error}
+				</p>
+			)}
+		</span>
+	);
+}
+```
+
+`LikeButton.module.css`：`.wrap { position: relative; display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }`；`.like { display: inline-flex; align-items: center; gap: var(--space-1); min-width: 44px; min-height: 44px; padding: 0 var(--space-2); border: 0; background: none; color: var(--color-text-muted); font: inherit; cursor: pointer; }`；`.on { color: var(--color-danger); fill: currentColor; }`；`.error { margin: 0; color: var(--color-danger); font-size: 13px; }`。間距變數用 `index.css` 裡真的有的（`--space-1` 沒有就用 `--space-2`）；**只用變數，不寫色碼**（`tests/css-tokens.test.ts`）。
+
+- [ ] **Step 4：卡片。**
+
+`FriendMealCard.tsx`——`<p className={styles.macros}>` 後面加一列（`Link`、`LikeButton` 的 import；把檔案裡的 `FriendPhoto` 改成 `export`，Task 9 要用）：
+
+```tsx
+			<div className={styles.social}>
+				<LikeButton
+					mealId={meal.id}
+					label={`${meal.user.display_name}的${MEAL_TYPE_LABELS[meal.meal_type]}`}
+					count={meal.like_count ?? 0}
+					liked={meal.liked_by_me ?? false}
+				/>
+				<Link
+					to={`/meals/${meal.id}`}
+					className={styles.comments}
+					aria-label={`${meal.user.display_name}的${MEAL_TYPE_LABELS[meal.meal_type]}，留言 ${meal.comment_count ?? 0} 則`}
+				>
+					留言 {meal.comment_count ?? 0}
+				</Link>
+			</div>
+```
+
+`MealList.tsx` 的 `MealCard`——`<p className={styles.total}>` 後面：
+
+```tsx
+			<div className={styles.social}>
+				{/* 自己的餐不能按讚（後端 422）：只顯示數字，0 就不畫。 */}
+				{(meal.like_count ?? 0) > 0 && (
+					<span className={styles.likes}>
+						<Heart aria-hidden="true" size={16} />
+						<span aria-hidden="true">{meal.like_count}</span>
+						<span className={ui.srOnly}>{meal.like_count} 個讚</span>
+					</span>
+				)}
+				{/* 名稱帶時間與餐別，理由同上面的「編輯」。 */}
+				<Link
+					to={`/meals/${meal.id}`}
+					className={styles.comments}
+					aria-label={`${formatTime(meal.eaten_at)} ${MEAL_TYPE_LABELS[meal.meal_type]}，留言 ${meal.comment_count ?? 0} 則`}
+				>
+					留言 {meal.comment_count ?? 0}
+				</Link>
+			</div>
+```
+
+`?? 0` 不是多餘的：離線快取裡的舊餐、沒有型別標註的測試資料都沒有這幾個欄位（第 11 點）。biome 如果抱怨「型別上不可能是 undefined」就照 `meal.description ?` 那一段的註解寫法留一句理由。兩個 CSS 檔各加 `.social`（`display: flex; align-items: center; gap: var(--space-3); margin-top: var(--space-2);`）、`.comments`（`display: inline-flex; align-items: center; min-height: 44px; color: var(--color-action); text-decoration: none;`）、`MealList` 另加 `.likes`（`position: relative; display: inline-flex; align-items: center; gap: 4px; color: var(--color-text-muted);`）。
+
+- [ ] **Step 5：卡片的測試。**
+
+- `friend-feed.test.tsx`：`friendMeal()` 加 `like_count: 2, comment_count: 3, liked_by_me: true`。新增：卡片上有 `button { name: "讚，鮑伯的午餐", pressed: true }`、`link { name: "鮑伯的午餐，留言 3 則" }` 的 `href` 是 `/meals/7`。新增一條「在動態上按讚不會重抓動態」：按一下（`DELETE` 回 `{ like_count: 1, liked_by_me: false }`）→ 等描述變成「1 個讚」→ `spy.mock.calls` 裡 `/api/friends/feed` **仍然只有一次**（先等到數字變了才斷言，第 41 種）。
+- `friend-day.test.tsx`：同樣補欄位；一條斷言按鈕與連結都在。
+- `meal-list.test.tsx`：`like_count: 2, comment_count: 1` → 有「2 個讚」的文字、**沒有**任何 `讚` 的按鈕、連結 `href="/meals/<id>"`；`like_count: 0` → 沒有「個讚」；**完全沒有這兩個欄位的舊資料** → 連結文字是「留言 0」、畫面沒有 `undefined`／`NaN`。
+
+Run：`npx vitest run tests/like-button.test.tsx tests/friend-feed.test.tsx tests/friend-day.test.tsx tests/meal-list.test.tsx tests/css-tokens.test.ts 2>&1 | grep -E "FAIL|Unhandled|Tests |Test Files"`
+
+- [ ] **Step 6：突變。**
+
+| 突變 | 該紅的 |
+|---|---|
+| `if (sending.current) return;` 拿掉 | #4（第一個放行之前就有兩個請求） |
+| `wanted.current = null;`（迴圈裡那一行）拿掉 | #2 之後的每一條都跑不完——**不要跑這個突變**（無限迴圈，handover §7） |
+| 迴圈改成只送一次（`if` 取代 `while`） | #4（沒有 `DELETE`） |
+| `patchLikes(queryClient, mealId, server)` 拿掉 | #3、#8 |
+| 成功之後不 `setOptimistic(null)` | #3（畫面停在樂觀的 3，不是伺服器的 5） |
+| 失敗時不 `setOptimistic(null)` | #6 |
+| `setError(null)` 拿掉 | #9 |
+| `aria-pressed` 拿掉；`aria-describedby` 拿掉 | #1 |
+| `FriendMealCard` 的 `?? 0` 拿掉 | 型別上不會紅；`friend-day`／`friend-feed` 裡**沒有帶欄位**的那些既有測試會出現「讚，…」描述是 `undefined 個讚`——補一條斷言「舊資料畫出 0 個讚」讓它紅 |
+| `MealList` 的 `> 0` 改成 `>= 0` | `like_count: 0` 那一條 |
+
+- [ ] **Step 7：commit。** `npm run -s lint && npm run -s test 2>&1 | grep -E "FAIL|Unhandled|Tests |Test Files"`；單獨 `npm run -s typecheck`；掃看不見的字元。
+
+```bash
+git add frontend/src/components/LikeButton.tsx frontend/src/components/LikeButton.module.css frontend/src/components/ui.module.css frontend/src/components/FriendMealCard.tsx frontend/src/components/FriendMealCard.module.css frontend/src/screens/MealList.tsx frontend/src/screens/MealList.module.css frontend/tests/like-button.test.tsx frontend/tests/friend-feed.test.tsx frontend/tests/friend-day.test.tsx frontend/tests/meal-list.test.tsx
+git commit -F "$S/social-plan-task8-msg.txt"   # feat(frontend): 讚的按鈕（樂觀更新、連按照最後的意圖）；卡片上的讚與留言數
+```
+
+---
+
