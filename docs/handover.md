@@ -29,7 +29,7 @@
 | 項目 | 數字 |
 |---|---|
 | 端點 | **79**（OpenAPI 的 operation 數，跟 `grep -c "@router\." app/api/routes/*.py` 的加總一樣；2026-10-09） |
-| 測試 | 後端 **1224**（`pytest -q -W error` 全綠，約 2 分 50 秒）；前端 `Test Files 142`、`Tests 1817`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **47** 條、19 個檔案（Playwright；預設 workers 連跑兩次都是 `47 passed`）。2026-10-09 在 `feat/ai-multi-food` 量的（審查後的修正之後） |
+| 測試 | 後端 **1227**（`pytest -q -W error` 全綠，約 2 分 50 秒）；前端 `Test Files 142`、`Tests 1817`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **47** 條、19 個檔案（Playwright；預設 workers 連跑兩次都是 `47 passed`）。2026-10-09 在 `feat/ai-multi-food` 量的（審查後的修正之後） |
 | 覆蓋率 | 96%（2026-09 量的，之後沒再量） |
 | 資料表 | 16（+ `alembic_version`） |
 | Migration | `0001` ~ `0017` |
