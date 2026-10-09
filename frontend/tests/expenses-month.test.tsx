@@ -1,4 +1,8 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+	onlineManager,
+	QueryClient,
+	QueryClientProvider,
+} from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation, useNavigate } from "react-router";
@@ -251,9 +255,21 @@ describe("報表：切換月份", () => {
 		for (const testId of ["month-summary", "month-list"]) {
 			expect(screen.getByTestId(testId)).toHaveAttribute("aria-busy", "true");
 			expect(screen.getByTestId(testId)).toHaveClass(STALE_CLASS);
+			// 留著的是十二月的資料、標題卻已經是十一月：這一層只能看，不能操作。
+			expect(screen.getByTestId(testId)).toHaveAttribute("inert");
 		}
 		expect(screen.getByText("十二月的便當")).toBeInTheDocument();
 		expect(screen.queryByText("載入中…")).not.toBeInTheDocument();
+		// 十二月那一筆的「修改」「刪除」都在 inert 的那一層裡面（瀏覽器不讓它們被點到、
+		// 被 Tab 到；jsdom 不實作 inert，真的點不到由 e2e 守）。
+		const staleRow = screen.getByTestId("expense-1");
+		for (const name of ["修改", "刪除"]) {
+			expect(
+				within(staleRow)
+					.getByText(name, { selector: "button" })
+					.closest("[inert]"),
+			).toBe(screen.getByTestId("month-list"));
+		}
 		// 按下去的那顆還在、焦點沒跑掉。
 		expect(document.activeElement).toBe(previousButton());
 
@@ -264,8 +280,73 @@ describe("報表：切換月份", () => {
 		for (const testId of ["month-summary", "month-list"]) {
 			expect(screen.getByTestId(testId)).not.toHaveAttribute("aria-busy");
 			expect(screen.getByTestId(testId)).not.toHaveClass(STALE_CLASS);
+			expect(screen.getByTestId(testId)).not.toHaveAttribute("inert");
 		}
 		expect(screen.queryByText("十二月的便當")).not.toBeInTheDocument();
+	});
+
+	it("離線翻到沒看過的月份：說讀不到，不把上一個月的數字留在新的月份底下；恢復連線就載入", async () => {
+		// 離線時 query 是 paused，不會自己結束——keepPreviousData 留著的十二月會一直掛在
+		// 「2026年11月」底下，而且沒有任何訊息。
+		const fetchMock = mockApi([...NOVEMBER, ...DECEMBER]);
+		renderAt("/reports");
+		await screen.findByText("十二月的便當");
+		expect(screen.getByTestId("expense-summary")).toHaveTextContent(
+			"總計 180.00",
+		);
+
+		onlineManager.setOnline(false);
+		try {
+			await userEvent.click(previousButton());
+
+			expect(monthLabel()).toHaveTextContent("2026年11月");
+			expect(
+				await screen.findByText("無法載入2026年11月的報表"),
+			).toBeInTheDocument();
+			expect(screen.getByText("無法載入花費清單")).toBeInTheDocument();
+			// 十二月的東西一樣都不在：數字、那一筆、它的按鈕。
+			expect(screen.queryByText("十二月的便當")).not.toBeInTheDocument();
+			expect(screen.getByTestId("expense-summary")).not.toHaveTextContent(
+				"180.00",
+			);
+			expect(
+				screen.queryByRole("button", { name: "修改" }),
+			).not.toBeInTheDocument();
+			// 不是「載入中」：沒有在抓，也就沒有調淡、aria-busy。
+			for (const testId of ["month-summary", "month-list"]) {
+				expect(screen.getByTestId(testId)).not.toHaveAttribute("aria-busy");
+				expect(screen.getByTestId(testId)).not.toHaveClass(STALE_CLASS);
+				expect(screen.getByTestId(testId)).not.toHaveAttribute("inert");
+			}
+			expect(
+				requested(fetchMock).filter((url) => url.includes("month=2026-11")),
+			).toEqual([]);
+		} finally {
+			onlineManager.setOnline(true);
+		}
+
+		// 恢復連線：暫停的請求送出去，十一月出來。
+		expect(await screen.findByText("十一月的高鐵")).toBeInTheDocument();
+		expect(screen.getByTestId("expense-summary")).toHaveTextContent(
+			"總計 999.00",
+		);
+		expect(screen.queryByText("無法載入花費清單")).not.toBeInTheDocument();
+	});
+
+	it("離線直接打開沒看過的月份：說讀不到，不是一直「載入中…」", async () => {
+		mockApi([...NOVEMBER, ...DECEMBER]);
+		onlineManager.setOnline(false);
+		try {
+			renderAt("/reports?month=2026-11");
+
+			expect(
+				await screen.findByText("無法載入2026年11月的報表"),
+			).toBeInTheDocument();
+			expect(screen.getByText("無法載入花費清單")).toBeInTheDocument();
+			expect(screen.queryByText("載入中…")).not.toBeInTheDocument();
+		} finally {
+			onlineManager.setOnline(true);
+		}
 	});
 
 	it("重新整理停在過去的月份：一開始就問那個月，不先問這個月的清單", async () => {

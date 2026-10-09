@@ -194,6 +194,29 @@ function ExpenseRow({ expense, onChanged }: RowProps) {
 	);
 }
 
+type MonthQuery =
+	| ReturnType<typeof useExpenseSummary>
+	| ReturnType<typeof useExpenses>;
+
+/** 這個月的資料現在**拿不到**：請求失敗了，或離線而且快取裡沒有這個月。
+ *
+ *  離線時 query 是 `paused`，不會自己結束（同 `Targets.tsx`）——不當成讀不到的話：
+ *  - 換月份：`keepPreviousData` 留著的上一個月會一直掛在新月份的標題底下，沒有任何訊息；
+ *  - 直接打開：一直是「載入中…」。
+ *  快取裡有這個月（離線還原的、剛看過的）就不算：那是真的資料，照樣顯示。 */
+function isUnavailable(query: MonthQuery): boolean {
+	return (
+		query.isError ||
+		(query.fetchStatus === "paused" &&
+			(query.isPending || query.isPlaceholderData))
+	);
+}
+
+/** 畫面上留著的是**上一個月**的資料、新的那個月還在抓（`keepPreviousData`）。 */
+function isShowingPreviousMonth(query: MonthQuery): boolean {
+	return query.isPlaceholderData && !isUnavailable(query);
+}
+
 type MonthSummaryProps = {
 	query: ReturnType<typeof useExpenseSummary>;
 	/** 看的不是這個月時，那個月的名字（「2026年9月」）；這個月是 `null`。 */
@@ -207,10 +230,12 @@ type MonthSummaryProps = {
  *  `query.data` 本身，但窄化不會跟著閉包進到 callback 裡——指到同一個
  *  本地變數就會。 */
 function MonthSummary({ query, otherMonth }: MonthSummaryProps) {
-	if (query.isPending) return <p>載入中…</p>;
+	const unavailable = isUnavailable(query);
+	if (query.isPending && !unavailable) return <p>載入中…</p>;
 	const summary = query.data;
 	// 失敗不能卡在「載入中…」——那會讓使用者以為還在等，而不是知道要重試。
-	if (query.isError || summary == null) {
+	// 讀不到的時候 `data` 可能還是上一個月的（離線、keepPreviousData）：不拿它來畫。
+	if (unavailable || summary == null) {
 		return (
 			<p>
 				{otherMonth === null
@@ -247,9 +272,15 @@ function MonthSummary({ query, otherMonth }: MonthSummaryProps) {
 }
 
 /** 換月份後、新的那個月還沒回來時，畫面上留著的是上一個月的資料
- *  （`keepPreviousData`）：調淡、`aria-busy`，同趨勢頁換期間的作法。 */
+ *  （`keepPreviousData`）：調淡、`aria-busy`，同趨勢頁換期間的作法。
+ *
+ *  **外加 `inert`**：標題已經是新的月份，底下那幾列的「修改」「刪除」卻是上一個月的
+ *  ——不能讓人在「2026年9月」底下改到十月的帳。`inert` 讓整層點不到、Tab 不到、
+ *  螢幕閱讀器也不唸（React 19 起是布林屬性）；新的月份回來就拿掉。 */
 function staleProps(stale: boolean) {
-	return stale ? { "aria-busy": true, className: styles.stale } : {};
+	return stale
+		? { "aria-busy": true, inert: true, className: styles.stale }
+		: {};
 }
 
 /** 報表：一個月的總額、分類佔比與花費清單（可改金額、刪除）。
@@ -373,7 +404,7 @@ export function Expenses() {
 					<Card testId="expense-summary">
 						<div
 							data-testid="month-summary"
-							{...staleProps(summaryQuery.isPlaceholderData)}
+							{...staleProps(isShowingPreviousMonth(summaryQuery))}
 						>
 							<MonthSummary query={summaryQuery} otherMonth={otherMonth} />
 						</div>
@@ -385,15 +416,16 @@ export function Expenses() {
 					<Card>
 						<div
 							data-testid="month-list"
-							{...staleProps(expensesQuery.isPlaceholderData)}
+							{...staleProps(isShowingPreviousMonth(expensesQuery))}
 						>
-							{expensesQuery.isPending ? (
-								<p>載入中…</p>
-							) : expensesQuery.isError ? (
+							{isUnavailable(expensesQuery) ? (
 								// 失敗不能落到「這個月還沒有記錄花費」——這是報表畫面，
 								// 空清單的措辭會引誘使用者重打一筆，造成重複記帳
 								// （跟 MealList.tsx 的 isError 分支同一個理由）。
+								// 離線而且沒看過這個月也走這裡：不把上一個月的列留在新的標題底下。
 								<p>無法載入花費清單</p>
+							) : expensesQuery.isPending ? (
+								<p>載入中…</p>
 							) : expenses.length === 0 ? (
 								<p>
 									{otherMonth === null
