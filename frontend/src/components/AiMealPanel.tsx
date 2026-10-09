@@ -75,9 +75,18 @@ class SameNameError extends Error {
 	}
 }
 
-/** 一樣 → 一個可以記的食物。**依序**的四種來源（規格 §6.2「加入」）：
- *  使用者在衝突時選的那一筆、食物庫同名的那一筆、（改過名稱的先查同名）、新建一個。 */
-async function resolveFood(item: ChecklistItem): Promise<Food> {
+/** 一樣 → 一個可以記的食物。**依序**的五種來源（規格 §6.2「加入」）：
+ *  使用者在衝突時選的那一筆、食物庫同名的那一筆、這一輪剛建好的同名食物、
+ *  （改過名稱的先查同名）、新建一個。
+ *
+ *  `createdThisRound`：這一輪**建出來**的食物，照名稱記。只有「要建食物」的那幾樣
+ *  會查它、會寫它——同一輪兩樣同名都要建時，第二樣沿用第一樣剛建好的（再建一次
+ *  會撞 409 FOOD_EXISTS）。**用食物庫的那一樣不經過它**：同名只是名稱一樣，「用食物庫
+ *  的」與「改用 AI 的數字」是一樣一樣選的，不能因為同名就互相沿用（審查 M4）。 */
+async function resolveFood(
+	item: ChecklistItem,
+	createdThisRound: Map<string, Food>,
+): Promise<Food> {
 	const foodId =
 		item.pickedFoodId ??
 		(item.draft === null ? (item.library?.food_id ?? null) : null);
@@ -94,6 +103,12 @@ async function resolveFood(item: ChecklistItem): Promise<Food> {
 		if (!edited.ok) throw new Error(edited.error);
 		body = edited.body;
 	}
+
+	// 鍵是**真的要送出去的名稱**。在查同名之前：改名成這一輪剛建好的那個名稱時，
+	// 查同名會查到它自己——那不是「食物庫裡已經有」，不用停下來問。
+	const createdKey = nameKey(body.name);
+	const alreadyCreated = createdThisRound.get(createdKey);
+	if (alreadyCreated !== undefined) return alreadyCreated;
 
 	if (wasRenamed(item) && !item.skipSameNameCheck) {
 		let match: Food | null = null;
@@ -114,6 +129,7 @@ async function resolveFood(item: ChecklistItem): Promise<Food> {
 		body: JSON.stringify(body),
 	});
 	if (created === null) throw new Error("建立食物沒有回傳結果");
+	createdThisRound.set(createdKey, created);
 	return created;
 }
 
@@ -275,8 +291,9 @@ export function AiMealPanel({ text, onFoodPicked, onItemsReady }: Props) {
 
 	/** 把 `list` 裡勾著、還沒加入的每一樣（`only` 有給就只做那一樣）**依序**變成食物。
 	 *
-	 *  依序而不是同時：同一輪兩樣同名時，第二樣直接用第一樣剛建好的食物
-	 *  （`made`），不會自己撞 409。成功的標成 `added`——之後任何一輪都不會再碰它。 */
+	 *  依序而不是同時：同一輪兩樣同名都要建時，第二樣直接用第一樣剛建好的食物
+	 *  （`createdThisRound`，見 `resolveFood`），不會自己撞 409。成功的標成
+	 *  `added`——之後任何一輪都不會再碰它。 */
 	async function addItems(list: ChecklistItem[], only?: number) {
 		if (runningRef.current || result === null) return;
 		const targets = pendingItems(list).filter(
@@ -290,14 +307,16 @@ export function AiMealPanel({ text, onFoodPicked, onItemsReady }: Props) {
 		setEditing(null);
 		const source = { image, description: result.description };
 
-		const made = new Map<string, Food>();
+		const createdThisRound = new Map<string, Food>();
 		const ready: ReadyItem[] = [];
 		const outcomes = new Map<number, Partial<ChecklistItem>>();
 		for (const item of targets) {
-			const key = nameKey(itemName(item));
+			// 使用者已經離開記一餐：還沒輪到的就不做了（審查 M3）。少了這一行，迴圈會
+			// 把剩下的每一樣都建成食物——交回已經被下面那一行擋住，建出來的就是一個個
+			// 沒有人要的私人食物。已經送出去的那一個請求收不回來，所以是每一輪開頭看。
+			if (!mountedRef.current) break;
 			try {
-				const food = made.get(key) ?? (await resolveFood(item));
-				made.set(key, food);
+				const food = await resolveFood(item, createdThisRound);
 				ready.push({ food, quantity: itemAmount(item).quantity });
 				outcomes.set(item.key, { added: true, error: null, conflict: null });
 			} catch (error) {

@@ -527,6 +527,161 @@ describe("AI 多樣估算面板：加入", () => {
 
 		expect(onItemsReady).not.toHaveBeenCalled();
 	});
+
+	it("加入到一半就離開畫面：還沒輪到的那幾樣不再建食物、也不再讀食物庫", async () => {
+		// 三樣依序：滷雞腿（建）、滷蛋（建）、白飯（讀食物庫）。第一樣建到一半時離開。
+		// 上一條守的是「不再交回」；這一條守的是「不再往下做」——交回擋住了，但迴圈
+		// 照樣跑完的話，剩下的每一樣都會留下一個沒有人要的私人食物（審查 M3）。
+		const egg = { ...CHICKEN, name: "滷蛋" };
+		let release: (response: Response) => void = () => {};
+		const fetchMock = mockPanel({
+			estimate: () => json({ ...ESTIMATE, items: [CHICKEN, egg, RICE] }),
+			createFood: () =>
+				new Promise<Response>((resolve) => {
+					release = resolve;
+				}),
+		});
+		const { onItemsReady, unmount } = renderPanel();
+		const card = await estimate();
+
+		await userEvent.click(
+			within(card).getByRole("button", { name: "加入這 3 樣" }),
+		);
+		await waitFor(() =>
+			expect(calls(fetchMock, "POST", "/api/foods")).toHaveLength(1),
+		);
+		unmount();
+		const response = json(CREATED_CHICKEN, 201);
+		release(response);
+		// 同上一條：等第一樣那一步跑完，再讓「如果會往下做」的那些請求有機會送出去。
+		await waitFor(() => expect(response.bodyUsed).toBe(true));
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		});
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		});
+
+		// 已經送出去的那一個收不回來；之後沒有第二個 POST，也沒有去讀食物庫。
+		expect(calls(fetchMock, "POST", "/api/foods")).toHaveLength(1);
+		expect(calls(fetchMock, "GET", "/api/foods/7")).toHaveLength(0);
+		expect(onItemsReady).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["第二樣", 1],
+		["第一樣", 0],
+	])(
+		"兩樣同名，%s改用 AI 的數字、另一樣用食物庫的：各用各的，不共用",
+		async (_which, switched) => {
+			// 同名只是名稱一樣，選擇是一樣一樣做的（審查 M4）：按了「改用 AI 的數字」的那
+			// 一樣要建一個食物、用 AI 的營養素；另一樣要拿食物庫的那一筆。之前這一輪
+			// 先做的那一樣會被後面同名的那一樣悄悄沿用。
+			const small = {
+				...RICE,
+				nutrition: { ...RICE.nutrition, serving_grams: "80.00" },
+			};
+			const createdRice = { ...CREATED_CHICKEN, id: 33, name: "白飯" };
+			const fetchMock = mockPanel({
+				estimate: () => json({ ...ESTIMATE, items: [RICE, small] }),
+				createFood: () => json(createdRice, 201),
+			});
+			const { onItemsReady } = renderPanel();
+			const card = await estimate();
+
+			const useAi = within(card).getAllByRole("button", {
+				name: "白飯：改用 AI 的數字",
+			})[switched];
+			if (useAi === undefined) throw new Error("沒有那一顆「改用 AI 的數字」");
+			await userEvent.click(useAi);
+			await userEvent.click(
+				within(card).getByRole("button", { name: "加入這 2 樣" }),
+			);
+			await waitUntilClosed();
+
+			// 各一次：食物庫的那一樣讀食物庫，改用 AI 的那一樣建一個（AI 的每 100 是 140）。
+			expect(calls(fetchMock, "GET", "/api/foods/7")).toHaveLength(1);
+			expect(createdBodies(fetchMock)).toHaveLength(1);
+			expect(createdBodies(fetchMock)[0]).toMatchObject({
+				name: "白飯",
+				nutrition: { kcal: "140.00" },
+			});
+			const expected =
+				switched === 1
+					? [
+							{ food: LIBRARY_RICE, quantity: "200" },
+							{ food: createdRice, quantity: "80" },
+						]
+					: [
+							{ food: createdRice, quantity: "200" },
+							{ food: LIBRARY_RICE, quantity: "80" },
+						];
+			expect(onItemsReady).toHaveBeenCalledWith(expected, expect.anything());
+		},
+	);
+
+	it("兩樣同名都用食物庫的：兩樣都拿食物庫的那一筆，不建", async () => {
+		const small = {
+			...RICE,
+			nutrition: { ...RICE.nutrition, serving_grams: "80.00" },
+		};
+		const fetchMock = mockPanel({
+			estimate: () => json({ ...ESTIMATE, items: [RICE, small] }),
+		});
+		const { onItemsReady } = renderPanel();
+		const card = await estimate();
+
+		await userEvent.click(
+			within(card).getByRole("button", { name: "加入這 2 樣" }),
+		);
+		await waitUntilClosed();
+
+		expect(createdBodies(fetchMock)).toEqual([]);
+		expect(onItemsReady).toHaveBeenCalledWith(
+			[
+				{ food: LIBRARY_RICE, quantity: "200" },
+				{ food: LIBRARY_RICE, quantity: "80" },
+			],
+			expect.anything(),
+		);
+	});
+
+	it("改名之後跟同一輪剛建好的那一樣同名：直接用那一個，不問、不再建", async () => {
+		// 滷蛋先建好；滷雞腿改名成「滷蛋」。這時去查同名會查到剛建的那一個——
+		// 那不是「食物庫裡已經有」，是這一輪自己建的：沿用它，不停下來問。
+		const egg = { ...CHICKEN, name: "滷蛋" };
+		const createdEgg = { ...CREATED_CHICKEN, id: 32, name: "滷蛋" };
+		const fetchMock = mockPanel({
+			estimate: () => json({ ...ESTIMATE, items: [egg, CHICKEN] }),
+			createFood: () => json(createdEgg, 201),
+			search: () => json([createdEgg]),
+		});
+		const { onItemsReady } = renderPanel();
+		const card = await estimate();
+
+		await userEvent.click(
+			within(card).getByRole("button", { name: "修改 滷雞腿" }),
+		);
+		const form = within(card).getByRole("form", { name: "修改 滷雞腿" });
+		const name = within(form).getByLabelText("食物名稱");
+		await userEvent.clear(name);
+		await userEvent.type(name, "滷蛋");
+		await userEvent.click(within(form).getByRole("button", { name: "套用" }));
+		await userEvent.click(
+			within(card).getByRole("button", { name: "加入這 2 樣" }),
+		);
+		await waitUntilClosed();
+
+		expect(createdBodies(fetchMock)).toHaveLength(1);
+		expect(calls(fetchMock, "GET", "/api/foods?q=")).toHaveLength(0);
+		expect(onItemsReady).toHaveBeenCalledWith(
+			[
+				{ food: createdEgg, quantity: "150" },
+				{ food: createdEgg, quantity: "150" },
+			],
+			expect.anything(),
+		);
+	});
 });
 
 describe("AI 多樣估算面板：部分失敗", () => {
