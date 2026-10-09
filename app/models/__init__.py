@@ -7,6 +7,7 @@ from app.models.invite import Invite
 from app.models.meal import Meal, MealItem, MealType
 from app.models.password_reset import PasswordResetToken
 from app.models.session import RefreshSession
+from app.models.social import MealComment, MealLike, Notification, NotificationType
 from app.models.supplement import Supplement, SupplementIntake, SupplementPlan, TimeOfDay
 from app.models.target import UserTarget
 from app.models.user import User, UserRole
@@ -25,8 +26,12 @@ __all__ = [
     "FriendshipStatus",
     "Invite",
     "Meal",
+    "MealComment",
     "MealItem",
+    "MealLike",
     "MealType",
+    "Notification",
+    "NotificationType",
     "PasswordResetToken",
     "RefreshSession",
     "RevisionStatus",

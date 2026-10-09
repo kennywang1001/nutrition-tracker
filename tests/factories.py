@@ -12,6 +12,7 @@ from app.models.friendship import Friendship, FriendshipStatus
 from app.models.invite import Invite
 from app.models.meal import Meal, MealItem, MealType
 from app.models.password_reset import PasswordResetToken
+from app.models.social import MealComment, MealLike
 from app.models.supplement import Supplement, SupplementIntake, SupplementPlan, TimeOfDay
 from app.models.target import UserTarget
 from app.models.user import User, UserRole
@@ -467,3 +468,23 @@ async def create_friendship(
     await db_session.commit()
     await db_session.refresh(friendship)
     return friendship
+
+
+async def create_like(db_session: AsyncSession, *, meal: Meal, user: User) -> MealLike:
+    """直接寫一列讚——不經過端點的可見性與「不能讚自己」。"""
+    like = MealLike(meal_id=meal.id, user_id=user.id)
+    db_session.add(like)
+    await db_session.commit()
+    await db_session.refresh(like)
+    return like
+
+
+async def create_comment(
+    db_session: AsyncSession, *, meal: Meal, user: User, body: str = "看起來好好吃"
+) -> MealComment:
+    """直接寫一則留言——不經過端點的可見性與清理。"""
+    comment = MealComment(meal_id=meal.id, user_id=user.id, body=body)
+    db_session.add(comment)
+    await db_session.commit()
+    await db_session.refresh(comment)
+    return comment
