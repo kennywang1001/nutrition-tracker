@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 import { loginAs, newAccount } from "./new-account.ts";
 import { expectTouchTargets, login } from "./touch-targets.ts";
 
@@ -49,7 +49,11 @@ test("報表看其他月份：上個月沒有剛記的那一筆，網址記得�
 	const next = page.getByRole("button", { name: "下個月", exact: true });
 	await expect(summary).toContainText("總計 123.45");
 	await expect(list.getByText(note, { exact: true })).toBeVisible();
+	// 不能按是 aria-disabled（Playwright 的 toBeDisabled 兩種都認），不是原生的 disabled：
+	// 原生的收不到焦點，見下面翻回這個月的那一段。
 	await expect(next).toBeDisabled();
+	await expect(next).toHaveAttribute("aria-disabled", "true");
+	await expect(next).not.toHaveAttribute("disabled");
 	await expect(page).toHaveURL(/\/reports$/);
 
 	// 上個月：新帳號，什麼都沒有。
@@ -87,6 +91,14 @@ test("報表看其他月份：上個月沒有剛記的那一筆，網址記得�
 	await expect(summary).toContainText("總計 123.45");
 	await expect(list.getByText(note, { exact: true })).toBeVisible();
 	await expect(next).toBeDisabled();
+	// 剛按下去的那顆變成不能按，但焦點還在它上面：用鍵盤的人還在原地——再按 Enter 沒有
+	// 反應（網址不動），Shift+Tab 就是「上個月」。
+	await expect(next).toBeFocused();
+	await page.keyboard.press("Enter");
+	await expect(page).toHaveURL(/\/reports$/);
+	await expect(summary).toContainText("總計 123.45");
+	await page.keyboard.press("Shift+Tab");
+	await expect(previous).toBeFocused();
 
 	// 換月份是一筆一筆的歷史紀錄：瀏覽器的上一頁回到上個月。
 	await page.goBack();
@@ -133,10 +145,87 @@ test("匯出花費：下載的 CSV 檔名帶日期、開頭有 BOM、內容有�
 		),
 	);
 	expect(lines[2]).toBe("");
-	// 三顆按鈕都恢復可以按。
+	// 三顆按鈕都恢復可以按；下載中它們是 aria-disabled 而不是原生停用，所以按下去的
+	// 那一顆從頭到尾沒有把焦點弄丟。
+	const expensesButton = card.getByRole("button", {
+		name: "花費",
+		exact: true,
+	});
+	await expect(expensesButton).toBeEnabled();
+	await expect(expensesButton).toBeFocused();
+	for (const name of ["餐點", "補劑"]) {
+		await expect(card.getByRole("button", { name, exact: true })).toBeEnabled();
+	}
+});
+
+/** 用座標點一個元素的正中央。`locator.click()` 會等到元素「點得到」為止——要測的正是
+ *  它點不到，所以不能用。 */
+async function clickCentre(page: Page, target: Locator) {
+	const box = await target.boundingBox();
+	if (box === null) throw new Error("要點的元素量不到位置");
+	await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+}
+
+test("換月份時留著的上一個月：看得到但點不到、Tab 不到，載入完才能操作", async ({
+	page,
+	request,
+}) => {
+	const account = await newAccount(request, "stale");
+	await loginAs(page, account);
+	const note = `e2e-stale-${Date.now()}`;
+	await addExpense(page, note);
+
+	await page.getByRole("link", { name: "報表", exact: true }).click();
+	const list = page.getByTestId("month-list");
+	const previous = page.getByRole("button", { name: "上個月", exact: true });
+	const next = page.getByRole("button", { name: "下個月", exact: true });
+	await expect(list.getByText(note, { exact: true })).toBeVisible();
+	// 用 CSS 找：inert 的那一層不在無障礙樹裡，getByRole 在那段時間找不到這幾顆。
+	const edit = list.locator("button", { hasText: "修改" });
+	const remove = list.locator("button", { hasText: "刪除" });
+	const editor = list.locator("input");
+	const confirm = list.locator('[role="alertdialog"]');
+
+	// 上個月的兩個請求先扣住：這段時間標題已經是上個月，底下留著的是這個月的那一筆。
+	let release: () => void = () => {};
+	const held = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	await page.route(/\/api\/expenses(\/summary)?\?month=/, async (route) => {
+		await held;
+		await route.continue();
+	});
+	await previous.click();
 	await expect(
-		card.getByRole("button", { name: "花費", exact: true }),
-	).toBeEnabled();
+		page.getByRole("heading", { name: /^\d{4}年\d{1,2}月花了多少$/ }),
+	).toBeVisible();
+	await expect(list).toHaveAttribute("aria-busy", "true");
+	await expect(list.getByText(note, { exact: true })).toBeVisible();
+
+	// 點不到：修改的輸入框、刪除的確認都沒有出現。
+	await clickCentre(page, edit);
+	await clickCentre(page, remove);
+	await expect(editor).toHaveCount(0);
+	await expect(confirm).toHaveCount(0);
+	// Tab 不到：從「上個月」開始（剛才點在 inert 的地方，焦點已經不在按鈕上了），
+	// 下一個是「下個月」，再下一個本來會是那一筆的「修改」。
+	await previous.focus();
+	await page.keyboard.press("Tab");
+	await expect(next).toBeFocused();
+	await page.keyboard.press("Tab");
+	await expect(list.locator(":focus")).toHaveCount(0);
+
+	release();
+	await expect(page.getByTestId("expense-summary")).toContainText("總計 0.00");
+	await expect(list).not.toHaveAttribute("aria-busy", "true");
+	await expect(list.getByText(note, { exact: true })).toHaveCount(0);
+
+	// 回到這個月：同樣的點法點得到——上面的「沒有反應」不是因為點歪了。
+	await next.click();
+	await expect(list.getByText(note, { exact: true })).toBeVisible();
+	await expect(list).not.toHaveAttribute("aria-busy", "true");
+	await clickCentre(page, edit);
+	await expect(editor).toHaveCount(1);
 });
 
 test.describe("手機尺寸", () => {
