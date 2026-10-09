@@ -82,7 +82,7 @@ app/
   days.py              day_bounds() / today_in_timezone()  ← 時區的單一來源
   nutrition.py         營養素換算（每 100 單位的「100」只存在這裡）
   stats.py             統計彙總核心（SQL 分桶）
-  ratelimit.py         登入速率限制、KeyedRateLimiter（換票／登出、匯出）、InFlightLimiter（匯出同時一個）——都在記憶體，單容器
+  ratelimit.py         登入速率限制、KeyedRateLimiter（換票／登出、匯出）、InFlightLimiter（匯出同時一個，最多佔 10 分鐘）——都在記憶體，單容器
   csv_export.py        CSV 的唯一寫法：BOM、RFC 4180 的引號、公式字元（儲存格的型別決定怎麼寫）
   export.py            匯出的三支分塊 async generator（餐點、花費、補劑；keyset 分塊）
   food_visibility.py   食物/份量的分層可見性（共用）
@@ -1601,6 +1601,11 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
   前一個還沒結束是 `429 EXPORT_IN_PROGRESS`、**不帶 `Retry-After`**（`TooManyRequestsError` 的秒數可以是 `None`）。
   兩個都在 router 上的 `export_slot` 依賴裡（先算次數、再看有沒有在跑），位子在 `yield` 之後的 `finally` 放掉——
   **不在串流 generator 的 `finally` 裡**（§7「串流 generator 的 `finally`」）。記憶體、單容器（同 §5.2）。
+- **位子最多佔 10 分鐘**（後續修正，`app/ratelimit.py` 的 `EXPORT_MAX_HOLD_SECONDS`）：「回應結束才放掉」管不到不結束的
+  回應（不讀、也不斷線的用戶端）。`InFlightLimiter.acquire` 記下佔的時間（單調時鐘，可以換掉）並回傳一個**憑證**；
+  佔著的那一個超過上限，下一個 `acquire` 直接接手。`release(key, token)` **只在憑證是現在佔著的那一次時才放**——
+  被接手的那一個後來才收尾，不能把接手的那一個的位子放掉。接手不會停掉被接手的串流。
+  **之後要加「同時最多一個」的東西，問兩件事：不結束的那一個怎麼辦；晚到的 `release` 放掉的是誰的。**
 - **前端下載**：`<a href>` 帶不了 `Authorization`（同照片），所以 `api/client.ts` 的 `fetchDownload()`（跟 `apiFetch`、
   `fetchPhotoBlob` 共用 `fetchWithAuthRetry`）先拿成 `Blob`、檔名讀 `Content-Disposition`；`lib/save-file.ts` 的 `saveBlob()`
   用暫時的 object URL＋`<a download>` 存檔、40 秒後才 `revokeObjectURL`。**iOS 主畫面模式**（`navigator.standalone === true`
@@ -1640,10 +1645,13 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
    就從 localStorage 拿掉。照預設值推論的，沒有另外量。
 8. 匯出是「全部歷史、一種一個檔」：沒有日期範圍；餐點的檔沒有餐費，花費的檔沒有餐點編號，兩個檔之間沒有可以對起來的鍵。
 9. **後端的記憶體是平的，瀏覽器的不是**：整份 CSV 先變成一個 Blob 才存檔。
-10. **卡住的下載不佔資料庫連線，但佔著那個人的位子**（審查 I1）：連線只在查一塊的那一下被借走。讀得很慢或不讀的用戶端
-    還是佔著一個 task、uvicorn 的寫入緩衝、與「這個人正在匯出」的位子，直到連線斷掉——**伺服器不會主動踢掉卡住的下載**
-    （uvicorn 沒有寫入逾時），那個人在那之前再按是 `429 EXPORT_IN_PROGRESS`。偷到 access token 的人可以這樣讓本人
-    匯出不了，直到那條連線斷掉或容器重啟（`docker compose restart api` 清得掉）；票過期不會中斷已經開始的串流。
+10. **卡住的下載不佔資料庫連線，但佔著那個人的位子——最多 10 分鐘**（審查 I1；上限是後續修正）：連線只在查一塊的
+    那一下被借走。讀得很慢或不讀的用戶端還是佔著一個 task、uvicorn 的寫入緩衝、與「這個人正在匯出」的位子——
+    **伺服器不會主動踢掉卡住的下載**（uvicorn 沒有寫入逾時），那個人在那之前再按是 `429 EXPORT_IN_PROGRESS`。
+    位子在連線斷掉時放掉，**或者佔滿 10 分鐘之後被同一個人的下一次匯出接手**（不用再靠 `docker compose restart api`）。
+    偷到 access token 的人還是可以讓本人匯出不了，每一次最多 10 分鐘。**被接手的串流沒有被停掉**：task 與緩衝留到它的
+    連線斷掉或容器重啟，故意卡住的人每 10 分鐘可以多疊一個。429 不帶 `Retry-After`、畫面上的字沒有變——卡住的人
+    不知道「最多等 10 分鐘」。票過期不會中斷已經開始的串流。
 11. **不是同一個時間點的快照**：每一塊是分開的查詢，匯出途中新增、刪除、改時間的列可能有、可能沒有、可能出現兩次。
 12. 串流開始之後才出錯（例如資料庫斷線）：狀態碼已經是 200，只能中斷連線。前端顯示「下載失敗」；用 curl 的人會拿到
     被截斷的檔案。**前端那一段沒有測試**；後端只測了「串流中途失敗之後位子有放掉」。

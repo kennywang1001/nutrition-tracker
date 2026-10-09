@@ -49,15 +49,21 @@ async def export_slot(user: User = Depends(get_current_user)) -> AsyncIterator[N
     **先算次數、再看有沒有在跑**：被「已經有一個在跑」擋下來的也算進每分鐘的額度，
     對著進行中的匯出狂打的迴圈一樣會被限速擋下來。兩個都在碰匯出的查詢之前；鍵都是
     這個使用者（`str(user.id)`），三個端點共用。
+
+    **「回應結束之後才放掉」管不到不結束的回應**：不讀、也不斷線的用戶端讓這個依賴一直
+    停在 `yield`。位子因此有時間上限（`app/ratelimit.py` 的 `EXPORT_MAX_HOLD_SECONDS`）——
+    超過了，同一個人的下一次匯出直接接手；卡住的那一個還掛著，等它自己的連線結束。
     """
     key = str(user.id)
     export_rate_limiter.hit(key)
     # 這一行丟 429 的話什麼都沒有佔到——所以在 try 外面：被擋的請求不能去放別人的位子。
-    export_in_flight.acquire(key)
+    hold = export_in_flight.acquire(key)
     try:
         yield
     finally:
-        export_in_flight.release(key)
+        # 帶著自己佔的那一次的憑證去放：這一個如果卡了超過 `EXPORT_MAX_HOLD_SECONDS`、位子
+        # 已經被同一個人的下一次匯出接手，這裡不能把**那一個**的位子放掉。
+        export_in_flight.release(key, hold)
 
 
 # 掛在 router 上：之後加第四個匯出端點，不會忘了限速與「一次一個」。

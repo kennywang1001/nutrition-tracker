@@ -241,6 +241,17 @@ session_rate_limiter = KeyedRateLimiter(
 )
 
 
+@dataclass(frozen=True, eq=False)
+class _Hold:
+    """一次 `acquire` 佔到的位子，同時是放掉它的憑證。
+
+    `eq=False`：比的是「是不是同一次 `acquire`」（物件本身），不是欄位——同一個鍵、
+    同一個時刻佔到的兩次也是兩張不同的憑證。
+    """
+
+    acquired_at: float
+
+
 class InFlightLimiter:
     """每個鍵**同一時間**最多一個在跑——不是「一段時間內幾次」。
 
@@ -249,28 +260,67 @@ class InFlightLimiter:
     `release` 要成對，呼叫端負責在**每一條**結束的路上放掉（做完、失敗、被取消、
     根本沒開始）。
 
+    **佔著的時間有上限（`max_hold_seconds`）：超過了，下一個 `acquire` 直接接手。**
+    「每一條結束的路上放掉」管不到**不結束**的那一種：不讀、也不斷線的用戶端可以讓連線
+    一直開著（uvicorn 沒有寫入逾時），位子就跟著一直佔著，那個人一直是 429，直到那條連線
+    斷掉或 process 重啟。接手只換「誰佔著位子」，**不會去停掉被接手的那一個**——它還掛在
+    那裡，等它自己的連線結束。所以「同一時間最多一個」在有人卡住的時候是「每
+    `max_hold_seconds` 最多多一個」。
+
+    **放的時候要出示佔的時候拿到的憑證**（`acquire` 的回傳值）。被接手的那一個後來才
+    結束時也會來放——它放的是自己的位子，而那個位子已經是別人的了。只認鍵的話，那一下
+    會把正在跑的那一個放掉，第三個就進得來。憑證對不上就什麼都不做。
+
+    時鐘是 `time.monotonic`（跟上面兩個限速器一樣可以換掉，測試用）：量的是「過了多久」，
+    不能跟著系統時間被調動。
+
     擋下來的是 `TooManyRequestsError`、**不帶 `Retry-After`**：前一個什麼時候結束這裡
-    不知道，不編一個秒數（`app/errors.py`）。
+    不知道，不編一個秒數（`app/errors.py`）。上限還剩幾秒是算得出來的，但那是「最壞
+    還要等多久」，不是「什麼時候可以再試」——正常的匯出幾秒就結束了，拿它當 `Retry-After`
+    會叫人白等十分鐘。
 
     跟上面兩個限速器一樣只在這個 process 的記憶體裡：單一容器成立；多容器的話，每個
     容器各算各的，「一個人一個」會變成「一個人每個容器一個」。重啟就全部清空——那時
     進行中的串流也一起斷了，兩邊是一致的。
     """
 
-    def __init__(self, *, code: str, message: str) -> None:
+    def __init__(
+        self,
+        *,
+        code: str,
+        message: str,
+        max_hold_seconds: float,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._code = code
         self._message = message
-        self._active: set[str] = set()
+        self._max_hold_seconds = max_hold_seconds
+        self._clock = clock
+        self._active: dict[str, _Hold] = {}
 
-    def acquire(self, key: str) -> None:
-        """佔住 `key`；已經有人佔著就丟 429，**而且這一次什麼都沒有佔到**——
-        被擋下來的呼叫端不能呼叫 `release`（那會把正在跑的那一個的位子放掉）。"""
-        if key in self._active:
+    def acquire(self, key: str) -> object:
+        """佔住 `key`，回傳放掉它要用的憑證。
+
+        已經有人佔著、而且還沒超過上限就丟 429，**而且這一次什麼都沒有佔到**（沒有憑證，
+        也就沒有東西可以拿去 `release`）。佔著的那一個超過上限了：這一次接手，位子從現在
+        重新算起。
+        """
+        now = self._clock()
+        current = self._active.get(key)
+        if current is not None and now - current.acquired_at < self._max_hold_seconds:
             raise TooManyRequestsError(self._code, self._message, retry_after_seconds=None)
-        self._active.add(key)
+        hold = _Hold(acquired_at=now)
+        self._active[key] = hold
+        return hold
 
-    def release(self, key: str) -> None:
-        self._active.discard(key)
+    def release(self, key: str, token: object) -> None:
+        """放掉 `key`——**只有 `token` 是現在佔著的那一次拿到的才放**。
+
+        對不上（已經被接手、已經放過、或這個鍵根本沒有人佔著）不是錯誤，什麼都不做：
+        呼叫端在 `finally` 裡呼叫，那裡沒有辦法、也不需要分辨。
+        """
+        if self._active.get(key) is token:
+            del self._active[key]
 
     def reset(self) -> None:
         self._active.clear()
@@ -292,6 +342,23 @@ export_rate_limiter = KeyedRateLimiter(
     message="匯出太頻繁，請稍後再試",
 )
 
+# 一次匯出最多佔著位子 **10 分鐘**；超過了，同一個人的下一次匯出接手（`InFlightLimiter`）。
+#
+# 這個數字夾在兩件事中間：
+#
+# - **不能短到正常的下載被接手。** 一個人的整段歷史是幾 MB 的 CSV（規格 §8 第 9 點），
+#   很慢的行動網路（每秒幾十 KB）也是一兩分鐘的事。10 分鐘離它很遠。就算真的有人下載
+#   超過 10 分鐘，接手也**不會中斷**那一次——只是那之後同一個人可以同時有兩個在跑。
+# - **不能長到「卡住」等於「鎖死」。** 不讀也不斷線的用戶端（或偷到 access token 的人
+#   故意這樣做）讓本人一直拿到 `429 EXPORT_IN_PROGRESS`；上限就是本人最多要等多久。
+#   10 分鐘是「等一下再試」還說得過去的長度，不必去重啟容器。
+#
+# 反過來的代價：被接手的那一個還掛著（一個 task、一塊寫入緩衝，不握資料庫連線），所以
+# 故意卡住的人每 10 分鐘可以多疊一個——一小時 6 個，沒有這個上限之前是 0 個、沒有
+# 「一次一個」之前是每分鐘 6 個（上面的限速）。access token 15 分鐘過期，拿不到新票的人
+# 疊不了幾個。
+EXPORT_MAX_HOLD_SECONDS = 600.0
+
 # 匯出「一個人同時一個」（規格 §8 第 10 點）：鍵跟上面一樣是使用者 id，三個端點共用。
 #
 # 限速只管「開始幾次」；一個下載到一半就不讀的用戶端會讓那一次一直掛著——已經不握資料庫
@@ -300,4 +367,5 @@ export_rate_limiter = KeyedRateLimiter(
 export_in_flight = InFlightLimiter(
     code="EXPORT_IN_PROGRESS",
     message="已經有一個匯出在進行，等它下載完再試",
+    max_hold_seconds=EXPORT_MAX_HOLD_SECONDS,
 )

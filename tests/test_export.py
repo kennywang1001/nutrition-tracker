@@ -41,7 +41,7 @@ from app.models.expense import ExpenseCategory
 from app.models.food import BaseUnit, FoodRevision
 from app.models.meal import MealType
 from app.models.user import User
-from app.ratelimit import EXPORT_LIMIT, InFlightLimiter
+from app.ratelimit import EXPORT_LIMIT, EXPORT_MAX_HOLD_SECONDS, InFlightLimiter
 from app.security.tokens import create_access_token
 from tests.conftest import TEST_DATABASE_URL
 from tests.factories import (
@@ -785,24 +785,110 @@ async def test_the_three_exports_share_one_budget_per_user(client, db_session):
 # ── 一個人同時只能有一個匯出在跑 ──────────────────────────────────────────────
 
 
-def test_the_in_flight_limiter_allows_one_per_key_until_it_is_released():
-    limiter = InFlightLimiter(code="BUSY", message="忙")
+class _FakeClock:
+    """單調時鐘的替身（同 `tests/test_session_rate_limit.py`）：時間只在測試說要走的時候走。"""
 
-    limiter.acquire("alice")
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _in_flight(clock: _FakeClock, *, max_hold_seconds: float = 600.0) -> InFlightLimiter:
+    return InFlightLimiter(
+        code="BUSY", message="忙", max_hold_seconds=max_hold_seconds, clock=clock
+    )
+
+
+def test_the_in_flight_limiter_allows_one_per_key_until_it_is_released():
+    limiter = _in_flight(_FakeClock())
+
+    alice = limiter.acquire("alice")
     limiter.acquire("bob")  # 別人不受影響
     with pytest.raises(TooManyRequestsError) as refused:
         limiter.acquire("alice")
-    limiter.release("alice")
-    limiter.acquire("alice")  # 放掉之後又可以了
-    limiter.release("nobody")  # 沒有佔著的鍵：不是錯誤
+    limiter.release("alice", alice)
+    again = limiter.acquire("alice")  # 放掉之後又可以了
+    limiter.release("nobody", object())  # 沒有佔著的鍵：不是錯誤
 
     assert (refused.value.status_code, refused.value.code) == (429, "BUSY")
     # 不知道前一個什麼時候結束：不給一個編出來的秒數。
     assert refused.value.retry_after_seconds is None
     assert refused.value.headers is None
+    assert again is not alice  # 每一次佔到的是一張新的憑證
     limiter.reset()
     limiter.acquire("alice")
     limiter.acquire("bob")
+
+
+def test_the_in_flight_limiter_keeps_the_slot_until_the_time_limit():
+    # 還沒到上限：不管等了多久，佔著就是佔著（正常的下載不能被第二次按下去搶走）。
+    clock = _FakeClock()
+    limiter = _in_flight(clock, max_hold_seconds=600.0)
+    limiter.acquire("alice")
+
+    clock.now += 599.9
+    with pytest.raises(TooManyRequestsError) as refused:
+        limiter.acquire("alice")
+
+    assert refused.value.code == "BUSY"
+    assert refused.value.retry_after_seconds is None
+
+
+def test_the_in_flight_limiter_hands_the_slot_over_after_the_time_limit():
+    # 佔著不放的（不讀、也不斷線的用戶端）不能讓這個人永遠匯出不了：到了上限，下一個接手。
+    clock = _FakeClock()
+    limiter = _in_flight(clock, max_hold_seconds=600.0)
+    stale = limiter.acquire("alice")
+
+    clock.now += 600.0
+    fresh = limiter.acquire("alice")
+
+    assert fresh is not stale
+    # 接手的那一個是「剛剛」佔的：它自己也有完整的一段時間，不是馬上又可以被接手。
+    clock.now += 599.9
+    with pytest.raises(TooManyRequestsError):
+        limiter.acquire("alice")
+    clock.now += 0.1
+    limiter.acquire("alice")
+
+
+def test_a_stale_holder_releasing_late_does_not_free_the_new_holder():
+    # 被接手的那一個後來才結束（連線終於斷了）：它放的是**自己的**位子，而那個位子已經
+    # 不是它的了。只認鍵的話，這裡會把正在跑的那一個放掉——第三個就進得來。
+    clock = _FakeClock()
+    limiter = _in_flight(clock, max_hold_seconds=600.0)
+    stale = limiter.acquire("alice")
+    clock.now += 600.0
+    fresh = limiter.acquire("alice")
+
+    limiter.release("alice", stale)
+    with pytest.raises(TooManyRequestsError):
+        limiter.acquire("alice")
+    limiter.release("alice", stale)  # 放兩次也一樣
+    with pytest.raises(TooManyRequestsError):
+        limiter.acquire("alice")
+
+    limiter.release("alice", fresh)  # 現在佔著的那一個自己放：正常放掉
+    limiter.acquire("alice")
+
+
+def test_a_release_with_another_keys_token_does_nothing():
+    clock = _FakeClock()
+    limiter = _in_flight(clock)
+    limiter.acquire("alice")
+    bob = limiter.acquire("bob")
+
+    limiter.release("alice", bob)
+
+    with pytest.raises(TooManyRequestsError):
+        limiter.acquire("alice")
+
+
+def test_the_export_slot_is_held_for_ten_minutes_at_most():
+    # 數字寫死：改這個常數要經過這裡（理由在 `app/ratelimit.py`）。
+    assert EXPORT_MAX_HOLD_SECONDS == 600.0
 
 
 class _HeldExport:
@@ -927,6 +1013,51 @@ async def test_the_slot_is_released_when_a_stalled_download_hangs_up(client, db_
     assert held.started == 1
     assert not held.header_sent.is_set()  # generator 還停在第一個 yield
     assert afterwards.status_code == 200
+
+
+async def test_a_stalled_download_loses_the_slot_after_the_time_limit(
+    client, db_session, held, monkeypatch
+):
+    """讀的人不讀、**也不斷線**：位子不能跟著那條連線一起永遠佔著。到了上限下一個接手；
+    卡住的那一個後來才結束時，放掉的不能是接手的那一個的位子。"""
+    # 只換**正式那一個 instance** 的時鐘，不另外建一個：上限要是它真的被設定的那個值
+    # （自己建一個的話，正式的 instance 寫死成別的數字這裡也是綠的——突變實測過）。
+    clock = _FakeClock()
+    monkeypatch.setattr(export_routes.export_in_flight, "_clock", clock)
+    alice = (await create_user(db_session)).id
+    stalled = asyncio.Event()
+    hang_up = asyncio.Event()
+
+    transport = ASGITransport(app=_on_the_wire(await _never_sent(stalled), hang_up=hang_up))
+    async with AsyncClient(transport=transport, base_url="http://test") as stuck:
+        download = asyncio.create_task(stuck.get(EXPENSES, headers=auth(alice)))
+        await asyncio.wait_for(stalled.wait(), 5)
+        clock.now += EXPORT_MAX_HOLD_SECONDS - 1
+        too_early = await client.get(MEALS, headers=auth(alice))
+        clock.now += 1
+        # 接手的這一個也停在串流中間（花費那一支：吐了標題就等放行）。
+        takeover = asyncio.create_task(client.get(EXPENSES, headers=auth(alice)))
+        try:
+            await asyncio.wait_for(held.header_sent.wait(), 5)
+            # 卡住的那一個現在才斷線、收尾。
+            hang_up.set()
+            cut_short = await asyncio.wait_for(download, 5)
+            while_the_new_one_runs = await client.get(MEALS, headers=auth(alice))
+        finally:
+            held.proceed.set()
+            finished = await asyncio.wait_for(takeover, 5)
+    afterwards = await client.get(MEALS, headers=auth(alice))
+
+    assert too_early.status_code == 429
+    assert too_early.json()["error"]["code"] == "EXPORT_IN_PROGRESS"
+    assert cut_short.content == b""
+    assert finished.status_code == 200
+    assert finished.content == BOM + b"header\r\nrow\r\n"
+    assert held.started == 2
+    # 舊的那一個收尾時沒有把新的那一個的位子放掉。
+    assert while_the_new_one_runs.status_code == 429
+    assert while_the_new_one_runs.json()["error"]["code"] == "EXPORT_IN_PROGRESS"
+    assert afterwards.status_code == 200  # 新的那一個自己做完，位子才空出來
 
 
 async def test_the_slot_is_released_when_the_request_task_is_cancelled(client, db_session, held):
