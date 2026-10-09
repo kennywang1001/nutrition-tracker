@@ -106,6 +106,48 @@
 
 （執行時填：哪個 task、原本寫什麼、實際是什麼、為什麼。）
 
+**工具（Task 1～3 都適用）**
+
+- Write／Edit 工具會把參數裡「反斜線 u＋四位十六進位」的跳脫解成**真的字元**（`\x00`、`\n` 不會）。必讀第 18 點要的跳脫寫法因此不能直接打：大段程式碼改成用腳本從這份計畫**依行號原樣取出**，其餘的寫完再用腳本把 Cf／Zl／Zp 類的字元換回跳脫，並逐檔掃一次看不見的字元。
+- `app/schemas/validators.py` 的工作目錄副本本來就是 CRLF（index 是 LF；同一批舊 checkout 還有二十幾個檔案）。照「保留各檔既有行尾」沒有動它，commit 進去的仍是 LF。
+
+**Task 1（`e391776`）**
+
+| 原本寫的 | 實際 | 為什麼 |
+|---|---|---|
+| Step 3 的 `…500…501…` 測試在 `rollback()` 之後用 `Meal.user_id == user.id` | 紅在 `MissingGreenlet`，不是斷言。改成先記下 `user_id = user.id` | `rollback()` 讓 ORM 物件過期，再碰 `user.id` 是一次同步的 lazy load。Task 3 的測試本來就是先記 `user_id` 的寫法 |
+| Step 6 之後 `test_meals_description.py` 15 條、整套 1033 | 16 條、整套 **1034** | 多一條 `test_patching_a_description_of_501_characters_is_rejected`：把 `MealUpdateRequest.description` 的 `max_length` 改成 5000，原本 15 條全綠——PATCH 的長度是另一個 schema 上的另一個 `max_length`，建立那一條守不到 |
+| 突變 2 只紅 `…stores_and_returns_it` | 紅 3 條（另有 `…cleaned_to_a_single_line`、`…500…501…`） | 那兩條也先斷言回應的 `description` |
+| 突變 3 紅 `…every_read…` 與兩條 PATCH | 紅 6 條（`…clears…` 三格也紅） | 清掉之後回應的描述變成「原本的備註」 |
+| 突變 4 只紅 `…stores_and_returns_it` | 紅 3 條（同突變 2 那三條） | 沒帶 `note` 的建立，描述被存成 `None` |
+| 突變 11「不用真的做」 | 做了兩個：`guard_text` 原樣回傳 → 11 條紅（含既有的品牌 `=茶裏王`）；只放過 `=便當` → 只紅 `…one_row_per_item…` | 第二個才分得出「描述那一格自己咬得住」 |
+| Step 4 對 dev 資料庫走一輪 `downgrade`／`upgrade` | 退版那一輪在 `wallet_test` 上走（`upgrade`→`check`→`downgrade 0016`→`upgrade`→`check`）；dev 資料庫只 `upgrade head`（現在是 `0017`） | 不在有真資料的 dev 上丟欄位 |
+
+其餘突變（1、5～10、12）如表。前端：typecheck 紅的就是 `tests/timeline.test.ts(7)` 那一處；補完後 `Test Files 138`、`Tests 1671`。
+
+**Task 2（`3350192`）**
+
+| 原本寫的 | 實際 | 為什麼 |
+|---|---|---|
+| `MEAL_SYSTEM_PROMPT` 的第一行 | 續行的斷點往前移兩個字（「…一樣一樣的＼」「食物，各自…」） | 原本那一行 101 欄，`ruff` E501。字串內容不變（改前改後 sha256 相同） |
+| `test_ai_estimator.py` ＋21 | ＋23（共 41 條） | 多兩條，各殺一個原本存活的突變：截斷後的 `.rstrip()`（`…cut_right_after_a_space…`）、退回各樣名稱時的 `[:500]`（`…fallback_description_is_also_cut…`——8 樣 × 100 字以「、」相連是 807 字） |
+| `test_ai_provider_errors.py` 兩張表「各 10 格左右」 | `_ANTHROPIC_CASES` 10、`_GEMINI_CASES` 11；新增 2＋2＋2＋10＋11＋6＋2＝**35**（共 72 條） | — |
+| 突變 14 補的斷言只看 Anthropic 那一格的 `minItems` | 兩家都看，而且 `minItems` 與 `min_items` 兩種寫法都看 | 實測：google-genai 把字典裡的 `minItems` 送成 `min_items`。只看前者的話，把 `minItems: 1` 寫進 Gemini 的 schema 測試照樣綠 |
+
+突變 1～13 如表（1、4 兩家各做一次）；14 先存活、補斷言後紅。整套 **1092**。
+
+**Task 3（`3de59d1`）**
+
+| 原本寫的 | 實際 | 為什麼 |
+|---|---|---|
+| 測試檔 `BadGatewayError(...)` 那一格寫成一行 | 拆成多行 | 104 欄，`ruff` E501 |
+| 新檔 18 條 | **20 條** | 多兩條：`…food_without_an_active_revision…`（規格 §8.1 列了「沒有生效版本的不算」；把 join 改成任何一版會紅）、`…quota_is_checked_before_the_photo_is_decoded`（規格 §3.1 的順序；把解碼搬到額度之前會紅） |
+| 突變 13「單樣那邊既有的測試」也紅 | 單樣那邊**沒有**這樣的測試，只有新檔那一條紅。在 `tests/test_ai_analyze.py` 補了 `test_someone_elses_private_food_is_not_a_library_hit`（不在這個 task 的檔案清單裡），補完兩邊都紅 | `_find_in_food_library` 的可見性條件原本沒有人守 |
+| 突變 5 第二段紅在 `fake.single_calls == 0` | 紅在它前兩行的 `fake.texts == [...]`（多樣的方法沒收到字） | 一樣有鑑別力；另外 `…last_allowed_call…`、`…share_one_quota`、失敗分類三格也紅 |
+| 突變 1、2、3 的紅燈清單 | 1 多一條圖片那條（`[row] = …`）；2 多 `…failed_call_uses_up_the_quota`；3 多新加的順序那一條 | — |
+
+其餘突變（4、6～12）如表；12 紅成 `image/jpeg` 對不上 `image/png`，以及壞照片那一條 500。整套 **1113**，端點數 79。`schema.d.ts` 只有新增（一條路徑、一個 operation、三個 schema），三個 schema 的欄位全部是必填。
+
 ## 檔案結構
 
 | 檔案 | 動作 | Task |
