@@ -136,3 +136,10 @@
 	min-height: 44px;
 	font-size: 15px;
 }
+
+/* 欄位底下的一句說明。 */
+.hint {
+	margin: 0;
+	font-size: 12px;
+	color: var(--color-text-muted);
+}

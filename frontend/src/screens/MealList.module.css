@@ -132,3 +132,11 @@
 	font-weight: 700;
 	font-variant-numeric: tabular-nums;
 }
+
+/* 這一餐的描述：一句話，可能很長、可能沒有空白可以斷行。 */
+.description {
+	margin: 0;
+	font-size: 14px;
+	color: var(--color-text);
+	overflow-wrap: anywhere;
+}

@@ -28,6 +28,7 @@ import { EditMealItems } from "./EditMealItems";
 type MealChanges = {
 	meal_type?: MealType;
 	cost?: string | null;
+	description?: string | null;
 	note?: string | null;
 	is_private?: boolean;
 	eaten_at?: string;
@@ -45,12 +46,13 @@ function initialCost(meal: Meal): string {
  *  不帶＝不動）。沒有任何改動回 `null`。
  *
  *  金額清空＝`cost: null`＝拿掉餐費（編輯餐點規格 §3.2）；備註清空＝
- *  `note: null`。 */
+ *  `note: null`；描述清空＝`description: null`。 */
 function mealChanges(
 	meal: Meal,
 	draft: {
 		mealType: MealType | undefined;
 		cost: string | undefined;
+		description: string | undefined;
 		note: string | undefined;
 		isPrivate: boolean | undefined;
 		date: string | undefined;
@@ -78,6 +80,13 @@ function mealChanges(
 		const cost = draft.cost.trim();
 		if (cost !== initialCost(meal)) {
 			changes.cost = cost === "" ? null : cost;
+		}
+	}
+	if (draft.description !== undefined) {
+		const description = draft.description.trim();
+		// `meal.description` 可能是 undefined：離線快取裡的舊形狀沒有這個欄位。
+		if (description !== (meal.description ?? "")) {
+			changes.description = description === "" ? null : description;
 		}
 	}
 	if (draft.note !== undefined) {
@@ -135,13 +144,14 @@ const DATE_TIME_PROBLEM_ID = "edit-meal-date-time-problem";
  *  每個欄位的草稿是 `undefined`＝沒動過，顯示的是伺服器現在的值
  *  （`draft ?? 伺服器值`）；使用者動過才有草稿。這樣背景重抓帶來另一台
  *  裝置的新值時，沒動過的欄位跟著更新，不會被誤算成「有改動」而在儲存時
- *  蓋回去。只送動過、且跟伺服器不同的欄位。存好之後六個草稿（餐別、金額、
- *  備註、隱私、日期、時間）都清掉，表單顯示伺服器的值，「儲存」回到
+ *  蓋回去。只送動過、且跟伺服器不同的欄位。存好之後七個草稿（餐別、金額、
+ *  描述、備註、隱私、日期、時間）都清掉，表單顯示伺服器的值，「儲存」回到
  *  disabled。 */
 function MealDetailsForm({ meal }: { meal: Meal }) {
 	const queryClient = useQueryClient();
 	const [mealType, setMealType] = useState<MealType | undefined>(undefined);
 	const [cost, setCost] = useState<string | undefined>(undefined);
+	const [description, setDescription] = useState<string | undefined>(undefined);
 	const [note, setNote] = useState<string | undefined>(undefined);
 	const [isPrivate, setIsPrivate] = useState<boolean | undefined>(undefined);
 	const [date, setDate] = useState<string | undefined>(undefined);
@@ -150,6 +160,7 @@ function MealDetailsForm({ meal }: { meal: Meal }) {
 	const changes = mealChanges(meal, {
 		mealType,
 		cost,
+		description,
 		note,
 		isPrivate,
 		date,
@@ -192,6 +203,7 @@ function MealDetailsForm({ meal }: { meal: Meal }) {
 			}
 			setMealType(undefined);
 			setCost(undefined);
+			setDescription(undefined);
 			setNote(undefined);
 			setIsPrivate(undefined);
 			setDate(undefined);
@@ -284,13 +296,30 @@ function MealDetailsForm({ meal }: { meal: Meal }) {
 				onChange={(event) => edit(setCost)(event.target.value)}
 			/>
 
+			<label htmlFor="edit-meal-description">描述（選填）</label>
+			<input
+				id="edit-meal-description"
+				type="text"
+				maxLength={500}
+				value={description ?? meal.description ?? ""}
+				aria-describedby="edit-meal-description-hint"
+				onChange={(event) => edit(setDescription)(event.target.value)}
+			/>
+			<p id="edit-meal-description-hint" className={styles.hint}>
+				好友看得到這段描述
+			</p>
+
 			<label htmlFor="edit-meal-note">備註（選填）</label>
 			<input
 				id="edit-meal-note"
 				type="text"
 				value={note ?? meal.note ?? ""}
+				aria-describedby="edit-meal-note-hint"
 				onChange={(event) => edit(setNote)(event.target.value)}
 			/>
+			<p id="edit-meal-note-hint" className={styles.hint}>
+				備註只有自己看得到
+			</p>
 
 			<label className={styles.privateToggle}>
 				<input

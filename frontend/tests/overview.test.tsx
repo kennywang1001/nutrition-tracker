@@ -370,4 +370,17 @@ describe("總覽", () => {
 		);
 		expect(screen.getByText("照片沒有傳上去")).toBeInTheDocument();
 	});
+
+	it("時間線不顯示這一餐的描述（只在飲食頁的卡片）", async () => {
+		mockOverview({
+			"/api/meals": () =>
+				json([{ ...LUNCH, description: "只在飲食頁出現的描述" }]),
+		});
+
+		render(wrap(<Overview />));
+
+		// 先等時間線畫出來（第 41 種），再斷言沒有。
+		expect(await screen.findAllByTestId("timeline-row")).toHaveLength(2);
+		expect(screen.queryByText(/只在飲食頁出現的描述/)).not.toBeInTheDocument();
+	});
 });

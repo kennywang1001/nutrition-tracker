@@ -110,6 +110,16 @@ function MealCard({ meal }: { meal: Meal }) {
 					編輯
 				</Link>
 			</div>
+			{/* 真值判斷，不是 `!== null`：離線快取裡的舊餐沒有這個欄位（undefined），
+			    `!== null` 會畫出一個空的段落。內容是 React 的文字節點——不會被當成 HTML。 */}
+			{meal.description ? (
+				<p
+					data-testid={`meal-description-${meal.id}`}
+					className={styles.description}
+				>
+					{meal.description}
+				</p>
+			) : null}
 			{meal.photo_path !== null && <MealPhoto meal={meal} />}
 			<MealPhotoUpload mealId={meal.id} />
 			<ul className={styles.items}>

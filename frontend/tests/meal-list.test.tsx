@@ -212,4 +212,24 @@ describe("今日餐點清單", () => {
 		// 標籤不併進標題的名稱：螢幕閱讀器的標題清單只念時間與餐別。
 		expect(privateHeading).not.toHaveAccessibleName(/只有我/);
 	});
+
+	it("有描述的餐在卡片上顯示描述；沒有的（null、或舊快取沒有這個欄位）不留空行", async () => {
+		mockApi({
+			"/api/meals": () =>
+				json([
+					{ ...MEALS[0], description: "巷口的滷肉飯加蛋" },
+					{ ...MEALS[1], description: null },
+					// 舊快取的形狀：沒有 description 這個 key。
+					{ ...MEALS[1], id: 13 },
+				]),
+		});
+
+		render(wrap(<MealList />));
+
+		expect(await screen.findByTestId("meal-description-11")).toHaveTextContent(
+			"巷口的滷肉飯加蛋",
+		);
+		expect(screen.queryByTestId("meal-description-12")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("meal-description-13")).not.toBeInTheDocument();
+	});
 });

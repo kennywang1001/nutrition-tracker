@@ -68,3 +68,18 @@
 	min-height: 44px;
 	font-size: 15px;
 }
+
+/* 欄位底下的一句說明。 */
+.hint {
+	margin: 0;
+	font-size: 12px;
+	color: var(--color-text-muted);
+}
+
+/* 輸入框與下拉也是點擊目標：至少 44px（同編輯這一餐，Task 7 的 e2e 會量）。
+   勾選框除外——它的點擊目標是整個 .privateToggle 標籤；檔案選擇是 PhotoPickerButton 的標籤。 */
+.form input:not([type="file"]):not([type="checkbox"]),
+.form select {
+	box-sizing: border-box;
+	min-height: 44px;
+}

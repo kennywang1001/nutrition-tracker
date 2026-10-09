@@ -431,6 +431,57 @@ describe("記一餐", () => {
 		});
 	});
 
+	it("填了描述就一起送出（去頭尾空白）", async () => {
+		const fetchMock = mockApi({
+			"/api/foods/frequent": () => json(FREQUENT_FOODS),
+			"/api/foods/recent": () => json([]),
+			"/api/foods/1/portions": () => json([]),
+			"/api/meals": () => json({ id: 99 }, 201),
+		});
+
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+		await userEvent.type(
+			screen.getByLabelText("描述（選填）"),
+			"  巷口的滷肉飯加蛋  ",
+		);
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() =>
+			expect(mealBody(fetchMock)).toMatchObject({
+				description: "巷口的滷肉飯加蛋",
+			}),
+		);
+	});
+
+	it("沒填描述（或只有空白）時不送 description 欄位", async () => {
+		const fetchMock = mockApi({
+			"/api/foods/frequent": () => json(FREQUENT_FOODS),
+			"/api/foods/recent": () => json([]),
+			"/api/foods/1/portions": () => json([]),
+			"/api/meals": () => json({ id: 99 }, 201),
+		});
+
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+		await userEvent.type(screen.getByLabelText("描述（選填）"), "   ");
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() => expect(mealBody(fetchMock)).not.toBeNull());
+		expect(mealBody(fetchMock)).not.toHaveProperty("description");
+	});
+
+	it("描述欄位說明好友看得到，而且最多 500 字", async () => {
+		mockWithPortions([]);
+
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await userEvent.click(await screen.findByText("滷肉飯"));
+
+		const field = screen.getByLabelText("描述（選填）");
+		expect(field).toHaveAttribute("maxlength", "500");
+		expect(field).toHaveAccessibleDescription("好友看得到這段描述");
+	});
+
 	it("409 FOOD_HAS_NO_REVISION 顯示具名訊息，不是通用的「記錄失敗，請再試一次」", async () => {
 		// 搜尋到送出之間，食物有可能剛好失去生效版本——disabled 擋不住
 		// 這種情況（選的當下 nutrition 還不是 null），所以後端這個 409

@@ -133,4 +133,27 @@ describe("好友的某一天", () => {
 			"/diet?view=friends",
 		);
 	});
+
+	it("某一天的卡片也顯示描述（跟動態同一個元件）", async () => {
+		const day = dayResponse("2026-10-06", "今天的便當");
+		mockApi([
+			{
+				method: "GET",
+				path: "/api/friends/2/meals",
+				handler: () =>
+					json({
+						...day,
+						meals: day.meals.map((meal) => ({
+							...meal,
+							description: "公司樓下的雞腿便當",
+						})),
+					}),
+			},
+		]);
+		renderDay();
+
+		expect(
+			await screen.findByTestId("friend-meal-description-7"),
+		).toHaveTextContent("公司樓下的雞腿便當");
+	});
 });

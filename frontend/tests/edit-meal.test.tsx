@@ -1199,6 +1199,84 @@ describe("編輯這一餐：草稿只記動過的欄位", () => {
 		);
 	});
 
+	it("描述：顯示伺服器的值；改了只送 description", async () => {
+		const fetchMock = mockApi(
+			routes({ ...MEAL, description: "原本的描述", note: "原本的備註" }),
+		);
+		renderEditMeal();
+
+		const field = await screen.findByLabelText("描述（選填）");
+		expect(field).toHaveValue("原本的描述");
+		// 兩格各顯示各的。
+		expect(screen.getByLabelText("備註（選填）")).toHaveValue("原本的備註");
+		await userEvent.clear(field);
+		await userEvent.type(field, "  改過的描述  ");
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		await waitFor(() =>
+			expect(bodyOf(fetchMock, "PATCH", "/api/meals/5")).toEqual({
+				description: "改過的描述",
+			}),
+		);
+	});
+
+	it("描述：清空既有的描述送 description: null", async () => {
+		const fetchMock = mockApi(routes({ ...MEAL, description: "原本的描述" }));
+		renderEditMeal();
+
+		const field = await screen.findByLabelText("描述（選填）");
+		await userEvent.clear(field);
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		await waitFor(() =>
+			expect(bodyOf(fetchMock, "PATCH", "/api/meals/5")).toEqual({
+				description: null,
+			}),
+		);
+	});
+
+	it("描述：沒動它、只改備註時不送 description", async () => {
+		const fetchMock = mockApi(routes({ ...MEAL, description: "原本的描述" }));
+		renderEditMeal();
+
+		await userEvent.type(await screen.findByLabelText("備註（選填）"), "加蛋");
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		await waitFor(() =>
+			expect(bodyOf(fetchMock, "PATCH", "/api/meals/5")).toEqual({
+				note: "加蛋",
+			}),
+		);
+	});
+
+	it("描述：舊快取裡的餐沒有 description 這個欄位——欄位是空的，「儲存」不能按", async () => {
+		mockApi(routes());
+		renderEditMeal();
+
+		const field = await screen.findByLabelText("描述（選填）");
+		expect(field).toHaveValue("");
+		expect(screen.getByRole("button", { name: "儲存" })).toBeDisabled();
+		// `?? ""` 讓這個欄位從頭到尾都是受控的。少了它，舊快取的 undefined 讓 React 先把
+		// 它當成非受控（畫面上一樣是空的，上面兩行看不出來），打第一個字才警告
+		// 「uncontrolled → controlled」。
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+		await userEvent.type(field, "新");
+		expect(field).toHaveValue("新");
+		expect(errors).not.toHaveBeenCalled();
+	});
+
+	it("描述與備註各有一句說明：誰看得到", async () => {
+		mockApi(routes());
+		renderEditMeal();
+
+		expect(
+			await screen.findByLabelText("描述（選填）"),
+		).toHaveAccessibleDescription("好友看得到這段描述");
+		expect(screen.getByLabelText("備註（選填）")).toHaveAccessibleDescription(
+			"備註只有自己看得到",
+		);
+	});
+
 	it.each([
 		["非金額欄位的 422", () => validationError(["body", "note"])],
 		[

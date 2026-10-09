@@ -44,6 +44,14 @@ export function FriendMealCard({
 					{formatDateTime(meal.eaten_at)} · {MEAL_TYPE_LABELS[meal.meal_type]}
 				</span>
 			</div>
+			{meal.description ? (
+				<p
+					data-testid={`friend-meal-description-${meal.id}`}
+					className={styles.description}
+				>
+					{meal.description}
+				</p>
+			) : null}
 			{meal.has_photo && <FriendPhoto meal={meal} />}
 			<ul className={styles.items}>
 				{meal.items.map((item, index) => (

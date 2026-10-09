@@ -260,4 +260,30 @@ describe("好友動態", () => {
 
 		expect(await screen.findByText("好友還沒有記錄餐點")).toBeInTheDocument();
 	});
+
+	it("卡片顯示好友寫的描述；沒有描述的不留空行", async () => {
+		mockApi(
+			feedRoutes(() =>
+				json({
+					meals: [
+						friendMeal(7, { description: "公司樓下的雞腿便當" }),
+						friendMeal(8, { description: null }),
+						friendMeal(9),
+					],
+					next_cursor: null,
+				}),
+			),
+		);
+		renderFeed();
+
+		expect(
+			await screen.findByTestId("friend-meal-description-7"),
+		).toHaveTextContent("公司樓下的雞腿便當");
+		expect(
+			screen.queryByTestId("friend-meal-description-8"),
+		).not.toBeInTheDocument();
+		expect(
+			screen.queryByTestId("friend-meal-description-9"),
+		).not.toBeInTheDocument();
+	});
 });

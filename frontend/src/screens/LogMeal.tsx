@@ -41,6 +41,8 @@ export function LogMeal({ onSaved }: Props) {
 	// 建一筆 category=food、meal_id 指過來的支出。
 	const [cost, setCost] = useState("");
 	const [isPrivate, setIsPrivate] = useState(false);
+	// 這一餐吃了什麼的一句話（AI 多樣估算規格 D13）。好友看得到；跟「備註」是兩回事。
+	const [description, setDescription] = useState("");
 	// 選填的照片（介面改版 §5.4）。選的當下就檢查大小，不要等到存檔才發現。
 	const [photo, setPhoto] = useState<File | null>(null);
 	const [photoError, setPhotoError] = useState<string | null>(null);
@@ -114,6 +116,10 @@ export function LogMeal({ onSaved }: Props) {
 					// 送 "" 會被 Pydantic 擋成 422；送 null 雖然合法但語意繞了
 					// 一圈；不帶讓後端的 default=None 生效，最乾淨。
 					...(cost.trim() === "" ? {} : { cost: cost.trim() }),
+					// 同 cost：留空（或只有空白）整個不帶。後端會再清一次（控制字元、長度）。
+					...(description.trim() === ""
+						? {}
+						: { description: description.trim() }),
 					// 不勾就不帶，後端預設 false＝給好友看（同 cost 的「留空不帶」）。
 					...(isPrivate ? { is_private: true } : {}),
 				}),
@@ -160,6 +166,7 @@ export function LogMeal({ onSaved }: Props) {
 			setSelectedFood(null);
 			portion.reset();
 			setCost("");
+			setDescription("");
 			setPhoto(null);
 			setPhotoError(null);
 			setError(null);
@@ -267,6 +274,21 @@ export function LogMeal({ onSaved }: Props) {
 						value={cost}
 						onChange={(event) => setCost(event.target.value)}
 					/>
+
+					<label htmlFor="meal-description">描述（選填）</label>
+					{/* 單行：後端把換行清成空白（`single_line`），這裡用 input 就不會讓人
+					    以為可以分段。maxLength 跟後端的 500 一致。 */}
+					<input
+						id="meal-description"
+						type="text"
+						maxLength={500}
+						value={description}
+						aria-describedby="meal-description-hint"
+						onChange={(event) => setDescription(event.target.value)}
+					/>
+					<p id="meal-description-hint" className={styles.hint}>
+						好友看得到這段描述
+					</p>
 
 					<label className={styles.privateToggle}>
 						<input
