@@ -6,11 +6,18 @@ Task 4 計畫寫「這個 task 不獨立測（真實作要打網路），由 Tas
 是一個純函式，不需要網路就測得到，而且正是規格 §8.2 那條保證真正落地的地方。
 """
 
+import json
 from decimal import Decimal
 
 import pytest
 
-from app.ai.estimator import RawEstimate, parse_raw_estimate
+from app.ai.estimator import (
+    MAX_MEAL_ITEMS,
+    RawEstimate,
+    RawMealEstimate,
+    parse_raw_estimate,
+    parse_raw_meal_estimate,
+)
 from app.errors import BadGatewayError
 
 _VALID_JSON = """
@@ -196,3 +203,183 @@ def test_bad_response_maps_to_502_not_422():
 
     assert exc_info.value.status_code == 502
     assert exc_info.value.code == "AI_BAD_RESPONSE"
+
+
+# ---------------------------------------------------------------------------
+# parse_raw_meal_estimate()：一餐多樣（AI 多樣估算規格 §5.1）
+# ---------------------------------------------------------------------------
+
+
+def _item(**overrides: object) -> dict[str, object]:
+    item: dict[str, object] = {
+        "name": "白飯",
+        "brand": None,
+        "serving_grams": 200,
+        "serving_kcal": 280,
+        "serving_protein_g": 5,
+        "serving_fat_g": 0.5,
+        "serving_carb_g": 62,
+        "confidence": 0.8,
+    }
+    item.update(overrides)
+    return item
+
+
+def _meal_json(*items: dict[str, object], description: object = "一碗白飯、滷雞腿一隻") -> str:
+    return json.dumps({"description": description, "items": list(items)}, ensure_ascii=False)
+
+
+def _rejected(text: str) -> BadGatewayError:
+    with pytest.raises(BadGatewayError) as exc_info:
+        parse_raw_meal_estimate(text)
+    assert exc_info.value.code == "AI_BAD_RESPONSE"
+    return exc_info.value
+
+
+def test_parses_a_meal_with_several_items():
+    leg = _item(name="滷雞腿", brand="阿嬤的店", serving_grams=150, serving_kcal=300)
+
+    result = parse_raw_meal_estimate(_meal_json(_item(), leg))
+
+    assert isinstance(result, RawMealEstimate)
+    assert result.description == "一碗白飯、滷雞腿一隻"
+    # 順序是模型給的順序。
+    assert [(item.name, item.brand) for item in result.items] == [
+        ("白飯", None),
+        ("滷雞腿", "阿嬤的店"),
+    ]
+    assert result.items[1] == RawEstimate(
+        name="滷雞腿",
+        brand="阿嬤的店",
+        serving_grams=Decimal("150"),
+        serving_kcal=Decimal("300"),
+        serving_protein_g=Decimal("5"),
+        serving_fat_g=Decimal("0.5"),
+        serving_carb_g=Decimal("62"),
+        confidence=Decimal("0.8"),
+        raw=leg,
+    )
+
+
+def test_each_item_keeps_its_own_original_dict_and_the_meal_keeps_the_whole_reply():
+    """`raw` 是模型原本說的（規格 §5.1）：清理、型別轉換之前的那一份。"""
+    dirty = _item(name="白\n飯")
+
+    result = parse_raw_meal_estimate(_meal_json(dirty, _item(name="湯")))
+
+    assert result.items[0].name == "白 飯"
+    assert result.items[0].raw == dirty
+    assert result.items[1].raw["name"] == "湯"
+    assert result.raw == {"description": "一碗白飯、滷雞腿一隻", "items": [dirty, _item(name="湯")]}
+
+
+def test_a_meal_of_exactly_the_maximum_number_of_items_is_accepted():
+    # 寫死 8，不是讀常數（第 10 種：拿它自己比自己）。下一行確認常數就是 8。
+    items = [_item(name=f"菜{index}") for index in range(8)]
+
+    assert len(parse_raw_meal_estimate(_meal_json(*items)).items) == 8
+    assert MAX_MEAL_ITEMS == 8
+
+
+def test_a_meal_of_9_items_is_rejected():
+    _rejected(_meal_json(*[_item(name=f"菜{index}") for index in range(9)]))
+
+
+def test_a_meal_with_no_items_is_rejected():
+    """模型看不出任何食物時回空陣列（提示詞這樣要求）——跟單樣流程認不出食物時
+    一樣是 AI_BAD_RESPONSE（規格 D9）。"""
+    _rejected(_meal_json())
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [{"serving_kcal": -1}, {"serving_grams": 0}, {"confidence": 2}, {"name": "x" * 101}],
+    ids=["negative-kcal", "zero-grams", "confidence-above-one", "name-too-long"],
+)
+def test_one_bad_item_rejects_the_whole_meal(broken: dict[str, object]):
+    """第二樣壞掉：不是「留下好的那一樣」——使用者會以為那就是全部（規格 D9）。"""
+    _rejected(_meal_json(_item(), _item(**broken)))
+
+
+def test_item_names_are_cleaned_to_a_single_line():
+    result = parse_raw_meal_estimate(_meal_json(_item(name="  白\n飯\x00\u202e（大）  ")))
+
+    assert result.items[0].name == "白 飯 （大）"
+
+
+def test_an_item_name_that_is_only_control_characters_is_rejected():
+    _rejected(_meal_json(_item(name="\n\x00\t")))
+
+
+def test_a_blank_brand_becomes_none_and_a_dirty_one_is_cleaned():
+    result = parse_raw_meal_estimate(
+        _meal_json(_item(brand=" \n"), _item(name="茶", brand="茶\x00裏王"))
+    )
+
+    assert [item.brand for item in result.items] == [None, "茶 裏王"]
+
+
+def test_the_description_is_cleaned_and_cut_at_500_characters():
+    result = parse_raw_meal_estimate(
+        _meal_json(_item(), description="第一行\n第二行\x00" + "長" * 600)
+    )
+
+    assert result.description.startswith("第一行 第二行 長")
+    assert len(result.description) == 500
+
+
+def test_a_description_cut_right_after_a_space_has_no_trailing_space():
+    """截斷的位置剛好落在空白後面：留下的那個空白要去掉——存進 `meals.description`
+    時會再清一次（去頭尾），那時前端預填的字跟存下來的字就差一個字元。"""
+    result = parse_raw_meal_estimate(
+        _meal_json(_item(), description="長" * 499 + " 後面被截掉的字")
+    )
+
+    assert result.description == "長" * 499
+
+
+def test_a_blank_description_falls_back_to_the_item_names():
+    result = parse_raw_meal_estimate(
+        _meal_json(_item(), _item(name="滷雞腿"), description=" \n ")
+    )
+
+    assert result.description == "白飯、滷雞腿"
+
+
+def test_the_fallback_description_is_also_cut_at_500_characters():
+    """8 樣、每樣名稱 100 字：以「、」相連是 807 字，超過 `meals.description` 的上限。
+    前端拿它預填描述——不截斷的話，那一餐一按「記錄」就是 422。"""
+    items = [_item(name=f"{index}" + "菜" * 99) for index in range(8)]
+
+    result = parse_raw_meal_estimate(_meal_json(*items, description=""))
+
+    assert len(result.description) == 500
+    assert result.description.startswith("0" + "菜" * 99 + "、1")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "這不是 JSON",
+        json.dumps([{"description": "x", "items": []}]),
+        json.dumps({"items": [_item()]}),
+        json.dumps({"description": None, "items": [_item()]}),
+        json.dumps({"description": "x", "items": "白飯"}),
+        # 單樣估算的形狀：沒有 items。
+        json.dumps(_item()),
+    ],
+    ids=[
+        "not-json",
+        "top-level-array",
+        "no-description",
+        "null-description",
+        "items-not-a-list",
+        "single-estimate-shape",
+    ],
+)
+def test_malformed_meal_replies_are_rejected(text: str):
+    _rejected(text)
+
+
+def test_a_bad_meal_reply_is_502():
+    assert _rejected("這不是 JSON").status_code == 502

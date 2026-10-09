@@ -1,10 +1,12 @@
-"""用 Anthropic Claude 估算「一份」的營養素（`AI_PROVIDER=anthropic`）。
+"""用 Anthropic Claude 估算營養素：一份（單樣）或一餐的每一樣（多樣）
+（`AI_PROVIDER=anthropic`）。
 
 不打真的 API 測——花錢、不可重現（P2 規格 §8.1）。SDK 的錯誤怎麼分類，由
 `tests/test_ai_provider_errors.py` 把 client 換成接假傳輸層的版本來測。
 """
 
 import base64
+from dataclasses import dataclass
 from typing import Literal, cast
 
 from anthropic import (
@@ -31,14 +33,21 @@ from anthropic.types import (
 from app.ai.estimator import (
     ALLOWED_IMAGE_MEDIA_TYPES,
     IMAGE_ESTIMATE_INSTRUCTION,
+    MAX_MEAL_OUTPUT_TOKENS,
     MAX_OUTPUT_TOKENS,
+    MEAL_IMAGE_INSTRUCTION,
+    MEAL_SYSTEM_PROMPT,
+    MEAL_TEXT_INSTRUCTION,
     SYSTEM_PROMPT,
     TEXT_ESTIMATE_INSTRUCTION,
     EstimatorMisconfiguredError,
     EstimatorUpstreamError,
     LLMEstimateSchema,
+    LLMMealEstimateSchema,
     RawEstimate,
+    RawMealEstimate,
     parse_raw_estimate,
+    parse_raw_meal_estimate,
 )
 from app.errors import BadGatewayError, UnprocessableEntityError
 
@@ -51,6 +60,26 @@ _ImageMediaType = Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
 # parse_raw_estimate() 的 pydantic 驗證仍然會擋下任何不合規的回應。
 _RESPONSE_SCHEMA: dict[str, object] = transform_schema(LLMEstimateSchema)
 _OUTPUT_CONFIG: OutputConfigParam = {"format": {"type": "json_schema", "schema": _RESPONSE_SCHEMA}}
+
+# 多樣版的 schema。實測（anthropic 1.8.0）：巢狀清單變成 `$defs`＋`$ref`；清單的上限
+# （`maxItems: 8`）被 transform_schema() 移進 description（只是提示），所以「最多 8 樣」
+# 同樣只靠 parse_raw_meal_estimate() 把關。
+_MEAL_OUTPUT_CONFIG: OutputConfigParam = {
+    "format": {"type": "json_schema", "schema": transform_schema(LLMMealEstimateSchema)}
+}
+
+
+@dataclass(frozen=True)
+class _Call:
+    """一種呼叫的三個參數：單樣與多樣只差這三個，其餘（模型、分類例外）是同一條路。"""
+
+    system: str
+    max_tokens: int
+    output_config: OutputConfigParam
+
+
+_SINGLE = _Call(SYSTEM_PROMPT, MAX_OUTPUT_TOKENS, _OUTPUT_CONFIG)
+_MEAL = _Call(MEAL_SYSTEM_PROMPT, MAX_MEAL_OUTPUT_TOKENS, _MEAL_OUTPUT_CONFIG)
 
 
 def _extract_text(message: Message) -> str:
@@ -85,8 +114,26 @@ def _is_misconfiguration(error: APIError | CredentialsError) -> bool:
     if isinstance(error, BadRequestError):
         return "model" in _provider_message(error).lower()
     # 讀不到憑證（設定檔、環境變數）——跟金鑰錯是同一件事。它不是 `APIError` 的
-    # 子類別（是 `AnthropicError` 底下的另一支），所以 `_estimate` 要另外接。
+    # 子類別（是 `AnthropicError` 底下的另一支），所以 `_complete` 要另外接。
     return isinstance(error, CredentialsError)
+
+
+def _text_message(instruction: str, text: str) -> MessageParam:
+    return {"role": "user", "content": instruction.format(text=text)}
+
+
+def _image_message(instruction: str, image: bytes, media_type: str) -> MessageParam:
+    if media_type not in ALLOWED_IMAGE_MEDIA_TYPES:
+        raise UnprocessableEntityError("INVALID_PHOTO", "無法識別的圖片格式")
+
+    source: Base64ImageSourceParam = {
+        "type": "base64",
+        "media_type": cast(_ImageMediaType, media_type),
+        "data": base64.standard_b64encode(image).decode("ascii"),
+    }
+    image_block: ImageBlockParam = {"type": "image", "source": source}
+    text_block: TextBlockParam = {"type": "text", "text": instruction}
+    return {"role": "user", "content": [image_block, text_block]}
 
 
 class AnthropicEstimator:
@@ -95,36 +142,34 @@ class AnthropicEstimator:
         self.model = model
 
     async def estimate_text(self, text: str) -> RawEstimate:
-        message: MessageParam = {
-            "role": "user",
-            "content": TEXT_ESTIMATE_INSTRUCTION.format(text=text),
-        }
-        return await self._estimate(message)
+        message = _text_message(TEXT_ESTIMATE_INSTRUCTION, text)
+        return parse_raw_estimate(await self._complete(message, _SINGLE))
 
     async def estimate_image(self, image: bytes, media_type: str) -> RawEstimate:
-        if media_type not in ALLOWED_IMAGE_MEDIA_TYPES:
-            raise UnprocessableEntityError("INVALID_PHOTO", "無法識別的圖片格式")
+        message = _image_message(IMAGE_ESTIMATE_INSTRUCTION, image, media_type)
+        return parse_raw_estimate(await self._complete(message, _SINGLE))
 
-        source: Base64ImageSourceParam = {
-            "type": "base64",
-            "media_type": cast(_ImageMediaType, media_type),
-            "data": base64.standard_b64encode(image).decode("ascii"),
-        }
-        image_block: ImageBlockParam = {"type": "image", "source": source}
-        text_block: TextBlockParam = {"type": "text", "text": IMAGE_ESTIMATE_INSTRUCTION}
-        message: MessageParam = {"role": "user", "content": [image_block, text_block]}
-        return await self._estimate(message)
+    async def estimate_meal_text(self, text: str) -> RawMealEstimate:
+        message = _text_message(MEAL_TEXT_INSTRUCTION, text)
+        return parse_raw_meal_estimate(await self._complete(message, _MEAL))
 
-    async def _estimate(self, message: MessageParam) -> RawEstimate:
-        # 只包 SDK 那一次呼叫：回應解析失敗是 AI_BAD_RESPONSE（parse_raw_estimate），
-        # 不是上游錯誤。
+    async def estimate_meal_image(self, image: bytes, media_type: str) -> RawMealEstimate:
+        message = _image_message(MEAL_IMAGE_INSTRUCTION, image, media_type)
+        return parse_raw_meal_estimate(await self._complete(message, _MEAL))
+
+    async def _complete(self, message: MessageParam, call: _Call) -> str:
+        """打一次 API，回模型說的那段文字。**分類例外的地方只有這裡**——單樣與多樣共用。
+
+        只包 SDK 那一次呼叫：回應解析失敗是 AI_BAD_RESPONSE（兩個 parse 函式），
+        不是上游錯誤。
+        """
         try:
             response = await self._client.messages.create(
                 model=self.model,
-                max_tokens=MAX_OUTPUT_TOKENS,
-                system=SYSTEM_PROMPT,
+                max_tokens=call.max_tokens,
+                system=call.system,
                 messages=[message],
-                output_config=_OUTPUT_CONFIG,
+                output_config=call.output_config,
             )
         except (APIError, CredentialsError) as exc:
             # APIError 涵蓋連線錯誤、逾時（APIConnectionError／APITimeoutError）、
@@ -132,4 +177,4 @@ class AnthropicEstimator:
             if _is_misconfiguration(exc):
                 raise EstimatorMisconfiguredError(str(exc)) from exc
             raise EstimatorUpstreamError(str(exc)) from exc
-        return parse_raw_estimate(_extract_text(response))
+        return _extract_text(response)

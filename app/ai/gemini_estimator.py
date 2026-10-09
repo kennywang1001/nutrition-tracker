@@ -1,9 +1,12 @@
-"""用 Google Gemini 估算「一份」的營養素（`AI_PROVIDER=gemini`）。
+"""用 Google Gemini 估算營養素：一份（單樣）或一餐的每一樣（多樣）
+（`AI_PROVIDER=gemini`）。
 
 從 `feat/p2-gemini` 分支（P2 計畫一 b）搬來；那條分支把 Anthropic 整個換掉，
 這裡改成並存。不打真的 API 測——見 `app/ai/estimator.py` 的說明；SDK 的錯誤怎麼
 分類，由 `tests/test_ai_provider_errors.py` 把 client 換成接假傳輸層的版本來測。
 """
+
+from dataclasses import dataclass
 
 import httpx
 from google import genai
@@ -12,13 +15,19 @@ from google.genai import errors, types
 from app.ai.estimator import (
     ALLOWED_IMAGE_MEDIA_TYPES,
     IMAGE_ESTIMATE_INSTRUCTION,
+    MAX_MEAL_OUTPUT_TOKENS,
     MAX_OUTPUT_TOKENS,
+    MEAL_IMAGE_INSTRUCTION,
+    MEAL_SYSTEM_PROMPT,
+    MEAL_TEXT_INSTRUCTION,
     SYSTEM_PROMPT,
     TEXT_ESTIMATE_INSTRUCTION,
     EstimatorMisconfiguredError,
     EstimatorUpstreamError,
     RawEstimate,
+    RawMealEstimate,
     parse_raw_estimate,
+    parse_raw_meal_estimate,
 )
 from app.errors import BadGatewayError, UnprocessableEntityError
 
@@ -66,6 +75,32 @@ _RESPONSE_SCHEMA: dict[str, object] = {
     ],
 }
 
+# 多樣版：外面包一層 OBJECT，items 是既有那個 OBJECT 的 ARRAY。同樣只用 Google `Schema`
+# 認得的關鍵字。**刻意不寫 minItems／maxItems**：沒有金鑰驗證不了真的 API 收不收，
+# 而收不收都不影響正確性（樣數由 parse_raw_meal_estimate() 把關）；寫了卻被拒絕的話
+# 是每一次估算都 400。也因此模型可以回空陣列表示「看不出任何食物」。
+_MEAL_RESPONSE_SCHEMA: dict[str, object] = {
+    "type": "OBJECT",
+    "properties": {
+        "description": {"type": "STRING"},
+        "items": {"type": "ARRAY", "items": _RESPONSE_SCHEMA},
+    },
+    "required": ["description", "items"],
+}
+
+
+@dataclass(frozen=True)
+class _Call:
+    """一種呼叫的三個參數（同 anthropic_estimator.py 的 `_Call`）。"""
+
+    system: str
+    max_output_tokens: int
+    response_schema: dict[str, object]
+
+
+_SINGLE = _Call(SYSTEM_PROMPT, MAX_OUTPUT_TOKENS, _RESPONSE_SCHEMA)
+_MEAL = _Call(MEAL_SYSTEM_PROMPT, MAX_MEAL_OUTPUT_TOKENS, _MEAL_RESPONSE_SCHEMA)
+
 
 def _extract_text(response: types.GenerateContentResponse) -> str:
     """`GenerateContentResponse.text` 是 `str | None`——`None` 或空字串本身
@@ -102,6 +137,16 @@ def _is_misconfiguration(error: errors.APIError) -> bool:
     return "api_key_invalid" in text or "api key" in text or "model" in text
 
 
+def _image_contents(
+    instruction: str, image: bytes, media_type: str
+) -> list[types.PartUnionDict]:
+    if media_type not in ALLOWED_IMAGE_MEDIA_TYPES:
+        raise UnprocessableEntityError("INVALID_PHOTO", "無法識別的圖片格式")
+    # `types.Part.from_bytes()` 直接吃原始 bytes，SDK 自己處理編碼。回傳型別明確標註：
+    # 不然 mypy 會把 [Part, str] 推成 list[object]（list 是不變的）。
+    return [types.Part.from_bytes(data=image, mime_type=media_type), instruction]
+
+
 class GeminiEstimator:
     def __init__(self, *, api_key: str, model: str) -> None:
         # 非同步走 `client.aio`——`genai.Client` 是同一個物件底下切出同步／
@@ -110,28 +155,30 @@ class GeminiEstimator:
         self.model = model
 
     async def estimate_text(self, text: str) -> RawEstimate:
-        return await self._estimate(TEXT_ESTIMATE_INSTRUCTION.format(text=text))
+        contents = TEXT_ESTIMATE_INSTRUCTION.format(text=text)
+        return parse_raw_estimate(await self._complete(contents, _SINGLE))
 
     async def estimate_image(self, image: bytes, media_type: str) -> RawEstimate:
-        if media_type not in ALLOWED_IMAGE_MEDIA_TYPES:
-            raise UnprocessableEntityError("INVALID_PHOTO", "無法識別的圖片格式")
+        contents = _image_contents(IMAGE_ESTIMATE_INSTRUCTION, image, media_type)
+        return parse_raw_estimate(await self._complete(contents, _SINGLE))
 
-        # `types.Part.from_bytes()` 直接吃原始 bytes，SDK 自己處理編碼。
-        image_part = types.Part.from_bytes(data=image, mime_type=media_type)
-        # 明確標註型別：不然 mypy 會把 [Part, str] 推成 list[object]，跟
-        # generate_content() 期待的聯集型別對不上（list 是不變的）。
-        contents: list[types.PartUnionDict] = [image_part, IMAGE_ESTIMATE_INSTRUCTION]
-        return await self._estimate(contents)
+    async def estimate_meal_text(self, text: str) -> RawMealEstimate:
+        contents = MEAL_TEXT_INSTRUCTION.format(text=text)
+        return parse_raw_meal_estimate(await self._complete(contents, _MEAL))
 
-    async def _estimate(self, contents: types.ContentListUnionDict) -> RawEstimate:
+    async def estimate_meal_image(self, image: bytes, media_type: str) -> RawMealEstimate:
+        contents = _image_contents(MEAL_IMAGE_INSTRUCTION, image, media_type)
+        return parse_raw_meal_estimate(await self._complete(contents, _MEAL))
+
+    async def _complete(self, contents: types.ContentListUnionDict, call: _Call) -> str:
+        """打一次 API，回模型說的那段文字。分類例外的地方只有這裡。"""
         config = types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            max_output_tokens=MAX_OUTPUT_TOKENS,
+            system_instruction=call.system,
+            max_output_tokens=call.max_output_tokens,
             response_mime_type="application/json",
-            response_schema=_RESPONSE_SCHEMA,
+            response_schema=call.response_schema,
         )
-        # 只包 SDK 那一次呼叫：回應解析失敗是 AI_BAD_RESPONSE（parse_raw_estimate），
-        # 不是上游錯誤。
+        # 只包 SDK 那一次呼叫：回應解析失敗是 AI_BAD_RESPONSE，不是上游錯誤。
         try:
             response = await self._client.aio.models.generate_content(
                 model=self.model,
@@ -151,4 +198,4 @@ class GeminiEstimator:
             # 連不上、逾時：google-genai 沒有包自己的例外，httpx 的直接穿出來
             # （沒裝 aiohttp 時非同步走 httpx，見 `google/genai/_api_client.py`）。
             raise EstimatorUpstreamError(str(exc) or type(exc).__name__) from exc
-        return parse_raw_estimate(_extract_text(response))
+        return _extract_text(response)

@@ -31,6 +31,12 @@ from sqlalchemy import select
 
 from app.ai.anthropic_estimator import AnthropicEstimator
 from app.ai.estimator import (
+    MAX_MEAL_OUTPUT_TOKENS,
+    MAX_OUTPUT_TOKENS,
+    MEAL_IMAGE_INSTRUCTION,
+    MEAL_SYSTEM_PROMPT,
+    MEAL_TEXT_INSTRUCTION,
+    SYSTEM_PROMPT,
     EstimatorMisconfiguredError,
     EstimatorUpstreamError,
     NutritionEstimator,
@@ -58,6 +64,17 @@ _VALID_ESTIMATE_JSON = json.dumps(
     ensure_ascii=False,
 )
 
+_VALID_MEAL_JSON = json.dumps(
+    {
+        "description": "一碗白飯、滷雞腿一隻",
+        "items": [
+            json.loads(_VALID_ESTIMATE_JSON),
+            {**json.loads(_VALID_ESTIMATE_JSON), "name": "滷雞腿"},
+        ],
+    },
+    ensure_ascii=False,
+)
+
 _MISCONFIGURED_MESSAGE = "AI 設定有問題（金鑰或模型），請管理員檢查"
 _UPSTREAM_MESSAGE = "AI 服務暫時無法使用，請稍後再試"
 
@@ -80,15 +97,19 @@ class FakeUpstream:
         self.body = body
         self.transport_error = transport_error
         self.requests = 0
+        # 每個請求的 body（解過的 JSON）：多樣的測試要看「送出去的是什麼」。
+        self.bodies: list[dict[str, Any]] = []
 
     def anthropic_handler(self, request: httpx2.Request) -> httpx2.Response:
         self.requests += 1
+        self.bodies.append(json.loads(request.content))
         if self.transport_error is not None:
             raise self.transport_error(request)
         return httpx2.Response(self.status, json=self.body)
 
     def gemini_handler(self, request: httpx.Request) -> httpx.Response:
         self.requests += 1
+        self.bodies.append(json.loads(request.content))
         if self.transport_error is not None:
             raise self.transport_error(request)
         return httpx.Response(self.status, json=self.body)
@@ -439,6 +460,175 @@ async def test_unsupported_media_type_is_still_invalid_photo(provider):
         await estimator.estimate_image(b"not-an-image", "image/bmp")
 
     assert excinfo.value.code == "INVALID_PHOTO"
+    assert upstream.requests == 0
+
+
+# ---------------------------------------------------------------------------
+# 一餐多樣（AI 多樣估算規格 §5）：同一套分類，另一組提示詞、schema、輸出上限
+# ---------------------------------------------------------------------------
+
+_PNG = b"\x89PNG\r\n\x1a\n"
+
+
+def _estimator_for(provider: str, text: str) -> tuple[FakeUpstream, NutritionEstimator]:
+    if provider == "anthropic":
+        body = {**_ANTHROPIC_OK_BODY, "content": [{"type": "text", "text": text}]}
+        upstream = FakeUpstream(body=body)
+        return upstream, _anthropic_estimator(upstream)
+    upstream = FakeUpstream(body=_gemini_ok_body(text))
+    return upstream, _gemini_estimator(upstream)
+
+
+def _sent(provider: str, body: dict[str, Any]) -> dict[str, Any]:
+    """把兩家的請求 body 攤成同一種形狀：輸出上限、system、schema 的頂層欄位、
+    使用者那一則訊息裡的文字、有沒有帶圖片。"""
+    if provider == "anthropic":
+        content = body["messages"][0]["content"]
+        blocks = [{"type": "text", "text": content}] if isinstance(content, str) else content
+        return {
+            "max_tokens": body["max_tokens"],
+            "system": body["system"],
+            "schema_fields": set(body["output_config"]["format"]["schema"]["properties"]),
+            "text": [block["text"] for block in blocks if block["type"] == "text"],
+            "has_image": any(block["type"] == "image" for block in blocks),
+        }
+    config = body["generationConfig"]
+    parts = body["contents"][0]["parts"]
+    return {
+        "max_tokens": config["maxOutputTokens"],
+        "system": body["systemInstruction"]["parts"][0]["text"],
+        "schema_fields": set(config["responseSchema"]["properties"]),
+        "text": [part["text"] for part in parts if "text" in part],
+        "has_image": any("inlineData" in part for part in parts),
+    }
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+async def test_a_meal_text_call_sends_the_meal_prompt_schema_and_limit(provider):
+    upstream, estimator = _estimator_for(provider, _VALID_MEAL_JSON)
+
+    result = await estimator.estimate_meal_text("雞腿便當")
+
+    assert result.description == "一碗白飯、滷雞腿一隻"
+    assert [item.name for item in result.items] == ["滷肉飯", "滷雞腿"]
+    assert upstream.requests == 1
+    sent = _sent(provider, upstream.bodies[0])
+    # 4096 寫死（第 10 種）；下一行確認常數就是它，而且跟單樣的不同。
+    assert sent["max_tokens"] == 4096
+    assert (MAX_MEAL_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS) == (4096, 1024)
+    assert sent["system"] == MEAL_SYSTEM_PROMPT
+    assert sent["system"] != SYSTEM_PROMPT
+    assert sent["schema_fields"] == {"description", "items"}
+    assert sent["text"] == [MEAL_TEXT_INSTRUCTION.format(text="雞腿便當")]
+    assert sent["has_image"] is False
+    # 送給供應商的 schema 不能帶樣數的下限：有了 `minItems: 1`，模型就沒辦法照提示詞
+    # 回空陣列說「看不出任何食物」（structured output 會照 schema 硬生出一樣）。
+    # 「至少一樣」只在 parse_raw_meal_estimate() 事後檢查——那邊的測試守不到這裡：
+    # 下限寫回 schema 上，事後的結果一樣是拒絕。
+    body = upstream.bodies[0]
+    items_schema = (
+        body["output_config"]["format"]["schema"]["properties"]["items"]
+        if provider == "anthropic"
+        else body["generationConfig"]["responseSchema"]["properties"]["items"]
+    )
+    assert items_schema["type"].lower() == "array"
+    # 兩種寫法都看：google-genai 送出去時把字典裡的 `minItems` 改寫成 `min_items`（實測）。
+    assert not {"minItems", "min_items"} & set(items_schema)
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+async def test_a_meal_image_call_sends_the_image_and_the_meal_instruction(provider):
+    upstream, estimator = _estimator_for(provider, _VALID_MEAL_JSON)
+
+    result = await estimator.estimate_meal_image(_PNG, "image/png")
+
+    assert len(result.items) == 2
+    sent = _sent(provider, upstream.bodies[0])
+    assert sent["max_tokens"] == 4096
+    assert sent["system"] == MEAL_SYSTEM_PROMPT
+    assert sent["schema_fields"] == {"description", "items"}
+    assert sent["text"] == [MEAL_IMAGE_INSTRUCTION]
+    assert sent["has_image"] is True
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+async def test_the_single_call_still_sends_the_single_prompt_schema_and_limit(provider):
+    """抽出共用的 `_complete` 之後，單樣那一條送出去的東西一個字都沒變。"""
+    upstream, estimator = _estimator_for(provider, _VALID_ESTIMATE_JSON)
+
+    await estimator.estimate_text("一碗滷肉飯")
+    await estimator.estimate_image(_PNG, "image/png")
+
+    text_call, image_call = (_sent(provider, body) for body in upstream.bodies)
+    for sent in (text_call, image_call):
+        assert sent["max_tokens"] == 1024
+        assert sent["system"] == SYSTEM_PROMPT
+        assert "serving_grams" in sent["schema_fields"]
+        assert "items" not in sent["schema_fields"]
+    assert text_call["has_image"] is False
+    assert image_call["has_image"] is True
+
+
+@pytest.mark.parametrize(
+    ("make_upstream", "expected", "sdk_error"),
+    [case[1:] for case in _ANTHROPIC_CASES],
+    ids=[case[0] for case in _ANTHROPIC_CASES],
+)
+async def test_anthropic_meal_errors_are_classified_the_same_way(
+    make_upstream, expected, sdk_error
+):
+    upstream = make_upstream()
+    estimator = _anthropic_estimator(upstream)
+
+    with pytest.raises(expected) as excinfo:
+        await estimator.estimate_meal_text("雞腿便當")
+
+    assert upstream.requests == 1
+    assert type(excinfo.value.__cause__) is sdk_error
+
+
+@pytest.mark.parametrize(
+    ("make_upstream", "expected", "sdk_error"),
+    [case[1:] for case in _GEMINI_CASES],
+    ids=[case[0] for case in _GEMINI_CASES],
+)
+async def test_gemini_meal_errors_are_classified_the_same_way(make_upstream, expected, sdk_error):
+    upstream = make_upstream()
+    estimator = _gemini_estimator(upstream)
+
+    with pytest.raises(expected) as excinfo:
+        await estimator.estimate_meal_image(_PNG, "image/png")
+
+    assert upstream.requests == 1
+    assert type(excinfo.value.__cause__) is sdk_error
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+@pytest.mark.parametrize(
+    "reply",
+    ["不是 JSON", json.dumps({"description": "看不出來", "items": []}), _VALID_ESTIMATE_JSON],
+    ids=["not-json", "no-items", "single-estimate-shape"],
+)
+async def test_a_bad_meal_reply_from_the_provider_is_ai_bad_response(provider, reply):
+    """HTTP 200 但內容不能用：是 `AI_BAD_RESPONSE`，不是上游錯誤——請求送到了、也計費了。"""
+    upstream, estimator = _estimator_for(provider, reply)
+
+    with pytest.raises(BadGatewayError) as excinfo:
+        await estimator.estimate_meal_text("雞腿便當")
+
+    assert excinfo.value.code == "AI_BAD_RESPONSE"
+    assert upstream.requests == 1
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+async def test_an_unsupported_media_type_for_a_meal_is_invalid_photo(provider):
+    upstream, estimator = _estimator_for(provider, _VALID_MEAL_JSON)
+
+    with pytest.raises(UnprocessableEntityError) as excinfo:
+        await estimator.estimate_meal_image(b"not-an-image", "image/bmp")
+
+    assert excinfo.value.code == "INVALID_PHOTO"
+    # 沒送出去：格式在打 API 之前就擋了。
     assert upstream.requests == 0
 
 
