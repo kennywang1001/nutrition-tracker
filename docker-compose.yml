@@ -45,6 +45,14 @@ services:
       AI_MODEL: "${AI_MODEL:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      # 每人每天最多呼叫幾次 AI（單樣與多樣估算共用）。**這一個不能照上面四個寫成
+      # `:-}`**：`app/config.py` 的 `ai_daily_limit` 是 int，空字串不是「沒設」，是解析
+      # 失敗——整個 app 起不來。所以預設值寫在這裡；`:-` 讓「沒設」與「設成空的」
+      # （`.env.production` 裡留白的 `AI_DAILY_LIMIT=`）都落到 20。
+      #
+      # 20 要跟 `ai_daily_limit` 的預設值同一個數字：這一行一旦存在，容器裡生效的
+      # 是這裡的預設值（tests/test_config.py 有一條守著兩邊相等）。
+      AI_DAILY_LIMIT: "${AI_DAILY_LIMIT:-20}"
 
       # JWT_SECRET 故意不寫在這裡：它在開發與 production 是完全不同的值
       # （開發是寫死的明顯字串，production 是 ${JWT_SECRET:?...} 必填），

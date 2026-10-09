@@ -1,3 +1,6 @@
+import re
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -152,3 +155,48 @@ def test_unknown_ai_provider_fails_at_startup(monkeypatch, value):
 
     with pytest.raises(ValidationError):
         Settings(jwt_secret="x" * 32, _env_file=None)
+
+
+# ---------------------------------------------------------------------------
+# AI_DAILY_LIMIT 要傳得進 api 容器（審查 M7）
+# ---------------------------------------------------------------------------
+
+_COMPOSE_FILE = Path(__file__).resolve().parent.parent / "docker-compose.yml"
+# `AI_DAILY_LIMIT: "${AI_DAILY_LIMIT:-<預設值>}"`——抓出冒號減號後面的預設值（可以是空的）。
+_AI_DAILY_LIMIT_LINE = re.compile(
+    r'^\s+AI_DAILY_LIMIT:\s*"\$\{AI_DAILY_LIMIT:-(?P<default>[^}]*)\}"\s*$', re.MULTILINE
+)
+
+
+def test_compose_forwards_ai_daily_limit_to_the_api_container():
+    """程式一直認得 `AI_DAILY_LIMIT`，但 compose 沒有把它傳進容器——在 `.env.production`
+    填它沒有效果，部署出去的上限就是寫死的 20。
+
+    **預設值要跟 `app/config.py` 的同一個數字**：compose 一旦傳了這個變數，容器裡
+    生效的就是 compose 的預設值，`ai_daily_limit` 自己的預設值再也輪不到。兩邊各寫
+    各的，改了其中一邊不會有任何東西變紅。
+    """
+    matches = _AI_DAILY_LIMIT_LINE.findall(_COMPOSE_FILE.read_text(encoding="utf-8"))
+
+    assert matches == ["20"]
+    assert int(matches[0]) == Settings.model_fields["ai_daily_limit"].default
+
+
+def test_an_empty_ai_daily_limit_would_stop_the_app_from_starting(monkeypatch):
+    """為什麼 compose 那一行**不能**照另外四個 AI 變數寫成 `${AI_DAILY_LIMIT:-}`：
+    沒設時容器收到的是空字串，而 `ai_daily_limit` 是 int——空字串不是「沒設」，
+    是解析失敗，整個 app 起不來（`_empty_means_unset` 只管那四個字串欄位）。
+    所以預設值寫在 compose 裡。"""
+    monkeypatch.setenv("AI_DAILY_LIMIT", "")
+
+    with pytest.raises(ValidationError):
+        Settings(jwt_secret="x" * 32, _env_file=None)
+
+
+def test_ai_daily_limit_is_read_from_the_environment(monkeypatch):
+    """compose 傳進來的是字串「20」或管理員填的值——兩種都要變成那個整數。"""
+    monkeypatch.setenv("AI_DAILY_LIMIT", "5")
+    assert Settings(jwt_secret="x" * 32, _env_file=None).ai_daily_limit == 5
+
+    monkeypatch.setenv("AI_DAILY_LIMIT", "20")
+    assert Settings(jwt_secret="x" * 32, _env_file=None).ai_daily_limit == 20

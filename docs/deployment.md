@@ -84,7 +84,7 @@ BIND_ADDR=127.0.0.1
 > 填什麼都不影響，填 `127.0.0.1` 是為了讓它至少不誤導（對外入口是
 > `tailscale serve`，不是任何一個綁在 tailnet 位址上的埠）。
 
-`.env.production.example` 還有四個選配的 AI 變數（AI 營養素估算）。
+`.env.production.example` 還有五個選配的 AI 變數（AI 營養素估算）。
 **全部留白也沒關係**：`AI_PROVIDER` 沒填，AI 功能就整個關閉（估算端點回
 `503 AI_NOT_CONFIGURED`，畫面上說「AI 分析未設定」），其他功能完全不受影響。
 「沒有 AI」不是安全性問題，只是少一個功能——不該讓整個 app 因此起不來。
@@ -97,17 +97,21 @@ BIND_ADDR=127.0.0.1
 | `AI_MODEL` | 那一家的模型名稱。**沒有預設值**：從供應商的文件確認目前可用的名稱再填（Anthropic：https://docs.anthropic.com/en/docs/about-claude/models、Gemini：https://ai.google.dev/gemini-api/docs/models） |
 | `ANTHROPIC_API_KEY` | 選 `anthropic` 時必填 |
 | `GEMINI_API_KEY` | 選 `gemini` 時必填 |
+| `AI_DAILY_LIMIT` | 每人每天最多呼叫幾次 AI。**留白＝20**。要填就填大於 0 的整數；填 0、負數或不是數字，api 容器會啟動失敗 |
 
 選了一家卻沒填它的金鑰或 `AI_MODEL`：端點回 503，訊息會說缺哪一個
-（例如「AI 分析未設定：缺 GEMINI_API_KEY」）。四個變數都由
-`docker-compose.yml` 用 `${VAR:-}` 傳進 api 容器（空字串＝沒設）。
+（例如「AI 分析未設定：缺 GEMINI_API_KEY」）。前四個變數由
+`docker-compose.yml` 用 `${VAR:-}` 傳進 api 容器（空字串＝沒設）；`AI_DAILY_LIMIT` 用的是
+`${AI_DAILY_LIMIT:-20}`——它是整數，空字串會讓 app 起不來，所以預設值寫在 compose 裡
+（沒設、留白都是 20）。
 
 **換供應商**：改 `AI_PROVIDER` 與 `AI_MODEL`（以及那一家的金鑰），然後用同一個版本
 重新部署一次（不是 `restart`，見「二、更新」的「改了 `.env.production` 之後」）。
 每日上限（每人每天 20 次）兩家共用、照樣算；記一餐一次估一餐（不管估出幾樣）算一次，
-跟新增食物、加一項的單樣估算共用同一個上限。這個數字是 `app/config.py` 的 `ai_daily_limit` 的預設值：
-程式認得 `AI_DAILY_LIMIT` 這個環境變數，但 **`docker-compose.yml` 沒有把它傳進 api 容器**（只傳了上面四個），
-所以在 `.env.production` 填它沒有效果——要調就先在 compose 的 `environment` 加一行。
+跟新增食物、加一項的單樣估算共用同一個上限。**要調這個數字**：在 `.env.production` 填
+`AI_DAILY_LIMIT`（上表），然後重新部署一次（不是 `restart`，同上）。調高等於每個人每天能花的錢變多；
+調低時今天已經用超過新上限的人，今天就不能再用了（上限是每次請求當下數 `ai_analyses` 今天的列數）。
+畫面上的「今天用了 N/20 次」「今天還能用 N 次」用的是後端當下的上限，不用另外改前端。
 
 **打開之後怎麼確認**：在記一餐打一個食物庫沒有的東西，按「用 AI 估算」——
 看到「AI 估算結果」的勾選清單就是通的；看到「AI 分析未設定」就照訊息補設定。金鑰或 `AI_MODEL`
