@@ -609,20 +609,31 @@ async def test_gemini_meal_errors_are_classified_the_same_way(make_upstream, exp
     assert type(excinfo.value.__cause__) is sdk_error
 
 
+_NO_ITEMS_REPLY = json.dumps({"description": "看不出來", "items": []}, ensure_ascii=False)
+
+
 @pytest.mark.parametrize("provider", ["anthropic", "gemini"])
 @pytest.mark.parametrize(
-    "reply",
-    ["不是 JSON", json.dumps({"description": "看不出來", "items": []}), _VALID_ESTIMATE_JSON],
-    ids=["not-json", "no-items", "single-estimate-shape"],
+    ("reply", "code"),
+    [
+        ("不是 JSON", "AI_BAD_RESPONSE"),
+        (_VALID_ESTIMATE_JSON, "AI_BAD_RESPONSE"),
+        # 模型照提示詞回了空陣列＝看不出任何食物：自己的錯誤碼（審查 M6）。
+        (_NO_ITEMS_REPLY, "AI_NO_FOOD_FOUND"),
+    ],
+    ids=["not-json", "single-estimate-shape", "no-items"],
 )
-async def test_a_bad_meal_reply_from_the_provider_is_ai_bad_response(provider, reply):
-    """HTTP 200 但內容不能用：是 `AI_BAD_RESPONSE`，不是上游錯誤——請求送到了、也計費了。"""
+async def test_a_bad_meal_reply_from_the_provider_is_a_502_not_an_upstream_error(
+    provider, reply, code
+):
+    """HTTP 200 但內容不能用：不是上游錯誤——請求送到了、也計費了。"""
     upstream, estimator = _estimator_for(provider, reply)
 
     with pytest.raises(BadGatewayError) as excinfo:
         await estimator.estimate_meal_text("雞腿便當")
 
-    assert excinfo.value.code == "AI_BAD_RESPONSE"
+    assert excinfo.value.code == code
+    assert excinfo.value.status_code == 502
     assert upstream.requests == 1
 
 
@@ -1009,6 +1020,46 @@ async def test_misconfiguration_does_not_use_up_the_quota(client, db_session, pr
     assert second.status_code == 200
     assert ok_upstream.requests == 1
     assert second.json()["remaining_today"] == 0
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+async def test_no_food_found_is_502_with_its_own_code_and_still_uses_the_quota(
+    client, db_session, provider, caplog
+):
+    """不是食物的照片（模型回空陣列）走完整條路：真的 SDK、真的解析、真的路由。
+
+    - 錯誤碼是 `AI_NO_FOOD_FOUND`，訊息是後端這一句（前端原樣顯示）。
+    - **仍然記一列失敗、仍然算一次額度**：供應商收了這一次的錢。跟單樣端點認不出
+      食物時的處理是同一個函式（`_call_estimator_or_record_failure`）。
+    - 模型是正常結束的，所以沒有「不正常的結束」那一行 log。
+    """
+    user = await create_user(db_session)
+    user_id = user.id
+    headers = _auth(user)
+    await _seed_analyses(db_session, user, settings.ai_daily_limit - 2)
+    upstream, estimator = _estimator_for(provider, _NO_ITEMS_REPLY)
+    ok_upstream, ok_estimator = _estimator_for(provider, _VALID_MEAL_JSON)
+    _inject(estimator, ok_estimator)
+
+    response = await client.post(
+        "/api/ai/analyze-meal", headers=headers, json={"kind": "text", "text": "一張桌子的照片"}
+    )
+    after = await client.post(
+        "/api/ai/analyze-meal", headers=headers, json={"kind": "text", "text": "雞腿便當"}
+    )
+
+    assert upstream.requests == 1
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "AI_NO_FOOD_FOUND"
+    assert response.json()["error"]["message"] == (
+        "AI 看不出這一餐有什麼食物，換一張照片或換個說法再試（這一次也算在今天的次數裡）"
+    )
+    # 上限前剩兩次：看不出食物的那一次用掉一次，下一次成功之後剩 0。
+    assert after.status_code == 200
+    assert after.json()["remaining_today"] == 0
+    rows = [row for row in await _rows(db_session, user_id) if row.model == estimator.model]
+    assert [row.succeeded for row in rows] == [False, True]
+    assert _estimator_warnings(caplog) == []
 
 
 class _ExplodingEstimator:

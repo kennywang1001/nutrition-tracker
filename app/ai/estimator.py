@@ -385,12 +385,14 @@ class LLMMealEstimateSchema(BaseModel):
 
 
 def parse_raw_meal_estimate(response_text: str) -> RawMealEstimate:
-    """把 LLM 回覆的文字解析成 `RawMealEstimate`，解析失敗拋 `AI_BAD_RESPONSE`。
+    """把 LLM 回覆的文字解析成 `RawMealEstimate`，解析失敗拋 `AI_BAD_RESPONSE`
+    （0 樣是 `AI_NO_FOOD_FOUND`）。
 
     純函式。跟 `parse_raw_estimate()` 同一種把關：不是 JSON、不是物件、缺欄位、
     任何一樣的數值超出範圍 → 整個拒絕。多的規則（AI 多樣估算規格 D9、D10）：
 
-    - 樣數要在 1 到 `MAX_MEAL_ITEMS` 之間。0 樣＝模型看不出任何食物。
+    - 樣數要在 1 到 `MAX_MEAL_ITEMS` 之間。0 樣＝模型看不出任何食物，錯誤碼是
+      `AI_NO_FOOD_FOUND`；超過上限是 `AI_BAD_RESPONSE`。
     - 名稱、品牌、描述先經過 `single_line`（模型輸出是不可信的文字）。
     - 描述太長截斷、清完是空的就用各樣的名稱——它只是給人看的一句話，
       不值得為它作廢一次已經付費的估算。
@@ -414,7 +416,16 @@ def parse_raw_meal_estimate(response_text: str) -> RawMealEstimate:
         ) from exc
 
     if not validated.items:
-        raise BadGatewayError("AI_BAD_RESPONSE", "AI 看不出這一餐有什麼食物")
+        # 模型照提示詞回了空陣列：它不是「回了看不懂的東西」，是回答了「沒有食物」。
+        # 自己的錯誤碼（審查 M6）——前端對 AI_BAD_RESPONSE 說的是「可以再試一次」，對一張
+        # 不是食物的照片那是錯的指示，而且每試一次吃一次額度。這一句前端原樣顯示，
+        # 所以寫的是使用者該做什麼。
+        #
+        # 仍然是 502、仍然由路由記一列失敗、算一次額度：供應商收了這一次的錢。
+        raise BadGatewayError(
+            "AI_NO_FOOD_FOUND",
+            "AI 看不出這一餐有什麼食物，換一張照片或換個說法再試（這一次也算在今天的次數裡）",
+        )
 
     items = tuple(
         RawEstimate(

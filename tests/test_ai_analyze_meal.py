@@ -313,14 +313,21 @@ async def test_the_single_and_meal_endpoints_share_one_quota(client, db_session)
     [
         (EstimatorUpstreamError("overloaded"), 502, "AI_UPSTREAM_ERROR", True),
         (
-            BadGatewayError("AI_BAD_RESPONSE", "AI 看不出這一餐有什麼食物"),
+            BadGatewayError("AI_BAD_RESPONSE", "AI 回傳的內容不是有效的 JSON"),
             502,
             "AI_BAD_RESPONSE",
             True,
         ),
+        # 看不出任何食物（審查 M6）：自己的錯誤碼，但一樣記一列失敗——供應商收了錢。
+        (
+            BadGatewayError("AI_NO_FOOD_FOUND", "AI 看不出這一餐有什麼食物"),
+            502,
+            "AI_NO_FOOD_FOUND",
+            True,
+        ),
         (EstimatorMisconfiguredError("bad key"), 503, "AI_MISCONFIGURED", False),
     ],
-    ids=["upstream", "bad-response", "misconfigured"],
+    ids=["upstream", "bad-response", "no-food-found", "misconfigured"],
 )
 async def test_failures_are_classified_and_recorded_like_the_single_endpoint(
     client, db_session, error, status, code, recorded

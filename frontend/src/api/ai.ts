@@ -77,6 +77,11 @@ export function describeAnalyzeError(error: unknown): string {
 				// 「設定有問題，請管理員檢查」與「暫時無法使用，請稍後再試」——
 				// 該做的事不同，通用的「再試一次」對前者是錯的指示。
 				return error.message;
+			case "AI_NO_FOOD_FOUND":
+				// 模型看不出任何食物（多半是一張不是食物的照片）。後端的訊息說的是
+				// 「換一張照片或換個說法」——下面那句「可以再試一次」對它是錯的指示：
+				// 原樣再按一次，結果一樣，而且再吃一次額度。
+				return error.message;
 			case "AI_BAD_RESPONSE":
 				return "AI 這次的回答看不懂，可以再試一次";
 			case "PHOTO_TOO_LARGE":

@@ -956,7 +956,7 @@ describe("AI 多樣估算面板：不呼叫 AI 的路與錯誤", () => {
 	it.each([
 		[
 			"AI_BAD_RESPONSE",
-			() => apiError(502, "AI_BAD_RESPONSE", "AI 看不出這一餐有什麼食物"),
+			() => apiError(502, "AI_BAD_RESPONSE", "AI 回傳的內容不是有效的 JSON"),
 			"AI 這次的回答看不懂，可以再試一次",
 		],
 		[
@@ -986,6 +986,30 @@ describe("AI 多樣估算面板：不呼叫 AI 的路與錯誤", () => {
 			).not.toBeInTheDocument();
 		},
 	);
+
+	it("AI 看不出任何食物（AI_NO_FOOD_FOUND）：顯示後端那一句，不是「可以再試一次」", async () => {
+		// 不是食物的照片：再按一次只會再吃一次額度。通用的「看不懂，可以再試一次」
+		// 對這種情況是錯的指示——後端的訊息說的是該換照片或換說法。
+		const message =
+			"AI 看不出這一餐有什麼食物，換一張照片或換個說法再試（這一次也算在今天的次數裡）";
+		mockPanel({
+			estimate: () => apiError(502, "AI_NO_FOOD_FOUND", message),
+		});
+		renderPanel();
+
+		await userEvent.click(
+			screen.getByRole("button", { name: "用 AI 估算「雞腿便當」" }),
+		);
+
+		// 整句相等（`toHaveTextContent` 給字串是「包含」）。
+		expect((await screen.findByRole("alert")).textContent).toBe(message);
+		expect(screen.queryByText(/可以再試一次/)).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole("region", { name: "AI 估算結果" }),
+		).not.toBeInTheDocument();
+		// 這不是「AI 沒設定」：拍照估算照樣能按（換一張照片）。
+		expect(screen.getByLabelText("拍照估算")).toBeEnabled();
+	});
 
 	it("AI 沒設定：顯示後端的訊息，並停用拍照估算（文字仍可按——命中食物庫不用 AI）", async () => {
 		mockPanel({

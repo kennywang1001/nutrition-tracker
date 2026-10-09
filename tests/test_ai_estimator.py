@@ -285,10 +285,27 @@ def test_a_meal_of_9_items_is_rejected():
     _rejected(_meal_json(*[_item(name=f"菜{index}") for index in range(9)]))
 
 
-def test_a_meal_with_no_items_is_rejected():
-    """模型看不出任何食物時回空陣列（提示詞這樣要求）——跟單樣流程認不出食物時
-    一樣是 AI_BAD_RESPONSE（規格 D9）。"""
-    _rejected(_meal_json())
+def test_a_meal_with_no_items_is_its_own_error():
+    """模型看不出任何食物時回空陣列（提示詞這樣要求）。它**不是**看不懂的回覆——模型
+    照規矩回答了「沒有」——所以有自己的錯誤碼（審查 M6）：前端對 AI_BAD_RESPONSE 說的是
+    「可以再試一次」，對一張不是食物的照片那是錯的指示，而且每試一次吃一次額度。
+
+    仍然是 502、仍然記一列失敗（路由那一層的測試守）。"""
+    with pytest.raises(BadGatewayError) as exc_info:
+        parse_raw_meal_estimate(_meal_json())
+
+    assert exc_info.value.code == "AI_NO_FOOD_FOUND"
+    assert exc_info.value.status_code == 502
+    # 前端原樣顯示這一句（`describeAnalyzeError`），所以字面也釘住。
+    assert exc_info.value.message == (
+        "AI 看不出這一餐有什麼食物，換一張照片或換個說法再試（這一次也算在今天的次數裡）"
+    )
+
+
+def test_only_an_empty_list_is_no_food_found():
+    """「沒有 items」「items 不是清單」是看不懂的回覆，不是「看不出食物」。"""
+    for reply in ({"description": "x"}, {"description": "x", "items": None}):
+        _rejected(json.dumps(reply))
 
 
 @pytest.mark.parametrize(
