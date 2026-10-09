@@ -40,6 +40,27 @@
 	font-size: 13px;
 }
 
+/* 最下面一列：讚的按鈕、連到餐點頁的「留言 N」。會換行——讚失敗時的錯誤訊息
+   （LikeButton 的 .error）佔滿一整列，落在這兩個的下面。 */
+.social {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0 var(--space-3);
+	margin-top: var(--space-1);
+}
+
+.comments {
+	display: inline-flex;
+	align-items: center;
+	min-width: 44px;
+	min-height: 44px;
+	color: var(--color-action);
+	font-size: 14px;
+	font-weight: 600;
+	text-decoration: none;
+}
+
 .card img {
 	max-width: 100%;
 	border-radius: var(--radius-button);

@@ -107,3 +107,30 @@ export function afterCommentChange(
 		queryKey: queryKeys.socialMeal(mealId),
 	});
 }
+
+/** 讚的回應回來之後（`LikeButton`）：`state` 是伺服器現在的數字。
+ *
+ *  1. 寫回每一份快取（`patchLikes`）——清單不重抓。
+ *  2. **那一刻還在路上的清單重抓，重來一次。** 回到分頁（重抓開始）馬上按讚時，動態的
+ *     GET 可能在讚寫進資料庫之前就讀完了、卻比讚的回應晚到：不重來的話，那份舊的
+ *     「沒讚」會蓋掉第 1 步剛寫的數字，畫面停在錯的狀態直到下一次重抓。只挑
+ *     `fetchStatus: "fetching"` 的：平常沒有東西在抓，一個請求都不會多。
+ *     `refetchType: "all"`：剛離開的那一頁（沒有人掛著，但請求還沒回來）也算。
+ *  3. 餐點頁重抓：數字第 1 步寫好了，但「誰按了讚」的名單只有伺服器知道。 */
+export function afterLikeChange(
+	queryClient: QueryClient,
+	mealId: number,
+	state: LikeState,
+): void {
+	patchLikes(queryClient, mealId, state);
+	for (const queryKey of [queryKeys.friendFeed, queryKeys.friendDays]) {
+		void queryClient.invalidateQueries({
+			queryKey,
+			fetchStatus: "fetching",
+			refetchType: "all",
+		});
+	}
+	void queryClient.invalidateQueries({
+		queryKey: queryKeys.socialMeal(mealId),
+	});
+}

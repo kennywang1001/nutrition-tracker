@@ -232,4 +232,85 @@ describe("今日餐點清單", () => {
 		expect(screen.queryByTestId("meal-description-12")).not.toBeInTheDocument();
 		expect(screen.queryByTestId("meal-description-13")).not.toBeInTheDocument();
 	});
+
+	/** 那一餐的卡片（h3 往上的 <li>；項目清單裡也有 <li>，不能從食物名稱往上找）。 */
+	function cardOf(mealLabel: RegExp) {
+		const card = screen
+			.getByRole("heading", { level: 3, name: mealLabel })
+			.closest("li");
+		if (card === null) throw new Error("找不到卡片");
+		return card;
+	}
+
+	it("自己的卡片：讚是數字（不能按）、「留言 N」連到餐點頁", async () => {
+		mockApi({
+			"/api/meals": () =>
+				json([
+					{ ...MEALS[0], like_count: 2, comment_count: 1 },
+					{ ...MEALS[1], like_count: 5, comment_count: 0 },
+				]),
+		});
+
+		render(wrap(<MealList />));
+		await screen.findByText("滷肉飯");
+
+		const lunch = within(cardOf(/午餐/));
+		// 看得到的是「2」，螢幕閱讀器聽到的是「2 個讚」。
+		expect(lunch.getByText("2 個讚")).toBeInTheDocument();
+		expect(lunch.getByText("2")).toHaveAttribute("aria-hidden", "true");
+		const comments = lunch.getByRole("link", { name: /留言/ });
+		expect(comments).toHaveAttribute("href", "/meals/11");
+		expect(comments).toHaveTextContent(/^留言 1$/);
+		// 名稱帶時間與餐別（時間依時區）：一頁好幾張卡片，每張都只寫「留言 1」分不出來。
+		expect(comments).toHaveAccessibleName(/^.+ 午餐，留言 1 則$/);
+
+		const dinner = within(cardOf(/晚餐/));
+		expect(dinner.getByText("5 個讚")).toBeInTheDocument();
+		expect(dinner.getByRole("link", { name: /留言/ })).toHaveAttribute(
+			"href",
+			"/meals/12",
+		);
+		expect(dinner.getByRole("link", { name: /留言/ })).toHaveAccessibleName(
+			/^.+ 晚餐，留言 0 則$/,
+		);
+
+		// 主人不能對自己的餐按讚（後端 422）：整個清單沒有任何讚的按鈕。
+		expect(
+			screen.queryByRole("button", { name: /讚/ }),
+		).not.toBeInTheDocument();
+	});
+
+	it("沒有人按讚的餐不畫愛心；「留言 0」還是在（從那裡進餐點頁）", async () => {
+		mockApi({
+			"/api/meals": () =>
+				json([{ ...MEALS[0], like_count: 0, comment_count: 0 }]),
+		});
+
+		render(wrap(<MealList />));
+		await screen.findByText("滷肉飯");
+
+		expect(screen.queryByText(/個讚/)).not.toBeInTheDocument();
+		expect(screen.getByRole("link", { name: /留言/ })).toHaveTextContent(
+			/^留言 0$/,
+		);
+	});
+
+	it("離線快取裡的舊餐沒有這兩個欄位：留言 0、沒有愛心，畫面上沒有 undefined", async () => {
+		// MEALS 就是舊的形狀：沒有 like_count、comment_count 這兩個 key。
+		expect(MEALS[0]).not.toHaveProperty("like_count");
+		expect(MEALS[0]).not.toHaveProperty("comment_count");
+		mockApi({ "/api/meals": () => json(MEALS) });
+
+		render(wrap(<MealList />));
+		await screen.findByText("滷肉飯");
+
+		const links = screen.getAllByRole("link", { name: /留言/ });
+		expect(links.map((link) => link.textContent)).toEqual(["留言 0", "留言 0"]);
+		expect(links.map((link) => link.getAttribute("aria-label"))).toEqual([
+			expect.stringMatching(/^.+ 午餐，留言 0 則$/),
+			expect.stringMatching(/^.+ 晚餐，留言 0 則$/),
+		]);
+		expect(screen.queryByText(/個讚/)).not.toBeInTheDocument();
+		expect(document.body).not.toHaveTextContent(/undefined|NaN/);
+	});
 });

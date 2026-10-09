@@ -20,6 +20,9 @@ function friendMeal(id: number, overrides: Record<string, unknown> = {}) {
 		fat_g: "20.00",
 		carb_g: "80.00",
 		has_photo: false,
+		like_count: 2,
+		comment_count: 3,
+		liked_by_me: true,
 		...overrides,
 	};
 }
@@ -285,5 +288,104 @@ describe("好友動態", () => {
 		expect(
 			screen.queryByTestId("friend-meal-description-9"),
 		).not.toBeInTheDocument();
+	});
+
+	it("卡片最下面：讚的按鈕（狀態與數字）、連到餐點頁的「留言 N」", async () => {
+		mockApi(
+			feedRoutes(() => json({ meals: [friendMeal(7)], next_cursor: null })),
+		);
+		renderFeed();
+
+		const like = await screen.findByRole("button", {
+			name: "讚，鮑伯的午餐",
+			pressed: true,
+		});
+		expect(like).toHaveAccessibleDescription("2 個讚");
+		const comments = screen.getByRole("link", {
+			name: "鮑伯的午餐，留言 3 則",
+		});
+		expect(comments).toHaveAttribute("href", "/meals/7");
+		expect(comments).toHaveTextContent(/^留言 3$/);
+	});
+
+	it("在動態上按讚：只動那一張卡片，寫回的是伺服器的數字，動態不重抓", async () => {
+		const spy = mockApi([
+			{
+				method: "DELETE",
+				path: "/api/social/meals/7/like",
+				// 伺服器的數字跟樂觀的（2 − 1）不一樣：畫面上出現 4，才證明回應真的寫回了動態的快取。
+				handler: () => json({ like_count: 4, liked_by_me: false }),
+			},
+			...feedRoutes(() =>
+				json({
+					meals: [
+						friendMeal(7),
+						friendMeal(8, { like_count: 0, liked_by_me: false }),
+					],
+					next_cursor: null,
+				}),
+			),
+		]);
+		const calls = () =>
+			spy.mock.calls.map(
+				([url, init]) => `${init?.method ?? "GET"} ${String(url)}`,
+			);
+		renderFeed();
+		const card = (food: string) => {
+			const item = screen.getByText(food).closest("ul")?.closest("li");
+			if (!item) throw new Error(`找不到「${food}」的卡片`);
+			return within(item);
+		};
+		await screen.findByText("便當 7");
+
+		await userEvent.click(
+			card("便當 7").getByRole("button", { name: /^讚，/ }),
+		);
+
+		await waitFor(() =>
+			expect(
+				card("便當 7").getByRole("button", { name: /^讚，/, pressed: false }),
+			).toHaveAccessibleDescription("4 個讚"),
+		);
+		// 另一張卡片沒被動到。
+		expect(
+			card("便當 8").getByRole("button", { name: /^讚，/, pressed: false }),
+		).toHaveAccessibleDescription("0 個讚");
+		// 先等到數字變了才看（第 41 種）：整個過程動態只抓過一開始那一次。
+		// （開頭兩個 GET 誰先誰後不重要，排序之後比。）
+		expect(calls().sort()).toEqual([
+			"DELETE /api/social/meals/7/like",
+			"GET /api/friends",
+			"GET /api/friends/feed",
+		]);
+	});
+
+	it("回應裡沒有讚與留言的欄位（後端退版時）：畫 0，不是 undefined", async () => {
+		mockApi(
+			feedRoutes(() =>
+				json({
+					meals: [
+						friendMeal(7, {
+							like_count: undefined,
+							comment_count: undefined,
+							liked_by_me: undefined,
+						}),
+					],
+					next_cursor: null,
+				}),
+			),
+		);
+		renderFeed();
+
+		expect(
+			await screen.findByRole("button", {
+				name: "讚，鮑伯的午餐",
+				pressed: false,
+			}),
+		).toHaveAccessibleDescription("0 個讚");
+		expect(
+			screen.getByRole("link", { name: "鮑伯的午餐，留言 0 則" }),
+		).toHaveTextContent(/^留言 0$/);
+		expect(document.body).not.toHaveTextContent(/undefined|NaN/);
 	});
 });

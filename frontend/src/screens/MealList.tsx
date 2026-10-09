@@ -1,3 +1,4 @@
+import { Heart } from "lucide-react";
 import type { ChangeEvent } from "react";
 import { Link } from "react-router";
 import { MEAL_TYPE_LABELS, type Meal, useTodayMeals } from "../api/meals";
@@ -89,6 +90,9 @@ function MealPhotoUpload({ mealId }: { mealId: number }) {
 }
 
 function MealCard({ meal }: { meal: Meal }) {
+	// `?? 0` 不是多餘的：離線快取裡的舊餐沒有這兩個欄位（undefined，不是 null）。
+	const likeCount = meal.like_count ?? 0;
+	const commentCount = meal.comment_count ?? 0;
 	return (
 		<li className={styles.meal}>
 			<div className={styles.cardHeader}>
@@ -138,6 +142,24 @@ function MealCard({ meal }: { meal: Meal }) {
 				))}
 			</ul>
 			<p className={styles.total}>合計 {formatMacro(meal.kcal)} kcal</p>
+			<div className={styles.social}>
+				{/* 自己的餐不能按讚（後端 422）：只顯示數字，0 就不畫。 */}
+				{likeCount > 0 && (
+					<span className={styles.likes}>
+						<Heart aria-hidden="true" size={16} />
+						<span aria-hidden="true">{likeCount}</span>
+						<span className={ui.srOnly}>{likeCount} 個讚</span>
+					</span>
+				)}
+				{/* 名稱帶時間與餐別，理由同上面的「編輯」。 */}
+				<Link
+					to={`/meals/${meal.id}`}
+					className={styles.comments}
+					aria-label={`${formatTime(meal.eaten_at)} ${MEAL_TYPE_LABELS[meal.meal_type]}，留言 ${commentCount} 則`}
+				>
+					留言 {commentCount}
+				</Link>
+			</div>
 		</li>
 	);
 }

@@ -1,7 +1,9 @@
 import {
 	type InfiniteData,
+	InfiniteQueryObserver,
 	QueryClient,
 	QueryClientProvider,
+	QueryObserver,
 } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -16,6 +18,7 @@ import {
 import { queryKeys } from "../src/api/queries";
 import {
 	afterCommentChange,
+	afterLikeChange,
 	deleteComment,
 	patchLikes,
 	postComment,
@@ -203,6 +206,175 @@ describe("patchLikes：把伺服器回來的讚寫回每一份快取", () => {
 				.getAll()
 				.map((query) => query.state.data),
 		).toEqual([undefined, undefined, undefined]);
+	});
+});
+
+/** 可以手動放行的 queryFn：每呼叫一次多一個等著的，`answer(i, data)` 放行第 i 次。 */
+function manual<T>() {
+	const resolvers: Array<(data: T) => void> = [];
+	return {
+		queryFn: () =>
+			new Promise<T>((resolve) => {
+				resolvers.push(resolve);
+			}),
+		calls: () => resolvers.length,
+		answer(index: number, data: T) {
+			const resolve = resolvers[index];
+			if (resolve === undefined) throw new Error(`沒有第 ${index + 1} 次呼叫`);
+			resolve(data);
+		},
+	};
+}
+
+/** 讓已經排好的工作（TanStack 的通知、被放行的 promise）都跑完。 */
+async function settle() {
+	for (let round = 0; round < 3; round += 1) {
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	}
+}
+
+describe("afterLikeChange：讚的回應回來之後", () => {
+	const LIKED = { like_count: 3, liked_by_me: true };
+	const day = (meal: FriendMeal): FriendDay => ({
+		friend: { id: 2, display_name: "鮑伯" },
+		day: "2026-10-06",
+		meals: [meal],
+	});
+	const feed = (meal: FriendMeal): InfiniteData<FriendFeedPage> => ({
+		pages: [{ meals: [meal], next_cursor: null }],
+		pageParams: [null],
+	});
+
+	it("數字寫回每一份快取；餐點頁重抓（名單變了），掛著的動態與某一天不重抓", async () => {
+		const client = new QueryClient();
+		const fetched: string[] = [];
+		const counted =
+			<T,>(name: string, data: T) =>
+			() => {
+				fetched.push(name);
+				return Promise.resolve(data);
+			};
+		client.setQueryData(queryKeys.friendFeed, feed(m(8)));
+		client.setQueryData(queryKeys.friendDay(2, null), day(m(8)));
+		client.setQueryData(queryKeys.socialMeal(8), socialMeal(8));
+		client.setQueryData(queryKeys.socialMeal(9), socialMeal(9));
+		// 四個都掛著（有人在看），資料都還新鮮：只有被失效的才會重抓。
+		const fresh = { staleTime: Number.POSITIVE_INFINITY };
+		const stop = [
+			new InfiniteQueryObserver(client, {
+				queryKey: queryKeys.friendFeed,
+				queryFn: counted("動態", { meals: [m(8)], next_cursor: null }),
+				initialPageParam: null as string | null,
+				getNextPageParam: (last: FriendFeedPage) => last.next_cursor,
+				...fresh,
+			}).subscribe(() => {}),
+			new QueryObserver(client, {
+				queryKey: queryKeys.friendDay(2, null),
+				queryFn: counted("某一天", day(m(8))),
+				...fresh,
+			}).subscribe(() => {}),
+			new QueryObserver(client, {
+				queryKey: queryKeys.socialMeal(8),
+				queryFn: counted("餐點頁 8", {
+					...socialMeal(8),
+					meal: { ...m(8), ...LIKED },
+				}),
+				...fresh,
+			}).subscribe(() => {}),
+			new QueryObserver(client, {
+				queryKey: queryKeys.socialMeal(9),
+				queryFn: counted("餐點頁 9", socialMeal(9)),
+				...fresh,
+			}).subscribe(() => {}),
+		];
+		await settle();
+		expect(fetched).toEqual([]);
+
+		afterLikeChange(client, 8, LIKED);
+
+		// 寫回是同步的：不用等任何重抓。
+		expect(
+			client.getQueryData<InfiniteData<FriendFeedPage>>(queryKeys.friendFeed)
+				?.pages[0]?.meals[0],
+		).toEqual({ ...m(8), ...LIKED });
+		expect(
+			client.getQueryData<FriendDay>(queryKeys.friendDay(2, null))?.meals[0],
+		).toEqual({ ...m(8), ...LIKED });
+		expect(
+			client.getQueryData<SocialMeal>(queryKeys.socialMeal(8))?.meal,
+		).toEqual({ ...m(8), ...LIKED });
+
+		await settle();
+		// 先等到會重抓的那一個真的抓了，「另外三個沒有」才有意義（第 41 種）。
+		expect(fetched).toEqual(["餐點頁 8"]);
+		for (const unsubscribe of stop) unsubscribe();
+	});
+
+	it("那時候還在路上的重抓重來一次：按讚之前的舊回應不會蓋掉剛寫進去的數字", async () => {
+		// 回到分頁（重抓開始）馬上按讚：動態的 GET 可能在讚寫進資料庫之前就讀完了，
+		// 但比讚的回應晚到——不重來的話，那份舊的「沒讚」會蓋掉剛寫的「讚」，一直到下一次重抓。
+		const client = new QueryClient();
+		const feedFn = manual<FriendFeedPage>();
+		const dayFn = manual<FriendDay>();
+		const idleFn = manual<FriendDay>();
+		client.setQueryData(queryKeys.friendFeed, feed(m(8)));
+		client.setQueryData(queryKeys.friendDay(2, null), day(m(8)));
+		client.setQueryData(queryKeys.friendDay(3, null), day(m(8)));
+		const stop = [
+			// 動態掛著（有人在看）。
+			new InfiniteQueryObserver(client, {
+				queryKey: queryKeys.friendFeed,
+				queryFn: feedFn.queryFn,
+				initialPageParam: null as string | null,
+				getNextPageParam: (last: FriendFeedPage) => last.next_cursor,
+				staleTime: Number.POSITIVE_INFINITY,
+			}).subscribe(() => {}),
+			// 另一個好友的某一天掛著、沒有在抓：不該被牽連。
+			new QueryObserver(client, {
+				queryKey: queryKeys.friendDay(3, null),
+				queryFn: idleFn.queryFn,
+				staleTime: Number.POSITIVE_INFINITY,
+			}).subscribe(() => {}),
+		];
+		void client.refetchQueries({ queryKey: queryKeys.friendFeed });
+		// 某一天沒有人掛著（剛離開那一頁），但它的重抓還在路上。
+		client
+			.fetchQuery({
+				queryKey: queryKeys.friendDay(2, null),
+				queryFn: dayFn.queryFn,
+			})
+			.catch(() => {});
+		await settle();
+		expect([feedFn.calls(), dayFn.calls(), idleFn.calls()]).toEqual([1, 1, 0]);
+
+		afterLikeChange(client, 8, LIKED);
+		await settle();
+
+		// 舊的回應（按讚之前讀的）這時才到：不能蓋掉剛寫的。
+		feedFn.answer(0, { meals: [m(8)], next_cursor: null });
+		dayFn.answer(0, day(m(8)));
+		await settle();
+		const liked = () => [
+			client.getQueryData<InfiniteData<FriendFeedPage>>(queryKeys.friendFeed)
+				?.pages[0]?.meals[0]?.liked_by_me,
+			client.getQueryData<FriendDay>(queryKeys.friendDay(2, null))?.meals[0]
+				?.liked_by_me,
+		];
+		expect(liked()).toEqual([true, true]);
+		// 在路上的兩個各重來了一次；沒有在抓的那一個不動。
+		expect([feedFn.calls(), dayFn.calls(), idleFn.calls()]).toEqual([2, 2, 0]);
+
+		// 重來的那一次回來：伺服器現在的樣子（別人也按了，4 個）。
+		const now = { ...m(8), like_count: 4, liked_by_me: true };
+		feedFn.answer(1, { meals: [now], next_cursor: null });
+		dayFn.answer(1, day(now));
+		await settle();
+		expect(liked()).toEqual([true, true]);
+		expect(
+			client.getQueryData<FriendDay>(queryKeys.friendDay(2, null))?.meals[0]
+				?.like_count,
+		).toBe(4);
+		for (const unsubscribe of stop) unsubscribe();
 	});
 });
 

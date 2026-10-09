@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -29,6 +29,9 @@ function dayResponse(day: string, mealName: string | null) {
 							fat_g: "20.00",
 							carb_g: "80.00",
 							has_photo: false,
+							like_count: 1,
+							comment_count: 2,
+							liked_by_me: false,
 						},
 					],
 	};
@@ -155,5 +158,60 @@ describe("好友的某一天", () => {
 		expect(
 			await screen.findByTestId("friend-meal-description-7"),
 		).toHaveTextContent("公司樓下的雞腿便當");
+	});
+
+	it("某一天的卡片也有讚的按鈕與「留言 N」（名字不在卡片上，但在可及名稱裡）", async () => {
+		mockApi([
+			{
+				method: "GET",
+				path: "/api/friends/2/meals",
+				handler: () => json(dayResponse("2026-10-06", "今天的便當")),
+			},
+		]);
+		renderDay();
+
+		expect(
+			await screen.findByRole("button", {
+				name: "讚，鮑伯的午餐",
+				pressed: false,
+			}),
+		).toHaveAccessibleDescription("1 個讚");
+		const comments = screen.getByRole("link", {
+			name: "鮑伯的午餐，留言 2 則",
+		});
+		expect(comments).toHaveAttribute("href", "/meals/7");
+		expect(comments).toHaveTextContent(/^留言 2$/);
+	});
+
+	it("在某一天按讚：寫回這一天的快取（伺服器的數字），這一天不重抓", async () => {
+		const spy = mockApi([
+			{
+				method: "PUT",
+				path: "/api/social/meals/7/like",
+				// 樂觀的是 1 ＋ 1；伺服器說 5。
+				handler: () => json({ like_count: 5, liked_by_me: true }),
+			},
+			{
+				method: "GET",
+				path: "/api/friends/2/meals",
+				handler: () => json(dayResponse("2026-10-06", "今天的便當")),
+			},
+		]);
+		renderDay();
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "讚，鮑伯的午餐" }),
+		);
+
+		await waitFor(() =>
+			expect(
+				screen.getByRole("button", { name: "讚，鮑伯的午餐", pressed: true }),
+			).toHaveAccessibleDescription("5 個讚"),
+		);
+		expect(
+			spy.mock.calls.map(
+				([url, init]) => `${init?.method ?? "GET"} ${String(url)}`,
+			),
+		).toEqual(["GET /api/friends/2/meals", "PUT /api/social/meals/7/like"]);
 	});
 });

@@ -133,6 +133,34 @@
 	font-variant-numeric: tabular-nums;
 }
 
+/* 合計下面一列：有人按讚時的「♥ N」（只是數字，自己的餐不能按）、連到餐點頁的「留言 N」。 */
+.social {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+}
+
+.likes {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
+	color: var(--color-text-muted);
+	font-size: 14px;
+	font-variant-numeric: tabular-nums;
+}
+
+.comments {
+	display: inline-flex;
+	align-items: center;
+	min-width: 44px;
+	min-height: 44px;
+	color: var(--color-action);
+	font-size: 14px;
+	font-weight: 600;
+	text-decoration: none;
+}
+
 /* 這一餐的描述：一句話，可能很長、可能沒有空白可以斷行。
    下面留一點距離：接著的可能是照片，貼在一起不好看。 */
 .description {

@@ -306,3 +306,18 @@
 	gap: var(--space-2);
 	margin-left: var(--space-2);
 }
+
+/* 只給螢幕閱讀器的文字（讚的數量、未讀數的完整講法）。不能用 display: none——
+   那樣 aria-describedby 指過來也唸不到。一般的 class，不放在 :where() 裡：
+   它要蓋得過任何元件自己的排版。 */
+.srOnly {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	padding: 0;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
+}

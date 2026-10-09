@@ -1,0 +1,35 @@
+/* 讚的按鈕：愛心＋數字。44px 的觸控目標；沒有底色、沒有框，跟旁邊的「留言 N」
+   是同一列的兩個安靜的動作。往左退一個內距：愛心對齊卡片裡的文字，不是按鈕的邊。 */
+.like {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: var(--space-1);
+	min-width: 44px;
+	min-height: 44px;
+	margin-left: calc(-1 * var(--space-2));
+	padding: 0 var(--space-2);
+	border: 0;
+	background: none;
+	color: var(--color-text-muted);
+	font: inherit;
+	font-variant-numeric: tabular-nums;
+	cursor: pointer;
+}
+
+/* 按了的愛心：實心、紅色。數字不跟著變色——狀態看愛心，數字只是數字。 */
+.on {
+	color: var(--color-danger);
+	fill: currentColor;
+}
+
+/* 錯誤訊息跟按鈕是兄弟（LikeButton 沒有包一層）。上層是會換行的 flex 列時：
+   佔滿一整列、排到最後——落在「讚」與「留言 N」的下面，不把「留言 N」擠走。
+   上層不是 flex 時這兩行沒有作用，它就是按鈕下面的一段字。 */
+.error {
+	flex-basis: 100%;
+	order: 1;
+	margin: 0;
+	color: var(--color-danger);
+	font-size: 13px;
+}
