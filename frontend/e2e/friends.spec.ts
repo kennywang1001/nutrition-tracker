@@ -86,7 +86,12 @@ async function seedFood(
 async function logMeal(
 	page: Page,
 	foodName: string,
-	options: { cost?: string; isPrivate?: boolean; photo?: Buffer },
+	options: {
+		cost?: string;
+		isPrivate?: boolean;
+		photo?: Buffer;
+		description?: string;
+	},
 ) {
 	await page.goto("/");
 	await expect(page.getByRole("heading", { name: "總覽" })).toBeVisible();
@@ -103,6 +108,11 @@ async function logMeal(
 			buffer: options.photo,
 		});
 		await expect(page.getByRole("img", { name: "選好的照片" })).toBeVisible();
+	}
+	if (options.description !== undefined) {
+		await page
+			.getByLabel("描述（選填）", { exact: true })
+			.fill(options.description);
 	}
 	if (options.isPrivate === true) {
 		await page.getByLabel("只有我看得到（好友看不到這一餐）").check();
@@ -150,12 +160,16 @@ test("好友：互加、私人的餐看不到、解除之後看不到", async ({
 		pal.page.getByRole("button", { name: /^解除和.+的好友$/ }),
 	).toBeVisible();
 
-	// 5. 管理員記兩餐：X 有金額、有照片、公開；Y 私人。
+	// 5. 管理員記兩餐：X 有金額、有照片、公開；Y 私人。兩餐各有一段描述
+	//    （AI 多樣估算規格 D14：描述好友看得到，但私人的餐整餐看不到）。
+	const shared = `E2E 好友看得到的描述 ${stamp}`;
+	const hidden = `E2E 私人餐的描述 ${stamp}`;
 	await logMeal(page, foodX, {
 		cost: "180",
 		photo: await generateJpegBuffer(page),
+		description: shared,
 	});
-	await logMeal(page, foodY, { isPrivate: true });
+	await logMeal(page, foodY, { isPrivate: true, description: hidden });
 
 	// 6. 夥伴看好友動態：看得到 X 與它的照片、看不到 Y。餐費不在白名單裡
 	//    ——那由後端的欄位白名單測試守（test_friend_meals.py），畫面上找
@@ -165,6 +179,8 @@ test("好友：互加、私人的餐看不到、解除之後看不到", async ({
 	const feed = pal.page.getByRole("region", { name: "好友動態" });
 	await expect(feed.getByText(foodX)).toBeVisible();
 	await expect(feed.getByText(foodY)).toHaveCount(0);
+	await expect(feed.getByText(shared, { exact: true })).toBeVisible();
+	await expect(feed.getByText(hidden, { exact: true })).toHaveCount(0);
 	const photo = feed
 		.getByRole("listitem")
 		.filter({ hasText: foodX })
