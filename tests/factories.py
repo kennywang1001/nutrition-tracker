@@ -164,6 +164,7 @@ async def create_meal(
     meal_type: MealType = MealType.LUNCH,
     items: Sequence[tuple[FoodRevision, Decimal | int]] | None = None,
     note: str | None = None,
+    description: str | None = None,
     photo_path: str | None = None,
 ) -> Meal:
     """建立一餐，items 收 (food_revision, quantity_g) 序列，直接寫入 quantity_g。
@@ -182,6 +183,7 @@ async def create_meal(
         eaten_at=eaten_at or _DEFAULT_EATEN_AT,
         meal_type=meal_type,
         note=note,
+        description=description,
         photo_path=photo_path,
     )
     db_session.add(meal)

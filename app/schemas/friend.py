@@ -56,12 +56,14 @@ class FriendMealItem(BaseModel):
 class FriendMeal(BaseModel):
     """好友看得到的一餐（規格 §4.3）。**白名單**——不是從 `MealResponse` 刪欄位：
     `MealResponse` 以後多了欄位，這裡不會跟著多。沒有餐費、備註、照片路徑、
-    食物與份量的 id。"""
+    食物與份量的 id。**描述有**（AI 多樣估算規格 D14）：它本來就是寫給人看的
+    那句「吃了什麼」。"""
 
     id: int
     user: PersonResponse
     eaten_at: datetime
     meal_type: MealType
+    description: str | None
     items: list[FriendMealItem]
     kcal: Decimal
     protein_g: Decimal

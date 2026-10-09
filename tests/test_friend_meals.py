@@ -76,6 +76,7 @@ async def test_a_friends_shared_meal_shows_in_the_feed_with_only_the_whitelisted
         revision,
         at="2026-10-06T04:00:00+00:00",
         note="今天心情很差",
+        description="滷肉飯配燙青菜",
         photo_path=photo,
     )
     await create_expense(db_session, user=alice, amount=180, meal=meal)
@@ -91,16 +92,51 @@ async def test_a_friends_shared_meal_shows_in_the_feed_with_only_the_whitelisted
     assert shared["has_photo"] is True
     assert [item["food_name"] for item in shared["items"]] == ["愛麗絲的私房菜"]
     assert set(shared) == {
-        "id", "user", "eaten_at", "meal_type", "items",
+        "id", "user", "eaten_at", "meal_type", "description", "items",
         "kcal", "protein_g", "fat_g", "carb_g", "has_photo",
     }
     assert set(shared["items"][0]) == {"food_name", "quantity_g", "base_unit", "kcal"}
+    # 同一餐同時有描述與備註（第 5 種：兩個都要有，才分得出「描述給看、備註不給」）。
+    assert shared["description"] == "滷肉飯配燙青菜"
     # 測試資料裡真的有餐費、備註、照片路徑、私人食物——上面的白名單比對才不是空轉；
     # 再用文字確認一次備註與照片路徑沒有從別的欄位漏出去。
     assert "今天心情很差" not in response.text
     assert photo not in response.text
     assert "food_id" not in response.text
 
+
+async def test_a_friends_day_also_carries_the_description(client, db_session, pals):
+    alice, bob, _food, revision = pals
+    await _meal(
+        db_session, alice, revision, at="2026-10-06T04:00:00+00:00",
+        description="滷肉飯配燙青菜", note="今天心情很差",
+    )  # fmt: skip
+
+    response = await client.get(
+        f"/api/friends/{alice.id}/meals", headers=auth(bob), params={"date": "2026-10-06"}
+    )
+
+    assert response.status_code == 200
+    [shared] = response.json()["meals"]
+    assert shared["description"] == "滷肉飯配燙青菜"
+    assert "今天心情很差" not in response.text
+
+
+async def test_a_private_meals_description_is_invisible_to_friends(client, db_session, pals):
+    alice, bob, _food, revision = pals
+    await _meal(
+        db_session, alice, revision, at="2026-10-06T04:00:00+00:00",
+        private=True, description="只有我知道的宵夜",
+    )  # fmt: skip
+
+    feed = await client.get("/api/friends/feed", headers=auth(bob))
+    day = await client.get(
+        f"/api/friends/{alice.id}/meals", headers=auth(bob), params={"date": "2026-10-06"}
+    )
+
+    assert feed.json()["meals"] == []
+    assert day.json()["meals"] == []
+    assert "只有我知道的宵夜" not in feed.text + day.text
 
 
 async def test_a_friends_liquid_shows_in_ml(client, db_session, pals):

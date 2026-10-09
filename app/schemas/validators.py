@@ -31,6 +31,32 @@ from pydantic import AfterValidator
 # 變成一個未經認證就能觸發的 500。
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
+# 會顯示給別人（好友）、寫進 CSV 的單行文字裡不該留下的字元：C0／DEL／C1 控制字元
+# （含換行與 Tab）、行／段分隔（U+2028、U+2029）、雙向控制字元（U+202A～U+202E、
+# U+2066～U+2069——它們能讓一段文字在畫面上倒著顯示）。
+# **不含 ZWJ（U+200D）**：表情符號的組合序列靠它。
+_UNSAFE_FOR_DISPLAY = re.compile(
+    r"[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]"
+)
+
+
+def single_line(value: str) -> str:
+    """把一段不可信的文字變成一行：不安全的字元換成空白、連續空白併成一個、去頭尾。
+
+    用在兩種來源：模型輸出（AI 多樣估算的名稱與描述，`app/ai/estimator.py`）、
+    以及會給好友看的使用者輸入（`meals.description`）。**換掉而不是拒絕**：
+    模型輸出被拒絕等於一次已經付費的估算作廢；使用者貼上的文字帶換行也不該是 422。
+    清完可能是空字串，由呼叫端決定那代表什麼。
+    """
+    return " ".join(_UNSAFE_FOR_DISPLAY.sub(" ", value).split())
+
+
+def _clean_optional_single_line(value: str | None) -> str | None:
+    if value is None:
+        return None
+    # 清完是空的＝沒有內容。存 NULL，不存 ""——畫面與 CSV 只需要分「有」與「沒有」。
+    return single_line(value) or None
+
 
 def _clean_display_name(value: str) -> str:
     value = value.strip()
@@ -67,3 +93,7 @@ def _must_be_real_timezone(value: str) -> str:
 
 DisplayName = Annotated[str, AfterValidator(_clean_display_name)]
 IanaTimezone = Annotated[str, AfterValidator(_must_be_real_timezone)]
+# `X | None` 的欄位：`None` 與清完是空的都變成 `None`。AfterValidator 綁在整個
+# 聯集上，所以函式自己處理 `None`（跟上面 `DisplayName` 綁在 `str` 分支不同——
+# 這裡要的正是「空字串也變成 None」）。
+OptionalSingleLine = Annotated[str | None, AfterValidator(_clean_optional_single_line)]

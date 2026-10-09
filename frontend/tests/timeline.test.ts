@@ -9,6 +9,7 @@ function meal(id: number, eatenAt: string): Meal {
 		eaten_at: eatenAt,
 		meal_type: "lunch",
 		note: null,
+		description: null,
 		is_private: false,
 		photo_path: null,
 		cost: null,

@@ -190,6 +190,7 @@ async def create_meal(
         eaten_at=payload.eaten_at,
         meal_type=payload.meal_type,
         note=payload.note,
+        description=payload.description,
         is_private=payload.is_private,
     )
     db.add(meal)
@@ -250,6 +251,7 @@ async def create_meal(
         eaten_at=meal.eaten_at,
         meal_type=meal.meal_type,
         note=meal.note,
+        description=meal.description,
         is_private=meal.is_private,
         photo_path=meal.photo_path,
         cost=expense.amount if expense is not None else None,
@@ -338,6 +340,7 @@ def _build_meal_response(
         eaten_at=meal.eaten_at,
         meal_type=meal.meal_type,
         note=meal.note,
+        description=meal.description,
         is_private=meal.is_private,
         photo_path=meal.photo_path,
         cost=cost,
@@ -399,7 +402,8 @@ async def update_meal(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> MealResponse:
-    """改餐點本身：`eaten_at` / `meal_type` / `note`（計畫 3 決定 2），
+    """改餐點本身：`eaten_at` / `meal_type` / `note` / `description`（計畫 3 決定 2；
+    `description` 是 AI 多樣估算規格 §3.2 加的），
     以及這一餐的餐費 `cost`（編輯餐點規格 §3.2）。
     項目不在這個端點的範圍內 —— 那是 `POST/DELETE .../items` 的事。
 
@@ -409,7 +413,7 @@ async def update_meal(
     用 `exclude_unset` 決定要更新哪些欄位（沒帶的欄位維持原樣），
     `MealUpdateRequest` 自己的驗證器已經擋掉 `eaten_at` / `meal_type`
     的顯式 `null`；`cost: null` 在下面先被 pop 出來（代表「刪掉餐費」），
-    所以流到 setattr 迴圈的 `None` 只可能是合法的 `note` 清空。
+    所以流到 setattr 迴圈的 `None` 只可能是合法的 `note`／`description` 清空。
 
     **這一餐的列用 `FOR UPDATE` 鎖到 commit**（`_load_owned_meal(for_update=True)`）。
     餐費的 `spent_at` 從 `eaten_at` 來：一個請求在改時間、還沒 commit，另一個同時

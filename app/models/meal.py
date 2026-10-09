@@ -64,6 +64,9 @@ class Meal(Base):
     )
     photo_path: Mapped[str | None] = mapped_column(Text)
     note: Mapped[str | None] = mapped_column(Text)
+    # 這一餐吃了什麼的一句話（AI 多樣估算規格 §2 D12）。**好友看得到**——跟上面的
+    # note（備註，只有自己看得到）是兩回事，不要合併。
+    description: Mapped[str | None] = mapped_column(Text)
     # 「只有我看得到」（好友規格 §3.3）：預設 false＝好友看得到。既有的餐也是 false。
     is_private: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=false(), default=False

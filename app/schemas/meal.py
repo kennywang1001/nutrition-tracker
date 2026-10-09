@@ -5,6 +5,7 @@ from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from app.models.food import BaseUnit
 from app.models.meal import MealType
+from app.schemas.validators import OptionalSingleLine
 
 # `eaten_at` 一律要帶時區偏移，naive 的一律 422。
 #
@@ -62,6 +63,9 @@ class MealCreateRequest(BaseModel):
     eaten_at: AwareInstant
     meal_type: MealType
     note: str | None = Field(default=None, max_length=500)
+    # 這一餐吃了什麼的一句話；好友看得到（規格 D12、D13）。經 `single_line` 清成一行，
+    # 清完是空的就是 None。500 是清理**之前**的長度。
+    description: OptionalSingleLine = Field(default=None, max_length=500)
     # 好友規格 §2：預設給好友看。
     is_private: bool = False
     # 允許空清單是刻意的：P2 的流程是先拍照、之後才落項目（見計畫本文）。
@@ -82,21 +86,24 @@ class MealUpdateRequest(BaseModel):
     """`PATCH /api/meals/{id}` 的請求（計畫 3 決定 2）：只改餐點本身，
     項目的增刪走另外兩個端點（Task 12），這裡不收 `items`。
 
-    跟 `UpdateMeRequest` 同一種哨兵寫法：四個欄位都是 `X | None = None`，
+    跟 `UpdateMeRequest` 同一種哨兵寫法：每個欄位都是 `X | None = None`，
     `None` 代表「這次請求沒帶這個欄位」，路由層用
     `model_dump(exclude_unset=True)` 決定要更新哪些。
 
-    但跟 `UpdateMeRequest` 不同的是，這裡四個欄位對 NOT NULL 的態度不一樣：
+    但跟 `UpdateMeRequest` 不同的是，這裡的欄位對 NOT NULL 的態度不一樣：
     `eaten_at` 與 `meal_type` 是 NOT NULL，顯式 `null` 必須擋在這裡 ——
     否則會一路流到 `setattr`，撞上 `asyncpg.NotNullViolationError` 變成
     已認證使用者就能觸發的 500（`UpdateMeRequest` 踩過的同一個坑）。
-    `note` 是 nullable，`{"note": null}` 是合法輸入、必須放行到底。
+    `note` 與 `description` 是 nullable，`{"note": null}`／`{"description": null}`
+    是合法輸入（清空）、必須放行到底。
     `cost` 也是：`null` 代表刪掉這一餐的餐費。
     """
 
     eaten_at: AwareInstant | None = None
     meal_type: MealType | None = None
     note: str | None = Field(default=None, max_length=500)
+    # 同 note：不帶＝不動；null、空字串、全空白＝清掉（AI 多樣估算規格 §3.2）。
+    description: OptionalSingleLine = Field(default=None, max_length=500)
     is_private: bool | None = None
     # 編輯餐點規格 §3.2：不帶＝不動；數字＝改那筆餐費或補一筆；null＝刪掉餐費。
     # null 是合法的（「拿掉金額」），所以不在下面驗證器的 non_nullable 集合裡。
@@ -105,8 +112,8 @@ class MealUpdateRequest(BaseModel):
 
     @model_validator(mode="after")
     def _reject_explicit_nulls_on_non_nullable_fields(self) -> "MealUpdateRequest":
-        # note 刻意不在這個集合裡：它在資料庫是 nullable，顯式 null 是
-        # 合法的「清空備註」語意，不該被擋下來。
+        # note、description 刻意不在這個集合裡：它們在資料庫是 nullable，顯式 null 是
+        # 合法的「清空」語意，不該被擋下來。
         non_nullable = {"eaten_at", "meal_type", "is_private"}
         nulls = sorted(
             field
@@ -147,6 +154,9 @@ class MealResponse(BaseModel):
     eaten_at: datetime
     meal_type: MealType
     note: str | None
+    # 沒有預設值是刻意的：哪一條組回應的路徑漏了它，是當場的驗證錯誤，不是悄悄的 null
+    # （同下面 cost 的註解：只有建立時有值、讀取時永遠 null 的欄位比沒有更糟）。
+    description: str | None
     is_private: bool
     # 相對於 photo_dir 的路徑；沒有照片是 None。計畫 3 Task 14：上傳成功後
     # 這個端點自己回的、以及之後 GET /api/meals/{id} 回的都要看得到同一個值。

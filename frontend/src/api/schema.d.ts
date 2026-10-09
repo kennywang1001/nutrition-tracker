@@ -793,7 +793,8 @@ export interface paths {
         head?: never;
         /**
          * Update Meal
-         * @description 改餐點本身：`eaten_at` / `meal_type` / `note`（計畫 3 決定 2），
+         * @description 改餐點本身：`eaten_at` / `meal_type` / `note` / `description`（計畫 3 決定 2；
+         *     `description` 是 AI 多樣估算規格 §3.2 加的），
          *     以及這一餐的餐費 `cost`（編輯餐點規格 §3.2）。
          *     項目不在這個端點的範圍內 —— 那是 `POST/DELETE .../items` 的事。
          *
@@ -803,7 +804,7 @@ export interface paths {
          *     用 `exclude_unset` 決定要更新哪些欄位（沒帶的欄位維持原樣），
          *     `MealUpdateRequest` 自己的驗證器已經擋掉 `eaten_at` / `meal_type`
          *     的顯式 `null`；`cost: null` 在下面先被 pop 出來（代表「刪掉餐費」），
-         *     所以流到 setattr 迴圈的 `None` 只可能是合法的 `note` 清空。
+         *     所以流到 setattr 迴圈的 `None` 只可能是合法的 `note`／`description` 清空。
          *
          *     **這一餐的列用 `FOR UPDATE` 鎖到 commit**（`_load_owned_meal(for_update=True)`）。
          *     餐費的 `spent_at` 從 `eaten_at` 來：一個請求在改時間、還沒 commit，另一個同時
@@ -1776,7 +1777,8 @@ export interface components {
          * FriendMeal
          * @description 好友看得到的一餐（規格 §4.3）。**白名單**——不是從 `MealResponse` 刪欄位：
          *     `MealResponse` 以後多了欄位，這裡不會跟著多。沒有餐費、備註、照片路徑、
-         *     食物與份量的 id。
+         *     食物與份量的 id。**描述有**（AI 多樣估算規格 D14）：它本來就是寫給人看的
+         *     那句「吃了什麼」。
          */
         FriendMeal: {
             /** Id */
@@ -1788,6 +1790,8 @@ export interface components {
              */
             eaten_at: string;
             meal_type: components["schemas"]["MealType"];
+            /** Description */
+            description: string | null;
             /** Items */
             items: components["schemas"]["FriendMealItem"][];
             /** Kcal */
@@ -1968,6 +1972,8 @@ export interface components {
             meal_type: components["schemas"]["MealType"];
             /** Note */
             note?: string | null;
+            /** Description */
+            description?: string | null;
             /**
              * Is Private
              * @default false
@@ -2042,6 +2048,8 @@ export interface components {
             meal_type: components["schemas"]["MealType"];
             /** Note */
             note: string | null;
+            /** Description */
+            description: string | null;
             /** Is Private */
             is_private: boolean;
             /** Photo Path */
@@ -2069,15 +2077,16 @@ export interface components {
          * @description `PATCH /api/meals/{id}` 的請求（計畫 3 決定 2）：只改餐點本身，
          *     項目的增刪走另外兩個端點（Task 12），這裡不收 `items`。
          *
-         *     跟 `UpdateMeRequest` 同一種哨兵寫法：四個欄位都是 `X | None = None`，
+         *     跟 `UpdateMeRequest` 同一種哨兵寫法：每個欄位都是 `X | None = None`，
          *     `None` 代表「這次請求沒帶這個欄位」，路由層用
          *     `model_dump(exclude_unset=True)` 決定要更新哪些。
          *
-         *     但跟 `UpdateMeRequest` 不同的是，這裡四個欄位對 NOT NULL 的態度不一樣：
+         *     但跟 `UpdateMeRequest` 不同的是，這裡的欄位對 NOT NULL 的態度不一樣：
          *     `eaten_at` 與 `meal_type` 是 NOT NULL，顯式 `null` 必須擋在這裡 ——
          *     否則會一路流到 `setattr`，撞上 `asyncpg.NotNullViolationError` 變成
          *     已認證使用者就能觸發的 500（`UpdateMeRequest` 踩過的同一個坑）。
-         *     `note` 是 nullable，`{"note": null}` 是合法輸入、必須放行到底。
+         *     `note` 與 `description` 是 nullable，`{"note": null}`／`{"description": null}`
+         *     是合法輸入（清空）、必須放行到底。
          *     `cost` 也是：`null` 代表刪掉這一餐的餐費。
          */
         MealUpdateRequest: {
@@ -2086,6 +2095,8 @@ export interface components {
             meal_type?: components["schemas"]["MealType"] | null;
             /** Note */
             note?: string | null;
+            /** Description */
+            description?: string | null;
             /** Is Private */
             is_private?: boolean | null;
             /** Cost */

@@ -54,6 +54,7 @@ MEAL_COLUMNS = (
     "蛋白質(g)",
     "脂肪(g)",
     "碳水(g)",
+    "描述",
     "備註",
     "只有我看得到",
 )
@@ -209,7 +210,9 @@ async def meal_csv(db: AsyncSession, *, user_id: int, tz_name: str) -> AsyncIter
     after: tuple[datetime, int] | None = None
     while True:
         query = (
-            select(Meal.id, Meal.eaten_at, Meal.meal_type, Meal.note, Meal.is_private)
+            select(
+                Meal.id, Meal.eaten_at, Meal.meal_type, Meal.description, Meal.note, Meal.is_private
+            )
             .where(Meal.user_id == user_id)
             .order_by(Meal.eaten_at, Meal.id)
             .limit(EXPORT_CHUNK_MEALS)
@@ -244,7 +247,13 @@ async def meal_csv(db: AsyncSession, *, user_id: int, tz_name: str) -> AsyncIter
                 clock,
                 MEAL_TYPE_LABELS[meal.meal_type],
             )
-            tail: tuple[Cell, ...] = (meal.note, _YES if meal.is_private else _NO)
+            # 描述在備註前面（AI 多樣估算規格 §3.2）。兩格都是 str，走 encode_rows 的
+            # guard_text——公式字元的處理只有那一條路。
+            tail: tuple[Cell, ...] = (
+                meal.description,
+                meal.note,
+                _YES if meal.is_private else _NO,
+            )
             items = items_by_meal.get(meal.id)
             if not items:
                 lines.append((*head, *_NO_FOOD, *tail))

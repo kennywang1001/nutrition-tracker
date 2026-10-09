@@ -360,6 +360,7 @@ async def _friend_meals(
                 user=_person(people[meal.user_id]),
                 eaten_at=meal.eaten_at,
                 meal_type=meal.meal_type,
+                description=meal.description,
                 items=items,
                 kcal=totals.kcal,
                 protein_g=totals.protein_g,

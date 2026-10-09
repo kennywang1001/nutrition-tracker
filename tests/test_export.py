@@ -60,7 +60,7 @@ SUPPLEMENTS = "/api/export/supplements.csv"
 # 標題列寫死在測試裡，不 import `app.export` 的常數——拿它自己比自己永遠是綠的（第 10 種）。
 MEAL_HEADER = [
     "餐點編號", "日期", "時間", "餐別", "食物", "品牌", "份量", "單位",
-    "熱量(kcal)", "蛋白質(g)", "脂肪(g)", "碳水(g)", "備註", "只有我看得到",
+    "熱量(kcal)", "蛋白質(g)", "脂肪(g)", "碳水(g)", "描述", "備註", "只有我看得到",
 ]  # fmt: skip
 EXPENSE_HEADER = ["日期", "時間", "分類", "金額", "備註", "是否餐費"]
 SUPPLEMENT_HEADER = [
@@ -214,6 +214,8 @@ async def test_a_meal_is_one_row_per_item_and_an_empty_meal_still_gets_a_row(
         meal_type=MealType.LUNCH,
         items=[(await _revision(db_session, rice), 150), (await _revision(db_session, tea), 500)],
         note="自己煮",
+        # 刻意用公式字元開頭：守「描述經過 guard_text」（跟品牌的 `=茶裏王` 同一招）。
+        description="=便當",
     )
     lunch.is_private = True
     await db_session.commit()
@@ -222,6 +224,7 @@ async def test_a_meal_is_one_row_per_item_and_an_empty_meal_still_gets_a_row(
         user=user,
         eaten_at=datetime(2026, 3, 10, 11, 0, tzinfo=UTC),
         meal_type=MealType.DINNER,
+        description="還沒填項目",
     )
 
     response = await client.get(MEALS, headers=auth(user.id))
@@ -230,10 +233,11 @@ async def test_a_meal_is_one_row_per_item_and_an_empty_meal_still_gets_a_row(
     assert header == MEAL_HEADER
     assert rows == [
         [str(lunch.id), "2026-03-10", "12:30", "午餐", "白飯", "", "150.00", "g",
-         "195.00", "4.05", "0.45", "42.00", "自己煮", "是"],
+         "195.00", "4.05", "0.45", "42.00", "'=便當", "自己煮", "是"],
         [str(lunch.id), "2026-03-10", "12:30", "午餐", "無糖綠茶", "'=茶裏王", "500.00", "ml",
-         "0.00", "0.00", "0.00", "0.00", "自己煮", "是"],
-        [str(empty.id), "2026-03-10", "19:00", "晚餐", "", "", "", "", "", "", "", "", "", "否"],
+         "0.00", "0.00", "0.00", "0.00", "'=便當", "自己煮", "是"],
+        [str(empty.id), "2026-03-10", "19:00", "晚餐", "", "", "", "", "", "", "", "",
+         "還沒填項目", "", "否"],
     ]  # fmt: skip
     # 跟 app 裡看到的同一組數字（同一份 join、同一套四捨五入）。
     api = (await client.get(f"/api/meals/{lunch.id}", headers=auth(user.id))).json()
