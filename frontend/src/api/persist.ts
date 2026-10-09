@@ -109,8 +109,8 @@ const NOT_PERSISTED: ReadonlySet<unknown> = new Set([
  *  - 掛著的 query 在還原結束之後一定重抓一次；抓回來 TanStack 自己把 `isInvalidated`
  *    清掉，之後同一次載入裡照常用 `staleTime`；
  *  - 連不上：重抓失敗，變成「有資料的 error」，離線標示出現（`Today.tsx`、
- *    `Overview.tsx` 的 `OfflineBanner`）；瀏覽器自己知道離線時 query 是 `paused`，
- *    資料留著、不算失敗。
+ *    `Overview.tsx` 與 `Expenses.tsx` 的 `OfflineBanner`）；瀏覽器自己知道離線時 query
+ *    是 `paused`，資料留著、不算失敗（三個畫面都不標）。
  *
  *  **只改寫存起來的那一份，不碰記憶體裡的 query**——在記憶體裡標 invalidated 的話，
  *  同一次載入裡每一次換頁掛載都會重抓，`staleTime` 等於沒設。也不改成把
@@ -121,9 +121,9 @@ const NOT_PERSISTED: ReadonlySet<unknown> = new Set([
  *  如果原樣寫，TanStack restore 回來的就是 error 狀態，而重抓開始時 query
  *  的 `fetch` 只在**沒有資料**時把 status 改回 pending——有資料就一路維持
  *  error，直到重抓回來。於是下一次**在線上**重新載入，重抓還在路上的那段
- *  時間，畫面以為剛剛失敗了：今日總覽顯示「離線資料，最後更新於…」，報表
- *  顯示「無法載入本月報表」／「無法載入花費清單」。上一次的失敗屬於上一次
- *  載入，不屬於這一次。（而且 `error` 經過 JSON 只剩 `{}`——`ApiError` 的
+ *  時間，畫面以為剛剛失敗了：飲食頁、總覽、報表都顯示「離線資料，最後更新於…」
+ *  （報表在留著資料之前顯示的是「無法載入本月報表」／「無法載入花費清單」）。
+ *  上一次的失敗屬於上一次載入，不屬於這一次。（而且 `error` 經過 JSON 只剩 `{}`——`ApiError` 的
  *  `code`、`status` 都不在了，留著也沒有用。）
  *
  *  改成 success、清掉 error 與失敗次數；重抓再失敗（還是離線），才會重新變成

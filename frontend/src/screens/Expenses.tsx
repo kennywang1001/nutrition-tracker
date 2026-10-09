@@ -17,6 +17,7 @@ import { CategoryDonut } from "../components/CategoryDonut";
 import { CategoryIcon } from "../components/IconBadge";
 import layout from "../components/layout.module.css";
 import ui from "../components/ui.module.css";
+import { formatTime } from "../lib/dates";
 import { formatMoney, isPositiveAmount } from "../lib/decimal";
 import { formatYearMonth, isYearMonth, shiftMonth } from "../lib/months";
 import { useConfirmFocus } from "../lib/use-confirm-focus";
@@ -198,15 +199,30 @@ type MonthQuery =
 	| ReturnType<typeof useExpenseSummary>
 	| ReturnType<typeof useExpenses>;
 
-/** 這個月的資料現在**拿不到**：請求失敗了，或離線而且快取裡沒有這個月。
+/** 重抓失敗了，但手上有**這個月自己的**資料（剛看過的、離線快取還原回來的）：留著顯示，
+ *  由 `OfflineBanner` 標上「離線資料，最後更新於…」——同總覽與飲食頁的「資料優先於錯誤」。
+ *
+ *  **離線快取還原回來的 query 一律重抓**（`api/persist.ts`），所以每一次「重新載入而且
+ *  連不上後端」（瀏覽器以為有網路、tailnet 不通）都會走到這裡。把它當成讀不到的話，
+ *  還原回來的數字閃一下就換成「無法載入…」，離線快取在這個畫面等於沒有。
+ *
+ *  `!isPlaceholderData` 是寫給讀的人看的：留著的上一個月（`keepPreviousData`）絕對不算
+ *  ——它不是這個月的資料。（TanStack 只在 `pending` 時給 placeholder，失敗了就沒有，
+ *  所以這一段現在不會是 false；規則哪天變了，這裡也不會把上一個月當成這個月。） */
+function isOfflineData(query: MonthQuery): boolean {
+	return query.isError && query.data !== undefined && !query.isPlaceholderData;
+}
+
+/** 這個月的資料現在**拿不到**：請求失敗了而且手上沒有這個月，或離線而且快取裡沒有這個月。
  *
  *  離線時 query 是 `paused`，不會自己結束（同 `Targets.tsx`）——不當成讀不到的話：
  *  - 換月份：`keepPreviousData` 留著的上一個月會一直掛在新月份的標題底下，沒有任何訊息；
  *  - 直接打開：一直是「載入中…」。
- *  快取裡有這個月（離線還原的、剛看過的）就不算：那是真的資料，照樣顯示。 */
+ *  快取裡有這個月（離線還原的、剛看過的）就不算：那是真的資料，照樣顯示——`paused` 時
+ *  原樣顯示，重抓失敗時多一條離線標示（`isOfflineData`）。 */
 function isUnavailable(query: MonthQuery): boolean {
 	return (
-		query.isError ||
+		(query.isError && !isOfflineData(query)) ||
 		(query.fetchStatus === "paused" &&
 			(query.isPending || query.isPlaceholderData))
 	);
@@ -235,6 +251,7 @@ function MonthSummary({ query, otherMonth }: MonthSummaryProps) {
 	const summary = query.data;
 	// 失敗不能卡在「載入中…」——那會讓使用者以為還在等，而不是知道要重試。
 	// 讀不到的時候 `data` 可能還是上一個月的（離線、keepPreviousData）：不拿它來畫。
+	// 重抓失敗但 `data` 是這個月自己的不算讀不到（`isOfflineData`）：往下照樣畫。
 	if (unavailable || summary == null) {
 		return (
 			<p>
@@ -268,6 +285,23 @@ function MonthSummary({ query, otherMonth }: MonthSummaryProps) {
 				</p>
 			)}
 		</div>
+	);
+}
+
+/** 「離線資料，最後更新於 HH:MM」——字樣與 testid 同總覽（`Overview.tsx` 的 `OfflineBanner`）
+ *  與飲食頁。只算**畫面上那個月**的報表與清單裡「重抓失敗但留著資料」的：時間取最舊的
+ *  那一份，它代表畫面上最不新鮮的數字。
+ *
+ *  **`paused`（瀏覽器自己知道離線）不標**：請求沒有送出去、沒有失敗。總覽與飲食頁的條件
+ *  也是 `isError`，在那個狀態一樣不標——三個畫面一致，沒有在這裡另外發明一條。 */
+function OfflineBanner({ queries }: { queries: MonthQuery[] }) {
+	const stale = queries.filter(isOfflineData);
+	if (stale.length === 0) return null;
+	const oldest = Math.min(...stale.map((query) => query.dataUpdatedAt));
+	return (
+		<p data-testid="offline-banner" className={styles.offline}>
+			離線資料，最後更新於 {formatTime(oldest)}
+		</p>
 	);
 }
 
@@ -399,6 +433,10 @@ export function Expenses() {
 				</button>
 			</div>
 
+			{/* 不含 `currentQuery`：看過去的月份時它只用來知道「這個月是哪個月」，畫面上沒有
+			    它的數字；看這個月時它跟 `summaryQuery` 是同一個 query。 */}
+			<OfflineBanner queries={[summaryQuery, expensesQuery]} />
+
 			{/* 電腦版：左＝這個月花了多少、右＝這個月的明細（電腦版版面規格 §4）。
 			    本來的順序就是先摘要後明細，手機版照樣往下排。 */}
 			<div className={layout.columns}>
@@ -424,10 +462,11 @@ export function Expenses() {
 							{...staleProps(isShowingPreviousMonth(expensesQuery))}
 						>
 							{isUnavailable(expensesQuery) ? (
-								// 失敗不能落到「這個月還沒有記錄花費」——這是報表畫面，
-								// 空清單的措辭會引誘使用者重打一筆，造成重複記帳
+								// 失敗而且手上沒有這個月的清單，不能落到「這個月還沒有記錄花費」
+								// ——這是報表畫面，空清單的措辭會引誘使用者重打一筆，造成重複記帳
 								// （跟 MealList.tsx 的 isError 分支同一個理由）。
 								// 離線而且沒看過這個月也走這裡：不把上一個月的列留在新的標題底下。
+								// 手上有這個月的清單（重抓失敗）不走這裡：照樣列出來，上面標著離線。
 								<p>無法載入花費清單</p>
 							) : expensesQuery.isPending ? (
 								<p>載入中…</p>

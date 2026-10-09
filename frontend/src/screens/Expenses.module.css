@@ -36,6 +36,13 @@
 	text-align: center;
 }
 
+/* 「離線資料，最後更新於…」：同 Overview.module.css 的 .offline。 */
+.offline {
+	margin: 0 0 var(--space-3);
+	font-size: 12px;
+	color: var(--color-text-muted);
+}
+
 /* 換月份時留著的是上一個月的資料（keepPreviousData），新的還沒回來：調淡。
    螢幕閱讀器那邊由 aria-busy 說。同 Trend.module.css 的 .stale。 */
 .stale {

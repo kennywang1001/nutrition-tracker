@@ -7,8 +7,10 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation, useNavigate } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { queryKeys } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
+import { formatTime } from "../src/lib/dates";
 import { Expenses } from "../src/screens/Expenses";
 import expensesStyles from "../src/screens/Expenses.module.css";
 import { json, mockApi, type Route } from "./helpers/mock-api";
@@ -84,11 +86,17 @@ function LocationProbe() {
 	);
 }
 
+function newClient(): QueryClient {
+	return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+}
+
 /** 在 `entries` 的最後一個網址上畫報表（前面的是「之前去過的頁面」）。 */
 function renderAt(...entries: string[]) {
-	const client = new QueryClient({
-		defaultOptions: { queries: { retry: false } },
-	});
+	return renderWith(newClient(), ...entries);
+}
+
+/** 同 `renderAt`，但 client 是呼叫端給的——先往裡面放「之前看過的那個月」用。 */
+function renderWith(client: QueryClient, ...entries: string[]) {
 	return render(
 		<QueryClientProvider client={client}>
 			<MemoryRouter initialEntries={entries} initialIndex={entries.length - 1}>
@@ -97,6 +105,22 @@ function renderAt(...entries: string[]) {
 			</MemoryRouter>
 		</QueryClientProvider>,
 	);
+}
+
+/** 連不上後端：`fetch` 直接 reject（不是回一個錯誤狀態碼）。瀏覽器以為有網路、tailnet 不通
+ *  就是這樣——TanStack 不知道離線，請求照常送、失敗（不是 `paused`）。 */
+function unreachable(): never {
+	throw new TypeError("network request failed");
+}
+
+/** 每一個請求都連不上。 */
+const UNREACHABLE: Route[] = [{ path: "/api/", handler: unreachable }];
+
+const HOUR_MS = 60 * 60 * 1000;
+
+/** 「最後更新於」那一條該寫的字。 */
+function offlineLabel(updatedAt: number): string {
+	return `離線資料，最後更新於 ${formatTime(updatedAt)}`;
 }
 
 /** 這個 spy 收到過的 GET 網址。 */
@@ -627,5 +651,253 @@ describe("報表：切換月份", () => {
 			),
 		).toHaveLength(2);
 		expect(location()).toBe("/reports?month=2026-11");
+	});
+});
+
+// 「重抓失敗，但手上有這個月自己的資料」——同總覽與飲食頁：資料留著、標上離線
+// （handover §6 第 45 種：錯誤優先於資料會廢掉離線快取）。離線快取還原回來的 query 一律
+// 重抓之後，每一次「重新載入而且連不上後端」都會走到這裡。
+describe("報表：重抓失敗時留著這個月的資料", () => {
+	/** 先往 client 裡放「之前成功抓到的」資料，`updatedAt` 是它抓到的時間。測試用的 client
+	 *  `staleTime` 是 0，掛載就重抓。 */
+	function seed(
+		client: QueryClient,
+		key: readonly unknown[],
+		data: unknown,
+		updatedAt: number,
+	) {
+		client.setQueryData(key, data, { updatedAt });
+	}
+
+	it("這個月看過、現在連不上後端：數字與清單留著，標上離線與最舊那一份的時間，不是「無法載入」", async () => {
+		const client = newClient();
+		const summaryAt = Date.now() - 3 * HOUR_MS;
+		const listAt = Date.now() - 2 * HOUR_MS;
+		seed(client, queryKeys.expenseSummary(null), DEC_SUMMARY, summaryAt);
+		seed(client, queryKeys.expenses(null), [DEC_ROW], listAt);
+		const fetchMock = mockApi(UNREACHABLE);
+
+		renderWith(client, "/reports");
+
+		// 兩個重抓都真的失敗了才看（標示只要一個失敗就出現）。
+		const banner = await screen.findByTestId("offline-banner");
+		await waitFor(() => {
+			expect(client.getQueryState(queryKeys.expenseSummary(null))?.status).toBe(
+				"error",
+			);
+			expect(client.getQueryState(queryKeys.expenses(null))?.status).toBe(
+				"error",
+			);
+		});
+		expect(requested(fetchMock).sort()).toEqual([
+			"/api/expenses",
+			"/api/expenses/summary",
+		]);
+
+		// 時間是畫面上最不新鮮的那一份（三小時前的報表），不是比較新的清單、也不是現在。
+		expect(banner).toHaveTextContent(offlineLabel(summaryAt));
+		expect(banner).not.toHaveTextContent(formatTime(listAt));
+		expect(banner).not.toHaveTextContent(formatTime(Date.now()));
+		expect(screen.getAllByTestId("offline-banner")).toHaveLength(1);
+
+		expect(screen.getByText("十二月的便當")).toBeInTheDocument();
+		expect(screen.getByTestId("expense-summary")).toHaveTextContent(
+			"總計 180.00",
+		);
+		expect(screen.queryByText(/無法載入/)).not.toBeInTheDocument();
+		expect(monthLabel()).toHaveTextContent("2026年12月");
+		// 這是這個月自己的資料，不是留著的上一個月：不調淡、可以操作。
+		for (const testId of ["month-summary", "month-list"]) {
+			expect(screen.getByTestId(testId)).not.toHaveAttribute("aria-busy");
+			expect(screen.getByTestId(testId)).not.toHaveClass(STALE_CLASS);
+			expect(screen.getByTestId(testId)).not.toHaveAttribute("inert");
+		}
+	});
+
+	it("只有清單重抓失敗：清單留著，標示的時間是清單的；報表是新的", async () => {
+		const client = newClient();
+		const summaryAt = Date.now() - 3 * HOUR_MS;
+		const listAt = Date.now() - 2 * HOUR_MS;
+		seed(client, queryKeys.expenseSummary(null), DEC_SUMMARY, summaryAt);
+		seed(client, queryKeys.expenses(null), [DEC_ROW], listAt);
+		mockApi([
+			{
+				method: "GET",
+				path: "/api/expenses/summary",
+				handler: () => json({ ...DEC_SUMMARY, total: "777.00" }),
+			},
+			{ method: "GET", path: "/api/expenses", handler: unreachable },
+		]);
+
+		renderWith(client, "/reports");
+
+		const banner = await screen.findByTestId("offline-banner");
+		await waitFor(() =>
+			expect(screen.getByTestId("expense-summary")).toHaveTextContent(
+				"總計 777.00",
+			),
+		);
+		// 報表剛抓到：它三小時前的那個時間不算。
+		expect(banner).toHaveTextContent(offlineLabel(listAt));
+		expect(screen.getByText("十二月的便當")).toBeInTheDocument();
+		expect(screen.queryByText(/無法載入/)).not.toBeInTheDocument();
+	});
+
+	it("過去的月份也一樣：留著那個月的資料並標上離線", async () => {
+		const client = newClient();
+		const at = Date.now() - 3 * HOUR_MS;
+		seed(client, queryKeys.expenseSummary(null), DEC_SUMMARY, at);
+		seed(client, queryKeys.expenseSummary("2026-11"), NOV_SUMMARY, at);
+		seed(client, queryKeys.expenses("2026-11"), [NOV_ROW], at);
+		mockApi(UNREACHABLE);
+
+		renderWith(client, "/reports?month=2026-11");
+
+		expect(await screen.findByTestId("offline-banner")).toHaveTextContent(
+			offlineLabel(at),
+		);
+		await waitFor(() =>
+			expect(client.getQueryState(queryKeys.expenses("2026-11"))?.status).toBe(
+				"error",
+			),
+		);
+		expect(screen.getByText("十一月的高鐵")).toBeInTheDocument();
+		expect(screen.getByTestId("expense-summary")).toHaveTextContent(
+			"總計 999.00",
+		);
+		expect(
+			screen.getByRole("heading", { name: "2026年11月花了多少" }),
+		).toBeInTheDocument();
+		expect(screen.queryByText(/無法載入/)).not.toBeInTheDocument();
+		expect(location()).toBe("/reports?month=2026-11");
+	});
+
+	it("報表看過、清單沒有：報表留著並標上離線；清單說讀不到，不是「還沒有記錄花費」", async () => {
+		// 沒有資料的那一半照舊是「無法載入」——空清單的措辭會引誘人再記一次。
+		const client = newClient();
+		const summaryAt = Date.now() - 3 * HOUR_MS;
+		seed(client, queryKeys.expenseSummary(null), DEC_SUMMARY, summaryAt);
+		mockApi(UNREACHABLE);
+
+		renderWith(client, "/reports");
+
+		expect(await screen.findByText("無法載入花費清單")).toBeInTheDocument();
+		expect(await screen.findByTestId("offline-banner")).toHaveTextContent(
+			offlineLabel(summaryAt),
+		);
+		expect(screen.getByTestId("expense-summary")).toHaveTextContent(
+			"總計 180.00",
+		);
+		expect(screen.queryByText("無法載入本月報表")).not.toBeInTheDocument();
+		expect(screen.queryByText(/還沒有記錄花費/)).not.toBeInTheDocument();
+	});
+
+	it("連不上後端時翻到沒看過的月份：說讀不到，上一個月的數字與離線標示都不留在新的月份底下", async () => {
+		// 十二月有資料（重抓失敗、標著離線）；十一月沒看過。翻過去之後畫面上沒有任何一份
+		// 十一月的資料——十二月的數字不能掛在「2026年11月」底下，「離線資料，最後更新於…」
+		// 也不能：那個時間是十二月那一份的。
+		const client = newClient();
+		const at = Date.now() - 3 * HOUR_MS;
+		seed(client, queryKeys.expenseSummary(null), DEC_SUMMARY, at);
+		seed(client, queryKeys.expenses(null), [DEC_ROW], at);
+		const fetchMock = mockApi(UNREACHABLE);
+		renderWith(client, "/reports");
+		await screen.findByTestId("offline-banner");
+		expect(screen.getByText("十二月的便當")).toBeInTheDocument();
+
+		await userEvent.click(previousButton());
+
+		expect(monthLabel()).toHaveTextContent("2026年11月");
+		expect(
+			await screen.findByText("無法載入2026年11月的報表"),
+		).toBeInTheDocument();
+		expect(await screen.findByText("無法載入花費清單")).toBeInTheDocument();
+		expect(requested(fetchMock)).toContain(
+			"/api/expenses/summary?month=2026-11",
+		);
+		expect(requested(fetchMock)).toContain("/api/expenses?month=2026-11");
+		expect(screen.queryByText("十二月的便當")).not.toBeInTheDocument();
+		expect(screen.getByTestId("expense-summary")).not.toHaveTextContent(
+			"180.00",
+		);
+		expect(
+			screen.queryByRole("button", { name: "修改" }),
+		).not.toBeInTheDocument();
+		expect(screen.queryByTestId("offline-banner")).not.toBeInTheDocument();
+		for (const testId of ["month-summary", "month-list"]) {
+			expect(screen.getByTestId(testId)).not.toHaveAttribute("aria-busy");
+			expect(screen.getByTestId(testId)).not.toHaveAttribute("inert");
+		}
+
+		// 翻回來：十二月自己的資料與標示都還在。
+		await userEvent.click(nextButton());
+
+		expect(await screen.findByText("十二月的便當")).toBeInTheDocument();
+		expect(await screen.findByTestId("offline-banner")).toHaveTextContent(
+			offlineLabel(at),
+		);
+		expect(screen.queryByText(/無法載入/)).not.toBeInTheDocument();
+	});
+
+	it("瀏覽器知道離線（paused）而且看過這個月：資料留著，不標離線——同總覽與飲食頁", async () => {
+		// 離線標示只看「重抓失敗」。paused 的請求沒有送出去、沒有失敗：總覽與飲食頁在這個
+		// 狀態都不顯示標示（它們的條件是 `isError`），報表照做。
+		const client = newClient();
+		const at = Date.now() - 3 * HOUR_MS;
+		seed(client, queryKeys.expenseSummary(null), DEC_SUMMARY, at);
+		seed(client, queryKeys.expenses(null), [DEC_ROW], at);
+		const fetchMock = mockApi(UNREACHABLE);
+		onlineManager.setOnline(false);
+		try {
+			renderWith(client, "/reports");
+
+			expect(await screen.findByText("十二月的便當")).toBeInTheDocument();
+			await waitFor(() =>
+				expect(
+					client.getQueryState(queryKeys.expenses(null))?.fetchStatus,
+				).toBe("paused"),
+			);
+			expect(
+				client.getQueryState(queryKeys.expenseSummary(null))?.fetchStatus,
+			).toBe("paused");
+			expect(screen.getByTestId("expense-summary")).toHaveTextContent(
+				"總計 180.00",
+			);
+			expect(screen.queryByTestId("offline-banner")).not.toBeInTheDocument();
+			expect(screen.queryByText(/無法載入/)).not.toBeInTheDocument();
+			expect(requested(fetchMock)).toEqual([]);
+		} finally {
+			onlineManager.setOnline(true);
+		}
+	});
+
+	it("留著的那一筆照樣可以按刪除；連不上時說刪除失敗，那一筆還在", async () => {
+		// 這幾列是這個月自己的（不是 inert 的上一個月），按鈕不擋。連不上時 mutation 會失敗
+		// （不是 paused：瀏覽器以為有網路），失敗要說出來——不能看起來像刪掉了。
+		const client = newClient();
+		const at = Date.now() - 3 * HOUR_MS;
+		seed(client, queryKeys.expenseSummary(null), DEC_SUMMARY, at);
+		seed(client, queryKeys.expenses(null), [DEC_ROW], at);
+		const fetchMock = mockApi(UNREACHABLE);
+		renderWith(client, "/reports");
+		await screen.findByTestId("offline-banner");
+		const row = screen.getByTestId("expense-1");
+
+		await userEvent.click(within(row).getByRole("button", { name: "刪除" }));
+		await userEvent.click(
+			within(row).getByRole("button", { name: "確定刪除" }),
+		);
+
+		expect(await within(row).findByRole("alert")).toHaveTextContent(
+			"刪除失敗，請再試一次",
+		);
+		expect(
+			fetchMock.mock.calls.some(
+				([input, init]) =>
+					init?.method === "DELETE" && String(input) === "/api/expenses/1",
+			),
+		).toBe(true);
+		expect(screen.getByText("十二月的便當")).toBeInTheDocument();
+		expect(screen.getByTestId("offline-banner")).toBeInTheDocument();
 	});
 });

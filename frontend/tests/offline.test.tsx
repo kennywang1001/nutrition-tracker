@@ -300,8 +300,9 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 		// 寫進去，TanStack restore 回來就是 `status: "error"`——下一次**在線上**
 		// 重新載入，背景重抓還沒回來的那段時間，畫面以為剛剛失敗了：今日總覽
 		// 冒出「離線資料，最後更新於…」，報表顯示「無法載入本月報表」／
-		// 「無法載入花費清單」，即使數字都在。（而且那個 error 經過 JSON 只剩
-		// `{}`，ApiError 早就不見了。）
+		// 「無法載入花費清單」，即使數字都在（當時的報表；現在它會跟著冒出同一條
+		// 離線標示——一樣不該出現）。（而且那個 error 經過 JSON 只剩 `{}`，
+		// ApiError 早就不見了。）
 		const routes = {
 			"/api/stats/daily": () => json(STATS_WITH_TARGET),
 			"/api/supplements/today": () => json([]),
@@ -365,7 +366,8 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 		goOffline();
 		const clientB = newTestClient();
 		const second = render(wrap(clientB, screens));
-		expect(await screen.findByTestId("offline-banner")).toBeInTheDocument();
+		// findAll：飲食頁與報表各有一條，先出現哪一條不一定。
+		await screen.findAllByTestId("offline-banner");
 		await waitFor(() => {
 			for (const key of [
 				queryKeys.dailyStats,
@@ -375,6 +377,14 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 				expect(clientB.getQueryState(key)?.status).toBe("error");
 			}
 		});
+		// 三個都失敗之後：兩個畫面都標著離線，數字都還在（報表以前在這裡是「無法載入」）。
+		expect(screen.getAllByTestId("offline-banner")).toHaveLength(2);
+		expect(screen.getByText("430.50")).toBeInTheDocument();
+		expect(screen.getByText(/便當/)).toBeInTheDocument();
+		// 只看報表的兩句：飲食頁的餐點清單在重抓失敗時另外有一句「無法載入餐點清單」
+		// （清單照樣列著，`MealList.tsx`），那是它既有的行為。
+		expect(screen.queryByText("無法載入本月報表")).not.toBeInTheDocument();
+		expect(screen.queryByText("無法載入花費清單")).not.toBeInTheDocument();
 		clientB.setQueryData(["persist-probe"], 1);
 		await waitFor(
 			() => {
@@ -948,10 +958,7 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 		// 資料留著。這條原本靠的是「還原回來的還在 staleTime 裡、根本不重抓」，那正是
 		// 第 17 種的 bug（上面「重新載入還原回來的資料還在 staleTime 裡」那一條）。
 		//
-		// 另一種離線（瀏覽器以為有網路、其實連不上後端，`fetch` reject）在這個畫面是
-		// 「無法載入…的報表」：`Expenses.tsx` 的 `isUnavailable` 把 `isError` 一律當讀不到，
-		// 不管手上有沒有資料——那是報表畫面既有的決定（快照超過 60 秒時本來就是這樣），
-		// 不是這一條要守的事。
+		// 另一種離線（瀏覽器以為有網路、其實連不上後端，`fetch` reject）是下一條。
 		vi.restoreAllMocks();
 		const offline = goOffline();
 		onlineManager.setOnline(false);
@@ -977,11 +984,100 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 			).toBe("paused");
 			expect(screen.getByText("八月的高鐵")).toBeInTheDocument();
 			expect(screen.queryByText(/無法載入/)).not.toBeInTheDocument();
+			// paused 沒有失敗：不標離線。飲食頁與總覽在這個狀態也不標（條件都是 `isError`）。
+			expect(screen.queryByTestId("offline-banner")).not.toBeInTheDocument();
 			// paused 的請求沒有碰到 fetch。
 			expect(offline).not.toHaveBeenCalled();
 		} finally {
 			// 全域的：不還原會讓後面的測試全部 paused。
 			onlineManager.setOnline(true);
 		}
+	});
+
+	it("報表：重新載入時連不上後端——還原回來的那個月留著並標上離線，不是「無法載入」", async () => {
+		// 上一條的另一種離線：瀏覽器以為有網路、其實連不上後端（tailnet 不通），`fetch`
+		// 直接 reject。還原回來的 query 一律重抓（`persist.ts`），那次重抓失敗——報表以前把
+		// 任何 `isError` 都當讀不到：還原的數字閃一下就換成「無法載入2026年8月的報表」
+		// 「無法載入花費清單」，而且沒有離線標示。每一次這樣的重新載入都會（不只快照超過
+		// 60 秒的時候）。現在同飲食頁與總覽：手上有這個月自己的資料就留著，標上最後更新的時間。
+		const august = {
+			month: "2026-08",
+			total: "640.00",
+			by_category: [
+				{ category: "food", total: "400.00", count: 2 },
+				{ category: "transport", total: "240.00", count: 1 },
+			],
+		};
+		const augustKeys = [
+			queryKeys.expenses("2026-08"),
+			queryKeys.expenseSummary("2026-08"),
+		];
+		const persistedAugust = () =>
+			readPersistedQueries().filter((query) =>
+				augustKeys.some(
+					(key) => JSON.stringify(key) === JSON.stringify(query.queryKey),
+				),
+			);
+
+		// 第一階段：線上，停在八月。
+		mockApi({
+			// 具體的排前面（url.includes 依序比對）。
+			"/api/expenses/summary?month=2026-08": () => json(august),
+			"/api/expenses?month=2026-08": () =>
+				json([
+					{
+						id: 7,
+						amount: "240.00",
+						category: "transport",
+						spent_at: "2026-08-20T04:00:00+00:00",
+						note: "八月的高鐵",
+						meal_id: null,
+					},
+				]),
+			"/api/expenses/summary": () =>
+				json({ month: "2026-09", total: "0.00", by_category: [] }),
+		});
+		const first = render(
+			wrap(newTestClient(), <Expenses />, ["/reports?month=2026-08"]),
+		);
+		await screen.findByText("八月的高鐵");
+		await waitFor(() => expect(persistedAugust()).toHaveLength(2), {
+			timeout: 3000,
+		});
+		first.unmount();
+		// **不老化**：幾秒前的快照、還在 staleTime 裡——以前這樣是不重抓的。
+		const persistedAt = Math.min(
+			...persistedAugust().map((query) => query.state.dataUpdatedAt),
+		);
+		expect(Date.now() - persistedAt).toBeLessThan(60_000);
+
+		// 第二階段：全新的 QueryClient，同一個網址，每一個請求都連不上。
+		vi.restoreAllMocks();
+		const offline = goOffline();
+		const clientB = newTestClient();
+		render(wrap(clientB, <Expenses />, ["/reports?month=2026-08"]));
+
+		const banner = await screen.findByTestId("offline-banner");
+		// 八月的兩個重抓都真的失敗了才看：以前就是在這之後換成「無法載入」的。
+		await waitFor(() => {
+			for (const key of augustKeys) {
+				expect(clientB.getQueryState(key)?.status).toBe("error");
+			}
+		});
+		const urls = offline.mock.calls.map(([input]) => String(input));
+		expect(urls).toContain("/api/expenses/summary?month=2026-08");
+		expect(urls).toContain("/api/expenses?month=2026-08");
+
+		expect(banner).toHaveTextContent(
+			`離線資料，最後更新於 ${formatTime(persistedAt)}`,
+		);
+		expect(screen.getByText("八月的高鐵")).toBeInTheDocument();
+		expect(screen.getByTestId("expense-summary")).toHaveTextContent(
+			"總計 640.00",
+		);
+		expect(
+			screen.getByRole("heading", { name: "2026年8月花了多少" }),
+		).toBeInTheDocument();
+		expect(screen.queryByText(/無法載入/)).not.toBeInTheDocument();
 	});
 });
