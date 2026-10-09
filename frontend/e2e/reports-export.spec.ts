@@ -76,6 +76,15 @@ test("報表看其他月份：上個月沒有剛記的那一筆，網址記得�
 	await expect(next).toBeEnabled();
 
 	// 重新整理：還在那個月。
+	//
+	// 先清掉離線快取（handover §6 第 17 種）：它是節流寫入的，reload 還原回來的可能是
+	// **記帳之前**總覽存的那一份「這個月 0.00」，而且還在 60 秒的 staleTime 裡、不會重抓
+	// ——下面翻回這個月時就會看到「總計 0.00」。紅綠取決於節流的時間差，跟要測的事
+	// （網址記得月份）無關；完整跑一輪時實際紅過一次。只清這一個 key：refresh token
+	// 也在 localStorage 裡。字面值抄自 `src/api/persist.ts` 的 `OFFLINE_CACHE_STORAGE_KEY`。
+	await page.evaluate(() => {
+		localStorage.removeItem("nutrition-tracker-offline-cache");
+	});
 	await page.reload();
 	await expect(pastHeading).toBeVisible();
 	await expect(page).toHaveURL(pastUrl);
