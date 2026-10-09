@@ -1259,6 +1259,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/ai/analyze-meal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Analyze Meal
+         * @description 文字或照片 → 這一餐的每一樣食物（最多 8 樣）＋一句描述。算一次額度。
+         */
+        post: operations["analyze_meal_api_ai_analyze_meal_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/expenses": {
         parameters: {
             query?: never;
@@ -1460,6 +1480,17 @@ export interface components {
             /** Image Base64 */
             image_base64: string;
         };
+        /** AnalyzeMealResponse */
+        AnalyzeMealResponse: {
+            /** Analysis Id */
+            analysis_id: number | null;
+            /** Description */
+            description: string;
+            /** Items */
+            items: components["schemas"]["AnalyzedMealItem"][];
+            /** Remaining Today */
+            remaining_today: number;
+        };
         /** AnalyzeResponse */
         AnalyzeResponse: {
             /** Analysis Id */
@@ -1486,6 +1517,27 @@ export interface components {
             kind: "text";
             /** Text */
             text: string;
+        };
+        /**
+         * AnalyzedMealItem
+         * @description 一餐裡的一樣。前五個欄位跟 `AnalyzeResponse` 同名同義——前端把它跟外層的
+         *     `analysis_id`／`remaining_today` 拼回一個 `AnalyzeResponse`，單樣流程存食物的程式碼
+         *     原樣重用。
+         *
+         *     **`nutrition` 永遠是 AI 的估算**，就算食物庫有同名的：使用者可以選「改用 AI 的數字」。
+         *     例外是整段文字命中食物庫、沒有呼叫 AI 的那一種回應（`analysis_id` 是 null）：
+         *     那時 `nutrition` 是食物庫那一版的值、`serving_grams` 是 100（同 `/api/ai/analyze`）。
+         */
+        AnalyzedMealItem: {
+            /** Name */
+            name: string;
+            /** Brand */
+            brand: string | null;
+            nutrition: components["schemas"]["AnalyzedNutrition"];
+            /** Confidence */
+            confidence: string;
+            consistency: components["schemas"]["ConsistencyResult"];
+            library_food: components["schemas"]["LibraryFoodMatch"] | null;
         };
         /**
          * AnalyzedNutrition
@@ -1924,6 +1976,23 @@ export interface components {
             display_name: string;
             /** Email */
             email: string;
+        };
+        /**
+         * LibraryFoodMatch
+         * @description 食物庫裡跟這一樣**名稱完全相同**的食物（看得到的、有生效版本的；AI 多樣估算規格 D4、D5）。
+         *
+         *     前端預設用它，不另外建食物。`serving_kcal` 是「用它的話這一樣會記成多少」：
+         *     食物庫那一版的每 100 熱量 × AI 估的量——由後端算，前端不乘（同 `AnalyzedNutrition`）。
+         *     AI 估的量一律當 g；`base_unit` 是 ml 的食物數字照搬（規格 §9.2 第 4 點）。
+         */
+        LibraryFoodMatch: {
+            /** Food Id */
+            food_id: number;
+            /** Name */
+            name: string;
+            base_unit: components["schemas"]["BaseUnit"];
+            /** Serving Kcal */
+            serving_kcal: string;
         };
         /** LoginRequest */
         LoginRequest: {
@@ -4825,6 +4894,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AnalyzeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    analyze_meal_api_ai_analyze_meal_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnalyzeTextRequest"] | components["schemas"]["AnalyzeImageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzeMealResponse"];
                 };
             };
             /** @description Validation Error */

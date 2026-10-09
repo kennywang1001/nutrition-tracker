@@ -1,5 +1,5 @@
-"""`POST /api/ai/analyze` —— 文字或圖片進去，一份的營養素估算加上一致性檢查
-出來，而且不落庫（規格 §1.3、§4）。
+"""`POST /api/ai/analyze` 與 `POST /api/ai/analyze-meal` —— 文字或圖片進去，
+一份（或一餐的每一樣）的營養素估算加上一致性檢查出來，而且不落庫（規格 §1.3、§4）。
 
 流程（規格 §3）：
 
@@ -12,6 +12,10 @@
     ④ 純函式一致性檢查（app/ai/consistency.py）
     ⑤ 回傳估算值 + 一致性結果 + analysis_id + food_id（只有命中食物庫才有）
        + remaining_today，到這裡為止沒有寫入任何食物
+
+`/analyze-meal`（AI 多樣估算規格 §3.1）是同一個流程的多樣版：①～③ 用的是同一批函式
+（食物庫短路、額度、記錄與錯誤分類），差別只有呼叫的是 estimator 的 `estimate_meal_*`、
+回的是一句描述＋每一樣各一份估算，而且每一樣再各自比對一次食物庫。**一次呼叫只寫一列**。
 """
 
 import base64
@@ -29,7 +33,12 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.consistency import check_consistency
-from app.ai.estimator import EstimatorMisconfiguredError, EstimatorUpstreamError, RawEstimate
+from app.ai.estimator import (
+    EstimatorMisconfiguredError,
+    EstimatorUpstreamError,
+    RawEstimate,
+    RawMealEstimate,
+)
 from app.api.deps import EstimatorFactory, get_current_user, get_estimator_factory
 from app.api.routes.meals import MAX_PHOTO_BYTES
 from app.config import settings
@@ -46,11 +55,14 @@ from app.models.ai_analysis import AiAnalysis, AnalysisKind
 from app.models.food import BaseUnit, Food, FoodRevision
 from app.models.user import User
 from app.schemas.ai import (
+    AnalyzedMealItem,
     AnalyzedNutrition,
+    AnalyzeMealResponse,
     AnalyzeRequest,
     AnalyzeResponse,
     AnalyzeTextRequest,
     ConsistencyResult,
+    LibraryFoodMatch,
 )
 from app.storage.photos import MAX_IMAGE_PIXELS
 
@@ -193,15 +205,15 @@ async def _assert_quota_available(db: AsyncSession, user: User) -> int:
     return used_today
 
 
-async def _call_estimator_or_record_failure(
+async def _call_estimator_or_record_failure[T](
     db: AsyncSession,
     *,
     user_id: int,
     kind: AnalysisKind,
     input_hash: str,
     model: str,
-    call: Callable[[], Awaitable[RawEstimate]],
-) -> RawEstimate:
+    call: Callable[[], Awaitable[T]],
+) -> T:
     """呼叫 LLM；不管成功或失敗都要在 `ai_analyses` 留一列（規格 §7：
     兩種都花了錢）。
 
@@ -403,5 +415,124 @@ async def analyze(
         confidence=raw.confidence,
         consistency=ConsistencyResult.model_validate(consistency),
         # 這一次已經寫進 ai_analyses 了。
+        remaining_today=_remaining(used_today + 1),
+    )
+
+
+def _library_match(
+    food: Food, revision: FoodRevision, serving_grams: Decimal
+) -> LibraryFoodMatch:
+    return LibraryFoodMatch(
+        food_id=food.id,
+        name=food.name,
+        base_unit=revision.base_unit,
+        # 用食物庫那一筆的話，這一樣會記成多少熱量：它的每 100 × AI 估的量。
+        serving_kcal=_serving_from_per_100g(revision.kcal, serving_grams),
+    )
+
+
+async def _to_meal_item(db: AsyncSession, user: User, raw: RawEstimate) -> AnalyzedMealItem:
+    """一樣的估算 → 回應裡的一樣：一致性檢查＋比對食物庫（跟文字短路同一個
+    `_find_in_food_library`，「同名」只有這一種定義）。"""
+    consistency = check_consistency(
+        kcal=raw.serving_kcal,
+        protein_g=raw.serving_protein_g,
+        fat_g=raw.serving_fat_g,
+        carb_g=raw.serving_carb_g,
+    )
+    hit = await _find_in_food_library(db, user, raw.name)
+    return AnalyzedMealItem(
+        name=raw.name,
+        brand=raw.brand,
+        nutrition=_to_analyzed_nutrition(raw),
+        confidence=raw.confidence,
+        consistency=ConsistencyResult.model_validate(consistency),
+        library_food=None if hit is None else _library_match(hit[0], hit[1], raw.serving_grams),
+    )
+
+
+@router.post("/analyze-meal", response_model=AnalyzeMealResponse)
+async def analyze_meal(
+    payload: AnalyzeRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    make_estimator: EstimatorFactory = Depends(get_estimator_factory),
+) -> AnalyzeMealResponse:
+    """文字或照片 → 這一餐的每一樣食物（最多 8 樣）＋一句描述。算一次額度。"""
+    if isinstance(payload, AnalyzeTextRequest):
+        hit = await _find_in_food_library(db, user, payload.text)
+        if hit is not None:
+            # 整段文字就是一個食物的名稱：跟 /analyze 一樣不呼叫 LLM、不記一列、不扣次數。
+            # 直接重用那邊組回應的函式——兩個端點對「命中食物庫」回的數字不會不一樣。
+            food, revision = hit
+            used_today = await _count_used_today(db, user)
+            single = _library_hit_response(
+                food, revision, remaining_today=_remaining(used_today)
+            )
+            return AnalyzeMealResponse(
+                analysis_id=None,
+                description=food.name,
+                items=[
+                    AnalyzedMealItem(
+                        name=single.name,
+                        brand=single.brand,
+                        nutrition=single.nutrition,
+                        confidence=single.confidence,
+                        consistency=single.consistency,
+                        library_food=_library_match(food, revision, _BASE_AMOUNT),
+                    )
+                ],
+                remaining_today=single.remaining_today,
+            )
+
+    # 順序同 /analyze：先建實作（沒設定 → 503），再看額度。
+    estimator = make_estimator()
+    used_today = await _assert_quota_available(db, user)
+
+    kind: AnalysisKind
+    input_hash: str
+    raw: RawMealEstimate
+    if isinstance(payload, AnalyzeTextRequest):
+        kind = AnalysisKind.TEXT
+        input_hash = hashlib.sha256(payload.text.encode()).hexdigest()
+        text = payload.text
+        raw = await _call_estimator_or_record_failure(
+            db,
+            user_id=user.id,
+            kind=kind,
+            input_hash=input_hash,
+            model=estimator.model,
+            call=lambda: estimator.estimate_meal_text(text),
+        )
+    else:
+        kind = AnalysisKind.IMAGE
+        content, media_type = _decode_photo(payload.image_base64)
+        input_hash = hashlib.sha256(content).hexdigest()
+        raw = await _call_estimator_or_record_failure(
+            db,
+            user_id=user.id,
+            kind=kind,
+            input_hash=input_hash,
+            model=estimator.model,
+            call=lambda: estimator.estimate_meal_image(content, media_type),
+        )
+
+    # **一列**：一次呼叫就是一次計費，跟估出幾樣無關（規格 D7）。
+    analysis = AiAnalysis(
+        user_id=user.id,
+        kind=kind,
+        model=estimator.model,
+        input_hash=input_hash,
+        succeeded=True,
+    )
+    db.add(analysis)
+    await db.commit()
+    await db.refresh(analysis)
+
+    items = [await _to_meal_item(db, user, item) for item in raw.items]
+    return AnalyzeMealResponse(
+        analysis_id=analysis.id,
+        description=raw.description,
+        items=items,
         remaining_today=_remaining(used_today + 1),
     )

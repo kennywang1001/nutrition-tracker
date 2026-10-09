@@ -624,3 +624,24 @@ async def test_library_hit_prefers_the_users_own_food_over_a_global_one(client, 
     )
 
     assert response.json()["food_id"] == own.id
+
+
+async def test_someone_elses_private_food_is_not_a_library_hit(client, db_session):
+    """別人的私人食物不算「食物庫裡有」：命中的話，那個人的食物 id 與營養素會直接回給
+    不相干的人。`_find_in_food_library` 也是 `/api/ai/analyze-meal` 逐樣比對用的同一個
+    函式（AI 多樣估算規格 D5）——可見性那個條件，兩個端點各有一條測試守著。"""
+    user = await create_user(db_session)
+    stranger = await create_user(db_session)
+    await create_food(db_session, created_by=stranger, owner=stranger, name="牛肉麵", kcal=777)
+    fake = FakeEstimator()
+    _inject(fake)
+
+    response = await client.post(
+        "/api/ai/analyze", headers=auth(user), json={"kind": "text", "text": "牛肉麵"}
+    )
+
+    assert response.status_code == 200
+    # 沒有短路：真的問了 AI，回的也不是那個人的食物。
+    assert fake.text_calls == 1
+    assert response.json()["food_id"] is None
+    assert response.json()["analysis_id"] is not None

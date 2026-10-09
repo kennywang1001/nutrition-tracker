@@ -82,3 +82,47 @@ class AnalyzeResponse(BaseModel):
     # 今天還能呼叫幾次（AI_DAILY_LIMIT − 今天 ai_analyses 的列數，最小 0）。
     # 命中食物庫不扣次數。
     remaining_today: int
+
+
+class LibraryFoodMatch(BaseModel):
+    """食物庫裡跟這一樣**名稱完全相同**的食物（看得到的、有生效版本的；AI 多樣估算規格 D4、D5）。
+
+    前端預設用它，不另外建食物。`serving_kcal` 是「用它的話這一樣會記成多少」：
+    食物庫那一版的每 100 熱量 × AI 估的量——由後端算，前端不乘（同 `AnalyzedNutrition`）。
+    AI 估的量一律當 g；`base_unit` 是 ml 的食物數字照搬（規格 §9.2 第 4 點）。
+    """
+
+    food_id: int
+    name: str
+    base_unit: BaseUnit
+    serving_kcal: Decimal
+
+
+class AnalyzedMealItem(BaseModel):
+    """一餐裡的一樣。前五個欄位跟 `AnalyzeResponse` 同名同義——前端把它跟外層的
+    `analysis_id`／`remaining_today` 拼回一個 `AnalyzeResponse`，單樣流程存食物的程式碼
+    原樣重用。
+
+    **`nutrition` 永遠是 AI 的估算**，就算食物庫有同名的：使用者可以選「改用 AI 的數字」。
+    例外是整段文字命中食物庫、沒有呼叫 AI 的那一種回應（`analysis_id` 是 null）：
+    那時 `nutrition` 是食物庫那一版的值、`serving_grams` 是 100（同 `/api/ai/analyze`）。
+    """
+
+    name: str
+    brand: str | None
+    nutrition: AnalyzedNutrition
+    # ⚠️ 同 AnalyzeResponse.confidence：模型自己說的，不顯示給使用者。
+    confidence: Decimal
+    consistency: ConsistencyResult
+    library_food: LibraryFoodMatch | None
+
+
+class AnalyzeMealResponse(BaseModel):
+    # 整段文字命中食物庫時是 None——沒有呼叫 LLM、沒有寫 ai_analyses、不扣次數。
+    analysis_id: int | None
+    # 這一餐有什麼的一句話（單行、最多 500 字）。前端拿它預填這一餐的「描述」。
+    description: str
+    # 1 到 8 樣。
+    items: list[AnalyzedMealItem]
+    # 一次呼叫只扣一次，不管估出幾樣。
+    remaining_today: int
