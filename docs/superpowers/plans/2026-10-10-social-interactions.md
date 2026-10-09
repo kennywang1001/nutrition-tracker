@@ -71,7 +71,7 @@
 
 ## 執行中發現的差異
 
-（哪個 task、原本寫什麼、實際是什麼、為什麼。Task 1～3 已填；後面的 task 接著寫。）
+（哪個 task、原本寫什麼、實際是什麼、為什麼。Task 1～6 已填；後面的 task 接著寫。）
 
 **基準線與數字**
 
@@ -143,6 +143,108 @@
 
 - `unlike_meal` 的 `lock=True`：拿掉它沒有測試會紅。收回一個讚落在正在關起來的餐上沒有壞處（讚少一個），鎖是照規格 §4.4「讚、留言寫入時」加的。
 - `read_social_meal` 的 `if owner is None`（主人的帳號剛好被刪）：現在沒有刪帳號的路，走不到。
+
+**Task 4～6 的數字與工具**
+
+- 後端條數：1304 → Task 4 **1344**（＋40）→ Task 5 **1371**（＋27）→ Task 6 **1384**（＋13）。前端仍然是 142／1817（三個 task 之後 typecheck、test、lint 都綠；沒有任何測試資料要補欄位）。
+- 端點：`grep -c "@router\." app/api/routes/*.py` 的加總是 **87**（79＋8），跟預測一樣。
+- dev 資料庫仍然在 `0017`。
+- **突變跑到一半被砍，檔案會停在突變的狀態。** Task 5 的那一批第一次是用背景執行、時間上限給得太短（35 個突變要十幾分鐘），手動停掉之後 `routes/social.py` 留著 `if True:`。小腳本的 `finally` 在行程被強制結束時不會跑。救法：scratchpad 的 `social-be1-bak-<路徑>` 是每個突變動手前寫的原始 bytes，`diff` 確認只差那一行之後複製回去、刪掉 `.pyc`。之後長的批次一律：`python -u`（輸出不緩衝）、背景執行、時間上限給足；跑完用 `git status` 與 `grep` 確認每個被動過的檔案都回來了。
+- 「執行環境」的看不見字元掃描換成一支小腳本（`Cc`、`Cf`／`Zl`／`Zp`、CR、BOM；ZWJ 也列出來看是不是故意的），三個 commit 之前各跑一次，都乾淨。
+
+**Task 4（`6d36d8a`）**
+
+| 原本寫的 | 實際 | 為什麼 |
+|---|---|---|
+| `test_social_comments.py` **25** 條 | **39** 條，另外 `test_social_likes_concurrency.py` 多 **1** 條 | 見下面「補的測試」 |
+| `add_comment` 在 commit 之後用 `user.display_name`、`user.id`、`meal.user_id` | 開頭先存 `user_id`、`display_name`，載入之後存 `owner_id`；之後不碰 ORM 物件 | 同 Task 3 |
+| 測試檔第一條的那一行 `assert (…) == ("鮑伯", True, True)` | 拆成多行 | ruff E501（101 欄） |
+| `test_the_author_deletes…` 沒有比對錯誤的內容 | 多斷言 `code`／`message`；錯誤的 body 是 `{code, message, details}`，不能用 `==` 比整個 dict | — |
+| 突變「不清理（`value.strip()`）」紅 `…one_safe_line`、`[200-padded]`、`[control]` | 紅 `…one_safe_line` 與 `[control]`，**`[200-padded]` 不紅** | 補在後面的都是空白與換行，`strip()` 也去得掉。`[control]` 紅的樣子是資料庫的錯誤（NUL 進不了 `text`），不是「422 變成 201」 |
+| 突變「`Field(max_length=1000)` 拿掉」**預期存活** | **紅**（`[raw-1001-padded]`） | 補了兩格：一個字＋999 個空白是 201、＋1000 個空白是 422——清完只剩一個字，200 那一道管不到它，擋下來的只有清理之前的上限。`max_length=1001` 也紅 |
+| 突變「`COMMENT_LIMIT = 21`」紅 `test_comments_are_limited_per_person` | 原本的測試**存活**（測試用的是同一個常數）；補一行 `assert COMMENT_LIMIT == 20` 之後紅 | 規格 D20 的數字要釘在測試裡 |
+| 突變「`COMMENT_MAX_LENGTH = 201`」「拿掉 `if not cleaned`」是資料庫的 CHECK 擋的 | 如預測：`CheckViolationError … ck_meal_comments_body_length` 從 `client.post` 冒出來 | — |
+| 突變表其餘 | 全部如預測 | — |
+
+補的測試：
+
+1. **`test_a_comment_racing_the_owner_closing_the_meal_waits_and_is_then_refused`（兩條真的連線，放在 `test_social_likes_concurrency.py`）**——`add_comment` 的 `lock=True`。計畫的測試沒有一條看得到它：改成 `lock=False` 全綠，只有這一條紅。
+2. **`test_both_writes_are_committed`**——端點回來之後 `db_session.rollback()` 一次再讀。共用 session 的夾具看得到沒 commit 的寫入：`delete_comment` 拿掉 `await db.commit()`、`add_comment` 把 commit 換成 flush，計畫的測試都是全綠，只有這一條紅。
+3. `test_a_friend_of_a_friend_cannot_comment`、`…cannot_delete`——伊芙是鮑伯的好友、不是愛麗絲的（Task 2 發現的那一格：`make_cast` 的阿丁與伊芙分不出「主人的好友」與「有任何一個好友」）。
+4. `test_a_comment_is_only_deletable_under_its_own_meal`——同一個主人的兩餐，留言在第一餐、網址寫第二餐；主人與作者都試一次。跟計畫的 IDOR 那一條一起守 `meal_id` 的條件。
+5. `test_going_private_the_author_cannot_delete_but_the_owner_can`（D5）、`test_the_owner_commenting_on_their_own_meal_is_marked_as_theirs`、`test_a_comment_lands_on_that_meal_only`。
+6. `test_the_limit_counts_attempts_on_meals_you_cannot_see`——限速在可見性之前（規格 §5.3 的順序）。把 `hit` 移到 `load_visible_meal` 後面時只有這一條紅。
+7. `test_an_id_that_cannot_be_a_meal_is_422_not_500[0|-1|2**63]`——兩個端點、留言 id 也試。
+8. 既有的幾條加了「先看得到一次」與「跟不存在逐字相同」：私人、解除之後、阿丁與伊芙的留言與刪除。`test_a_third_person…` 多一則主人自己的留言（小卡也刪不到）並先確認她看到的 `can_delete` 是 `False`。
+
+多跑的突變（計畫沒列，全部紅）：限速移到可見性之後、`add_comment` 的 `viewer_id` 寫錯、作者寫成主人、刪除的作者條件換成「不是主人寫的」、兩個端點各自不 commit、`add_comment` 的 `lock=False`。
+
+**Task 5（`62d3b47`）**
+
+| 原本寫的 | 實際 | 為什麼 |
+|---|---|---|
+| `test_notifications.py` **20** 條 | **27** 條 | 見下面 |
+| `eaten_at` 可能是 `+00:00` 結尾 | 是 `Z`，測試照計畫寫的不用改 | — |
+| `like_meal`／`add_comment`／`read_all` 在 commit 之後用 `user.id`、`meal.id` | 一律用開頭存好的整數與路徑參數；`unlike_meal` 改回 `meal = await load_visible_meal(…)`，`meal.user_id` 在 commit **之前**讀 | 同 Task 3 的提醒 |
+| `test_unliking_only_removes_my_like_notification` | 改名加 `_for_that_meal`，多一餐（鮑伯在另一餐也有讚） | `forget_like` 的四個條件各有一則「只差那一個」的通知；拿掉 `meal_id` 時只有這一條紅 |
+| `test_unfriending_hides_their_notifications…` | 鮑伯另外有一個好友（伊芙）；中間多一段「鮑伯重新送邀請、還在等」 | 過濾寫成「動作者有任何一個好友」、或第一個分支拿掉 `is_request`（等著的邀請讓讚與留言也顯示）時，計畫的版本是全綠 |
+| 突變「`notify_like` 的 `on_conflict_do_nothing` 拿掉」「`notify_like` 拿掉自己的 return」預期存活 | 存活 | 如預測 |
+| 突變「兩個一起拿掉」紅 `test_liking_twice…` | 紅 4 條：那一條、並行那一條、`test_social_likes.py` 的 `test_both_directions_are_idempotent` 與 `test_after_unfriending…`（`UniqueViolationError … uq_notifications_like`） | 每一個重複的 PUT 都撞到 |
+| 突變「`notify_comment` 拿掉自己的 return」是 CHECK 擋的 | 如預測：`ck_notifications_not_self` | — |
+| 突變「`lt=2**63` 拿掉」 | 如預測：asyncpg 的 `DataError`（`value out of int64 range`） | — |
+| 突變表其餘 | 全部如預測 | — |
+
+補的測試：
+
+1. `test_read_all_also_marks_what_is_hidden_right_now`——規格 §4.3「`read-all` 不套可見性」。`read_all` 多套一個 `notification_visible()` 時只有這一條紅。
+2. `test_read_all_is_committed`——rollback 之後再問未讀數。`read_all` 不 commit 時只有這一條紅。
+3. `test_every_comment_gets_its_own_notification`（留言不像讚，一則一個；刪一則只帶走它自己的）、`test_the_owner_trying_to_like_their_own_meal_writes_nothing`（回歸用，實作之前就是綠的）、`test_read_all_accepts_the_largest_id_and_an_id_that_is_not_there`（`2**63 - 1` 是 200）。
+4. 參數多兩格：預覽 `[1]`、`read-all` 的 `{"up_to": null}`。既有的幾條多斷言資料列的總數（`_rows`）、未讀數、`meal` 的形狀；私人那一條多一則留言與它的預覽。
+
+多跑的突變（全部紅，除非另外註明）：`forget_like` 拿掉 `meal_id`；`notification_visible` 改成「動作者有任何一個好友」、第一個分支拿掉 `is_request`；清單拿掉 `notification_visible()`；`_unread` 拿掉 `user_id`；`read_all` 套上可見性、不 commit、`<=` 改 `<`；`add_comment` 不寫通知；`meal` 寫死 `None`；`is_read` 寫死 `False`。
+
+存活的（照實記）：
+
+- `forget_like` 拿掉 `user_id == owner_id`：**等價**。讚的通知只寫給那一餐的主人，（動作者、餐、種類）已經決定了收件人。條件留著是讓它跟 `uq_notifications_like` 的三個欄位對齊。
+- `notification_visible` 第二個分支拿掉 `~is_request`：Task 5 的時候存活（還沒有人寫好友通知），Task 6 之後紅（`test_accepting_tells_the_sender_and_retires_the_request_notice`）。
+
+**Task 6（`4e0f383`）**
+
+| 原本寫的 | 實際 | 為什麼 |
+|---|---|---|
+| `test_notifications.py` **28** 條（20＋8） | **40** 條（27＋13） | 見下面 |
+| `_insert_request` 的註解一行 | 拆成兩行 | ruff E501 |
+| 重新產生 `schema.d.ts` 是空的 | 是空的 | `_insert_request` 的 docstring 多一句，它不是路由 |
+| `test_friend_requests.py` 一條都不能紅 | 全綠（含三條 monkeypatch 的競態） | — |
+| 突變「`to=` 寫反」紅 `test_a_friend_request_tells_the_receiver` | 紅 14 條，包含 `test_friend_requests.py` 的 4 條以上（`ck_notifications_not_self` 從 `client.post` 冒出來） | 每一個送邀請的測試都撞到 |
+| 突變「拿掉 `await db.flush()`」可能仍然綠 | 存活 | 如預測：autoflush 的例外也落在 try 裡 |
+| 突變「`still_pending` 拿掉 `requested_by == actor_id`」**預期存活**（「方向不對的通知寫不出來」） | **紅**，而且那是一個真的會發生的畫面 | 伊芙邀愛麗絲、愛麗絲拒絕（通知留著、藏起來）；後來愛麗絲邀伊芙——這一對又有一列「在等」，但那是愛麗絲送的。沒有這個條件，愛麗絲那則舊的「伊芙想加你為好友」會冒出來。補了 `test_an_old_request_notice_does_not_resurface_when_i_ask_them` |
+| 突變表其餘 | 全部如預測 | — |
+
+補的測試：
+
+1. `test_an_old_request_notice_does_not_resurface_when_i_ask_them`（見上）。
+2. `test_a_request_to_someone_else_does_not_revive_my_notice`——`still_pending` 拿掉 `*_pair(…)`（動作者有任何一個送出去的邀請在等）時只有這一條紅。
+3. `test_each_direction_keeps_its_own_notice`——「只留最新一則」的 DELETE 拿掉 `user_id == to` 或 `actor_id == actor` 時只有這一條紅（後者會把同一個收件人收到的**所有人**的好友通知一起刪掉；計畫的測試全綠）。
+4. `test_the_friend_notices_are_committed_with_the_request`——rollback 之後再讀。通知移到 `commit` 之後才寫（不在邀請的那個交易裡）時只有這一條紅。
+5. `test_a_request_that_is_refused_writes_nothing`（409 與 404 都不寫；回歸用）；`test_unfriending_hides_the_accepted_notice` 的伊芙另外有一個好友；`test_becoming_friends_again…` 多一則留言，並在「邀請還在等」的時候先看一次（只有邀請那一則）。
+
+**沒有測試守住的事（Task 4～6，已知）**
+
+- `notify_like` 的 `on_conflict_do_nothing` 與它自己的 `owner_id == actor_id`：經過端點走不到（重複的 PUT 先被 `if inserted is not None` 擋、主人按讚先 422）。第二道防線。
+- `_insert_request` 的 `await db.flush()`：讓順序明確，不是唯一的保證。
+- `delete_comment` 沒有鎖那一餐（計畫就是這樣寫的）：刪除不會讓一則留言落在關起來的餐上，不需要。
+
+**給 Task 7～12 的提醒（照實作寫的）**
+
+- 路徑、形狀、錯誤碼跟規格 §5 一樣，沒有差異。錯誤的 body 是 `{"error": {"code", "message", "details"}}`。
+- `POST /api/social/meals/{id}/comments`：body `{ "body": string }`；`201` 回 `CommentResponse`；`422`（清完是空的、超過 200 字、清理之前超過 1000 字、不是字串）是 FastAPI 的驗證錯誤；`429 TOO_MANY_COMMENTS` 帶 `Retry-After`；`404 MEAL_NOT_FOUND`。
+- `DELETE /api/social/meals/{id}/comments/{comment_id}`：`204` 沒有 body；`404 MEAL_NOT_FOUND`（看不到那一餐）或 `404 COMMENT_NOT_FOUND`「找不到這則留言」。
+- `GET /api/notifications` → `{ items: NotificationItem[] }`；`type` 是 `"like" | "comment" | "friend_request" | "friend_accepted"`；`meal` 與 `comment_preview` 在好友的兩種是 `null`；`meal.eaten_at` 與 `created_at` 是 `Z` 結尾。
+- `GET /api/notifications/unread-count` → `{ count }`；`POST /api/notifications/read-all` body `{ up_to: number }`（1 到 2^63−1，必填）→ `{ count }`（剩下的未讀數）。
+- 前端的 `mockApi` 用 `url.includes` 依序比對：`/api/notifications/unread-count` 與 `/read-all` 要排在 `/api/notifications` **前面**。
+- 接受邀請之後，收件人那一則 `friend_request` 會從清單與未讀數消失（不是變成已讀）——Task 10 接受邀請之後要讓通知與未讀數的 query 失效，Task 11 的 e2e 不要去找那一則。
+- 好友通知沒有 `meal`：Task 10 的連結是 `/me`。
 
 ## 檔案結構
 
