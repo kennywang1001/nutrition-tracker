@@ -141,7 +141,8 @@ async def unlike_meal(
     await db.execute(
         delete(MealLike).where(MealLike.meal_id == meal_id, MealLike.user_id == user_id)
     )
-    # 同一個交易：讚不在了，「他按了讚」的通知也不該留著（規格 D12）。
+    # 同一個交易：讚不在了，主人還沒看過的「他按了讚」也不該留著（規格 D12）。
+    # 已經看過的那一則留著——不然再按一次就是一則新的未讀（審查 M3，`forget_like`）。
     await forget_like(db, owner_id=meal.user_id, actor_id=user_id, meal_id=meal_id)
     await db.commit()
     return await _like_state(db, user_id, meal_id)

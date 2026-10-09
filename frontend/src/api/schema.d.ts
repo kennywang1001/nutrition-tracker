@@ -455,7 +455,13 @@ export interface paths {
         /** List Requests */
         get: operations["list_requests_api_friends_requests_get"];
         put?: never;
-        /** Send Request */
+        /**
+         * Send Request
+         * @description 用好友碼送邀請。對方已經邀過我的話直接成為好友。
+         *
+         *     限速在最前面（查不查得到都算一次）：每一個新邀請都給對方一則未讀的通知，
+         *     「送出、收回、再送」不能一直做（社群審查 M3，`friend_request_rate_limiter`）。
+         */
         post: operations["send_request_api_friends_requests_post"];
         delete?: never;
         options?: never;

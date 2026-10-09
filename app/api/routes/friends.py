@@ -38,6 +38,7 @@ from app.models.meal import Meal
 from app.models.social import NotificationType
 from app.models.user import User
 from app.notifications import notify_friend
+from app.ratelimit import friend_request_rate_limiter
 from app.schemas.friend import (
     FriendCodeResponse,
     FriendDayResponse,
@@ -124,6 +125,11 @@ async def send_request(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> FriendRequestResult:
+    """用好友碼送邀請。對方已經邀過我的話直接成為好友。
+
+    限速在最前面（查不查得到都算一次）：每一個新邀請都給對方一則未讀的通知，
+    「送出、收回、再送」不能一直做（社群審查 M3，`friend_request_rate_limiter`）。"""
+    friend_request_rate_limiter.hit(str(user.id))
     target = await db.scalar(
         select(User).where(User.friend_code == normalize_friend_code(payload.code))
     )

@@ -3,7 +3,9 @@ from sqlalchemy import delete, func, select
 
 from app.friend_codes import format_friend_code
 from app.models.friendship import Friendship, FriendshipStatus
+from app.models.social import Notification
 from app.models.user import User
+from app.ratelimit import FRIEND_REQUEST_LIMIT
 from app.security.tokens import create_access_token
 from tests.factories import create_friendship, create_user
 
@@ -387,3 +389,64 @@ async def test_the_database_refuses_a_self_friendship_and_a_reversed_pair(db_ses
     )
     with pytest.raises(IntegrityError, match="ck_friendships_ordered_pair"):
         await db_session.flush()
+
+
+# ---------- 限速（社群審查 M3(b)） ----------
+
+
+async def test_sending_requests_is_limited_per_sender(client, db_session):
+    """送出、收回、再送：每一輪都讓對方多一則未讀的「想加你為好友」，而且只要拿到好友碼
+    就做得到（不必是好友）。收回不限速，送出每人每分鐘 `FRIEND_REQUEST_LIMIT` 次。
+    被擋的那一次什麼都沒寫：沒有邀請、沒有通知。"""
+    assert FRIEND_REQUEST_LIMIT == 10  # 數字釘在這裡；下面的迴圈跟著常數走
+    alice = await create_user(db_session, display_name="愛麗絲")
+    bob = await create_user(db_session, display_name="鮑伯")
+    carol = await create_user(db_session, display_name="小卡")
+    code = format_friend_code(bob.friend_code)
+    as_alice, as_carol = auth(alice), auth(carol)
+
+    for _ in range(FRIEND_REQUEST_LIMIT):
+        sent = await client.post("/api/friends/requests", headers=as_alice, json={"code": code})
+        assert sent.status_code == 201, sent.text
+        outgoing = (await client.get("/api/friends/requests", headers=as_alice)).json()["outgoing"]
+        withdrawn = await client.delete(
+            f"/api/friends/requests/{outgoing[0]['id']}", headers=as_alice
+        )
+        assert withdrawn.status_code == 204
+
+    async def written() -> tuple[int, int | None]:
+        """（邀請有幾列、最新一則通知的 id）。收回不刪通知（它只是不再顯示），所以這裡
+        已經有一則；真的又送出去一次的話會是另一則新的、id 比較大。"""
+        return await _count(db_session), await db_session.scalar(select(func.max(Notification.id)))
+
+    before = await written()
+    assert before[0] == 0 and before[1] is not None
+
+    blocked = await client.post("/api/friends/requests", headers=as_alice, json={"code": code})
+
+    assert blocked.status_code == 429
+    error = blocked.json()["error"]
+    assert (error["code"], error["message"]) == (
+        "TOO_MANY_FRIEND_REQUESTS",
+        "邀請送得太頻繁，請稍後再試",
+    )
+    assert 1 <= int(blocked.headers["Retry-After"]) <= 60
+    assert await written() == before
+    # 額度是每個送的人的：小卡照樣送得出去。
+    other = await client.post("/api/friends/requests", headers=as_carol, json={"code": code})
+    assert other.status_code == 201
+
+
+async def test_guessing_friend_codes_runs_into_the_limit_before_the_lookup(client, db_session):
+    """限速在查好友碼之前（跟讚、留言同一個順序）：查不到的碼也算一次——拿碼亂試的人
+    一分鐘只有這麼多次。"""
+    alice = await create_user(db_session)
+    bob = await create_user(db_session)
+
+    for _ in range(FRIEND_REQUEST_LIMIT):
+        assert (await _send(client, alice, "22222222")).status_code == 404
+
+    # 這一次的碼是真的：照樣被擋，而且沒有寫進任何東西。
+    blocked = await _send(client, alice, format_friend_code(bob.friend_code))
+    assert blocked.status_code == 429
+    assert await _count(db_session) == 0

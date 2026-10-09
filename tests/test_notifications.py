@@ -49,6 +49,12 @@ async def _unread(client, user) -> int:
     return response.json()["count"]
 
 
+async def _read_all(client, user, up_to):
+    return await client.post(
+        "/api/notifications/read-all", headers=auth(user), json={"up_to": up_to}
+    )
+
+
 def _who_did_what(items) -> list[tuple[str, str]]:
     return [(item["actor_name"], item["type"]) for item in items]
 
@@ -107,6 +113,58 @@ async def test_liking_twice_or_unliking_and_reliking_never_piles_up(client, db_s
     await _like(client, cast.bob, cast.meal)
     assert _who_did_what(await _inbox(client, cast.alice)) == [("鮑伯", "like")]
     assert await _rows(db_session) == 1
+
+
+async def test_unliking_and_reliking_cannot_ring_the_bell_again(client, db_session, cast):
+    """審查 M3(a)：主人**已經看過**的那一則，收回讚時留著——不然「按、收回、再按」每一輪
+    都是一則新的未讀，一個好友一分鐘可以讓主人的未讀數字亮 30 次（按讚的限速是 60）。
+    留著的那一則擋住再按時的新通知（`uq_notifications_like`＋`ON CONFLICT DO NOTHING`）。"""
+    await _like(client, cast.bob, cast.meal)
+    [first] = await _inbox(client, cast.alice)
+    assert (await _read_all(client, cast.alice, first["id"])).json() == {"count": 0}
+
+    await _unlike(client, cast.bob, cast.meal)
+
+    # 讚不在了，那一行歷史還在（已知限制：它說的是一個已經收回的讚）。
+    [kept] = await _inbox(client, cast.alice)
+    assert (kept["id"], kept["type"], kept["is_read"]) == (first["id"], "like", True)
+    assert await _unread(client, cast.alice) == 0
+    assert await _rows(db_session) == 1
+
+    for _ in range(3):
+        await _like(client, cast.bob, cast.meal)
+        # 同一則、仍然是已讀：沒有新的一則，未讀數沒有動。
+        [again] = await _inbox(client, cast.alice)
+        assert (again["id"], again["is_read"]) == (first["id"], True)
+        assert await _unread(client, cast.alice) == 0
+        assert await _rows(db_session) == 1
+        await _unlike(client, cast.bob, cast.meal)
+
+
+async def test_an_unseen_like_notification_still_leaves_with_the_like(client, db_session, cast):
+    """還沒看過的那一則照舊跟著讚一起消失（規格 D12）：主人從來沒看到它，不該為了一個
+    已經不存在的讚留著一則未讀。再按一次是新的一則、未讀。
+    同一餐上另一個人**已讀**的那一則不受影響——留不留看的是每一則自己讀過沒有。"""
+    await _like(client, cast.carol, cast.meal)
+    [carols] = await _inbox(client, cast.alice)
+    await _read_all(client, cast.alice, carols["id"])
+    await _like(client, cast.bob, cast.meal)
+    [bobs, _] = await _inbox(client, cast.alice)
+    assert (bobs["actor_name"], bobs["is_read"]) == ("鮑伯", False)
+
+    await _unlike(client, cast.bob, cast.meal)
+
+    assert [(i["actor_name"], i["is_read"]) for i in await _inbox(client, cast.alice)] == [
+        ("小卡", True)
+    ]
+    assert await _unread(client, cast.alice) == 0
+    assert await _rows(db_session) == 1
+
+    await _like(client, cast.bob, cast.meal)
+    [fresh, _] = await _inbox(client, cast.alice)
+    assert (fresh["actor_name"], fresh["is_read"]) == ("鮑伯", False)
+    assert fresh["id"] != bobs["id"]
+    assert await _unread(client, cast.alice) == 1
 
 
 async def test_unliking_only_removes_my_like_notification_for_that_meal(client, db_session, cast):
@@ -290,12 +348,6 @@ async def test_the_latest_fifty_newest_first(client, db_session, cast):
 
 
 # ---------- 已讀 ----------
-
-
-async def _read_all(client, user, up_to):
-    return await client.post(
-        "/api/notifications/read-all", headers=auth(user), json={"up_to": up_to}
-    )
 
 
 async def test_read_all_marks_up_to_what_was_seen_and_no_further(client, cast):

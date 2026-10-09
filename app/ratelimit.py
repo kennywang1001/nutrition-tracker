@@ -392,3 +392,21 @@ comment_rate_limiter = KeyedRateLimiter(
     code="TOO_MANY_COMMENTS",
     message="留言太頻繁，請稍後再試",
 )
+
+FRIEND_REQUEST_LIMIT = 10
+
+# 送好友邀請（`POST /api/friends/requests`；社群審查 M3），鍵是**送的人**的使用者 id。
+#
+# 每一個新邀請都給對方一則未讀的「X 想加你為好友」。「送出、收回、再送」每一輪都是一則新的
+# ——而且那是對的（收回之後邀請就不在了，再送是一個新的邀請），所以擋的不是通知的寫法，
+# 是送的次數。這件事只要拿到對方的好友碼就做得到，不必是好友。收回與拒絕不算。
+#
+# **10**：一個人一分鐘內真的要加的朋友不會有這麼多個；被擋的人等一分鐘。
+# 限速在查好友碼之前，所以查不到的碼也算一次——順便讓拿碼亂試的人一分鐘只有 10 次
+# （好友碼是 8 個字，以前這個端點沒有任何限速）。
+friend_request_rate_limiter = KeyedRateLimiter(
+    limit=FRIEND_REQUEST_LIMIT,
+    window_seconds=SOCIAL_WINDOW_SECONDS,
+    code="TOO_MANY_FRIEND_REQUESTS",
+    message="邀請送得太頻繁，請稍後再試",
+)

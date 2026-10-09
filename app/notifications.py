@@ -12,7 +12,8 @@ from app.models.social import Notification, NotificationType
 
 
 async def notify_like(db: AsyncSession, *, owner_id: int, actor_id: int, meal_id: int) -> None:
-    """同一個人對同一餐只有一則（`uq_notifications_like`）；已經有就什麼都不做。"""
+    """同一個人對同一餐只有一則（`uq_notifications_like`）；已經有就什麼都不做——
+    包含「已經有一則**已讀**的」（收回讚時留下來的，見 `forget_like`）：不會變回未讀。"""
     if owner_id == actor_id:
         return
     await db.execute(
@@ -23,13 +24,24 @@ async def notify_like(db: AsyncSession, *, owner_id: int, actor_id: int, meal_id
 
 
 async def forget_like(db: AsyncSession, *, owner_id: int, actor_id: int, meal_id: int) -> None:
-    """收回讚：那一則通知跟著消失——不然「按了又收回」會留下一則指向不存在的讚的通知。"""
+    """收回讚：**主人還沒看過**的那一則通知跟著消失——她從來沒看到它，不該為了一個已經
+    不存在的讚留著一則未讀。
+
+    **已經看過的那一則留著**（社群審查 M3）。以前是一律刪掉，於是「按、收回、再按」每一輪
+    都是刪掉再新增一則**未讀**的：按讚的限速是每分鐘 60 次，一個好友一分鐘可以讓主人的
+    未讀數字亮 30 次。留著的那一則（已讀）會讓再按時的 `ON CONFLICT DO NOTHING` 什麼都
+    不寫（`uq_notifications_like`：每個收件人、動作者、餐只有一則），不會再亮一次。
+
+    代價：清單裡會有一行「X 對你的午餐按了讚」而那個讚已經收回了。一行稍微過時的歷史，
+    比可以一直被重新點亮的未讀數字好。未讀的那一種仍然可以「按、收回、再按」讓數字
+    在 0 與 1 之間跳——主人一打開通知它就變成已讀，之後就安靜了。"""
     await db.execute(
         delete(Notification).where(
             Notification.user_id == owner_id,
             Notification.actor_id == actor_id,
             Notification.meal_id == meal_id,
             Notification.type == NotificationType.LIKE,
+            Notification.read_at.is_(None),
         )
     )
 
