@@ -6,6 +6,7 @@
 """
 
 import base64
+import logging
 from dataclasses import dataclass
 from typing import Literal, cast
 
@@ -55,6 +56,13 @@ from app.errors import BadGatewayError, UnprocessableEntityError
 # ALLOWED_IMAGE_MEDIA_TYPES 驗證過之後縮成 Literal 給 mypy。
 _ImageMediaType = Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
 
+logger = logging.getLogger(__name__)
+
+# 模型自己寫完才停的那一種。其餘的（`max_tokens`：寫到上限被截斷；`refusal`：拒絕回答；
+# 以及這裡不該出現的 `tool_use`、`pause_turn`、`stop_sequence`——沒給工具、沒給停止字串）
+# 都值得留一行 log。
+_NORMAL_STOP_REASON = "end_turn"
+
 # 用 anthropic 官方提供的 transform_schema() 從 pydantic model 產生 structured
 # output 要的 JSON schema。**這不是唯一的防線**——就算 API 忽略這個提示，
 # parse_raw_estimate() 的 pydantic 驗證仍然會擋下任何不合規的回應。
@@ -82,13 +90,45 @@ _SINGLE = _Call(SYSTEM_PROMPT, MAX_OUTPUT_TOKENS, _OUTPUT_CONFIG)
 _MEAL = _Call(MEAL_SYSTEM_PROMPT, MAX_MEAL_OUTPUT_TOKENS, _MEAL_OUTPUT_CONFIG)
 
 
-def _extract_text(message: Message) -> str:
-    """從回應裡取出第一個文字內容區塊。找不到本身就是一種「垃圾回應」，
-    跟 JSON 解析失敗走同一條錯誤路徑。"""
+def _first_text(message: Message) -> str | None:
     for block in message.content:
         if isinstance(block, TextBlock):
             return block.text
-    raise BadGatewayError("AI_BAD_RESPONSE", "AI 回應沒有文字內容")
+    return None
+
+
+def _extract_text(message: Message) -> str:
+    """從回應裡取出第一個文字內容區塊。找不到本身就是一種「垃圾回應」，
+    跟 JSON 解析失敗走同一條錯誤路徑。"""
+    text = _first_text(message)
+    if text is None:
+        raise BadGatewayError("AI_BAD_RESPONSE", "AI 回應沒有文字內容")
+    return text
+
+
+def _warn_if_abnormal(message: Message, *, model: str, max_tokens: int) -> None:
+    """不是正常寫完、或根本沒有字：留一行 WARNING（審查 I1）。
+
+    這種回覆接下來會在 parse 那一步變成 `AI_BAD_RESPONSE`——畫面只說「看不懂」，而且
+    算一次額度。少了這一行，「模型把思考算進輸出上限、JSON 被截斷」與「模型回了別的
+    形狀」在後端完全分不出來。
+
+    **只記原因與用量。** 提示詞、使用者輸入的字、照片、模型的輸出都不進 log：那是
+    別人吃了什麼，而且模型的輸出是不可信的文字（可以帶換行偽造 log 行）。這裡用到的
+    值都是供應商給的列舉字串與整數，加上我們自己的設定。
+    """
+    if message.stop_reason == _NORMAL_STOP_REASON and _first_text(message):
+        return
+    logger.warning(
+        "AI 回覆不是正常結束（model=%s, stop_reason=%s, max_tokens=%d, "
+        "input_tokens=%d, output_tokens=%d, has_text=%s）",
+        model,
+        message.stop_reason,
+        max_tokens,
+        message.usage.input_tokens,
+        message.usage.output_tokens,
+        bool(_first_text(message)),
+    )
 
 
 def _provider_message(error: APIStatusError) -> str:
@@ -177,4 +217,6 @@ class AnthropicEstimator:
             if _is_misconfiguration(exc):
                 raise EstimatorMisconfiguredError(str(exc)) from exc
             raise EstimatorUpstreamError(str(exc)) from exc
+        # 在取出文字**之前**：沒有文字時下一行就丟例外了。
+        _warn_if_abnormal(response, model=self.model, max_tokens=call.max_tokens)
         return _extract_text(response)

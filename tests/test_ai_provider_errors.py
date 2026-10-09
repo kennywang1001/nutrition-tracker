@@ -16,6 +16,7 @@
 """
 
 import json
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -412,7 +413,12 @@ _ANTHROPIC_OK_BODY = {
 
 
 def _gemini_ok_body(text: str) -> dict[str, object]:
-    return {"candidates": [{"content": {"role": "model", "parts": [{"text": text}]}}]}
+    # 真的 API（非串流）每個 candidate 都帶 finishReason；正常結束是 STOP。
+    return {
+        "candidates": [
+            {"content": {"role": "model", "parts": [{"text": text}]}, "finishReason": "STOP"}
+        ]
+    }
 
 
 @pytest.mark.parametrize("provider", ["anthropic", "gemini"])
@@ -513,9 +519,9 @@ async def test_a_meal_text_call_sends_the_meal_prompt_schema_and_limit(provider)
     assert [item.name for item in result.items] == ["滷肉飯", "滷雞腿"]
     assert upstream.requests == 1
     sent = _sent(provider, upstream.bodies[0])
-    # 4096 寫死（第 10 種）；下一行確認常數就是它，而且跟單樣的不同。
-    assert sent["max_tokens"] == 4096
-    assert (MAX_MEAL_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS) == (4096, 1024)
+    # 8192 寫死（第 10 種）；下一行確認常數就是它，而且跟單樣的不同。
+    assert sent["max_tokens"] == 8192
+    assert (MAX_MEAL_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS) == (8192, 1024)
     assert sent["system"] == MEAL_SYSTEM_PROMPT
     assert sent["system"] != SYSTEM_PROMPT
     assert sent["schema_fields"] == {"description", "items"}
@@ -544,7 +550,7 @@ async def test_a_meal_image_call_sends_the_image_and_the_meal_instruction(provid
 
     assert len(result.items) == 2
     sent = _sent(provider, upstream.bodies[0])
-    assert sent["max_tokens"] == 4096
+    assert sent["max_tokens"] == 8192
     assert sent["system"] == MEAL_SYSTEM_PROMPT
     assert sent["schema_fields"] == {"description", "items"}
     assert sent["text"] == [MEAL_IMAGE_INSTRUCTION]
@@ -630,6 +636,233 @@ async def test_an_unsupported_media_type_for_a_meal_is_invalid_photo(provider):
     assert excinfo.value.code == "INVALID_PHOTO"
     # 沒送出去：格式在打 API 之前就擋了。
     assert upstream.requests == 0
+
+
+# ---------------------------------------------------------------------------
+# 不正常的結束要留一行 log（審查 I1）：單樣與多樣共用 `_complete`，所以兩條都有
+# ---------------------------------------------------------------------------
+#
+# 沒有這一行的時候，「模型把思考算進輸出上限、JSON 寫到一半被截斷」在畫面上是
+# 「AI 這次的回答看不懂」、在後端什麼都沒有——每按一次吃一次額度，卻沒有任何地方說為什麼。
+
+# 被截斷的回覆：寫到一半的 JSON。log 裡**不能**出現這段字（模型的輸出不進 log）。
+_PARTIAL_TEXT = '{"description": "一碗白飯、滷雞腿", "items": [{"name": "白飯截斷"'
+_PROMPT_TEXT = "雞腿便當不要進log"
+
+_ESTIMATOR_LOGGERS = {"app.ai.anthropic_estimator", "app.ai.gemini_estimator"}
+
+
+def _anthropic_body(
+    *, text: str | None, stop_reason: str, input_tokens: int = 1, output_tokens: int = 1
+) -> dict[str, object]:
+    content = [] if text is None else [{"type": "text", "text": text}]
+    return {
+        **_ANTHROPIC_OK_BODY,
+        "content": content,
+        "stop_reason": stop_reason,
+        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+    }
+
+
+def _gemini_body(
+    *,
+    text: str | None,
+    finish_reason: str | None,
+    usage: dict[str, int] | None = None,
+) -> dict[str, object]:
+    candidate: dict[str, object] = {}
+    if text is not None:
+        candidate["content"] = {"role": "model", "parts": [{"text": text}]}
+    if finish_reason is not None:
+        candidate["finishReason"] = finish_reason
+    body: dict[str, object] = {"candidates": [candidate]}
+    if usage is not None:
+        body["usageMetadata"] = usage
+    return body
+
+
+def _estimator_with_body(provider: str, body: object) -> tuple[FakeUpstream, NutritionEstimator]:
+    upstream = FakeUpstream(body=body)
+    if provider == "anthropic":
+        return upstream, _anthropic_estimator(upstream)
+    return upstream, _gemini_estimator(upstream)
+
+
+def _estimator_warnings(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [
+        record
+        for record in caplog.records
+        if record.name in _ESTIMATOR_LOGGERS and record.levelno >= logging.WARNING
+    ]
+
+
+# 數字刻意每個都不一樣、也不是別的地方會出現的值：斷言它們在 log 裡，才分得出
+# 「記的是這一次的用量」與「記了一個寫死的數字」。
+_TRUNCATED_BODIES: dict[str, object] = {
+    "anthropic": _anthropic_body(
+        text=_PARTIAL_TEXT, stop_reason="max_tokens", input_tokens=1873, output_tokens=7919
+    ),
+    "gemini": _gemini_body(
+        text=_PARTIAL_TEXT,
+        finish_reason="MAX_TOKENS",
+        usage={
+            "promptTokenCount": 1873,
+            "candidatesTokenCount": 46,
+            "thoughtsTokenCount": 7919,
+            "totalTokenCount": 9838,
+        },
+    ),
+}
+_TRUNCATED_EXPECTED = {
+    "anthropic": ["max_tokens", "1873", "7919"],
+    "gemini": ["MAX_TOKENS", "1873", "46", "7919", "9838"],
+}
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+@pytest.mark.parametrize("method", ["estimate_meal_text", "estimate_text"])
+async def test_a_truncated_reply_logs_the_stop_reason_and_the_token_counts(
+    provider, method, caplog
+):
+    """寫到上限被截斷：照舊是 `AI_BAD_RESPONSE`，但多一行 WARNING 說為什麼。"""
+    upstream, estimator = _estimator_with_body(provider, _TRUNCATED_BODIES[provider])
+
+    with pytest.raises(BadGatewayError) as excinfo:
+        await getattr(estimator, method)(_PROMPT_TEXT)
+
+    assert excinfo.value.code == "AI_BAD_RESPONSE"
+    assert upstream.requests == 1
+    warnings = _estimator_warnings(caplog)
+    assert len(warnings) == 1
+    assert warnings[0].levelno == logging.WARNING
+    assert warnings[0].name == f"app.ai.{provider}_estimator"
+    message = warnings[0].getMessage()
+    for expected in _TRUNCATED_EXPECTED[provider]:
+        assert expected in message
+    # 哪個模型、上限設多少：看 log 的人要拿這兩個去對。
+    assert estimator.model in message
+    assert ("8192" if method == "estimate_meal_text" else "1024") in message
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+async def test_the_warning_never_contains_the_prompt_or_the_reply(provider, caplog):
+    """log 只有原因與用量。使用者輸入的字、照片、模型的輸出都不進 log——那是別人吃了
+    什麼，而且模型的輸出是不可信的文字（可以帶換行偽造 log）。"""
+    upstream, estimator = _estimator_with_body(provider, _TRUNCATED_BODIES[provider])
+
+    with pytest.raises(BadGatewayError):
+        await estimator.estimate_meal_text(_PROMPT_TEXT)
+    with pytest.raises(BadGatewayError):
+        await estimator.estimate_meal_image(_PNG, "image/png")
+
+    assert upstream.requests == 2
+    # 兩次都記了——下面的「沒有出現」不是因為根本沒有 log。
+    assert len(_estimator_warnings(caplog)) == 2
+    for record in _estimator_warnings(caplog):
+        message = record.getMessage()
+        assert "白飯" not in message
+        assert "description" not in message
+        assert _PROMPT_TEXT not in message
+        assert "便當" not in message
+        # 照片的 base64（`_PNG` 編碼後的開頭）與提示詞本身。
+        assert "iVBOR" not in message
+        assert "營養分析助手" not in message
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+@pytest.mark.parametrize("method", ["estimate_meal_text", "estimate_text"])
+async def test_a_normal_reply_logs_nothing(provider, method, caplog):
+    text = _VALID_MEAL_JSON if method == "estimate_meal_text" else _VALID_ESTIMATE_JSON
+    upstream, estimator = _estimator_for(provider, text)
+
+    await getattr(estimator, method)("雞腿便當")
+
+    assert upstream.requests == 1
+    assert _estimator_warnings(caplog) == []
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+async def test_an_abnormal_stop_is_logged_even_when_the_reply_happens_to_parse(provider, caplog):
+    """看的是「怎麼停的」，不是「解析有沒有過」：碰巧寫完才撞到上限的那一次也要記——
+    那代表下一次多一樣就會被截斷。"""
+    body = (
+        _anthropic_body(text=_VALID_MEAL_JSON, stop_reason="max_tokens")
+        if provider == "anthropic"
+        else _gemini_body(text=_VALID_MEAL_JSON, finish_reason="MAX_TOKENS")
+    )
+    upstream, estimator = _estimator_with_body(provider, body)
+
+    result = await estimator.estimate_meal_text("雞腿便當")
+
+    assert len(result.items) == 2
+    warnings = _estimator_warnings(caplog)
+    assert len(warnings) == 1
+    assert "max_tokens" in warnings[0].getMessage().lower()
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+async def test_a_reply_with_no_text_is_logged_even_when_the_stop_looks_normal(provider, caplog):
+    """正常結束卻沒有字（例如整段輸出都是思考）：一樣是 `AI_BAD_RESPONSE`，一樣要記。"""
+    body = (
+        _anthropic_body(text=None, stop_reason="end_turn", output_tokens=4711)
+        if provider == "anthropic"
+        else _gemini_body(
+            text=None, finish_reason="STOP", usage={"promptTokenCount": 9, "totalTokenCount": 4711}
+        )
+    )
+    upstream, estimator = _estimator_with_body(provider, body)
+
+    with pytest.raises(BadGatewayError) as excinfo:
+        await estimator.estimate_meal_text("雞腿便當")
+
+    assert excinfo.value.code == "AI_BAD_RESPONSE"
+    warnings = _estimator_warnings(caplog)
+    assert len(warnings) == 1
+    assert "4711" in warnings[0].getMessage()
+
+
+async def test_an_anthropic_refusal_is_logged_with_its_stop_reason(caplog):
+    upstream, estimator = _estimator_with_body(
+        "anthropic", _anthropic_body(text=None, stop_reason="refusal", output_tokens=3)
+    )
+
+    with pytest.raises(BadGatewayError):
+        await estimator.estimate_meal_image(_PNG, "image/png")
+
+    warnings = _estimator_warnings(caplog)
+    assert len(warnings) == 1
+    assert "refusal" in warnings[0].getMessage()
+
+
+async def test_a_gemini_blocked_prompt_is_logged_with_its_block_reason(caplog):
+    """提示被擋：沒有 candidate，原因在 `promptFeedback.blockReason`。"""
+    body = {
+        "promptFeedback": {"blockReason": "PROHIBITED_CONTENT"},
+        "usageMetadata": {"promptTokenCount": 263, "totalTokenCount": 263},
+    }
+    upstream, estimator = _estimator_with_body("gemini", body)
+
+    with pytest.raises(BadGatewayError) as excinfo:
+        await estimator.estimate_meal_image(_PNG, "image/png")
+
+    assert excinfo.value.code == "AI_BAD_RESPONSE"
+    warnings = _estimator_warnings(caplog)
+    assert len(warnings) == 1
+    assert "PROHIBITED_CONTENT" in warnings[0].getMessage()
+    assert "263" in warnings[0].getMessage()
+
+
+async def test_a_gemini_reply_without_a_finish_reason_but_with_text_is_not_logged(caplog):
+    """沒帶 `finishReason` 不等於不正常：有字就照常解析，不多一行 log。沒有字的那種
+    由「沒有文字」那一條接住。"""
+    upstream, estimator = _estimator_with_body(
+        "gemini", _gemini_body(text=_VALID_MEAL_JSON, finish_reason=None)
+    )
+
+    await estimator.estimate_meal_text("雞腿便當")
+
+    assert upstream.requests == 1
+    assert _estimator_warnings(caplog) == []
 
 
 # ---------------------------------------------------------------------------

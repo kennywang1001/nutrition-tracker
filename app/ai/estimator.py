@@ -121,10 +121,15 @@ MAX_OUTPUT_TOKENS = 1024
 # 一餐最多幾樣（AI 多樣估算規格 D9、D11）。超過的回覆整個拒絕——不默默丟掉幾樣。
 MAX_MEAL_ITEMS = 8
 
-# 8 樣 × 8 個欄位＋一句描述大約 600～800 token。給 4096：留餘裕給會把思考算進
-# 輸出上限的模型，同時仍然擋得住跑題的長篇大論。寫不完被截斷的 JSON 會在
-# parse_raw_meal_estimate() 變成 AI_BAD_RESPONSE。
-MAX_MEAL_OUTPUT_TOKENS = 4096
+# 8 樣 × 8 個欄位＋一句描述大約 600～800 token，答案本身用不到這麼多。給 8192 是因為
+# **預設就會思考的模型把思考的 token 也算在這個上限裡**：4096 時，一張複雜一點的照片
+# 光是思考就可能用掉大半，輪到寫 JSON 時被截斷——那是 AI_BAD_RESPONSE，而且每按一次
+# 吃一次額度（審查 I1）。上限只是「最多」，不是「會用掉」：計費看實際輸出，調高它不會
+# 讓正常的那一次變貴；它仍然擋得住跑題的長篇大論。
+#
+# 還是被截斷的話，兩家的 `_complete` 會留一行 WARNING（停下來的原因＋用了多少 token），
+# 不會再是「畫面說看不懂、後端什麼都沒有」。
+MAX_MEAL_OUTPUT_TOKENS = 8192
 
 # `meals.description` 的上限（app/schemas/meal.py）。模型寫超過就截斷，不拒絕（規格 D10）。
 MAX_MEAL_DESCRIPTION_CHARS = 500

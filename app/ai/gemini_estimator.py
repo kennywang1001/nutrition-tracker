@@ -6,6 +6,7 @@
 分類，由 `tests/test_ai_provider_errors.py` 把 client 換成接假傳輸層的版本來測。
 """
 
+import logging
 from dataclasses import dataclass
 
 import httpx
@@ -102,6 +103,9 @@ _SINGLE = _Call(SYSTEM_PROMPT, MAX_OUTPUT_TOKENS, _RESPONSE_SCHEMA)
 _MEAL = _Call(MEAL_SYSTEM_PROMPT, MAX_MEAL_OUTPUT_TOKENS, _MEAL_RESPONSE_SCHEMA)
 
 
+logger = logging.getLogger(__name__)
+
+
 def _extract_text(response: types.GenerateContentResponse) -> str:
     """`GenerateContentResponse.text` 是 `str | None`——`None` 或空字串本身
     就是一種「垃圾回應」，跟 JSON 解析失敗走同一條錯誤路徑。"""
@@ -109,6 +113,51 @@ def _extract_text(response: types.GenerateContentResponse) -> str:
     if not text:
         raise BadGatewayError("AI_BAD_RESPONSE", "AI 回應沒有文字內容")
     return text
+
+
+def _warn_if_abnormal(
+    response: types.GenerateContentResponse, *, model: str, max_output_tokens: int
+) -> None:
+    """不是正常寫完、提示被擋、或根本沒有字：留一行 WARNING（審查 I1；理由同
+    anthropic_estimator.py 的 `_warn_if_abnormal`）。
+
+    - `finish_reason` 不是 `STOP`：`MAX_TOKENS`（寫到上限被截斷——Gemini 2.5 起預設
+      會思考，`thoughts_token_count` 也算在 `max_output_tokens` 裡）、`SAFETY`、
+      `RECITATION`……
+    - 提示被擋：沒有 candidate，原因在 `prompt_feedback.block_reason`。
+    - 沒有字：`response.text` 是 `None` 或空字串。
+
+    **沒帶 `finish_reason` 而有字的不算**：沒有理由說它不正常；沒有字的那種由第三條接住。
+
+    **只記原因與用量**——列舉名稱與整數。`block_reason_message`、`finish_message` 是
+    供應商寫的句子，可能引用到內容，不記。
+    """
+    candidate = response.candidates[0] if response.candidates else None
+    finish_reason = candidate.finish_reason if candidate is not None else None
+    feedback = response.prompt_feedback
+    block_reason = feedback.block_reason if feedback is not None else None
+    has_text = bool(response.text)
+
+    # 提示被擋的那一種不用另外判斷：被擋就沒有 candidate、也就沒有字。
+    stopped_normally = finish_reason is None or finish_reason is types.FinishReason.STOP
+    if stopped_normally and has_text:
+        return
+
+    usage = response.usage_metadata
+    logger.warning(
+        "AI 回覆不是正常結束（model=%s, finish_reason=%s, block_reason=%s, "
+        "max_output_tokens=%d, prompt_tokens=%s, candidates_tokens=%s, thoughts_tokens=%s, "
+        "total_tokens=%s, has_text=%s）",
+        model,
+        finish_reason.name if finish_reason is not None else None,
+        block_reason.name if block_reason is not None else None,
+        max_output_tokens,
+        usage.prompt_token_count if usage is not None else None,
+        usage.candidates_token_count if usage is not None else None,
+        usage.thoughts_token_count if usage is not None else None,
+        usage.total_token_count if usage is not None else None,
+        has_text,
+    )
 
 
 # 金鑰錯、沒權限、模型不存在。**Gemini 的金鑰錯是 400 INVALID_ARGUMENT**
@@ -198,4 +247,8 @@ class GeminiEstimator:
             # 連不上、逾時：google-genai 沒有包自己的例外，httpx 的直接穿出來
             # （沒裝 aiohttp 時非同步走 httpx，見 `google/genai/_api_client.py`）。
             raise EstimatorUpstreamError(str(exc) or type(exc).__name__) from exc
+        # 在取出文字**之前**：沒有文字時下一行就丟例外了。
+        _warn_if_abnormal(
+            response, model=self.model, max_output_tokens=call.max_output_tokens
+        )
         return _extract_text(response)
