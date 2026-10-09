@@ -94,8 +94,29 @@ const NOT_PERSISTED: ReadonlySet<unknown> = new Set([
 	"admin",
 ]);
 
-/** 寫進 localStorage 前，把「有資料的失敗查詢」改寫成「有資料、待重抓」。
+/** 寫進 localStorage 前改寫每一個查詢的狀態。做兩件事：
  *
+ *  **一、每一個查詢都標成「待重抓」（`isInvalidated: true`）——不只失敗過的。**
+ *  這份快取是**節流寫入**的（persister 預設一秒一次）：記完一筆、一秒內重新整理，
+ *  localStorage 裡還是**記之前**的那一份。還原回來的 query 帶著原本的
+ *  `dataUpdatedAt`（幾秒前），在 60 秒的 `staleTime`（`api/queries.ts`）裡算新鮮、
+ *  掛載不重抓——剛記的那一筆最多一分鐘不在總額裡，使用者可能以為沒記到、再記一次
+ *  （handover §6 第 17 種；e2e 實際紅過）。**存起來的那一份到底是不是最新的，寫的
+ *  時候不知道，還原的時候也不知道**，所以一律當成「可以先顯示，但要去問一次」：
+ *
+ *  - 資料照樣馬上畫出來，`dataUpdatedAt` 不動——那仍是上一次**真的成功**的時間
+ *    （`Today.tsx`「最後更新於」要的值）；
+ *  - 掛著的 query 在還原結束之後一定重抓一次；抓回來 TanStack 自己把 `isInvalidated`
+ *    清掉，之後同一次載入裡照常用 `staleTime`；
+ *  - 連不上：重抓失敗，變成「有資料的 error」，離線標示出現（`Today.tsx`、
+ *    `Overview.tsx` 的 `OfflineBanner`）；瀏覽器自己知道離線時 query 是 `paused`，
+ *    資料留著、不算失敗。
+ *
+ *  **只改寫存起來的那一份，不碰記憶體裡的 query**——在記憶體裡標 invalidated 的話，
+ *  同一次載入裡每一次換頁掛載都會重抓，`staleTime` 等於沒設。也不改成把
+ *  `dataUpdatedAt` 歸零：那會讓「最後更新於」說謊，`maxAge` 以外的地方也有人讀它。
+ *
+ *  **二、「有資料的失敗查詢」改寫成「有資料、成功」。**
  *  `shouldDehydrateQuery` 讓有資料的 `status: "error"` 也寫進來（見下面）。
  *  如果原樣寫，TanStack restore 回來的就是 error 狀態，而重抓開始時 query
  *  的 `fetch` 只在**沒有資料**時把 status 改回 pending——有資料就一路維持
@@ -105,10 +126,8 @@ const NOT_PERSISTED: ReadonlySet<unknown> = new Set([
  *  載入，不屬於這一次。（而且 `error` 經過 JSON 只剩 `{}`——`ApiError` 的
  *  `code`、`status` 都不在了，留著也沒有用。）
  *
- *  改成 success、清掉 error 與失敗次數，`isInvalidated` 留著（失敗時 query
- *  已經把它設成 true）——restore 回來的 query 一律算 stale，掛載就重抓；
- *  重抓再失敗（還是離線），才會重新變成 error、顯示離線標示。`data` 與
- *  `dataUpdatedAt` 不動：那仍是上一次**真的成功**的資料與時間。
+ *  改成 success、清掉 error 與失敗次數；重抓再失敗（還是離線），才會重新變成
+ *  error、顯示離線標示。`data` 與 `dataUpdatedAt` 一樣不動。
  *
  *  回傳新的物件，不改傳進來的那份（`dehydrate` 的 state 雖然是複本，仍不
  *  依賴這件事）。之後跟預設一樣 `JSON.stringify`。 */
@@ -117,21 +136,21 @@ function serializePersistedClient(client: PersistedClient): string {
 		...client,
 		clientState: {
 			...client.clientState,
-			queries: client.clientState.queries.map((query) =>
-				query.state.status === "error" && query.state.data !== undefined
-					? {
-							...query,
-							state: {
-								...query.state,
+			queries: client.clientState.queries.map((query) => ({
+				...query,
+				state: {
+					...query.state,
+					...(query.state.status === "error" && query.state.data !== undefined
+						? {
 								status: "success",
 								error: null,
 								fetchFailureCount: 0,
 								fetchFailureReason: null,
-								isInvalidated: true,
-							},
-						}
-					: query,
-			),
+							}
+						: {}),
+					isInvalidated: true,
+				},
+			})),
 		},
 	});
 }

@@ -384,6 +384,26 @@ refresh token 也放在 `localStorage`，一起清掉會讓 `reload()` 後掉回
 **任何一條 E2E 想用 `page.reload()` 觀察「另一個 session 剛寫入的狀態」，
 只要那個頁面開著離線持久化又剛好瀏覽過同一份資料，都要檢查這件事。**
 
+**後來從產品端修掉了（2026-10-09，`feat/reports-month-export` 的後續修正）。**
+這場賽跑不只測試會遇到：使用者記完一筆、一秒內重新整理，看到的也是記之前的
+總額，最多一分鐘。`api/persist.ts` 的 `serializePersistedClient` 現在把**寫進
+localStorage 的每一個 query** 都標成待重抓（`isInvalidated: true`），不只失敗過
+的：還原回來的資料照樣馬上顯示、`dataUpdatedAt` 不動，掛著的 query 在還原結束
+之後一定重抓一次。記憶體裡的 query 沒有被標——同一次載入裡換頁還是看
+`staleTime`，`api/queries.ts` 說的那個理由不變。所以：
+
+- **reload 之前清離線快取不再需要。** `reports-export.spec.ts` 的那一處已經
+  拿掉；`admin.spec.ts`（上面這一條）的還留著，多餘但無害。
+- **不經 reload 的那一半沒有變。** 同一次載入裡 remount 還是 60 秒內不重抓：要
+  立刻看到別人寫入的畫面，仍然是自己設 `staleTime: 0`（`useInvites` 那一類）。
+- 測試在 `frontend/tests/offline.test.tsx`「重新載入還原回來的資料還在 staleTime
+  裡…」：localStorage 裡是舊的、`dataUpdatedAt` 是剛剛、伺服器已經是新的，不去
+  賽跑節流。修之前紅在「重抓沒有發出去」。
+- 寫那條測試時又踩到同一件事的另一面：**unmount 不會取消 persister 已經排好的
+  那一次節流寫入**，上一個 client（甚至上一條測試的）會在下一階段開始之後才把
+  它的快照寫進同一份 localStorage。那個檔案的 `wrap()` 現在每次給一個「只在這
+  一次載入裡寫得進去」的 storage（`pageStorage`）。
+
 **第 18 種：兩種行為的畫面結果完全一樣，斷言文字測不出差異。** 規格
 要求「非管理員打 admin 端點得到 403」，而 `client.ts` 只在
 `status === 401` 換票，403 不該觸發換票。但如果有人把條件改寬成
@@ -918,8 +938,10 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
   localStorage 的那一份「這個月」——離線快取是節流寫入的（一秒一次），reload 還原回來的可以是記帳之前的快照，而它還在
   60 秒的 `staleTime` 裡、不會重抓。單獨重跑 12 次全綠（平常 reload 的那一刻快照裡根本還沒有這個 query：16 次裡 15 次）；
   把「之後的寫入都還沒發生」固定下來（擋掉 `setItem`）就**每次**都是那個畫面。修法照第 17 種：reload 前清掉那一個 key。
-  **這不只是測試的事**：使用者記完一筆、一秒內重新整理，也可能看到舊的總額，最多 60 秒（或到下一次失效為止）——
-  沒有修，記在這裡。
+  **這不只是測試的事**：使用者記完一筆、一秒內重新整理，也可能看到舊的總額，最多 60 秒（或到下一次失效為止）。
+  **後續修正已經從產品端修掉**（還原回來的 query 一律重抓，見第 17 種那一段的補記），spec 裡清 key 的那幾行也拿掉了。
+  拿掉之前先確認過不是碰運氣：用一條暫時的探針把快照固定在「記帳之前」（登入後等到快照裡有「這個月 0.00」，
+  之後擋掉那個 key 的 `setItem`），修之前 3 次都紅在「總計 0.00」，修之後 3 次都綠。
 
 ---
 
@@ -1349,7 +1371,7 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
 
 **已知待辦（都已完成，見規格 `docs/superpowers/specs/2026-10-08-keypad-offline-design.md`）：**
 
-- (a) **已完成，bug 實測證實**：有資料但重抓失敗的查詢（`status: "error"`）被下一次寫入從離線快取拿掉，第二次離線重新載入什麼都沒有；`persist.ts` 的 `shouldDehydrateQuery` 改成 success 或「error 而且有 data」（`offline.test.tsx` 三階段測試，修之前紅）。寫進去之前 persister 的 `serialize` 把它改寫成 success、清掉 error、保留 `isInvalidated: true`——restore 回來的失敗查詢不是 error，在線上重新載入時重抓還在路上也不會顯示離線標示或「無法載入」，重抓再失敗才變回 error。
+- (a) **已完成，bug 實測證實**：有資料但重抓失敗的查詢（`status: "error"`）被下一次寫入從離線快取拿掉，第二次離線重新載入什麼都沒有；`persist.ts` 的 `shouldDehydrateQuery` 改成 success 或「error 而且有 data」（`offline.test.tsx` 三階段測試，修之前紅）。寫進去之前 persister 的 `serialize` 把它改寫成 success、清掉 error、保留 `isInvalidated: true`（2026-10-09 起**每一個**寫進去的 query 都標 `isInvalidated: true`，不只失敗過的——§6 第 17 種的補記）——restore 回來的失敗查詢不是 error，在線上重新載入時重抓還在路上也不會顯示離線標示或「無法載入」，重抓再失敗才變回 error。
 - (b) **已完成**：只在 `/expenses/new` 隱藏分頁列（`App.tsx` 的 `LoggedInShell`，`.app-main-no-tab-bar` 拿掉底部留白）；記一餐沒有關閉鈕，不隱藏。
 - (c) **已完成**：記帳數字鍵盤接受實體鍵盤（數字、`.`／`,`、Backspace、Enter 送出），焦點在備註欄、有 Ctrl／Meta／Alt、或輸入法組字中時不攔（`MoneyKeypad.tsx`）。Enter 的規則：焦點在任何按鈕或連結上（包括 Tab 走到的數字鍵）時屬於那個控制項；鍵盤上的按鍵滑鼠／觸控點了不拿焦點（mousedown 擋預設動作，焦點在備註時把備註 blur 掉），所以點過數字之後按 Enter 是送出；按住 Enter 的自動重複不算。已知限制：螢幕閱讀器的瀏覽模式會吃掉數字鍵，要切到焦點模式才打得進金額。
   - 審查提過、刻意不改：監聽器每次金額改變就重新掛一次（行得通、有測試）；Enter 分支裡 `!submitDisabled` 跟 ✓ 的 `disabled` 重複；(b) 的版面沒有 e2e。
@@ -1541,7 +1563,13 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
   （不寫 `?month=這個月`，才會跟著後端走）。換月份是 push：上一頁回到剛才看的月份。
 - **`keepPreviousData` 在 `useExpenses`／`useExpenseSummary` 裡**；換月份時摘要與清單的內容層各自 `aria-busy`＋`.stale`
   （同趨勢頁）**＋`inert`**，月份標籤與標題已經是新的月份。query key 沒動（`["expenses","list"｜"summary", month]`），改刪之後失效
-  `expensesAll` 本來就打到每一個月；**離線持久化沒改**。
+  `expensesAll` 本來就打到每一個月；**哪些 query 進離線快取沒改**。
+- **離線快取還原回來的 query 一律重抓**（後續修正，`api/persist.ts` 的 `serializePersistedClient`）：快取是節流寫入的，
+  記完一筆、一秒內重新整理，還原回來的是記之前的那一份，而它還在 60 秒的 `staleTime` 裡。寫進 localStorage 的每一個
+  query 都標 `isInvalidated: true`——先顯示、掛載就重抓；連不上是「有資料的 error」（總覽與飲食頁出現離線標示），
+  瀏覽器自己知道離線時是 `paused`、資料留著。**報表在重抓失敗時顯示的是「無法載入…」而不是留著的資料**
+  （`isUnavailable` 把 `isError` 一律當讀不到，這個分支之前就是這樣）：以前只有快照超過 60 秒才會走到，現在每一次
+  「重新載入而且連不上後端」都會——見已知限制第 20 點。
 - **留著的上一個月只能看**（審查 M3）：那幾列的「修改」「刪除」是上一個月的，`inert` 讓整層點不到、Tab 不到。
   **離線而且沒看過那個月**（query 是 `paused`，不會自己結束）算「讀不到」，跟請求失敗顯示同樣的文字，不留上一個月的資料
   （`Expenses.tsx` 的 `isUnavailable`；同 `Targets.tsx` 對 `paused` 的處理）。**之後用 `keepPreviousData` 的畫面，
@@ -1632,6 +1660,8 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
     `inert`，單元測試守的是屬性；真的點不到由 e2e 守。
 20. **「離線」是瀏覽器說的**（`fetchStatus === "paused"`）。連得上網路但連不到後端（tailnet 不通）不是 paused：請求照常
     失敗、重試，重試期間是調淡、不能操作的上一個月，全部失敗之後才顯示讀不到。
+    **重新載入時也一樣**（後續修正之後每一次都是，不只快照超過 60 秒的時候）：離線快取還原回來的那個月先顯示，
+    重抓全部失敗之後換成「無法載入…的報表」「無法載入花費清單」——報表不像總覽那樣留著資料、標上離線。沒有改。
 
 ---
 

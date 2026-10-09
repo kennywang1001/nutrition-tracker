@@ -1,4 +1,4 @@
-import { QueryClient } from "@tanstack/react-query";
+import { onlineManager, QueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -14,7 +14,11 @@ import { clearTokens, setTokens } from "../src/auth/store";
 import { formatTime } from "../src/lib/dates";
 import { Expenses } from "../src/screens/Expenses";
 import { Today } from "../src/screens/Today";
-import { json, mockApiByPath as mockApi } from "./helpers/mock-api";
+import {
+	json,
+	mockApiByPath as mockApi,
+	mockApi as mockApiRoutes,
+} from "./helpers/mock-api";
 
 // wrap 從 today.test.tsx 改寫——這裡額外接一個 QueryClient 參數（今日總覽的
 // 離線行為只有在「兩個不同的 QueryClient 透過同一份 localStorage 交接」時
@@ -24,6 +28,31 @@ import { json, mockApiByPath as mockApi } from "./helpers/mock-api";
 // 需要 MemoryRouter：P3-C Task 2 在「今日補劑」區塊加了一個連到
 // /supplements 的 <Link>，不掛 Router 會直接炸掉（跟 today.test.tsx 同一個
 // 理由）。
+//
+// **每一次 `wrap()` 是一次「頁面載入」，拿到的是只在這一次載入裡寫得進去的 storage**
+// （`pageStorage`）。persister 的寫入是節流的（一秒一次），unmount 不會取消已經排好的那
+// 一次——真的重新整理時舊頁面連同它排著的寫入一起消失，這裡不模擬的話，上一個 client
+// （甚至上一條測試的）會在下一階段開始之後才把**它的**快照寫進同一份 localStorage，
+// 蓋掉這一階段要看的那一份。實測過：「重新載入還原回來的資料還在 staleTime 裡」那兩條
+// 第一次跑，讀到的就是前一條測試留下的 `dataUpdatedAt`。
+let currentPage = 0;
+
+function pageStorage(): Storage {
+	currentPage += 1;
+	const page = currentPage;
+	const alive = () => page === currentPage;
+	// persister 只用這三個方法（`AsyncStorage`）；型別要的是整個 `Storage`。
+	return {
+		getItem: (key: string) => window.localStorage.getItem(key),
+		setItem: (key: string, value: string) => {
+			if (alive()) window.localStorage.setItem(key, value);
+		},
+		removeItem: (key: string) => {
+			if (alive()) window.localStorage.removeItem(key);
+		},
+	} as Storage;
+}
+
 function wrap(
 	client: QueryClient,
 	children: ReactNode,
@@ -33,7 +62,7 @@ function wrap(
 	return (
 		<PersistQueryClientProvider
 			client={client}
-			persistOptions={createOfflinePersistOptions(window.localStorage)}
+			persistOptions={createOfflinePersistOptions(pageStorage())}
 		>
 			<MemoryRouter initialEntries={entries}>{children}</MemoryRouter>
 		</PersistQueryClientProvider>
@@ -163,6 +192,8 @@ function newTestClient(): QueryClient {
 }
 
 beforeEach(() => {
+	// 上一條測試最後一個 client 排著的寫入也作廢（見 `pageStorage`）。
+	currentPage += 1;
 	localStorage.clear();
 	clearTokens();
 	resetRefreshStateForTests();
@@ -233,12 +264,19 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 		expect(await screen.findByTestId("offline-banner")).toBeInTheDocument();
 		expect(screen.getByText(/1800/)).toBeInTheDocument();
 		// 等失敗**之後**的那次寫入：只看「stats 有資料」會被第一階段留下的快照
-		// 騙過（那份一直都在，直到下一次寫入蓋掉它），所以要認失敗留下的
-		// `isInvalidated: true`——第一階段的快照是 false。不認 status：寫進去
-		// 之前 `persist.ts` 會把有資料的 error 改寫成 success（見下一條測試）。
+		// 騙過（那份一直都在，直到下一次寫入蓋掉它）。認不了 status（寫進去之前
+		// `persist.ts` 會把有資料的 error 改寫成 success，見下一條測試），也認不了
+		// `isInvalidated`（每一份快照都是 true，第一階段的也是）——所以失敗之後往
+		// client 放一個探針，等它出現在 localStorage 裡：每一次寫入都是整個 client
+		// 當下的狀態，探針在，那一份就是失敗之後的。
+		clientB.setQueryData(["persist-probe"], 1);
 		await waitFor(
 			() => {
-				const stats = readPersistedQueries().find(
+				const persisted = readPersistedQueries();
+				expect(
+					persisted.some((query) => query.queryKey[0] === "persist-probe"),
+				).toBe(true);
+				const stats = persisted.find(
 					(query) =>
 						query.queryKey[0] === "stats" && query.queryKey[1] === "daily",
 				);
@@ -321,18 +359,33 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 		agePersistedCacheBy(5 * 60 * 1000);
 
 		// 第二階段：離線重新載入，三個查詢的背景重抓都失敗；等失敗**之後**的
-		// 那次寫入（失敗把 `isInvalidated` 設成 true，第一階段的快照是 false）。
+		// 那次寫入（用探針認，理由同上一條）。三個都要先真的失敗過才放探針：
+		// 離線標示只要一個失敗就出現。
 		vi.restoreAllMocks();
 		goOffline();
-		const second = render(wrap(newTestClient(), screens));
+		const clientB = newTestClient();
+		const second = render(wrap(clientB, screens));
 		expect(await screen.findByTestId("offline-banner")).toBeInTheDocument();
+		await waitFor(() => {
+			for (const key of [
+				queryKeys.dailyStats,
+				queryKeys.expenseSummary(null),
+				queryKeys.expenses(null),
+			]) {
+				expect(clientB.getQueryState(key)?.status).toBe("error");
+			}
+		});
+		clientB.setQueryData(["persist-probe"], 1);
 		await waitFor(
 			() => {
+				expect(persistedFor("persist-probe")).toBeDefined();
 				for (const query of [
 					persistedFor("stats", "daily"),
 					persistedFor("expenses", "summary"),
 					persistedFor("expenses", "list"),
 				]) {
+					// 失敗過的也是寫成 success（`persist.ts`）——第三階段要守的就是這個。
+					expect(query?.state.status).toBe("success");
 					expect(query?.state.isInvalidated).toBe(true);
 					expect(query?.state.data).toBeDefined();
 				}
@@ -361,6 +414,136 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 		});
 		expect(screen.queryByTestId("offline-banner")).not.toBeInTheDocument();
 		expect(screen.queryByText(/無法載入/)).not.toBeInTheDocument();
+	});
+
+	it("重新載入還原回來的資料還在 staleTime 裡，掛載時照樣重抓（節流寫入來不及的那一筆）", async () => {
+		// handover §6 第 17 種在產品裡的樣子。離線快取是節流寫入的（一秒一次）：記完一筆、
+		// 一秒內重新整理，localStorage 裡還是**記之前**的那一份，而它的 `dataUpdatedAt` 是
+		// 幾秒前——還在 60 秒的 `staleTime` 裡。只靠 `dataUpdatedAt` 判斷新不新鮮的話，還原
+		// 之後一個請求都不發，舊的總額最多掛一分鐘，使用者可能再記一次。
+		//
+		// 這裡用「localStorage 裡是舊的、伺服器已經是新的」直接做出那個狀態，不去賽跑節流。
+
+		// 第一階段：線上讀到 1800，寫進 localStorage。
+		mockApi({
+			"/api/stats/daily": () => json(STATS_WITH_TARGET),
+			"/api/supplements/today": () => json([]),
+			"/api/meals": () => json([]),
+		});
+		const first = render(wrap(newTestClient(), <Today />));
+		await screen.findByText(/1800/);
+		await waitFor(
+			() => expect(findPersistedStatsSuccess()).not.toBeUndefined(),
+			{ timeout: 3000 },
+		);
+		first.unmount();
+		// **不老化**：這條要的正是「還新鮮」的快照。（整條測試幾秒就跑完。）
+		const persistedAt = readPersistedStatsUpdatedAt();
+		expect(Date.now() - persistedAt).toBeLessThan(60_000);
+
+		// 第二階段：重新載入。伺服器現在回的是 2150，但先扣住不回。
+		vi.restoreAllMocks();
+		let release: () => void = () => {};
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const newer = {
+			...STATS_WITH_TARGET,
+			actual: { ...STATS_WITH_TARGET.actual, kcal: "2150.00" },
+		};
+		const fetchSpy = mockApiRoutes([
+			{
+				path: "/api/stats/daily",
+				handler: async () => {
+					await held;
+					return json(newer);
+				},
+			},
+			{ path: "/api/supplements/today", handler: () => json([]) },
+			{ path: "/api/meals", handler: () => json([]) },
+		]);
+		const clientB = newTestClient();
+		render(wrap(clientB, <Today />));
+
+		// 還原回來的那一份馬上就畫出來，時間是它真的抓到的時間（沒有被改成現在、也沒有歸零）。
+		expect(await screen.findByText(/1800/)).toBeInTheDocument();
+		expect(clientB.getQueryState(queryKeys.dailyStats)?.dataUpdatedAt).toBe(
+			persistedAt,
+		);
+		// 而且重抓已經發出去了——不等 staleTime。
+		await waitFor(() => {
+			const urls = fetchSpy.mock.calls.map(([input]) => String(input));
+			expect(urls.some((url) => url.includes("/api/stats/daily"))).toBe(true);
+		});
+		// 重抓還在路上：不是錯誤，沒有離線標示。
+		expect(screen.queryByTestId("offline-banner")).not.toBeInTheDocument();
+
+		release();
+		expect(await screen.findByText(/2150/)).toBeInTheDocument();
+		expect(screen.queryByText(/1800/)).not.toBeInTheDocument();
+		expect(screen.queryByTestId("offline-banner")).not.toBeInTheDocument();
+	});
+
+	it("還原回來的資料還在 staleTime 裡、但連不上後端：資料還在，離線標示出現", async () => {
+		// 上一條的反面。一律重抓之後，「剛看過、馬上重新整理、這時連不上」這條路以前
+		// 不存在（還新鮮、不抓，也就不知道連不上）：現在那次重抓會失敗，畫面要跟其他
+		// 「重抓失敗但手上有資料」一樣——數字留著、標上「離線資料，最後更新於…」，不是
+		// 變成空白或錯誤訊息。
+		mockApi({
+			"/api/stats/daily": () => json(STATS_WITH_TARGET),
+			"/api/supplements/today": () => json([]),
+			"/api/meals": () => json([]),
+		});
+		const first = render(wrap(newTestClient(), <Today />));
+		await screen.findByText(/1800/);
+		await waitFor(
+			() => expect(findPersistedStatsSuccess()).not.toBeUndefined(),
+			{ timeout: 3000 },
+		);
+		first.unmount();
+		const persistedAt = readPersistedStatsUpdatedAt();
+		expect(Date.now() - persistedAt).toBeLessThan(60_000);
+
+		vi.restoreAllMocks();
+		goOffline();
+		render(wrap(newTestClient(), <Today />));
+
+		const banner = await screen.findByTestId("offline-banner");
+		expect(banner).toHaveTextContent(
+			`離線資料，最後更新於 ${formatTime(persistedAt)}`,
+		);
+		expect(screen.getByText(/1800/)).toBeInTheDocument();
+		expect(screen.queryByText("無法載入今天的營養素")).not.toBeInTheDocument();
+	});
+
+	it("寫進 localStorage 的每一個查詢都標成待重抓；記憶體裡的那一份與 dataUpdatedAt 不動", async () => {
+		// 上一條的另一半：「待重抓」只寫在**存起來的那一份**上。記憶體裡的 query 不能被標成
+		// invalidated——那會讓同一次載入裡每一次換頁掛載都重抓，`staleTime` 60 秒等於沒設
+		// （`api/queries.ts` 說明了為什麼需要它）。
+		mockApi({
+			"/api/stats/daily": () => json(STATS_WITH_TARGET),
+			"/api/supplements/today": () => json([]),
+			"/api/meals": () => json([]),
+		});
+		const client = newTestClient();
+		render(wrap(client, <Today />));
+		await screen.findByText(/1800/);
+
+		await waitFor(
+			() => {
+				const persisted = readPersistedQueries();
+				// 今日營養素、補劑、餐點清單三個都寫進去了才看。
+				expect(persisted.length).toBeGreaterThanOrEqual(3);
+				for (const query of persisted) {
+					expect(query.state.status).toBe("success");
+					expect(query.state.isInvalidated).toBe(true);
+				}
+			},
+			{ timeout: 3000 },
+		);
+		const inMemory = client.getQueryState(queryKeys.dailyStats);
+		expect(inMemory?.isInvalidated).toBe(false);
+		expect(readPersistedStatsUpdatedAt()).toBe(inMemory?.dataUpdatedAt);
 	});
 
 	it("沒有資料的失敗查詢不寫進 localStorage", async () => {
@@ -759,18 +942,46 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 		first.unmount();
 
 		// 第二階段：離線，全新的 QueryClient，同一個網址。
+		//
+		// **離線是 TanStack 知道的那一種**（`onlineManager`，瀏覽器的 offline 事件）：還原
+		// 回來的 query 一律待重抓（`persist.ts`），離線時那次重抓是 `paused`——沒有失敗，
+		// 資料留著。這條原本靠的是「還原回來的還在 staleTime 裡、根本不重抓」，那正是
+		// 第 17 種的 bug（上面「重新載入還原回來的資料還在 staleTime 裡」那一條）。
+		//
+		// 另一種離線（瀏覽器以為有網路、其實連不上後端，`fetch` reject）在這個畫面是
+		// 「無法載入…的報表」：`Expenses.tsx` 的 `isUnavailable` 把 `isError` 一律當讀不到，
+		// 不管手上有沒有資料——那是報表畫面既有的決定（快照超過 60 秒時本來就是這樣），
+		// 不是這一條要守的事。
 		vi.restoreAllMocks();
 		const offline = goOffline();
-		render(wrap(newTestClient(), <Expenses />, ["/reports?month=2026-08"]));
+		onlineManager.setOnline(false);
+		try {
+			const clientB = newTestClient();
+			render(wrap(clientB, <Expenses />, ["/reports?month=2026-08"]));
 
-		expect(await screen.findByText("八月的高鐵")).toBeInTheDocument();
-		expect(screen.getByTestId("expense-summary")).toHaveTextContent(
-			"總計 640.00",
-		);
-		expect(
-			screen.getByRole("heading", { name: "2026年8月花了多少" }),
-		).toBeInTheDocument();
-		// 資料來自 localStorage：還新鮮（staleTime 60 秒），一個請求都沒發。
-		expect(offline).not.toHaveBeenCalled();
+			expect(await screen.findByText("八月的高鐵")).toBeInTheDocument();
+			expect(screen.getByTestId("expense-summary")).toHaveTextContent(
+				"總計 640.00",
+			);
+			expect(
+				screen.getByRole("heading", { name: "2026年8月花了多少" }),
+			).toBeInTheDocument();
+			// 重抓排上了、停在 paused（不是「還新鮮所以沒抓」）；資料一直都在，沒有變成讀不到。
+			await waitFor(() =>
+				expect(
+					clientB.getQueryState(queryKeys.expenses("2026-08"))?.fetchStatus,
+				).toBe("paused"),
+			);
+			expect(
+				clientB.getQueryState(queryKeys.expenseSummary("2026-08"))?.fetchStatus,
+			).toBe("paused");
+			expect(screen.getByText("八月的高鐵")).toBeInTheDocument();
+			expect(screen.queryByText(/無法載入/)).not.toBeInTheDocument();
+			// paused 的請求沒有碰到 fetch。
+			expect(offline).not.toHaveBeenCalled();
+		} finally {
+			// 全域的：不還原會讓後面的測試全部 paused。
+			onlineManager.setOnline(true);
+		}
 	});
 });
