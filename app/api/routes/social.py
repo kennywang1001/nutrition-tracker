@@ -3,7 +3,7 @@
 **每個端點的第一件事都是 `load_visible_meal`**——看不到與不存在是同一個 404。
 這裡不直接碰好友關係的表：規則都在可見性模組。"""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, status
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,8 +15,14 @@ from app.errors import NotFoundError, UnprocessableEntityError
 from app.friend_meals import build_friend_meals
 from app.models.social import MealComment, MealLike
 from app.models.user import User
-from app.ratelimit import like_rate_limiter
-from app.schemas.social import CommentResponse, LikerResponse, LikeState, SocialMealResponse
+from app.ratelimit import comment_rate_limiter, like_rate_limiter
+from app.schemas.social import (
+    CommentCreate,
+    CommentResponse,
+    LikerResponse,
+    LikeState,
+    SocialMealResponse,
+)
 from app.social_visibility import author_counts, like_counts, load_visible_meal, social_counts
 
 router = APIRouter(prefix="/social", tags=["social"])
@@ -130,3 +136,51 @@ async def unlike_meal(
     )
     await db.commit()
     return await _like_state(db, user_id, meal_id)
+
+
+@router.post(
+    "/meals/{meal_id}/comments",
+    status_code=status.HTTP_201_CREATED,
+    response_model=CommentResponse,
+)
+async def add_comment(
+    meal_id: ResourceId,
+    payload: CommentCreate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> CommentResponse:
+    """留言。看得到這一餐的人都可以，包含主人自己。不能改，只能刪掉重寫。
+
+    限速在最前面（查不查得到都算一次）。"""
+    # commit 之後 ORM 物件可能過期：要用的值先存起來。
+    user_id, display_name = user.id, user.display_name
+    comment_rate_limiter.hit(str(user_id))
+    meal = await load_visible_meal(db, user, meal_id, lock=True)
+    owner_id = meal.user_id
+    comment = MealComment(meal_id=meal_id, user_id=user_id, body=payload.body)
+    db.add(comment)
+    await db.commit()
+    await db.refresh(comment)
+    return _comment_response(comment, display_name, viewer_id=user_id, owner_id=owner_id)
+
+
+@router.delete("/meals/{meal_id}/comments/{comment_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_comment(
+    meal_id: ResourceId,
+    comment_id: ResourceId,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """刪留言：作者刪自己的，餐的主人刪這一餐底下任何一則。
+
+    條件全部在一個 DELETE 的 WHERE 裡——留言 id、**它屬於路徑上的這一餐**、我有權刪。
+    不存在、屬於另一餐、看得到但不是我的，都是同一個 404。"""
+    meal = await load_visible_meal(db, user, meal_id)
+    conditions = [MealComment.id == comment_id, MealComment.meal_id == meal.id]
+    if meal.user_id != user.id:
+        # 不是主人：只能刪自己寫的。
+        conditions.append(MealComment.user_id == user.id)
+    deleted = await db.scalar(delete(MealComment).where(*conditions).returning(MealComment.id))
+    if deleted is None:
+        raise NotFoundError("COMMENT_NOT_FOUND", "找不到這則留言")
+    await db.commit()

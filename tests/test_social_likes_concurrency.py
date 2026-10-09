@@ -1,8 +1,9 @@
-"""按讚的兩種並行（社群規格 D8、§4.4）——兩條真的連線。
+"""按讚（與留言）的並行（社群規格 D8、§4.4）——兩條真的連線。
 
 1. 兩個同時到的 PUT（連按兩下、兩台裝置）：都成功，只有一列。
 2. 主人正在把這一餐改成「只有我看得到」、還沒 commit，好友同時按讚：讚等主人 commit，
    然後是 404——不會有一則讚落在已經關起來的餐上。
+3. 同一件事換成留言：留言也等，然後也是 404。
 
 不用 `db_session`：共用一個交易的夾具看不見「一個交易在等另一個」
 （handover §6 第 14 種）。資料真的 commit，`finally` 自己清。"""
@@ -17,12 +18,13 @@ import pytest_asyncio
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.api.routes.social import like_meal
+from app.api.routes.social import add_comment, like_meal
 from app.errors import NotFoundError
 from app.models.friendship import Friendship, FriendshipStatus
 from app.models.meal import Meal, MealType
-from app.models.social import MealLike
+from app.models.social import MealComment, MealLike
 from app.models.user import User
+from app.schemas.social import CommentCreate
 from tests.conftest import TEST_DATABASE_URL
 from tests.test_sessions_concurrency import _wait_until_someone_else_is_lock_waiting
 
@@ -143,5 +145,49 @@ async def test_a_like_racing_the_owner_closing_the_meal_waits_and_is_then_refuse
             assert refused.value.code == "MEAL_NOT_FOUND"
 
         assert await _like_rows(independent_sessions, meal) == 0
+    finally:
+        await _clean_up(independent_sessions, alice, bob)
+
+
+async def test_a_comment_racing_the_owner_closing_the_meal_waits_and_is_then_refused(
+    independent_sessions,
+):
+    """規格 §4.4 的另一半：留言寫入時也鎖。沒有鎖的話，主人關門的那一瞬間還會落下一則
+    留言——而且主人會收到它的通知。"""
+    alice, bob, meal = await _friends_and_a_meal(independent_sessions)
+
+    try:
+        async with independent_sessions() as owner_side, independent_sessions() as friend_side:
+            closing = await owner_side.scalar(
+                select(Meal).where(Meal.id == meal.id).with_for_update()
+            )
+            assert closing is not None
+            closing.is_private = True
+            await owner_side.flush()
+            owner_pid = await owner_side.scalar(select(func.pg_backend_pid()))
+
+            bob_again = await friend_side.get(User, bob.id)
+            assert bob_again is not None
+            attempt = asyncio.create_task(
+                add_comment(
+                    meal.id, CommentCreate(body="趕在關門前"), user=bob_again, db=friend_side
+                )
+            )
+            try:
+                async with asyncio.timeout(5.0):
+                    await _wait_until_someone_else_is_lock_waiting(owner_pid)
+            except TimeoutError as exc:
+                raise AssertionError("留言沒有等主人的交易——可以落在正在關起來的餐上") from exc
+            await owner_side.commit()
+
+            with pytest.raises(NotFoundError) as refused:
+                await attempt
+            assert refused.value.code == "MEAL_NOT_FOUND"
+
+        async with independent_sessions() as check:
+            rows = await check.scalar(
+                select(func.count()).select_from(MealComment).where(MealComment.meal_id == meal.id)
+            )
+        assert rows == 0
     finally:
         await _clean_up(independent_sessions, alice, bob)

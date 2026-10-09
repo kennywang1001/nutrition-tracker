@@ -639,6 +639,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/social/meals/{meal_id}/comments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add Comment
+         * @description 留言。看得到這一餐的人都可以，包含主人自己。不能改，只能刪掉重寫。
+         *
+         *     限速在最前面（查不查得到都算一次）。
+         */
+        post: operations["add_comment_api_social_meals__meal_id__comments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/social/meals/{meal_id}/comments/{comment_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Comment
+         * @description 刪留言：作者刪自己的，餐的主人刪這一餐底下任何一則。
+         *
+         *     條件全部在一個 DELETE 的 WHERE 裡——留言 id、**它屬於路徑上的這一餐**、我有權刪。
+         *     不存在、屬於另一餐、看得到但不是我的，都是同一個 404。
+         */
+        delete: operations["delete_comment_api_social_meals__meal_id__comments__comment_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/food-revisions": {
         parameters: {
             query?: never;
@@ -1660,6 +1705,11 @@ export interface components {
             current_password: string;
             /** New Password */
             new_password: string;
+        };
+        /** CommentCreate */
+        CommentCreate: {
+            /** Body */
+            body: string;
         };
         /** CommentResponse */
         CommentResponse: {
@@ -4031,6 +4081,71 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LikeState"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_comment_api_social_meals__meal_id__comments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                meal_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CommentCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_comment_api_social_meals__meal_id__comments__comment_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                meal_id: number;
+                comment_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
