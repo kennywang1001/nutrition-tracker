@@ -1150,7 +1150,7 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
        WARNING「AI 回覆不是正常結束（…）」——Anthropic 帶 `stop_reason`（`max_tokens`、`refusal`…）與
        `input_tokens`／`output_tokens`；Gemini 帶 `finish_reason`（`MAX_TOKENS`、`SAFETY`…）、`block_reason`（提示被擋）與
        `prompt`／`candidates`／`thoughts`／`total` 四個 token 數。**只有原因與用量**：提示詞、使用者輸入、照片、模型的輸出
-       都不進 log。**還是沒有 log 的**：模型正常結束、但內容驗證不過的那一種（9 樣、某一樣超出範圍、不是 JSON）。
+       都不進 log。**模型正常結束、但內容驗證不過的那一種（9 樣、某一樣超出範圍、不是 JSON、0 樣）也有 log 了**：路由的 `_call_estimator_or_record_failure` 記一行 WARNING「AI 的回覆沒有通過檢查（model=…）：錯誤碼 …」，後面是哪幾個欄位、哪一種錯（例如 `items.0.serving_kcal:greater_than_equal`），或 `JSONDecodeError（位置 N）`。同樣**不帶回覆的內容**——Pydantic 的錯誤只取 `loc` 與 `type`，不取 `input` 與 `msg`（`tests/test_ai_analyze_meal.py` 最後三條守著，含「回覆裡的字不出現在 log」）。單樣與多樣共用。
     4. AI 估的量一律當 g；食物庫同名的那一樣如果是 ml 的，數字照搬（1 g≈1 ml）。
     5. **「加入這 N 樣」建的私人食物是當場真的建了**（餐要到按「記錄」才存）：加入之後放棄這一餐，那幾個私人食物
        留在食物庫裡，而食物沒有刪除的端點。加入到一半就離開記一餐：已經送出去的那一個請求收不回來，還沒輪到的

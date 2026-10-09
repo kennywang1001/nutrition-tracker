@@ -20,6 +20,7 @@ from app.ai.estimator import (
     EstimatorUpstreamError,
     RawEstimate,
     RawMealEstimate,
+    parse_raw_meal_estimate,
 )
 from app.api.deps import get_estimator_factory
 from app.config import settings
@@ -515,3 +516,86 @@ async def test_the_library_shortcut_works_without_ai_configured(client, db_sessi
 
     assert response.status_code == 200
     assert response.json()["analysis_id"] is None
+
+
+# ── 回答看不懂時，log 要說得出為什麼（審查後補的）───────────────────────────────
+
+
+def _error_from_parsing(reply: str) -> BadGatewayError:
+    with pytest.raises(BadGatewayError) as raised:
+        parse_raw_meal_estimate(reply)
+    return raised.value
+
+
+async def test_a_reply_that_fails_validation_logs_where_and_why_but_not_the_reply(
+    client, db_session, caplog
+):
+    """停得正常、但內容沒過驗證的回覆（數值超出範圍）——I1 的 WARNING 看的是停下來的
+    原因，這一種不會記。少了這一行，正式環境第一次「AI 這次的回答看不懂」就沒有任何
+    線索：只知道錯誤碼，不知道是哪一欄。
+
+    記的是欄位位置與錯誤種類；**不記回覆的內容**（那是使用者照片裡的東西）。"""
+    import json
+    import logging
+
+    reply = json.dumps(
+        {
+            "description": "秘密的描述",
+            "items": [
+                {
+                    "name": "秘密的食物",
+                    "brand": None,
+                    "serving_grams": 100,
+                    "serving_kcal": -5,
+                    "serving_protein_g": 1,
+                    "serving_fat_g": 1,
+                    "serving_carb_g": 1,
+                    "confidence": 0.5,
+                }
+            ],
+        },
+        ensure_ascii=False,
+    )
+    user = await create_user(db_session)
+    _inject(FakeMealEstimator(error=_error_from_parsing(reply)))
+
+    with caplog.at_level(logging.WARNING, logger="app"):
+        response = await client.post(URL, headers=auth(user), json=TEXT)
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "AI_BAD_RESPONSE"
+    lines = [r.getMessage() for r in caplog.records if "AI_BAD_RESPONSE" in r.getMessage()]
+    assert len(lines) == 1
+    assert "items.0.serving_kcal" in lines[0]
+    assert "greater_than_equal" in lines[0]
+    assert "秘密" not in caplog.text
+    assert "-5" not in lines[0]
+
+
+async def test_a_reply_that_is_not_json_logs_that_without_the_reply(client, db_session, caplog):
+    import logging
+
+    user = await create_user(db_session)
+    _inject(FakeMealEstimator(error=_error_from_parsing("秘密的散文，不是 JSON")))
+
+    with caplog.at_level(logging.WARNING, logger="app"):
+        response = await client.post(URL, headers=auth(user), json=TEXT)
+
+    assert response.json()["error"]["code"] == "AI_BAD_RESPONSE"
+    lines = [r.getMessage() for r in caplog.records if "AI_BAD_RESPONSE" in r.getMessage()]
+    assert len(lines) == 1
+    assert "JSONDecodeError" in lines[0]
+    assert "秘密" not in caplog.text
+
+
+async def test_no_food_found_is_logged_by_its_own_code(client, db_session, caplog):
+    import logging
+
+    user = await create_user(db_session)
+    reply = '{"description": "一張桌子", "items": []}'
+    _inject(FakeMealEstimator(error=_error_from_parsing(reply)))
+
+    with caplog.at_level(logging.WARNING, logger="app"):
+        await client.post(URL, headers=auth(user), json=TEXT)
+
+    assert any("AI_NO_FOOD_FOUND" in r.getMessage() for r in caplog.records)

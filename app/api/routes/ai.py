@@ -29,6 +29,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends
 from PIL import Image
+from pydantic import ValidationError
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -256,7 +257,37 @@ async def _call_estimator_or_record_failure[T](
             raise BadGatewayError(
                 "AI_UPSTREAM_ERROR", "AI 服務暫時無法使用，請稍後再試"
             ) from exc
+        if isinstance(exc, BadGatewayError):
+            # 連上了、也回了，但回的東西沒過把關（AI_BAD_RESPONSE／AI_NO_FOOD_FOUND）。
+            # 使用者只看得到一句「看不懂」；這一行是管理員唯一查得到「哪裡不對」的地方。
+            logger.warning(
+                "AI 的回覆沒有通過檢查（model=%s）：%s %s",
+                model,
+                exc.code,
+                _describe_rejected_reply(exc),
+            )
         raise
+
+
+def _describe_rejected_reply(exc: BadGatewayError) -> str:
+    """回覆為什麼被拒絕——**只說位置與種類，不帶回覆的內容**。
+
+    回覆裡是使用者那一餐的東西（照片裡看到的、他打的字），不進 log。Pydantic 的
+    `errors()` 每一筆都帶 `input`（被拒絕的值）與 `msg`（有時會把值寫進去），所以
+    只取 `loc` 與 `type`；JSON 解析失敗只取例外的類別與位置，不取它帶的原文。
+    """
+    cause = exc.__cause__
+    if isinstance(cause, ValidationError):
+        places = [
+            f"{'.'.join(str(part) for part in error['loc'])}:{error['type']}"
+            for error in cause.errors(include_input=False, include_url=False)
+        ]
+        # 一餐最多 8 樣 × 8 欄；真的全錯也只列前 20 筆，夠看出是哪一類問題。
+        return f"{len(places)} 處不合格：{', '.join(places[:20])}"
+    if isinstance(cause, ValueError):
+        position = getattr(cause, "pos", None)
+        return f"{type(cause).__name__}（位置 {position}）"
+    return "沒有進一步的原因"
 
 
 def _decode_photo(image_base64: str) -> tuple[bytes, str]:
