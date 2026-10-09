@@ -71,7 +71,7 @@
 
 ## 執行中發現的差異
 
-（哪個 task、原本寫什麼、實際是什麼、為什麼。Task 1～6 已填；後面的 task 接著寫。）
+（哪個 task、原本寫什麼、實際是什麼、為什麼。Task 1～8 已填；後面的 task 接著寫。）
 
 **基準線與數字**
 
@@ -245,6 +245,74 @@
 - 前端的 `mockApi` 用 `url.includes` 依序比對：`/api/notifications/unread-count` 與 `/read-all` 要排在 `/api/notifications` **前面**。
 - 接受邀請之後，收件人那一則 `friend_request` 會從清單與未讀數消失（不是變成已讀）——Task 10 接受邀請之後要讓通知與未讀數的 query 失效，Task 11 的 e2e 不要去找那一則。
 - 好友通知沒有 `meal`：Task 10 的連結是 `/me`。
+
+**Task 7～8 的數字與工具**
+
+- 前端（vitest 印出來的數字）：142／1817 → Task 7 **144／1843** → Task 8 **146／1907** → 看過截圖之後的調整 **146／1909**。後端沒有動（1384）。`schema.d.ts` 開工前重新產生一次，`git diff` 是空的。
+- e2e：`friends.spec.ts` 以外的 46 條跑過一次，全綠（那一條會動示範帳號的好友關係，這一輪沒有跑；它的選擇器逐行看過，沒有一個會被新的名稱搶走）。
+- **dev 資料庫現在在 `0018`。** 上面寫的「Task 11 的 `docker compose up -d --build api` 會把 dev 升上去」是錯的：dev 的 api 容器啟動時不跑 migration，重建之後 `alembic current` 還是 `0017`（社群的路由在、表不在）。要另外跑 `docker compose exec -T api python -m alembic upgrade head`。Task 8 的視覺檢查前跑過了；**Task 11 在別的機器上要自己跑一次**。
+- 突變用一支小腳本（scratchpad 的 `social-fe1-mutate.py`）：改 bytes → 跑指定的測試（240 秒上限，逾時用 `taskkill /T`）→ 寫回原本的 bytes → 比對。批次用背景執行；跑的時候 Vite 的 dev server 會熱更新到突變的程式，**截圖要等批次跑完**。
+- **Bash heredoc 不只是吃反斜線**：有兩次整個指令直接是 `unexpected EOF while looking for matching`（heredoc 的內容是帶中文註解、樣板字串的 Python 與 TS；沒有追是哪個字元）。超過幾行的腳本一律用 Write 工具寫成檔案再跑。
+- 視覺檢查開了四組一次性的帳號（`shot.alice.*`／`shot.bob.*@example.com`，腳本前三次各跑到一半），都留在 dev 資料庫裡；沒有動任何示範帳號。
+
+**Task 7（`7b0dd2b`）**
+
+| 原本寫的 | 實際 | 為什麼 |
+|---|---|---|
+| `tests/social-api.test.tsx` 5 條 | **12 條**（Task 8 再加 2 條） | 計畫的 5 條之外：`postComment`、`deleteComment`（方法、網址、body）、`useSocialMeal`（404 只打一次）、`afterCommentChange`（四個鍵標成過期、別的餐與別的資料不動）、`useNotifications`（回的是 `items`）、未讀數抓不到時只打一次、下面那一條 |
+| 「沒有那個快取時不會憑空生一個」守三個 updater 的 `data &&` | 只守得到餐點頁那一個 | 空的 client 上 `setQueriesData` 找不到任何 query，動態與某一天的 updater **根本沒被呼叫**——那兩個的 `data &&` 拿掉是全綠。補了「query 在但還沒有資料」（三個 `prefetch…` 掛著不回來）：動態第一次載入失敗時，人可以在好友的某一天按讚，那時動態的 query 存在而 `data` 是 `undefined`。突變確認：三個各自紅 |
+| `patchLikes` 第 1 條 | 多一份 `friendDay(2, null)`（讓後端決定今天的那一份）、多一份 `socialMeal(9)`（別的餐不動） | `friendDays` 的前綴改成只對到某一個日期時，只有 `null` 那一份紅 |
+| 離線的那一條「原始字串裡沒有留言的文字」 | 多比名單上的名字、通知的預覽 | 三個鍵各自換到別的命名空間時各自紅（`["notifications"]`、`["unread"]`、`["meals", "social", id]`） |
+| `required` 加 `export` | 加了一段說明 | — |
+| 突變表（7 列、9 個） | 全部紅 | 另外多跑 17 個，全部紅：`notifications`、`unreadCount` 的鍵各自換命名空間、`friendDays` 的前綴、動態與某一天的 `data &&`、`markAllRead` 的鍵、`useSocialMeal` 照預設重試（紅的樣子是 1 秒內沒有變成 error）、未讀數照預設重試、`afterCommentChange` 的三個清單失效各拿掉一個與「每一餐的餐點頁都失效」、`useNotifications` 回整個 body、`deleteComment` 不帶方法、`postComment` 的鍵、`staleTime: 0`（餐點頁一個、通知的兩個一起） |
+
+**Task 8（`3beb0e2`，看過截圖之後的調整 `6bc3d60`）**
+
+| 原本寫的 | 實際 | 為什麼 |
+|---|---|---|
+| 成功之後 `setOptimistic(null)`，畫面改看 props | **留著伺服器的回應，蓋到 props 變了為止**（`Held.over`） | 計畫的寫法會閃：`patchLikes` 寫進快取之後，TanStack 的通知是 `setTimeout(0)` 才送，React 先用**舊的 props** 畫一次（退回「沒讚、2」）、下一拍才變成「讚、5」。jsdom 裡用 `MutationObserver` 看得到（`['false／2 個讚', 'true／5 個讚']`）；瀏覽器裡兩拍之間可能剛好畫一格。現在：這一輪還在送時樂觀的狀態一律蓋過 props；送完換成伺服器的回應，props 還是送完那一刻的樣子就繼續蓋，props 一變就照 props |
+| 連按三下送 `["PUT", "PUT"]` | **`["PUT"]`** | 規格 D19 寫的是「送完再看最後的意圖，**不一樣**就再送一次」。第一個回應已經是「讚」，最後的意圖也是「讚」——不用再送（也不白吃限速的額度） |
+| 成功之後 `patchLikes`＋`invalidateQueries(socialMeal)` 寫在按鈕裡 | 搬到 `api/social.ts` 的 **`afterLikeChange`**，多一步：**那一刻還在路上的清單重抓，重來一次**（`invalidateQueries({ fetchStatus: "fetching", refetchType: "all" })`） | 回到分頁（動態開始重抓）馬上按讚：動態的 GET 可能在讚寫進資料庫之前就讀完、卻比讚的回應晚到。測試實際量到：不重來的話，舊的「沒讚」蓋掉剛寫的數字（`[false, false]`），畫面停在錯的狀態直到下一次重抓。平常沒有東西在抓，一個請求都不會多——「在動態上按讚不會重抓動態」那一條照樣成立 |
+| 失敗一律「沒有送出，請再試一次」 | **404 寫「這一餐已經看不到了」** | 剛被解除好友、那一餐被關起來：再按幾次都一樣，不該叫人再試 |
+| `<span className={styles.wrap}>` 包著按鈕與錯誤訊息 | 不包（Fragment）；`.error` 是 `flex-basis: 100%; order: 1` | 包起來的話錯誤訊息把那一塊撐寬，手機上「留言 N」被擠到下一列。現在錯誤訊息落在「讚」與「留言 N」的下面一整列（截圖 `phone-friend-card-error.png`） |
+| `catch` 裡 `wanted.current = null`、`failure = caught ?? new Error("unknown")` | 那一行拿掉；`failure` 包成 `{ caught }` | 下一次按下去第一件事就是蓋掉 `wanted`，沒有任何路徑讀得到留下來的值（拿掉之後「失敗之後還有沒送的意圖不會自己再送」照樣綠）。`{ caught }`：有人 `throw undefined` 時不用另外造一個 Error |
+| `FriendMealCard` 的 `?? 0`「離線快取裡的舊餐」 | `?? 0` 留著，註解寫的理由是**後端退版** | 好友的資料不進離線快取（`NOT_PERSISTED`），不會有舊的形狀；會沒有這三個欄位的情況是 `0018` 退版（規格 §3.5 說可以退）之後的回應。測試：「回應裡沒有讚與留言的欄位：畫 0，不是 undefined」 |
+| 自己的卡片：合計下面另外一列 | **跟合計同一列**（左邊讚與留言、右邊合計；原始碼裡合計在前，`row-reverse`） | 看截圖：另外一列要 44px 高，卡片底下空一大塊。愛心改成實心（空心的像一顆還沒按的按鈕，而這裡不能按） |
+| `.social` 沒有下緣的調整 | 兩種卡片的那一列 `margin-bottom: calc(-1 * var(--space-2))` | 44px 的觸控目標比裡面的字高，不退的話卡片底下比上面空 |
+| `like-button.test.tsx` 10 條 | **23 條** | 見下面 |
+| 突變表 | 全部紅（「迴圈裡的 `wanted.current = null`」照計畫說的**沒有跑**：現在多了一個 `continue`，拿掉它是同步的無限迴圈） | 共 43 個，42 紅、1 存活（見下面） |
+
+補的測試（`like-button.test.tsx`）：
+
+1. **「回應回來的那一刻，畫面不會閃回按之前的樣子」**——`MutationObserver` 記下按鈕顯示過的每一個樣子。計畫的寫法紅。
+2. 「props 不是從那幾份快取來的」（成功之後顯示伺服器的數字，props 自己變了才照 props）、「送出中 props 變了」（清單剛好重抓回來，不把剛按的讚蓋掉）——`Held.over` 的兩個分支；`over` 永遠是 `null`、`same(…)` 拿掉、`latestProps` 不更新，各有一條紅。
+3. 連按：「連按兩下收回再按」（另一個方向）、「第二個請求還在路上時又按一下」（三個請求 `PUT`、`DELETE`、`PUT`）、「失敗之後還有沒送的意圖：丟掉」。連按兩下那一條多斷言**中間的回應不寫進快取**、從第二下之後畫面一直是「沒讚、2」。
+4. 錯誤：斷線（`fetch` reject）、429 沒有 `Retry-After`（不寫「0 秒」）、404。「失敗之後再按一下」斷言的是**回應回來之前**錯誤就不在了。
+5. 「按了就離開畫面：回應回來照樣寫進快取」、「收回送 DELETE」、「樂觀的數字不會變成負的」、已經按過的初始狀態。
+
+`social-api.test.tsx` 多 2 條（`afterLikeChange`）：掛著的動態、某一天不重抓而餐點頁重抓一次；在路上的重抓（掛著的動態、沒有人掛著的某一天）各重來一次、舊的回應不會蓋掉、沒有在抓的那一份不動。`friend-feed` 多 3 條、`friend-day` 多 2 條、`meal-list` 多 3 條（計畫的那幾條，加上「在某一天按讚」）。「在動態上按讚」伺服器回的數字（4）刻意跟樂觀的（1）不一樣——一樣的話看不出回應有沒有寫回動態的快取。
+
+存活的（照實記）：
+
+- `MealList` 的 `const likeCount = meal.like_count ?? 0` 拿掉 `?? 0`：**等價**（`undefined > 0` 也是 `false`，愛心照樣不畫）。留著是讓它跟旁邊的 `commentCount` 同一個寫法；`commentCount` 的那一個拿掉會紅。
+
+**沒有測試守住的事（Task 7～8，已知）**
+
+- 44px 的觸控目標、錯誤訊息落在哪一列、兩種卡片的排版：jsdom 不做版面計算。截圖時量過（讚 49×44、兩種「留言 N」44×44）；Task 11 的 e2e 用 `expectTouchTargets` 釘住。
+- 「閃一下」的測試靠的是 jsdom 裡 React 與 TanStack 各自排程的先後（React 先畫）。兩邊的排程方式換了，那一條可能變成怎麼寫都綠——「props 不是從那幾份快取來的」那一條不靠時序，守同一段程式。
+- 按讚時動態正在重抓的那個競態只在 `QueryClient` 的層級測（`social-api.test.tsx`），沒有經過畫面。
+
+**給 Task 9～12 的提醒（照實作寫的）**
+
+- **`/meals/:id` 還沒有路由**：兩種卡片上的「留言 N」現在點下去沒有頁面，Task 9 接上。
+- `LikeButton` **回傳兩個並排的元素**（按鈕、失敗時的 `<p role="alert">`），沒有包一層。餐點頁放它的地方要嘛是會換行的 flex 列（錯誤訊息自己佔一整列），要嘛是一般的區塊（錯誤訊息是按鈕下面的一段字）。按鈕左邊有 `margin-left: -8px`（愛心對齊文字）。
+- 讚成功之後呼叫的是 `afterLikeChange(queryClient, mealId, state)`：它會讓 `socialMeal(mealId)` 失效——餐點頁的名單自己會重抓，Task 9 不用另外處理。`patchLikes` 還是 export 的。
+- `LikeButton` 的 props 一定要從快取來（`useSocialMeal` 的 `data.meal`）；不是的話它會一直顯示伺服器回的數字，直到 props 變了。
+- `FriendPhoto` 已經 export；`ui.srOnly` 在 `ui.module.css` 檔尾；`queryKeys.friendDays` 是所有好友的所有「某一天」。
+- 讚回 404 時卡片還留在動態上（只顯示「這一餐已經看不到了」）。Task 9 的 `forgetFriend` 是自己解除的那一邊；**被**解除的那一邊要等動態下一次重抓。
+- **自己的餐點清單上的數字最多舊 60 秒**：`["meals"]` 用 app 預設的 `staleTime`，同一次載入裡換頁不重抓——別人剛按的讚要等到重新整理、或有東西讓 `meals` 失效。視覺檢查就踩到（愛麗絲的卡片停在「留言 0」）。Task 10 可以在未讀數變多時讓 `meals` 失效；Task 11 的 e2e 要看主人卡片上的數字時先重新整理。
+- 可及名稱：讚的按鈕是「讚，{名字}的{餐別}」——**同一個好友同一天兩餐同一個餐別時名稱一樣**（規格 D18 的名稱就是這樣），e2e 先用卡片（`getByRole("listitem").filter({ hasText })`）縮小範圍。好友卡片的連結是「{名字}的{餐別}，留言 N 則」，自己卡片的是「{時間} {餐別}，留言 N 則」（時間跟瀏覽器語系走，用 `/留言 \d+ 則$/`）。兩個名稱都**包含**好友的名字與餐別：`getByRole("link", { name: 名字 })` 要 `exact: true`。
+- Task 10 的 `useUnreadCount` 掛到 `LoggedInShell` 之後，`tests/app.test.tsx` 那一類整頁的測試會多一個 `/api/notifications/unread-count` 的請求：`mockApi` 沒準備的路徑是 throw（query 變成 error），不會讓測試紅，但「請求清單」逐字比對的斷言會。
 
 ## 檔案結構
 
@@ -3036,7 +3104,7 @@ git commit -F "$S/social-plan-task6-msg.txt"   # feat(backend): 好友邀請與�
 - Create: `frontend/src/api/social.ts`、`frontend/src/api/notifications.ts`、`frontend/tests/social-api.test.tsx`
 - Modify: `frontend/src/api/queries.ts`、`frontend/src/api/persist.ts`、`frontend/src/api/friends.ts`（`required` 加 `export`）、`frontend/tests/offline.test.tsx`
 
-- [ ] **Step 1：鍵與離線快取。** `queries.ts` 的 `queryKeys` 加：
+- [x] **Step 1：鍵與離線快取。** `queries.ts` 的 `queryKeys` 加：
 
 ```ts
 	// 社群（讚、留言、通知）一律在 "social" 底下：`persist.ts` 靠第一個字不把它們存進
@@ -3050,7 +3118,7 @@ git commit -F "$S/social-plan-task6-msg.txt"   # feat(backend): 好友邀請與�
 
 `persist.ts` 的 `NOT_PERSISTED` 加 `"social",`（上面的註解補一句理由）。
 
-- [ ] **Step 2：`src/api/social.ts`。**
+- [x] **Step 2：`src/api/social.ts`。**
 
 ```ts
 import {
@@ -3161,7 +3229,7 @@ export function afterCommentChange(
 }
 ```
 
-- [ ] **Step 3：`src/api/notifications.ts`。**
+- [x] **Step 3：`src/api/notifications.ts`。**
 
 ```ts
 import { useQuery } from "@tanstack/react-query";
@@ -3222,7 +3290,7 @@ export async function markAllRead(upTo: number): Promise<number> {
 }
 ```
 
-- [ ] **Step 4：測試。** `tests/social-api.test.tsx`（`QueryClient` 直接操作，不用畫面；`beforeEach` 照 `tests/friend-feed.test.tsx`——沒有 `setTokens` 的話 `mockApi` 一律回 401）：
+- [x] **Step 4：測試。** `tests/social-api.test.tsx`（`QueryClient` 直接操作，不用畫面；`beforeEach` 照 `tests/friend-feed.test.tsx`——沒有 `setTokens` 的話 `mockApi` 一律回 401）：
 
 1. **`patchLikes` 三種形狀**：`setQueryData` 塞一個兩頁的好友動態（`{ pages: [{ meals: [m(7), m(8)], next_cursor: "x" }, { meals: [m(9)], next_cursor: null }], pageParams: [null, "x"] }`）、一個 `friendDay(2, "2026-10-06")`、一個 `socialMeal(8)`，每一餐 `like_count: 0, liked_by_me: false`。`patchLikes(client, 8, { like_count: 3, liked_by_me: true })` 之後：三處的第 8 餐都是 `(3, true)`；**第 7、9 餐沒變**；`pageParams` 與 `next_cursor` 原封不動；`socialMeal(8)` 的 `likes`／`comments` 沒被動到。
 2. **沒有那個快取時不會憑空生一個**：空的 client 上呼叫 `patchLikes` → `getQueryData(queryKeys.socialMeal(8))` 是 `undefined`。
@@ -3257,7 +3325,7 @@ it("未讀數：每 60 秒、只在前景、不重試", async () => {
 Run：`npx vitest run tests/social-api.test.tsx tests/offline.test.tsx 2>&1 | grep -E "FAIL|Unhandled|Tests|Test Files"`
 Expected：全綠。
 
-- [ ] **Step 5：突變。**
+- [x] **Step 5：突變。**
 
 | 突變 | 該紅的 |
 |---|---|
@@ -3269,7 +3337,7 @@ Expected：全綠。
 | `setLike` 兩個方法對調 | 第 3 條 |
 | `refetchInterval` 拿掉 | 第 5 條 |
 
-- [ ] **Step 6：commit。** `npm run -s lint && npm run -s test 2>&1 | grep -E "FAIL|Unhandled|Tests |Test Files"`，再單獨跑 `npm run -s typecheck`。
+- [x] **Step 6：commit。** `npm run -s lint && npm run -s test 2>&1 | grep -E "FAIL|Unhandled|Tests |Test Files"`，再單獨跑 `npm run -s typecheck`。
 
 ```bash
 git add frontend/src/api/social.ts frontend/src/api/notifications.ts frontend/src/api/queries.ts frontend/src/api/persist.ts frontend/src/api/friends.ts frontend/tests/social-api.test.tsx frontend/tests/offline.test.tsx
@@ -3284,7 +3352,7 @@ git commit -F "$S/social-plan-task7-msg.txt"   # feat(frontend): 社群的 API �
 - Create: `frontend/src/components/LikeButton.tsx`、`LikeButton.module.css`、`frontend/tests/like-button.test.tsx`
 - Modify: `frontend/src/components/ui.module.css`、`FriendMealCard.tsx`、`FriendMealCard.module.css`、`frontend/src/screens/MealList.tsx`、`MealList.module.css`、`frontend/tests/friend-feed.test.tsx`、`friend-day.test.tsx`、`meal-list.test.tsx`
 
-- [ ] **Step 1：`ui.srOnly`。** `ui.module.css` 檔尾（一般的 class，不放在 `:where()` 裡）：
+- [x] **Step 1：`ui.srOnly`。** `ui.module.css` 檔尾（一般的 class，不放在 `:where()` 裡）：
 
 ```css
 /* 只給螢幕閱讀器的文字（未讀數、讚的數量的完整講法）。不能用 display: none——
@@ -3302,7 +3370,7 @@ git commit -F "$S/social-plan-task7-msg.txt"   # feat(frontend): 社群的 API �
 }
 ```
 
-- [ ] **Step 2：測試（先寫）。** `tests/like-button.test.tsx`。包一層 `QueryClientProvider`；回應用**可以手動放行的 Promise**（`let release!: (r: Response) => void; handler: () => new Promise<Response>((resolve) => { release = resolve; })`），這樣「第一個請求還在路上時再按一下」是確定性的，不靠時間：
+- [x] **Step 2：測試（先寫）。** `tests/like-button.test.tsx`。包一層 `QueryClientProvider`；回應用**可以手動放行的 Promise**（`let release!: (r: Response) => void; handler: () => new Promise<Response>((resolve) => { release = resolve; })`），這樣「第一個請求還在路上時再按一下」是確定性的，不靠時間：
 
 | # | 情境 | 斷言 |
 |---|---|---|
@@ -3321,7 +3389,7 @@ git commit -F "$S/social-plan-task7-msg.txt"   # feat(frontend): 社群的 API �
 
 Run → Expected：FAIL（transform error：`LikeButton` 不存在）。
 
-- [ ] **Step 3：`LikeButton.tsx`。**
+- [x] **Step 3：`LikeButton.tsx`。**
 
 ```tsx
 import { useQueryClient } from "@tanstack/react-query";
@@ -3440,7 +3508,7 @@ export function LikeButton({ mealId, label, count, liked }: Props) {
 
 `LikeButton.module.css`：`.wrap { position: relative; display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }`；`.like { display: inline-flex; align-items: center; gap: var(--space-1); min-width: 44px; min-height: 44px; padding: 0 var(--space-2); border: 0; background: none; color: var(--color-text-muted); font: inherit; cursor: pointer; }`；`.on { color: var(--color-danger); fill: currentColor; }`；`.error { margin: 0; color: var(--color-danger); font-size: 13px; }`。間距變數用 `index.css` 裡真的有的（`--space-1` 沒有就用 `--space-2`）；**只用變數，不寫色碼**（`tests/css-tokens.test.ts`）。
 
-- [ ] **Step 4：卡片。**
+- [x] **Step 4：卡片。**
 
 `FriendMealCard.tsx`——`<p className={styles.macros}>` 後面加一列（`Link`、`LikeButton` 的 import；把檔案裡的 `FriendPhoto` 改成 `export`，Task 9 要用）：
 
@@ -3487,7 +3555,7 @@ export function LikeButton({ mealId, label, count, liked }: Props) {
 
 `?? 0` 不是多餘的：離線快取裡的舊餐、沒有型別標註的測試資料都沒有這幾個欄位（第 11 點）。biome 如果抱怨「型別上不可能是 undefined」就照 `meal.description ?` 那一段的註解寫法留一句理由。兩個 CSS 檔各加 `.social`（`display: flex; align-items: center; gap: var(--space-3); margin-top: var(--space-2);`）、`.comments`（`display: inline-flex; align-items: center; min-height: 44px; color: var(--color-action); text-decoration: none;`）、`MealList` 另加 `.likes`（`position: relative; display: inline-flex; align-items: center; gap: 4px; color: var(--color-text-muted);`）。
 
-- [ ] **Step 5：卡片的測試。**
+- [x] **Step 5：卡片的測試。**
 
 - `friend-feed.test.tsx`：`friendMeal()` 加 `like_count: 2, comment_count: 3, liked_by_me: true`。新增：卡片上有 `button { name: "讚，鮑伯的午餐", pressed: true }`、`link { name: "鮑伯的午餐，留言 3 則" }` 的 `href` 是 `/meals/7`。新增一條「在動態上按讚不會重抓動態」：按一下（`DELETE` 回 `{ like_count: 1, liked_by_me: false }`）→ 等描述變成「1 個讚」→ `spy.mock.calls` 裡 `/api/friends/feed` **仍然只有一次**（先等到數字變了才斷言，第 41 種）。
 - `friend-day.test.tsx`：同樣補欄位；一條斷言按鈕與連結都在。
@@ -3495,7 +3563,7 @@ export function LikeButton({ mealId, label, count, liked }: Props) {
 
 Run：`npx vitest run tests/like-button.test.tsx tests/friend-feed.test.tsx tests/friend-day.test.tsx tests/meal-list.test.tsx tests/css-tokens.test.ts 2>&1 | grep -E "FAIL|Unhandled|Tests |Test Files"`
 
-- [ ] **Step 6：突變。**
+- [x] **Step 6：突變。**
 
 | 突變 | 該紅的 |
 |---|---|
@@ -3510,7 +3578,7 @@ Run：`npx vitest run tests/like-button.test.tsx tests/friend-feed.test.tsx test
 | `FriendMealCard` 的 `?? 0` 拿掉 | 型別上不會紅；`friend-day`／`friend-feed` 裡**沒有帶欄位**的那些既有測試會出現「讚，…」描述是 `undefined 個讚`——補一條斷言「舊資料畫出 0 個讚」讓它紅 |
 | `MealList` 的 `> 0` 改成 `>= 0` | `like_count: 0` 那一條 |
 
-- [ ] **Step 7：commit。** `npm run -s lint && npm run -s test 2>&1 | grep -E "FAIL|Unhandled|Tests |Test Files"`；單獨 `npm run -s typecheck`；掃看不見的字元。
+- [x] **Step 7：commit。** `npm run -s lint && npm run -s test 2>&1 | grep -E "FAIL|Unhandled|Tests |Test Files"`；單獨 `npm run -s typecheck`；掃看不見的字元。
 
 ```bash
 git add frontend/src/components/LikeButton.tsx frontend/src/components/LikeButton.module.css frontend/src/components/ui.module.css frontend/src/components/FriendMealCard.tsx frontend/src/components/FriendMealCard.module.css frontend/src/screens/MealList.tsx frontend/src/screens/MealList.module.css frontend/tests/like-button.test.tsx frontend/tests/friend-feed.test.tsx frontend/tests/friend-day.test.tsx frontend/tests/meal-list.test.tsx
