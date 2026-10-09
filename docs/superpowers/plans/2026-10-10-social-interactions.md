@@ -67,7 +67,7 @@
 
 ## 與規格的差異
 
-（執行時發現的寫在這裡。）
+執行完之後整理成兩份：**跟規格不一樣的**（18 條）搬進規格 §2 的「執行中發現的差異」；**逐個 task 的經過**（原本寫什麼、實際是什麼、每個突變紅在哪、補了哪些測試、存活的與理由）留在下面那一節。
 
 ## 執行中發現的差異
 
@@ -422,9 +422,9 @@
 
 **Task 11 的數字與工具**
 
-- e2e：47 → **50 條、20 個檔案**（`social.spec.ts` 三條；計畫寫的是一條、48）。整套用預設的 workers（6）連跑兩次：`50 passed (36.2s)`、`50 passed (33.0s)`；`friends.spec.ts` 也在裡面，綠的。`social.spec.ts` 單獨跑約 8 秒，`--repeat-each=3` 全綠。前端仍然是 152／2083，後端沒有動。
+- e2e：47 → **50 條、20 個檔案**（`social.spec.ts` 三條；計畫寫的是一條、48）。整套用預設的 workers（6）連跑兩次，做了兩輪：`915011c` 之後 `50 passed (36.2s)`、`50 passed (33.0s)`；最後一個 e2e 的 commit（`ce7c9de`）之後再一輪 `50 passed (36.2s)`、`50 passed (35.5s)`。`friends.spec.ts` 也在裡面，綠的。`social.spec.ts` 單獨跑約 8 秒，`--repeat-each=3` 全綠。前端仍然是 152／2083，後端沒有動。
 - 開跑前：`docker compose up -d --build api`，再 `docker compose exec -T api python -m alembic upgrade head`（dev 已經在 `0018`，沒有東西要跑；`alembic current` 是 `0018 (head)`）。
-- 日誌：兩次整套跑完之後 `docker compose logs api --since 20m | grep 重用` 是 **0 行**（那 20 分鐘的日誌 2699 行，也沒有 `WARNING`／`ERROR`）。api 容器在跑整套之前才因為後端的突變重建過，所以這 20 分鐘就是這個容器的全部。
+- 日誌：兩輪整套跑完之後各看一次 `docker compose logs api --since 20m | grep 重用`，都是 **0 行**（那 20 分鐘的日誌分別是 2699 行、5512 行，也沒有 `WARNING`／`ERROR`）。第一輪之前 api 容器才因為後端的突變重建過，那 20 分鐘就是那個容器的全部。
 - 突變用 scratchpad 的 `social-e2e-mutate.py`：改 bytes →（後端的 `docker compose up -d --build api`、等 healthy）→ 跑 `social.spec.ts` → 寫回原本的 bytes、比對；後端那幾個跑完再重建一次回到原本的映像。每批最多四個，在前景跑（被砍的時候最多留下一個檔案的一行）。跑的時候沒有別的行程在用 dev server。
 - **每跑一次 `social.spec.ts`，dev 資料庫多 7 個帳號**（`e2e.social-a.*`、`-b`、`-c`、`social-owner`、`social-stranger`、`social-wide-a`、`-b`），三個私人食物、三餐、幾列讚／留言／通知。沒有動任何示範帳號。
 
@@ -484,6 +484,29 @@
 - 觸控目標只量高度；寬度與排列沒有量。
 - 陌生人那一條只有「不是好友」一格；邀請中、解除之後、私人的餐在後端的表格化測試裡（`test_social_meal.py`）。解除之後那一格在第一條 e2e 有（B 按讚 404）。
 - 10 則以上的「9+」、留言的字數提示、429：都只在單元測試。
+
+**Task 12（文件）**
+
+量到的數字（2026-10-10，`feat/social-interactions`，Task 11 的 commit 之後）：
+
+| 項目 | 計畫預期 | 量到的 |
+|---|---|---|
+| 後端 `pytest -q -W error` | 「條數與秒數」（基準線 1227、約 2 分 50 秒） | **`1384 passed in 224.36s`**（3 分 44 秒；跑的時候沒有別的東西在用資料庫） |
+| 前端 `npm run -s test` | — | **`Test Files 152`、`Tests 2083`**，`Type Errors no errors`；`typecheck`、`lint`（256 個檔案）乾淨 |
+| e2e | 48 條 | **50 條、20 個檔案**；連跑兩次都是 `50 passed` |
+| 端點 | 87 | **87**（`grep -c "@router\."` 的加總；`app.openapi()` 數出來的 operation 也是 87） |
+| 資料表 | 19 | **19**（dev 資料庫 `information_schema.tables` 是 20，含 `alembic_version`） |
+| Migration | `0001`～`0018` | head 是 **`0018`**（`alembic current`） |
+
+| 原本寫的 | 實際 | 為什麼 |
+|---|---|---|
+| handover §6：「至少這三個寫計畫時就看到的」 | 那三個（`now()`、`type` 的 CHECK、短的數字）之外，寫的是執行時真的踩到的：互相遮住的過濾四次（含 e2e 那一次）、共用 session 看不到 commit 與鎖、測試用的是它要守的常數、預期存活的突變其實是真的畫面、空的快取上 updater 沒被呼叫、「閃一下」、StrictMode 那一條、e2e 的第一次抓與重抓、突變弄髒另一邊 | 那一節的用處是下一個人少踩一次 |
+| handover §7：三格（`ON CONFLICT`、`aria-hidden`、`refetchInterval`） | 那三格，加上各 task 記下來的：heredoc 吃反斜線、`created_at` 是交易開始的時間、commit 之後不碰 ORM 物件、dev 容器不跑 migration、`.pyc` 與突變、三個東西同名、TanStack 的四格（props 慢一拍、`invalidateQueries` 的三種結果、`setQueriesData`、effect 的「下一次再試」）、StrictMode 與「第一次」的 ref、vitest 看不到 tsx 測試的型別錯誤、`Number(useParams().id)`、e2e 的兩格（巢狀的 `listitem`、直接打開深的網址） | 執行時的提醒（「給 Task 12 的」）都搬過去了 |
+| handover §8.2：規格 §9.1 的五點＋兩點 | **14 點**，照執行後的實際情況寫 | 「自己的餐點清單上的數字最多慢 60 秒」改寫了（Task 10 之後未讀數變多時會重抓；慢的是對方收回讚、刪留言）；多了照片 4:3、`/notifications` 不在分頁底下、不在 CSV 匯出、帳號不能刪而 cascade 只在資料庫層測過、時間線仍然連到編輯 |
+| handover §10：端點表、兩張可見性表、通知的寫入點、前端的鍵、分頁標記 | 照做，另外有「新的東西在哪裡」「沒有自動測試守的」；§3 的目錄多四行、§4.10 多一段 | — |
+| `docs/deployment.md`：照 `0017` 那一段 | 照做。多寫一段「退版期間手機上還留著新版前端會看到什麼」——**那是照程式讀的，沒有實際退版試過**（文件裡也這樣寫） | `scripts/deploy.sh` 的 `ROLLBACK_UNSAFE_REVISIONS` 仍然是 `(0012)`，沒有改 |
+| 規格：「把計畫『與規格的差異』累積的每一條搬過去」 | 搬的是**跟規格不一樣的** 18 條；逐個 task 的突變表與補的測試留在計畫，規格指過來 | 全部搬過去是把這一節（三百多行）抄一遍 |
+| 完成條件「`ruff check .`、`mypy app` 乾淨；`schema.d.ts` 重新產生後 `git diff` 是空的」 | Task 11～12 沒有動後端，仍然各跑一次：`All checks passed!`、`Success: no issues found in 85 source files`、重新產生之後 `git status` 沒有 `schema.d.ts` | — |
 
 ## 檔案結構
 
@@ -4396,8 +4419,8 @@ git commit -F "$S/social-plan-task12-msg.txt"   # docs: 按讚、留言、通知
 
 ## 完成條件
 
-- [ ] 後端 `pytest -q -W error` 全綠（含 `alembic check`）；`ruff check .`、`mypy app` 乾淨。
-- [ ] 前端 `npm run -s test` 沒有 `FAIL`／`Unhandled`；`typecheck`、`lint` 乾淨；`schema.d.ts` 重新產生後 `git diff` 是空的。
-- [ ] e2e 整套連跑兩次都綠；規格 §6.5 列的每一處「我的」都沒有改。
-- [ ] 每個 task 的突變表都跑過：紅的寫了是哪一條，存活的寫了理由。
-- [ ] `git status` 只剩 `lunch.jpg`；沒有 push。
+- [x] 後端 `pytest -q -W error` 全綠（含 `alembic check`）；`ruff check .`、`mypy app` 乾淨。——`1384 passed in 224.36s`。
+- [x] 前端 `npm run -s test` 沒有 `FAIL`／`Unhandled`；`typecheck`、`lint` 乾淨；`schema.d.ts` 重新產生後 `git diff` 是空的。——152／2083。
+- [x] e2e 整套連跑兩次都綠；規格 §6.5 列的每一處「我的」都沒有改。——`50 passed` 兩次；這個分支在 `frontend/e2e/` 只多了 `social.spec.ts`，既有的 19 個檔一個字都沒動。
+- [x] 每個 task 的突變表都跑過：紅的寫了是哪一條，存活的寫了理由。——在「執行中發現的差異」。
+- [x] `git status` 只剩 `lunch.jpg`；沒有 push。

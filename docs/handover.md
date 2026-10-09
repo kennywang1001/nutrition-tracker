@@ -2,8 +2,8 @@
 
 **專案：** nutrition-tracker —— 飲食紀錄系統
 **Repo：** https://github.com/kennywang1001/nutrition-tracker（公開）
-**狀態：** 後端完成並可部署、session 撤銷已完成；介面改版第一階段、食物的一份、修改與刪除已記錄的餐點、AI 估算的前端已合併；介面改版第二階段已實作於 `feat/ui-phase2`；帳號與目標設定已實作於 `feat/account-settings`；報表看其他月份與匯出資料已實作於 `feat/reports-month-export`；AI 一次估算多樣食物與餐點的描述已實作於 `feat/ai-multi-food`
-**文件產出日：** 2026-09-11（session 撤銷完成後更新於 2026-09-12；§2 的數字更新於 2026-10-09）
+**狀態：** 後端完成並可部署、session 撤銷已完成；介面改版第一階段、食物的一份、修改與刪除已記錄的餐點、AI 估算的前端已合併；介面改版第二階段已實作於 `feat/ui-phase2`；帳號與目標設定已實作於 `feat/account-settings`；報表看其他月份與匯出資料已實作於 `feat/reports-month-export`；AI 一次估算多樣食物與餐點的描述已實作於 `feat/ai-multi-food`；按讚、留言、通知已實作於 `feat/social-interactions`
+**文件產出日：** 2026-09-11（session 撤銷完成後更新於 2026-09-12；§2 的數字更新於 2026-10-10）
 
 ---
 
@@ -28,11 +28,11 @@
 
 | 項目 | 數字 |
 |---|---|
-| 端點 | **79**（OpenAPI 的 operation 數，跟 `grep -c "@router\." app/api/routes/*.py` 的加總一樣；2026-10-09） |
-| 測試 | 後端 **1227**（`pytest -q -W error` 全綠，約 2 分 50 秒）；前端 `Test Files 142`、`Tests 1817`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **47** 條、19 個檔案（Playwright；預設 workers 連跑兩次都是 `47 passed`）。2026-10-09 在 `feat/ai-multi-food` 量的（審查後的修正之後） |
+| 端點 | **87**（OpenAPI 的 operation 數，跟 `grep -c "@router\." app/api/routes/*.py` 的加總一樣；2026-10-10） |
+| 測試 | 後端 **1384**（`pytest -q -W error` 全綠，約 3 分 45 秒）；前端 `Test Files 152`、`Tests 2083`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **50** 條、20 個檔案（Playwright；預設 workers 連跑兩次都是 `50 passed`）。2026-10-10 在 `feat/social-interactions` 量的 |
 | 覆蓋率 | 96%（2026-09 量的，之後沒再量） |
-| 資料表 | 16（+ `alembic_version`） |
-| Migration | `0001` ~ `0017` |
+| 資料表 | 19（+ `alembic_version`） |
+| Migration | `0001` ~ `0018` |
 | Commit | 600+ |
 | PR | 5 個，全部經 CI 驗證後合併 |
 
@@ -56,7 +56,8 @@
 | 帳號與目標設定 | 「我的」的每日目標卡片＋`/me/targets`（**從今天起**生效，過去的日子維持原本的目標）；帳號卡片的行內「修改名稱」；`/me/password` 改密碼（**其他裝置全部登出**，這台換一組新票繼續用）；管理員在「所有帳號」替一般使用者產生**重設密碼連結**（24 小時、只能用一次、不給管理員帳號），朋友打開 `/reset-password#<碼>` 設新密碼——取代 SSH 跑 `create-user`（規格 `docs/superpowers/specs/2026-10-08-account-settings-design.md`、計畫 `docs/superpowers/plans/2026-10-08-account-settings.md`；見第 10 節「帳號與目標設定」） | ✅（`feat/account-settings`） |
 | 報表看其他月份、匯出資料 | 報表頂端的「‹ 上個月｜月份｜下個月 ›」（`?month=YYYY-MM`，沒有就是這個月；**這個月是哪個月由後端決定**）；「我的」的匯出資料：餐點／花費／補劑各下載一個 CSV（UTF-8＋BOM、帳號時區、分塊串流、每人每分鐘 6 次、同時一個）。沒有 migration（規格 `docs/superpowers/specs/2026-10-09-reports-month-export-design.md`、計畫 `docs/superpowers/plans/2026-10-09-reports-month-export.md`；見第 10 節「報表看其他月份與匯出資料」） | ✅（`feat/reports-month-export`） |
 | AI 一次估算多樣食物、餐點的描述 | 記一餐的 AI 入口改成一餐一次估（`POST /api/ai/analyze-meal`：一句描述＋最多 8 樣，**算一次額度**）；估完是勾選清單，食物庫同名的預設用食物庫的，「加入這 N 樣」把每一樣變成食物放進這一餐（部分失敗可以重試）。這一餐多一個「描述」（`meals.description`，migration `0017`）：**好友看得到**（備註仍然只有自己看得到），飲食頁與好友的卡片、餐點 CSV 都有。新增食物與編輯這一餐的「加一項」仍然是一次一樣（規格 `docs/superpowers/specs/2026-10-09-ai-multi-food-design.md`、計畫 `docs/superpowers/plans/2026-10-09-ai-multi-food.md`；見第 10 節「AI 多樣估算與餐點描述」） | ✅（`feat/ai-multi-food`；**沒有對真的 LLM 打過**，見 §8.2） |
-| UI 改版 第三階段 | 社群（P7）：第一步「開帳號的路」、第二步「好友關係」已完成。按讚、留言、通知刻意沒做——等真的用過再說 | 🟡 |
+| 按讚、留言、通知（社群第三步） | 餐點頁 `/meals/:id`（自己的餐與看得到的好友的餐：照片、項目、合計、描述，底下是讚與留言）；讚（一人一餐一個，卡片上的愛心與數字）；留言（一行、1–200 字，不能改，作者與餐的主人可以刪）；通知（只在 app 裡：讚、留言、好友邀請、邀請被接受）——「我的」分頁上的未讀數字、「我的」最上面的通知卡片、`/notifications`。**解除好友不刪資料，讀的時候過濾**；端點全部是新的（`/api/social/…`、`/api/notifications…`），`/api/meals` 仍然只回自己的餐。migration `0018`（三張新表，可以退版）（規格 `docs/superpowers/specs/2026-10-10-social-interactions-design.md`、計畫 `docs/superpowers/plans/2026-10-10-social-interactions.md`；見第 10 節「按讚、留言、通知」） | ✅（`feat/social-interactions`） |
+| UI 改版 第三階段 | 社群（P7）：「開帳號的路」「好友關係」「按讚、留言、通知」三步都已完成。**還沒做：封鎖與檢舉、好友的趨勢／統計／目標**（好友規格 §1.3 剩下的項目）；推播也沒有（通知只在 app 裡，見 §8.2） | 🟡 |
 
 > **P4 早於 P2/P3 完成是刻意的，但當初的理由有瑕疵。**
 > 我說「部署完手機就能用」—— 部署完能用的是 API，不是能在手機上按的東西。
@@ -83,10 +84,14 @@ app/
   days.py              day_bounds() / today_in_timezone()  ← 時區的單一來源
   nutrition.py         營養素換算（每 100 單位的「100」只存在這裡）
   stats.py             統計彙總核心（SQL 分桶）
-  ratelimit.py         登入速率限制、KeyedRateLimiter（換票／登出、匯出）、InFlightLimiter（匯出同時一個，最多佔 10 分鐘）——都在記憶體，單容器
+  ratelimit.py         登入速率限制、KeyedRateLimiter（換票／登出、匯出、讚、留言）、InFlightLimiter（匯出同時一個，最多佔 10 分鐘）——都在記憶體，單容器
   csv_export.py        CSV 的唯一寫法：BOM、RFC 4180 的引號、公式字元（儲存格的型別決定怎麼寫）
   export.py            匯出的三支分塊 async generator（餐點、花費、補劑；keyset 分塊）
   food_visibility.py   食物/份量的分層可見性（共用）
+  friend_visibility.py 好友的讀取的唯一入口：friend_ids / load_visible_friend / shared_meals（§4.10）
+  social_visibility.py 讚、留言、通知的可見性：看不看得到一餐、一則讚或留言算不算數、通知顯不顯示（§4.10）
+  friend_meals.py      `FriendMeal` 白名單的唯一組法（好友動態、某一天、餐點頁共用）
+  notifications.py     通知的寫入：notify_like / forget_like / notify_comment / notify_friend
   password_resets.py   重設密碼連結的規則：產生、雜湊、還能用、兌換、撤銷某人的活連結（同 invites.py 的形狀）
   cli.py               create-admin / create-user / cleanup-photos / cleanup-sessions
   storage/photos.py    照片的所有檔案讀寫（規格第 8 節：集中在單一模組）
@@ -213,6 +218,27 @@ DB 只存相對路徑。不存進資料庫的真正理由不是效能，是**備
   對方解除或把一餐改成私人之後，這台裝置離線時不該還看得到。
 - 私人食物的**名稱**好友看得到（「吃了什麼」就是食物名）——刻意的取捨，對策是逐餐的「只有我看得到」。
 - 一對朋友一列（`user_a < user_b`，CHECK 擋自己加自己）；拒絕、收回、解除都是刪列。
+
+**按讚、留言、通知是同一個做法的第二次**（社群規格 D1、D4、D6、D7）：
+
+- **第二個可見性模組 `app/social_visibility.py`**——`friend_visibility.py` 之外唯一碰 `Friendship` 的非路由模組。
+  三個問題各一個函式：看不看得到一餐（`meal_visible_to`／`load_visible_meal`：主人，或主人現在的好友而且那一餐不是
+  「只有我看得到」）、一則讚或留言算不算數（`like_counts`／`author_counts`：作者是主人，或作者**現在**是主人的好友）、
+  一則通知顯不顯示（`notification_visible`）。五個社群端點第一步都是 `load_visible_meal`；看不到與不存在同一個
+  `404 MEAL_NOT_FOUND`，條件全部在一個查詢的 `WHERE` 裡。
+- **解除好友＝讀的時候過濾，不刪資料。** 讚、留言、通知的資料列都留著，數字、名單、留言清單、`liked_by_me`、未讀數
+  全部套同一個 `EXISTS friendships`；重新加好友就回來。解除時不用掃表，「解除＝立刻看不到」也不靠任何清理工作。
+  代價：解除之後自己留下的讚與留言收不回來（看不到那一餐了），見 §8.2。
+- **端點全部是新的**（`/api/social/…`、`/api/notifications…`），不是 `/api/meals/{id}/like`。`/api/meals` 仍然只回
+  自己的餐，只多 `like_count`、`comment_count` 兩個數字——它從 `social_visibility` **只能** import `SocialCounts` 與
+  `social_counts`（`test_friend_meals.py` 的 `test_only_the_social_modules_widen_who_can_read_a_meal`：`social_visibility`、
+  `load_visible_meal`、`meal_visible_to`、`build_friend_meals`、`friend_meals`、`like_counts`、`author_counts` 這幾個字只准
+  出現在社群的五個模組）。**它掃的是文字**：別的模組連註解都不能出現這幾個字。
+- **主人與好友看同一餐走同一個白名單**（`GET /api/social/meals/{id}` 回 `FriendMeal`，由 `app/friend_meals.py` 的
+  `build_friend_meals` 組）：不存在「好友那條路多漏一個欄位」。主人要看餐費與備註是既有的 `GET /api/meals/{id}`。
+- **讚與留言不回 email、不回作者的 user id**：「是不是我」「能不能刪」由伺服器算成 `is_me`／`can_delete`。
+- **社群的 query 都在 `["social", …]` 底下，不進 localStorage**（同 `friends`）。自己的餐點清單（`["meals"]`，會存）
+  只多了兩個數字，沒有名字與內容。
 
 ---
 
@@ -1000,6 +1026,43 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
   `toLocaleTimeString(undefined, …)`；Playwright 的 Chromium 預設 en-US，名稱是「編輯 05:42 PM 點心」，
   計畫的 `/^編輯 \d{2}:\d{2} 點心$/` 等到逾時。單元測試（jsdom）與台灣的手機都看不到這個差別。
 
+### 按讚、留言、通知：第 2、14 種又好幾次，另外幾條「突變存活才發現」
+
+沒有編新的號碼。逐條的經過（哪個突變、補了哪一條測試）在計畫 `docs/superpowers/plans/2026-10-10-social-interactions.md`
+的「執行中發現的差異」。
+
+- **第 2 種：這個功能有三道會互相遮住的過濾**（看不看得到餐、作者還算不算數、是不是私人），而且第四道在畫面上。
+  - 測試的那組人裡，「不是主人的好友」的兩個人**一個好友都沒有**：把條件寫成「viewer 有任何一個好友」「作者有任何
+    一個好友」都是全綠。補了「好友的好友」（她有好友，只是不是這個主人的）之後才紅——可見性、算不算數、通知三處各一次。
+  - 通知的 `type` 寫一條 `CHECK (type IN (…))` **永遠看不到它**：四種以外的值先被「形狀要對上種類」那一條擋下來。所以只留一條
+    （它同時就是 `type` 的手寫約束，§7 `Enum(create_constraint=True)` 那一格的另一半）。
+  - 只測「錯的形狀被擋」的話，把形狀約束的好友分支整個拿掉（好友通知一則都寫不進去）是全綠——**每一種對的形狀也要寫進去一次**。
+  - e2e：後端把餐點頁的名單改成不過濾前好友，全綠。解除之後主人那一頁因為「0 個讚」**整列不畫**，名單上有誰看不出來。
+    多一個也按了讚的第三人之後才紅。
+- **第 14 種（共用 session 的夾具看得到沒 commit 的寫入）四次。** 刪留言不 commit、留言把 commit 換成
+  flush、已讀不 commit、好友通知移到 commit 之後才寫——全綠。每一種補一條「端點回來之後 `db_session.rollback()` 再讀」。
+  同一個夾具也**看不到鎖**：按讚與留言的 `FOR SHARE` 拿掉是全綠，要兩條真的連線（`test_social_likes_concurrency.py`）。
+- **共用交易裡 `now()` 不會動。** 整條測試是同一個外層交易，「第二次已讀不會改掉第一次的時間」比兩次的 `read_at`
+  看不出差別（兩次都是同一個時間）；測試直接把已讀時間改成 2020 年，看它有沒有被蓋掉
+  （`test_reading_again_does_not_restamp_what_was_already_read`）。
+- **測試用的是它要守的那個常數。** `COMMENT_LIMIT = 21` 存活——測試迴圈跑 `COMMENT_LIMIT` 次。規格的數字要寫死在測試裡
+  （`assert COMMENT_LIMIT == 20`）。
+- **不外流的測試用短的數字，會紅在不相干的地方。** 餐費 180 會剛好出現在 id 或熱量裡；用 4321.75 這種不會撞的，而且斷言
+  「沒有這個字串」之前先斷言同一個回應裡**有**描述（第 5 種）。
+- **計畫預期存活的突變，其實是一個真的畫面。** `still_pending` 拿掉「邀請是對方送的」：計畫說方向不對的通知寫不出來。
+  寫得出來——對方邀我、我拒絕（通知藏起來），後來我邀對方：這一對又有一列在等，那則舊的「想加你為好友」冒出來。
+- **空的快取上 updater 根本沒被呼叫。** `setQueriesData` 找不到 query 時不呼叫 updater：「沒有那個快取時不會憑空生一個」
+  守不到 updater 裡的 `data &&`。要「query 在、但還沒有資料」（一個掛著不回來的請求）才走得到那一行。
+- **「樂觀更新之後會不會閃一下」要記下每一個畫過的樣子。** 最後的狀態是對的，中間退回舊的那一格只有 `MutationObserver`
+  看得到（§7 TanStack 那一格）。
+- **StrictMode 的測試守不到「只送一次」。** 加了 `isFetchedAfterMount` 之後，掛載那一刻 effect 一定過不了第一個判斷，
+  跑兩次都一樣；守 `marked` 的是「同一份清單重抓回來不再送」。**一條測試守的是哪一行，改了旁邊的行之後要重看。**
+- **e2e：第一次抓與重抓分不出來。** 「未讀數變多時自己的餐點清單重抓」「解除好友時清單過期」：那個人只去一次飲食頁的話，
+  那是第一次抓，兩個失效拿掉都是綠的。先去一次（讓快取裡有一份 60 秒內算新鮮的），事情發生之後再去，數字變了才是失效造成的。
+- **突變的那一邊會弄髒另一邊。** 突變的批次在跑時另外跑 vitest：它順便做整個專案的型別檢查，剛好看到被改成突變樣子的檔案，
+  印出 `Unhandled Source Error`，而它自己的測試全綠。跑 e2e 的突變時 Vite 也會把突變的程式熱更新給正在跑的另一輪 e2e。
+  **同一時間只跑一樣東西。**
+
 ---
 
 ## 7. 踩過的技術坑（節錄，完整版在各計畫文件）
@@ -1059,6 +1122,24 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
 | 必填欄位加進 `MealResponse` 之後 | **有型別標註**的測試資料（`tests/timeline.test.ts`）會讓 `tsc -b` 紅——其他測試資料是沒有標註的物件，不會，所以紅的只有那一處。另外**離線快取裡的舊餐沒有那個 key**（`undefined`，不是 `null`）：畫面判斷要用真值（`meal.description ? … : null`），寫 `!== null` 會畫出一個空的 `<p>`；受控輸入框的 `value` 要 `?? ""` |
 | e2e 選擇器裡的時間 | `formatTime` 是 `toLocaleTimeString(undefined, …)`——跟瀏覽器語系走。Playwright 的 Chromium 預設 **en-US**（「05:42 PM」），台灣的手機是「下午05:42」。可及名稱帶時間的元素（飲食頁卡片的「編輯 … 點心」）不要用 `\d{2}:\d{2}` 去對；CSV 裡的時間是後端寫的，才是固定的 `HH:MM` |
 | Write／Edit 工具與「反斜線 u」跳脫 | 工具會把參數裡「反斜線 u＋四位十六進位」解成**真的字元**（`\x00`、`\n` 不會）。要在原始碼裡留跳脫寫法（BOM、雙向控制字元）就不能直接打：用腳本從計畫依行號原樣取出，或寫完再用腳本換回去；commit 前掃一次 Cf／Zl／Zp 類的字元（同上面 BOM 那一格的「反方向也會」） |
+| Bash heredoc 裡的腳本 | **反斜線會少一層**：要寫進檔案的「反斜線＋b」變成真的退格字元（0x08）、「反斜線＋n」變成真的換行；帶反引號、樣板字串、中文註解的內容還會整個變成 `unexpected EOF while looking for matching`。退格是 `Cc` 類，上一格的掃描（`Cf`／`Zl`／`Zp`）**掃不到**——掃描要連 `Cc`（Tab、換行除外）、CR、BOM 一起看。超過幾行的腳本一律用 Write 工具寫成檔案再跑 |
+| `INSERT … ON CONFLICT DO NOTHING` | 衝突時 `RETURNING` **沒有列**（`scalar` 是 `None`——「真的新增了才寫通知」靠它）；而且**照樣吃掉一個 identity 值**，id 會跳號，不要斷言 id 連續。它不丟 `IntegrityError`，所以不用 savepoint，共用 session 的測試夾具也不會壞 |
+| `created_at` 當排序依據 | `server_default now()` 是**交易開始**的時間，同一個交易裡寫的幾列一模一樣。要「寫入的先後」用 identity 的 `id`（通知的清單、`read-all` 的 `up_to` 都是 id） |
+| commit 之後碰 ORM 物件 | 端點在 `await db.commit()` 之後讀 `user.id`、`meal.user_id` 可能是 `MissingGreenlet`（物件過期、async 不能懶載入）。開頭就把要用的整數與字串存成區域變數，commit 之後只用它們（社群的每一個寫入端點都是這樣） |
+| dev 的 api 容器與 migration | `docker compose up -d --build api` **不會**替 dev 資料庫跑 migration（只有 `deploy.sh` 會）：重建之後路由在、表不在。要另外 `docker compose exec -T api python -m alembic upgrade head`，再 `alembic current` 確認 |
+| `.pyc` 與突變 | pyc 用「秒」比對原始檔的 mtime：同一秒內、同樣大小的改動會被當成沒變。突變改回之後**刪掉對應的 `.pyc`** 比 `touch` 可靠。突變的批次被砍在半路時 `finally` 不會跑，檔案停在突變的樣子——動手前把原始 bytes 存一份、長的批次拆成幾段在前景跑、跑完看 `git status`／`git diff` |
+| `aria-hidden` 與可及名稱 | `aria-hidden` 的子元素**不進**父元素的可及名稱：分頁上的未讀數字是 `aria-hidden` 的標記，連結的名稱仍然是「我的」（20 多處測試不用改）。唸出來的「N 則新通知」用 `aria-describedby`，而那段字要放在連結**外面**——放裡面會併進名稱。按鈕的 `aria-describedby` 指到自己裡面的元素則沒有問題（讚的「N 個讚」） |
+| 同一塊有三個東西同名 | 留言區的標題「留言（N）」、清單 `aria-label="留言"`、輸入框的標籤：`getByLabel("留言", { exact: true })` 對到的是**清單**（`aria-label` 也算 label）。輸入框改叫「寫留言」 |
+| TanStack：快取寫進去之後 props 慢一拍 | `setQueryData` 之後，訂閱的元件要等 TanStack 的通知（`setTimeout(0)`）才重畫。「回應回來 → 寫快取 → 清掉樂觀的 state」會讓元件先用**舊的 props** 畫一次——閃一下。讚的按鈕把伺服器的回應留在手上，蓋到 props 變了為止（`LikeButton` 的 `Held.over`） |
+| TanStack `invalidateQueries` 的三種結果 | 有資料、有人掛著：**取消**正在抓的、重抓一次。**還沒有資料、正在抓**：併進同一個請求（不會多一個）。沒有人掛著：只標成過期。另外 `PersistQueryClientProvider` 還原離線快取期間 observer **還沒訂閱**——掛載那一刻的失效一個請求都不會多。要讓「正在路上、可能讀到舊資料」的清單重來一次：`invalidateQueries({ fetchStatus: "fetching", refetchType: "all" })`（`afterLikeChange`）；要讓晚到的舊回應不蓋掉剛寫的值：先 `cancelQueries` 再 `setQueryData`（通知頁的已讀） |
+| TanStack `setQueriesData` | 找不到 query 時**不呼叫 updater**；query 在但 `data` 是 `undefined`（第一次載入還沒回來、或失敗）時會呼叫——updater 要自己擋 `undefined` |
+| TanStack `refetchInterval` | 預設**分頁在背景時不抓**（`refetchIntervalInBackground: false`）——未讀數的 60 秒輪詢不用自己判斷 `document.visibilityState` |
+| effect「下一次再試」 | 依賴沒變 effect 就不會再跑。「已讀失敗，清單下一次回來時再試」——同一份清單重抓回來，最新的 id、有沒有未讀都沒變，永遠不會再試。依賴要有一個每次抓回來都會變的東西（`dataUpdatedAt`）；「這一次掛載之後抓回來的才算」用 `isFetchedAfterMount`（回到那一頁時先畫的是快取裡上一次的清單） |
+| StrictMode 與「第一次」的 ref | 用布林 ref 記「是不是第一次」：StrictMode 把 effect 跑兩次，第二次就「不是第一次了」。記**上一次的值**（上一次的路徑），值沒變就不做事 |
+| vitest 的型別檢查與 tsx 測試 | `<TabBar unread={3} />` 在元件還沒有那個 prop 時，vitest 印的是 `Type Errors  no errors`。會擋的只有 `npm run typecheck`（同上面 Playwright 那一格：兩種測試的型別都只有 `tsc -b` 看得到） |
+| `Number(useParams().id)` | `Number("1.5")`、`Number("-3")`、`Number("")` 都是數字：會真的送出一個 422 的請求。路徑參數要的是正整數就用 `/^[1-9]\d*$/` 先比（`MealDetail` 的 `parseMealId`） |
+| e2e：巢狀清單的 `listitem` | 卡片是 `<li>`、裡面每一項食物也是 `<li>`：`getByRole("listitem").filter({ hasText: 食物 })` 兩層都中。要卡片就 `.first()`（文件順序外層在前）或用卡片才有的東西過濾 |
+| e2e：直接打開一個深的網址 | 還沒登入時 `goto("/meals/5")` 看到的是登入表單，**登入之後留在那個網址**（`App` 只是換外框，不導頁）——一個 context 一次 `goto` 就能測「用網址直接開」，不用登入之後再 `goto`（那會多換一次票） |
 
 ---
 
@@ -1320,6 +1401,8 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
   與一張用掉的邀請（加上觸控測試產生的邀請）；好友的 e2e 多一個 `e2e.pal.*` 帳號、
   兩個 `E2E 好友…` 食物與幾餐（管理員 kenny.demo 的）。AI 多樣估算的 e2e 每跑一次多兩個帳號
   （`e2e.describe.*`、`e2e.multi.*`），各有一兩個私人食物與一餐（`e2e.multi.*` 的那一餐有一張照片）。
+  社群的 e2e（`social.spec.ts`）每跑一次多 **7 個帳號**（`e2e.social-a.*`、`-b`、`-c`、`social-owner`、`social-stranger`、
+  `social-wide-a`、`-b`），三個私人食物、三餐，幾列讚、留言、通知與好友關係。
 - **好友關係的已知取捨**（好友規格）：
   - 好友碼由 ORM 的 `default=` 產生、**不重試**：31⁸ 種組合，碰撞機率可忽略；碰到就是一次 500。
   - migration `0012` 替既有使用者補碼的那段**沒有自動化測試**（測試資料庫從空的升級）；
@@ -1335,6 +1418,34 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
     要補跑就手動改、跑、改回。
   - 極端的日期（`?date=9999-12-31`、`0001-01-01`）在 `day_bounds` 裡 `OverflowError` → 500——
     `/api/meals?date=` 本來就有（master 就存在），好友的某一天繼承了它。
+- **按讚、留言、通知的已知限制**（社群規格 §9.1，用執行後的實際情況寫；沒有測試守住的事逐條在計畫
+  `docs/superpowers/plans/2026-10-10-social-interactions.md` 的「執行中發現的差異」）：
+  1. **共同好友看得到彼此。** B 與 C 都是 A 的好友、彼此不是：他們在 A 的餐上看得到對方的名字（「B、C 說讚」）與留言。
+     刻意的（規格 D3：那是 A 的場子）；要擋就要先有封鎖，還沒做。
+  2. **解除好友之後，自己留下的讚與留言收不回來**（看不到那一餐了）。它們被藏起來——不算數、不顯示、對方的通知也不顯示；
+     資料列還在，重新加好友就全部回來，包括當時的通知（已讀的仍然是已讀）。
+  3. **通知沒有保留期限，也沒有清理。** 清單只回最近 50 則，更舊的一直留在表裡；`cleanup-notifications` 這個 CLI
+     規格 §3.4 提過、**沒有做**。沒有個別已讀、個別刪除、關掉某一類通知的設定。
+  4. **沒有推播**（Web Push、email、桌面通知都沒有）。未讀數的新鮮度靠三件事：換頁時重抓、回到視窗時重抓、畫面看得到時
+     每 60 秒一次——所以停在同一頁不動時，最慢 60 秒才看到新的數字；app 沒開著就什麼都不知道。
+  5. **自己卡片上的讚與留言數**（飲食頁，`["meals"]` 用 app 預設的 60 秒 `staleTime`）：未讀數**變多**時會跟著重抓，所以別人
+     剛按的讚、剛留的言換一次頁就看得到。**對方收回讚、刪掉留言**不會讓未讀數變多——那個數字最多慢 60 秒，或重新整理。
+     被解除好友的那一邊也一樣：動態上那張卡片要等動態下一次重抓才不見；在卡片上按讚會寫「這一餐已經看不到了」，
+     開著餐點頁的話按讚或送留言之後整頁換成「看不到這一餐」。
+  6. **讚與留言不在 CSV 匯出裡**（刻意的，規格 §7 第 8 點：匯出是「你自己的紀錄」）。自己寫在別人餐上的留言也匯不出來。
+  7. **限速在記憶體裡**（留言每人每分鐘 20 次、讚與收回合計 60 次；同 §3 的 `ratelimit.py`）：api 重啟歸零、多容器時不共用。
+  8. **帳號不能刪**（沒有端點、CLI 也沒有）。三張新表對 `users` 的 FK 都是 `CASCADE`，「刪一個使用者之後三張表都乾淨」
+     **只在資料庫層測過**（`tests/test_social_model.py::test_deleting_a_user_takes_what_they_did` 直接在資料庫刪一個使用者），
+     沒有任何一條產品的路會走到。
+  9. **留言超過 100 則時看不到更早的**（畫面寫「只顯示最近 100 則」，沒有分頁）。
+  10. **通知裡留言的預覽照 code point 切 40 個字**：可能切在表情符號的組合序列中間（留言本身的 200 字上限也是 code point）。
+  11. **`notifications.meal_id`／`comment_id` 沒有索引**：刪一餐或一則留言時 cascade 會掃整張通知表。這個規模可以；
+      量長大了再加（好友規格 §4.5：沒有實測證據不加索引）。
+  12. **餐點頁的照片是裁成 4:3 的縮圖**（置中裁切，最寬 360px）：直的照片照原比例放會佔滿整個手機畫面。要看完整的點下去。
+  13. **`/notifications` 不在任何一個分頁底下**：在那一頁時分頁列／左側導覽沒有亮的那一格（入口是「我的」最上面的卡片）。
+      `/meals/:id` 也一樣。
+  14. **總覽時間線的餐點列仍然連到編輯**，不是餐點頁；時間線上也不顯示讚與留言數（規格 §1.3）。進自己那一餐的餐點頁要從
+      飲食頁卡片的「留言 N」或通知。
 - **編輯自己已送出的提案**：後端沒有這個端點，目前只能等審核結果。
 
 ---
@@ -1472,8 +1583,9 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
 
 - **第二階段：已完成**（見階段進度）。當時順手發現的三件事（報表清單按鈕、
   編輯歷史日期、趨勢日期軸）已在小項目包做完。
-- **第三階段**：社群（P7）。「開帳號的路」與「好友關係」都已完成（見階段進度）。
-  按讚、留言、通知、封鎖、好友的趨勢都刻意沒做——等真的用過一陣子再決定要什麼。
+- **第三階段**：社群（P7）。「開帳號的路」「好友關係」「按讚、留言、通知」都已完成（見階段進度；最後一個見本節最後的
+  「按讚、留言、通知」）。**封鎖與檢舉、好友的趨勢／統計／目標仍然沒做**——等真的用過一陣子再決定要什麼；
+  推播也沒有（通知只在 app 裡）。
 
 **已知待辦（都已完成，見規格 `docs/superpowers/specs/2026-10-08-keypad-offline-design.md`）：**
 
@@ -1902,6 +2014,101 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
 
 **已知限制**在 §8.2「AI 估算的已知限制與後續」第一點底下（12 點）。最要緊的三點：沒有對真的 LLM 打過（第 1 點）、
 會把思考算進輸出上限的模型可能寫不完（第 3 點）、「加入」建的私人食物在放棄這一餐之後留著（第 5 點）。
+
+### 按讚、留言、通知
+
+好友的餐可以按讚、留言；每一餐有自己的頁面；有人對你的餐按讚或留言、送好友邀請或接受你的邀請時，「我的」的分頁上有未讀數字
+（規格 `docs/superpowers/specs/2026-10-10-social-interactions-design.md`、計畫
+`docs/superpowers/plans/2026-10-10-social-interactions.md`，計畫的「執行中發現的差異」記了實作跟計畫不一樣的地方）。
+**一個 migration（`0018`，三張新表，可以退版）、沒有新的環境變數。** 設計上的「為什麼」在 §4.10 的後半。
+
+**端點**（8 個，全部要登入；路徑參數是 `ResourceId`，超出 bigint → `422`）：
+
+| 端點 | 做什麼 | 要記得的 |
+|---|---|---|
+| `GET /api/social/meals/{id}` | 一餐（`FriendMeal` 白名單＋三個數字）、`is_mine`、按讚的名單、最近 100 則留言（由舊到新）、`comments_truncated` | 主人與好友同一個形狀；沒有餐費、備註。照片不在這裡：自己的走 `/api/meals/{id}/photo`，好友的走 `/api/friends/{user_id}/meals/{id}/photo` |
+| `PUT`／`DELETE /api/social/meals/{id}/like` | 按讚／收回，都冪等、都回 `200 { like_count, liked_by_me }` | 順序：限速（`429 TOO_MANY_LIKES`，兩個合計每分鐘 60 次）→ 可見性（`404`）→ PUT 才有：主人 `422 CANNOT_LIKE_OWN_MEAL`。`INSERT … ON CONFLICT DO NOTHING`，真的新增了才寫通知；DELETE 連通知一起刪 |
+| `POST /api/social/meals/{id}/comments` | 留言，`201` 回那一則 | body `{ body }`：清理前最多 1000 字，`single_line` 清理後 1–200 字。限速每分鐘 20 次（`429 TOO_MANY_COMMENTS`）在可見性**之前**。主人可以留言 |
+| `DELETE /api/social/meals/{id}/comments/{comment_id}` | 刪留言，`204` | 一個 `DELETE … WHERE`（留言 id、餐 id、我是作者或主人）；0 列一律 `404 COMMENT_NOT_FOUND`——不存在、屬於另一餐、不是我能刪的，同一個回應 |
+| `GET /api/notifications` | `{ items }`：最近 50 則、新的在前（**照 `id`，不是 `created_at`**） | `type` 是 `like`／`comment`／`friend_request`／`friend_accepted`；`meal`、`comment_preview`（前 40 個字）在好友的兩種是 `null` |
+| `GET /api/notifications/unread-count` | `{ count }` | 跟清單同一個可見性條件 |
+| `POST /api/notifications/read-all` | body `{ up_to }`（必填）：把 `id <= up_to` 的標成已讀，回剩下的未讀數 | 帶清單裡最新那一則的 id——清單載入之後才到的通知不會沒看過就變成已讀。**不**套可見性（把藏起來的也標成已讀沒有壞處） |
+
+另外：`FriendMeal`（動態、好友的某一天）多 `like_count`、`comment_count`、`liked_by_me`；`MealResponse`（`/api/meals` 的每一個回應）
+多 `like_count`、`comment_count`。好友的兩個端點有副作用：送邀請 → 給對方一則 `friend_request`；接受（含兩邊互送直接成立）→
+給送邀請的人一則 `friend_accepted`。
+
+**看不看得到一餐**（`load_visible_meal`；看不到的一律 `404 MEAL_NOT_FOUND`，跟不存在逐字相同）：
+
+| viewer | 公開的餐 | 「只有我看得到」的餐 |
+|---|---|---|
+| 主人 | 讀、留言、刪任何一則留言；**不能按讚**（`422`） | 同左（既有的讚與留言主人仍然看得到） |
+| 主人現在的好友 | 讀、按讚、留言、刪自己的留言 | `404` |
+| 邀請還在等、已經解除的前好友、陌生人 | `404` | `404` |
+
+**一則讚或留言算不算數**（數字、名單、留言清單、`liked_by_me`、`comments_truncated` 用同一個過濾；**看的人是誰不影響**——
+B 看 A 的餐時，C 的留言算不算只看 C 與 A 的關係）：
+
+| 作者 | 讚 | 留言 |
+|---|---|---|
+| 餐的主人 | 不算（本來就不該有那一列） | 顯示 |
+| 主人現在的好友 | 算 | 顯示 |
+| 已經解除的前好友 | 不算、不顯示 | 不顯示 |
+| 解除之後又加回來 | 算（資料列一直都在） | 顯示 |
+
+**通知**（`app/notifications.py` 寫、`app/api/routes/notifications.py` 讀）：
+
+| 種類 | 誰寫的、什麼時候 | 什麼時候顯示 |
+|---|---|---|
+| `like` | `like_meal`：真的新增了一列讚才寫（同一個交易）。每個（收件人、動作者、餐）最多一則（部分唯一索引）；`unlike_meal` 把它刪掉 | 動作者**現在**是我的好友 |
+| `comment` | `add_comment`：作者不是主人才寫，一則留言一則通知。刪留言時 FK cascade 帶走 | 同上 |
+| `friend_request` | `friends.py` 的 `_insert_request`：新邀請 | 那個邀請還在等、而且是對方送的。接受、拒絕、收回之後**不顯示**（不是變成已讀） |
+| `friend_accepted` | `_accept`（含兩邊互送直接成立） | 動作者現在是我的好友 |
+
+只通知餐的主人與好友關係的對方；自己的動作不通知自己（資料庫也擋：`ck_notifications_not_self`）；別人在同一餐留言**不**通知
+其他留言的人。好友的通知寫之前先刪同一對、同方向的舊通知（每個方向最多一則）。刪一餐 → 讚、留言、通知都 cascade。
+
+**前端：**
+
+| 東西 | 在哪裡 | 要記得的 |
+|---|---|---|
+| query 的鍵 | `api/queries.ts`：`socialMeal(id)`＝`["social","meal",id]`、`socialMeals`（它的前綴，解除好友時整組移除）、`notifications`、`unreadCount` | 全部在 `"social"` 底下，`persist.ts` 的 `NOT_PERSISTED` 靠第一個字不讓它們進 localStorage（`tests/offline.test.tsx`） |
+| API 層 | `api/social.ts`：`useSocialMeal`（`staleTime: 0`、404 不重試）、`setLike`、`postComment`、`deleteComment`、`patchLikes`、`afterLikeChange`、`afterCommentChange`、`refreshIfMealGone`；`api/notifications.ts`：`useNotifications`、`useUnreadCount`、`markAllRead` | **`afterLikeChange`**：把伺服器的數字寫回每一份快取（動態、某一天、餐點頁；清單不重抓），再讓那一刻**還在路上**的清單重來一次（它可能在讚寫進去之前就讀完了）。**`afterCommentChange`**：這一餐重抓（等它抓完才回來），三個清單標成過期。**`refreshIfMealGone`**：讚或留言回 404 時讓餐點頁重抓——整頁換成「看不到這一餐」 |
+| 讚的按鈕 | `components/LikeButton.tsx` | 名稱固定「讚，{誰}的{餐別}」＋`aria-pressed`，數字是描述（「N 個讚」）。樂觀更新；請求**一次一個**，送完看最後的意圖，跟伺服器剛回的不一樣才再送。回應回來之後把伺服器的數字留在手上、蓋到 props 變了為止（不然會閃，§7）。**回傳兩個並排的元素**（按鈕、錯誤訊息），放它的地方要是會換行的 flex 列。props 一定要從快取來 |
+| 留言 | `components/CommentForm.tsx`、`CommentList.tsx`（樣式 `Comments.module.css`） | 輸入框叫「寫留言」（「留言」是清單的名稱）；送出鍵與「確定刪除」是 `aria-disabled` 不是 `disabled`；字數用 code point、去頭尾空白之後算；刪完焦點移到標題「留言（N）」；任何 404 都當成「已經不在了」照樣重抓 |
+| 餐點頁 | `screens/MealDetail.tsx`，路由 `/meals/:id`（`narrow`；`/meals/new`、`/meals/:id/edit` 照舊） | 自己的標題是「我的{餐別}」＋「編輯」；好友的是「{名字}的{餐別}」＋名字連到他的那一天。主人沒有讚的按鈕，只有數字，**0 個讚時整列不畫**。網址的 id 不是正整數（`parseMealId`）或 404：「看不到這一餐」＋「回飲食」，快取裡有舊資料也不顯示 |
+| 卡片 | `components/FriendMealCard.tsx`、`screens/MealList.tsx` | 好友的：讚的按鈕＋「留言 N」；自己的：「♥ N」（文字，0 不畫）＋「留言 N」，都連到 `/meals/:id`。數字一律 `?? 0`（好友的是為了後端退版，自己的還有離線快取裡的舊餐） |
+| 未讀數 | `App.tsx` 的 `useUnreadNotifications`（在 `LoggedInShell`），數字當 prop 傳給 `TabBar`／`SideNav` | 這兩個元件自己不碰 query（它們的測試沒有 `QueryClientProvider`）。新鮮度：回到視窗、畫面看得到時每 60 秒、**每換一頁**。**數字變多時**順便讓 `meals`、`notifications`、`socialMeals` 過期（有人對我的東西做了什麼）；變少不做事 |
+| 分頁上的標記 | `components/nav-tabs.ts` 的 `UNREAD_TAB`（`/me`）、`unreadBadgeText`（10 以上顯示「9+」）；`TabBar.tsx` 的 `TabLink`、`SideNav.tsx` 的 `SideLink` | 見下面「為什麼連結的名稱不變」 |
+| 通知 | `components/NotificationsCard.tsx`（「我的」最上面：`data-testid="notifications-card"`、「N 則新通知」或「沒有新通知」、「看通知」）；`screens/Notifications.tsx`，路由 `/notifications`（`narrow`） | 每一列是一個連結：讚與留言到那一餐，**好友的兩種到 `/me`**。清單載入後送一次已讀（這一次掛載之後抓回來的才算、同一份不重送、失敗下次清單回來再試），用回來的數字更新未讀數（先 `cancelQueries`）；**不重抓清單**——這一次的畫面上剛看到的還標著「未讀」 |
+| 解除、接受之後 | `api/friends.ts` 的 `forgetFriend`；`FriendsCard.tsx` 的 `refreshRequests` | 解除：餐點頁的快取整組移除，通知、未讀數、自己的餐點清單重抓。接受、拒絕、收回：通知與未讀數重抓（那一則 `friend_request` 不見了）、餐點清單重抓（加回來的好友以前的讚又算數） |
+
+**為什麼分頁的連結名稱仍然是「我的」（規格 D17）：** 單元測試與 e2e 有 20 多處用 `getByRole("link", { name: "我的" })` 找它。
+看得到的數字是 `aria-hidden` 的標記（不進名稱）；唸出來的「N 則新通知」是連結的**描述**（`aria-describedby`），那段字放在連結
+**外面**（放裡面會併進名稱）。螢幕閱讀器唸「我的，連結，3 則新通知」；測試用 `toHaveAccessibleDescription("3 則新通知")`。
+沒有未讀時沒有 `aria-describedby`，`side-nav.test.tsx` 比對 `textContent` 的那幾條也不用動。標記的顏色是
+`--color-action`／`--color-on-action`（`--color-danger` 配白字在深色模式只有約 2.6:1）。
+
+**新的東西在哪裡：**
+
+- 後端：`migrations/versions/0018_create_social_tables.py`；`app/models/social.py`（`MealLike`、`MealComment`、`Notification`）；
+  `app/social_visibility.py`、`app/friend_meals.py`、`app/notifications.py`；`app/schemas/social.py`；
+  `app/api/routes/social.py`、`notifications.py`；`app/ratelimit.py`（`like_rate_limiter`、`comment_rate_limiter`）；
+  `routes/friends.py`（`FriendMeal` 的組法搬出去、好友通知）、`routes/meals.py`（兩個數字）。測試 `tests/test_social_model.py`、
+  `test_social_meal.py`、`test_social_likes.py`、`test_social_likes_concurrency.py`（兩條真的連線）、`test_social_comments.py`、
+  `test_notifications.py`，共用的那組人在 `tests/social_helpers.py`；`test_friend_meals.py` 的兩條掃描測試。
+- 前端：上表的檔案，加上 `ui.module.css` 的 `srOnly`。測試 `tests/social-api.test.tsx`、`like-button.test.tsx`、
+  `comment-form.test.tsx`、`meal-detail.test.tsx`、`notifications.test.tsx`，以及 `app`、`tab-bar`、`side-nav`、`me`、
+  `friends-card`、`friend-feed`、`friend-day`、`meal-list`、`offline`、`layout` 的新增。
+- e2e：`e2e/social.spec.ts`（三條，各開新帳號、一個人一個 context）：兩個人的整圈＋解除好友（手機，途中量觸控目標）；
+  陌生人用網址開不了別人的餐；電腦版的未讀數字與內容寬度。
+
+**沒有自動測試守的**（逐條在計畫的「沒有測試守住的事」）：未讀數「回到視窗重抓」「每 60 秒一次」這兩個時間（換頁重抓有測）；
+`unlike_meal` 的鎖；`CommentList` 刪完之後重抓失敗的那一格；版面的排列（e2e 只量高度）；`LoggedInShell` 第一次掛載不多抓一次
+（從 App 那一層怎麼寫都是綠的，見計畫 Task 10「存活的」）。
+
+**已知限制**在 §8.2「按讚、留言、通知的已知限制」（14 點）。最要緊的三點：共同好友看得到彼此的名字與留言（第 1 點）、
+沒有推播（第 4 點）、通知不會自己清（第 3 點）。
 
 ---
 
