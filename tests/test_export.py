@@ -14,7 +14,9 @@ from decimal import Decimal
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.routes import export as export_routes
 from app.db import get_db
 from app.export import (
     EXPENSE_CATEGORY_LABELS,
@@ -27,6 +29,7 @@ from app.main import app
 from app.models.expense import ExpenseCategory
 from app.models.food import BaseUnit, FoodRevision
 from app.models.meal import MealType
+from app.models.user import User
 from app.ratelimit import EXPORT_LIMIT
 from app.security.tokens import create_access_token
 from tests.factories import (
@@ -434,14 +437,37 @@ async def test_meals_are_read_a_few_meals_at_a_time(db_session, monkeypatch, sel
     assert sizes == [(1, 0), (4, 2), (2, 4)]
 
 
-async def test_the_database_session_stays_open_until_the_last_chunk(db_session, monkeypatch):
-    """`get_db` 的收尾要在串流**結束之後**。
+async def _some_of_each(db: AsyncSession, user: User, *, count: int = 1) -> None:
+    """三種資料各 `count` 筆，時間一筆一筆往後（餐點沒有項目：一餐一列）。"""
+    start = datetime(2026, 3, 10, 4, 0, tzinfo=UTC)
+    pill = await create_supplement(db, created_by=user, owner=user)
+    for index in range(count):
+        moment = start + timedelta(minutes=index)
+        await create_meal(db, user=user, eaten_at=moment)
+        await create_expense(db, user=user, spent_at=moment)
+        await create_intake(db, user=user, supplement=pill, taken_at=moment)
+
+
+# 三條匯出的路：網址，與 route 模組裡那支 generator 的名字（測試要把它包一層）。
+EXPORT_PATHS = [
+    pytest.param(MEALS, "meal_csv", id="meals"),
+    pytest.param(EXPENSES, "expense_csv", id="expenses"),
+    pytest.param(SUPPLEMENTS, "supplement_csv", id="supplements"),
+]
+
+
+@pytest.mark.parametrize(("path", "generator"), EXPORT_PATHS)
+async def test_the_database_session_stays_open_until_the_last_chunk(
+    db_session, monkeypatch, path, generator
+):
+    """`get_db` 的收尾要在串流**結束之後**——三個端點各自宣告自己的 `Depends(get_db)`，
+    所以三個都要守（只測花費的話，把餐點那一支改成 `scope="function"` 沒有人會發現）。
 
     FastAPI 0.118 之前、或把依賴改成 `scope="function"`，session 會在第一塊送出之前就被關掉
     ——而共用 session 的 `client` 夾具根本不關 session，看不到這件事（第 14 種）。
     """
     user = await create_user(db_session)
-    await create_expense(db_session, user=user)
+    await _some_of_each(db_session, user)
     user_id = user.id
     events: list[str] = []
 
@@ -451,20 +477,23 @@ async def test_the_database_session_stays_open_until_the_last_chunk(db_session, 
         finally:
             events.append("session-closed")
 
+    original = getattr(export_routes, generator)
+
     async def spying(db, **kwargs):
-        async for chunk in expense_csv(db, **kwargs):
+        async for chunk in original(db, **kwargs):
             events.append("chunk")
             yield chunk
 
-    monkeypatch.setattr("app.api.routes.export.expense_csv", spying)
+    monkeypatch.setattr(export_routes, generator, spying)
     app.dependency_overrides[get_db] = get_db_spy
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as raw:
-            response = await raw.get(EXPENSES, headers=auth(user_id))
+            response = await raw.get(path, headers=auth(user_id))
     finally:
         app.dependency_overrides.clear()
 
     assert response.status_code == 200
+    assert len(_table(response.content)) == 2  # 標題＋一列：真的讀到資料了
     assert events == ["chunk", "chunk", "session-closed"]  # 標題、一塊資料，然後才收尾
 
 
