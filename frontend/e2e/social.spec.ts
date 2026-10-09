@@ -69,6 +69,48 @@ async function seedMeal(
 	return id;
 }
 
+/** 用 API 加好友：`inviter` 用 `receiver` 的好友碼送邀請，`receiver` 接受。
+ *  （`inviter` 因此多一則「接受了你的好友邀請」。）畫面上的加好友在第一條測試。 */
+async function befriend(
+	request: APIRequestContext,
+	inviter: Headers,
+	receiver: Headers,
+) {
+	const mine = await request.get("/api/friends/me/code", { headers: receiver });
+	expect(mine.ok()).toBe(true);
+	const { code } = (await mine.json()) as { code: string };
+	const sent = await request.post("/api/friends/requests", {
+		headers: inviter,
+		data: { code },
+	});
+	expect(sent.ok()).toBe(true);
+	const pending = await request.get("/api/friends/requests", {
+		headers: receiver,
+	});
+	expect(pending.ok()).toBe(true);
+	const { incoming } = (await pending.json()) as {
+		incoming: { id: number }[];
+	};
+	const invitation = incoming[0];
+	if (invitation === undefined) throw new Error("對方沒有收到邀請");
+	const accepted = await request.post(
+		`/api/friends/requests/${invitation.id}/accept`,
+		{ headers: receiver },
+	);
+	expect(accepted.ok()).toBe(true);
+}
+
+async function likeMeal(
+	request: APIRequestContext,
+	headers: Headers,
+	mealId: number,
+) {
+	const liked = await request.put(`/api/social/meals/${mealId}/like`, {
+		headers,
+	});
+	expect(liked.ok()).toBe(true);
+}
+
 /** 分頁列（手機）或左側導覽（電腦）上的連結。先縮到導覽裡：「我的」在飲食頁也是
  *  一個單選鈕的字，餐點頁的標題是「我的點心」。 */
 function tab(page: Page, name: "總覽" | "飲食" | "我的"): Locator {
@@ -137,7 +179,8 @@ test("社群：按讚、留言、通知、刪留言；解除好友之後讚不�
 	const comment = `看起來好好吃 ${stamp}`;
 	// 好友看到的名稱（讚的按鈕、留言連結、餐點頁的標題都帶它）。
 	const meal = `${a.name}的點心`;
-	await seedMeal(request, await apiLogin(request, a), food);
+	const asA = await apiLogin(request, a);
+	const mealId = await seedMeal(request, asA, food);
 
 	const contextA = await browser.newContext({ viewport: PHONE });
 	const contextB = await browser.newContext({ viewport: PHONE });
@@ -349,7 +392,20 @@ test("社群：按讚、留言、通知、刪留言；解除好友之後讚不�
 	await expect(pageB.getByText(comment)).toHaveCount(0);
 	await expect(likeB).toHaveAttribute("aria-pressed", "true");
 
+	// ── 第三個人 C（用 API）：也是 A 的好友、也按了讚 ─────────────────────
+	// 為了下面的解除：只有 B 一個讚的話，解除之後主人的頁面因為「0 個讚」整列
+	// 不畫——名單有沒有過濾掉 B 根本看不出來。有 C 在，那一列還在，上面只該剩 C。
+	const c = await newAccount(request, "social-c");
+	const asC = await apiLogin(request, c);
+	await befriend(request, asA, asC);
+	await likeMeal(request, asC, mealId);
+
 	// ── A 解除好友：B 的讚不算了（資料列還在，讀的時候過濾）───────────────
+	// 解除之前先看一次自己的卡片：留言 0、兩個讚（換頁時未讀數變多，清單跟著重抓）。
+	// 這一次抓回來的清單留在快取裡（60 秒內算新鮮），下面要看解除會不會讓它重抓。
+	await go(pageA, "飲食");
+	await expect(ownComments(0)).toBeVisible();
+	await expect(pageA.getByText("2 個讚", { exact: true })).toHaveCount(1);
 	await go(pageA, "我的");
 	await pageA
 		.getByRole("button", { name: `解除和${b.name}的好友`, exact: true })
@@ -358,18 +414,20 @@ test("社群：按讚、留言、通知、刪留言；解除好友之後讚不�
 	await expect(
 		pageA.getByRole("button", { name: `解除和${b.name}的好友`, exact: true }),
 	).toHaveCount(0);
-	// 飲食頁的卡片：快取裡是「留言 1」，「留言 0」出現＝這是重抓回來的清單。
+	// 飲食頁的卡片：解除時自己的餐點清單被標成過期，回來就重抓——只剩 C 的讚。
 	await go(pageA, "飲食");
-	await expect(ownComments(0)).toBeVisible();
-	await expect(pageA.getByText("1 個讚", { exact: true })).toHaveCount(0);
+	await expect(pageA.getByText("1 個讚", { exact: true })).toHaveCount(1);
+	await expect(pageA.getByText("2 個讚", { exact: true })).toHaveCount(0);
 	await ownComments(0).click();
 	// 解除時餐點頁的快取整個拿掉了：標題出現＝這是剛抓回來的資料。
+	// 名單上只有 C——B 的名字不在這一頁的任何地方。
 	await expect(h1(pageA, "我的點心")).toBeVisible();
 	await expect(commentsHeading(pageA, 0)).toBeVisible();
-	await expect(pageA.getByText(`${b.name} 說讚`, { exact: true })).toHaveCount(
-		0,
-	);
-	await expect(pageA.getByText("1 個讚", { exact: true })).toHaveCount(0);
+	await expect(
+		pageA.getByText(`${c.name} 說讚`, { exact: true }),
+	).toBeVisible();
+	await expect(pageA.getByText("1 個讚", { exact: true })).toHaveCount(1);
+	await expect(pageA.getByText(b.name)).toHaveCount(0);
 
 	// ── B 還開著那一餐的頁面：一按讚（後端回 404）整頁換成「看不到這一餐」──
 	await likeB.click();
@@ -450,30 +508,8 @@ test("社群（電腦版）：左側導覽的未讀數字；通知頁與餐點�
 	const mealId = await seedMeal(request, asA, food);
 
 	// 這一條要量的是版面，所以好友、讚、留言都直接用 API 做（畫面上的流程在第一條）。
-	const myCode = await request.get("/api/friends/me/code", { headers: asB });
-	expect(myCode.ok()).toBe(true);
-	const { code } = (await myCode.json()) as { code: string };
-	const sent = await request.post("/api/friends/requests", {
-		headers: asA,
-		data: { code },
-	});
-	expect(sent.ok()).toBe(true);
-	const pending = await request.get("/api/friends/requests", { headers: asB });
-	expect(pending.ok()).toBe(true);
-	const { incoming } = (await pending.json()) as {
-		incoming: { id: number }[];
-	};
-	const invitation = incoming[0];
-	if (invitation === undefined) throw new Error("B 沒有收到邀請");
-	const accepted = await request.post(
-		`/api/friends/requests/${invitation.id}/accept`,
-		{ headers: asB },
-	);
-	expect(accepted.ok()).toBe(true);
-	const liked = await request.put(`/api/social/meals/${mealId}/like`, {
-		headers: asB,
-	});
-	expect(liked.ok()).toBe(true);
+	await befriend(request, asA, asB);
+	await likeMeal(request, asB, mealId);
 	const commented = await request.post(`/api/social/meals/${mealId}/comments`, {
 		headers: asB,
 		data: { body: comment },
