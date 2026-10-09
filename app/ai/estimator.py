@@ -28,7 +28,7 @@
 import json
 import logging
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Protocol
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -234,6 +234,43 @@ MEAL_IMAGE_INSTRUCTION = (
 )
 
 
+_CENTS = Decimal("0.01")
+
+
+def _round_to_cents(value: object) -> object:
+    # 模型給的數字先四捨五入到小數兩位，再交給欄位的範圍檢查（審查 I2）。
+    #
+    # 之前「超過兩位小數」是拒絕（`decimal_places=2`）：八樣裡有一樣的脂肪是 0.333，
+    # 整餐就是 AI_BAD_RESPONSE，而且算一次額度。三位小數不是垃圾回覆，是我們存的
+    # 精度（兩位，同食物庫）比模型給的粗——那是我們該整理的事，不是它該被退回的理由。
+    #
+    # **只整理「本來就是有限數字」的值，其餘原樣交回去讓 Pydantic 拒絕**——這裡不是
+    # 「什麼都轉成數字」：
+    # - bool 是 int 的子類別：不擋的話 `Decimal(True)` 是 1，true 就變成 1.00。
+    # - None、清單、字典：不是數字（`Decimal(None)` 是 TypeError，Pydantic 不會把它
+    #   翻成驗證錯誤——會變成 500）。
+    # - "abc"、空字串：`Decimal()` 解析不了。
+    # - NaN、Infinity（`json.loads` 認得這兩個字）：不是有限值。這裡沒有另外判斷——
+    #   Infinity 的 quantize 丟 InvalidOperation（原樣交回去），NaN 的 quantize 還是 NaN；
+    #   兩種都由 Pydantic 的「要是有限的數字」拒絕，跟加這個函式之前是同一道檢查。
+    # - 大到 quantize 放不下（超過 28 位有效數字）：一定也超過欄位的上限。
+    #
+    # float 經過 `str()` 再轉：`Decimal(1.005)` 是 1.00499999999999989…（float 的二進位
+    # 誤差），會被捨成 1.00；模型寫的是「1.005」，`str()` 給的就是那幾個字。
+    if isinstance(value, bool) or not isinstance(value, (int, float, str, Decimal)):
+        return value
+    try:
+        number = Decimal(str(value)) if isinstance(value, float) else Decimal(value)
+    except InvalidOperation:
+        return value
+    try:
+        rounded = number.quantize(_CENTS, rounding=ROUND_HALF_UP)
+    except InvalidOperation:
+        return value
+    # -0.004 捨成 -0.00：範圍檢查會過（-0 == 0），但負號會一路寫進回應的字串。
+    return abs(rounded) if rounded.is_zero() else rounded
+
+
 class LLMEstimateSchema(BaseModel):
     """驗證 LLM 回傳 JSON 的形狀。
 
@@ -254,6 +291,22 @@ class LLMEstimateSchema(BaseModel):
     serving_fat_g: Decimal = Field(ge=0, le=10000, max_digits=8, decimal_places=2)
     serving_carb_g: Decimal = Field(ge=0, le=10000, max_digits=8, decimal_places=2)
     confidence: Decimal = Field(ge=0, le=1, decimal_places=2)
+
+    # 寫在這個類別上，`LLMMealItemSchema` 繼承它：單樣與多樣是同一條規則。
+    # mode="before"：先整理成兩位，上面的 ge／le／gt 驗的是整理之後的值。
+    # （說明寫成註解不寫進 docstring：這個類別的 docstring 會被送給模型。）
+    @field_validator(
+        "serving_grams",
+        "serving_kcal",
+        "serving_protein_g",
+        "serving_fat_g",
+        "serving_carb_g",
+        "confidence",
+        mode="before",
+    )
+    @classmethod
+    def _round_numbers(cls, value: object) -> object:
+        return _round_to_cents(value)
 
 
 def parse_raw_estimate(response_text: str) -> RawEstimate:

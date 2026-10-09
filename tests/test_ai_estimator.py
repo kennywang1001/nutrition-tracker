@@ -383,3 +383,164 @@ def test_malformed_meal_replies_are_rejected(text: str):
 
 def test_a_bad_meal_reply_is_502():
     assert _rejected("這不是 JSON").status_code == 502
+
+
+# ---------------------------------------------------------------------------
+# 數值先四捨五入到小數兩位再驗範圍（審查 I2）：單樣與多樣是同一條規則
+# ---------------------------------------------------------------------------
+#
+# 之前「超過兩位小數」是拒絕：一餐八樣裡有一樣的脂肪是 0.333，整餐就是 AI_BAD_RESPONSE，
+# 而且算一次額度。模型寫三位小數不是「回了垃圾」，是我們要的精度比它給的粗。
+
+_NUMERIC_FIELDS = [
+    "serving_grams",
+    "serving_kcal",
+    "serving_protein_g",
+    "serving_fat_g",
+    "serving_carb_g",
+    "confidence",
+]
+
+
+def _parse_item(shape: str, **overrides: object) -> RawEstimate:
+    """用單樣或多樣的解析器解析一樣，回被改過的那一樣。多樣的那一樣放在第二個：
+    前面有一樣正常的，壞掉時才看得出「整餐被拒絕」。"""
+    if shape == "single":
+        return parse_raw_estimate(json.dumps(_item(**overrides), ensure_ascii=False))
+    return parse_raw_meal_estimate(_meal_json(_item(), _item(**overrides))).items[1]
+
+
+def _item_rejected(shape: str, **overrides: object) -> None:
+    with pytest.raises(BadGatewayError) as exc_info:
+        _parse_item(shape, **overrides)
+    assert exc_info.value.code == "AI_BAD_RESPONSE"
+
+
+_SHAPES = pytest.mark.parametrize("shape", ["single", "meal"])
+
+
+@_SHAPES
+@pytest.mark.parametrize(
+    ("field", "value", "expected"),
+    [
+        ("serving_fat_g", 0.333, "0.33"),
+        ("confidence", 0.875, "0.88"),
+        ("serving_fat_g", 0.005, "0.01"),
+        # 1.005 這個 float 實際上是 1.00499999999999989…：直接 `Decimal(1.005)` 會捨成
+        # 1.00。經過 `str()` 才是模型寫的那個「1.005」。
+        ("serving_protein_g", 1.005, "1.01"),
+        ("serving_carb_g", 0.30000000000000004, "0.30"),
+        ("serving_kcal", 479.996, "480.00"),
+        # 模型有時把數字包成字串——同一條規則。
+        ("serving_fat_g", "0.333", "0.33"),
+        ("serving_kcal", "1e2", "100.00"),
+        # 本來就合格的也整理成兩位：之後算每 100 與回應裡的字串都是同一種寫法。
+        ("serving_grams", 250, "250.00"),
+        ("confidence", 1, "1.00"),
+    ],
+)
+def test_numbers_are_rounded_half_up_to_two_decimals(
+    shape: str, field: str, value: object, expected: str
+):
+    estimate = _parse_item(shape, **{field: value})
+
+    # 比字串：`Decimal("0.33") == Decimal("0.330")`，相等看不出有沒有整理成兩位。
+    assert str(getattr(estimate, field)) == expected
+    # `raw` 仍然是模型原本說的。
+    assert estimate.raw[field] == value
+
+
+@_SHAPES
+@pytest.mark.parametrize("field", _NUMERIC_FIELDS)
+def test_every_numeric_field_is_rounded(shape: str, field: str):
+    """六個欄位都要：漏掉一個，那個欄位的三位小數照樣讓整餐被拒絕。"""
+    # 0.125 對六個欄位都在範圍內（含 confidence 的 0～1）。
+    assert str(getattr(_parse_item(shape, **{field: 0.125}), field)) == "0.13"
+
+
+def test_one_item_with_three_decimals_no_longer_rejects_the_whole_meal():
+    result = parse_raw_meal_estimate(
+        _meal_json(_item(), _item(name="滷雞腿", serving_fat_g=0.333, confidence=0.875))
+    )
+
+    assert [item.name for item in result.items] == ["白飯", "滷雞腿"]
+    assert (str(result.items[1].serving_fat_g), str(result.items[1].confidence)) == (
+        "0.33",
+        "0.88",
+    )
+
+
+@_SHAPES
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("serving_fat_g", -0.333),
+        ("serving_kcal", -1),
+        ("confidence", -0.875),
+        ("serving_fat_g", "-0.333"),
+    ],
+)
+def test_a_negative_number_is_still_rejected_after_rounding(shape: str, field: str, value: object):
+    _item_rejected(shape, **{field: value})
+
+
+@_SHAPES
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        # 捨到 0.00：serving_grams 要大於 0（它是換算每 100 的除數）。
+        ("serving_grams", 0.004),
+        # 進到 1.01：超過 confidence 的上限。
+        ("confidence", 1.006),
+        # 進到 100000.01、10000.01：超過上限。
+        ("serving_kcal", 100000.005),
+        ("serving_grams", 10000.005),
+    ],
+)
+def test_the_range_is_checked_after_rounding(shape: str, field: str, value: object):
+    _item_rejected(shape, **{field: value})
+
+
+@_SHAPES
+def test_a_value_that_rounds_back_into_the_range_is_accepted(shape: str):
+    """範圍看的是四捨五入之後的值——兩個方向都是。"""
+    estimate = _parse_item(shape, confidence=1.004, serving_grams=10000.004)
+
+    assert (str(estimate.confidence), str(estimate.serving_grams)) == ("1.00", "10000.00")
+
+
+@_SHAPES
+def test_a_tiny_negative_number_rounds_to_plain_zero_not_negative_zero(shape: str):
+    """-0.004 捨成 0.00。不留負號：`-0.00` 會一路寫進回應的字串裡。"""
+    assert str(_parse_item(shape, serving_fat_g=-0.004).serving_fat_g) == "0.00"
+
+
+@_SHAPES
+@pytest.mark.parametrize(
+    "value",
+    [
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        "NaN",
+        "sNaN",
+        "Infinity",
+        "-Infinity",
+        "abc",
+        "",
+        "12 公克",
+        # bool 是 int 的子類別：不擋的話 True 會變成 1.00。
+        True,
+        False,
+        None,
+        [1],
+        {"value": 1},
+        # 大到放不進兩位小數的精度：照舊拒絕，不是 500。
+        1e30,
+        10**40,
+    ],
+    ids=repr,
+)
+def test_non_numeric_and_non_finite_values_are_still_rejected(shape: str, value: object):
+    """四捨五入不是「什麼都轉成數字」：不是數字、不是有限值的，照舊整個拒絕。"""
+    _item_rejected(shape, serving_fat_g=value)
