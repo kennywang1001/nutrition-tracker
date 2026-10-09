@@ -408,6 +408,225 @@ describe("記一餐：AI 多樣估算", () => {
 	});
 });
 
+// 審查 M5：AI 的項目全部移除之後，表單收起來，但 AI 填的那句描述與那張照片還留在
+// state 裡——之後手選一個食物，表單再出現時它們也跟著回來，一按「記錄」就把「一碗白飯、
+// 滷雞腿一隻」與便當的照片記在一碗牛肉麵上（描述好友看得到）。
+describe("記一餐：AI 的項目全部移除之後", () => {
+	const BENTO = new File(["fake-jpeg"], "bento.jpg", { type: "image/jpeg" });
+	const AI_DESCRIPTION = "一碗白飯、滷雞腿一隻";
+
+	async function estimateByPhoto() {
+		await userEvent.upload(screen.getByLabelText("拍照估算"), BENTO);
+		await addAll();
+		// 預覽是 effect 裡建的 object URL——等它出現，才知道照片真的放進去了。
+		await screen.findByAltText("選好的照片");
+	}
+
+	async function removeAiItem(name: string) {
+		await userEvent.click(screen.getByRole("button", { name: `移除 ${name}` }));
+	}
+
+	async function pickNoodles() {
+		await userEvent.click(
+			await screen.findByRole("button", { name: "牛肉麵" }),
+		);
+		await screen.findByText("已選擇：牛肉麵");
+	}
+
+	async function save(fetchMock: FetchMock) {
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+		await waitFor(() => expect(mealBody(fetchMock)).toBeDefined());
+		return mealBody(fetchMock) as Record<string, unknown>;
+	}
+
+	it("AI 填的描述與照片沒有動過：跟著清掉——之後手選的那一餐是乾淨的", async () => {
+		const onSaved = vi.fn();
+		const fetchMock = mockLogMeal();
+		render(wrap(<LogMeal onSaved={onSaved} />));
+		await estimateByPhoto();
+		expect(screen.getByLabelText("描述（選填）")).toHaveValue(AI_DESCRIPTION);
+
+		// 還有一樣的時候不清：描述說的東西還有一樣在。
+		await removeAiItem("白飯");
+		expect(screen.getByLabelText("描述（選填）")).toHaveValue(AI_DESCRIPTION);
+		expect(screen.getByAltText("選好的照片")).toBeInTheDocument();
+		await removeAiItem("滷雞腿");
+		expect(screen.queryByRole("button", { name: "記錄" })).toBeNull();
+		await pickNoodles();
+
+		expect(screen.getByLabelText("描述（選填）")).toHaveValue("");
+		expect(screen.queryByAltText("選好的照片")).toBeNull();
+		const body = await save(fetchMock);
+		// 只有手選的那一樣——移除的 AI 項目沒有跟著送出去。
+		expect(body.items).toEqual([expect.objectContaining({ food_id: 10 })]);
+		expect(body).not.toHaveProperty("description");
+		// 存好了（onSaved 在照片那一步之後才呼叫）而且沒有傳照片。
+		await waitFor(() => expect(onSaved).toHaveBeenCalled());
+		expect(uploadedPhotoName(fetchMock)).toBeNull();
+	});
+
+	it("改過的描述、換過的照片：是使用者自己的，不清", async () => {
+		const fetchMock = mockLogMeal();
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		const chosen = new File(["a"], "chosen.jpg", { type: "image/jpeg" });
+		await estimateByPhoto();
+
+		await userEvent.type(screen.getByLabelText("描述（選填）"), "，加一顆蛋");
+		await userEvent.upload(screen.getByLabelText("照片（選填）"), chosen);
+		await removeAiItem("白飯");
+		await removeAiItem("滷雞腿");
+		await pickNoodles();
+
+		expect(screen.getByLabelText("描述（選填）")).toHaveValue(
+			`${AI_DESCRIPTION}，加一顆蛋`,
+		);
+		const body = await save(fetchMock);
+		expect(body.description).toBe(`${AI_DESCRIPTION}，加一顆蛋`);
+		await waitFor(() =>
+			expect(uploadedPhotoName(fetchMock)).toBe("chosen.jpg"),
+		);
+	});
+
+	it("估算之前自己打的描述、自己選的照片（AI 沒有覆蓋的）：不清", async () => {
+		const fetchMock = mockLogMeal();
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		const chosen = new File(["a"], "chosen.jpg", { type: "image/jpeg" });
+
+		await pickNoodles();
+		await userEvent.type(screen.getByLabelText("描述（選填）"), "我自己寫的");
+		await userEvent.upload(screen.getByLabelText("照片（選填）"), chosen);
+		await userEvent.upload(screen.getByLabelText("拍照估算"), BENTO);
+		await addAll();
+		await userEvent.click(screen.getByRole("button", { name: "不記這一樣" }));
+		await removeAiItem("白飯");
+		await removeAiItem("滷雞腿");
+		expect(screen.queryByRole("button", { name: "記錄" })).toBeNull();
+		await pickNoodles();
+
+		expect(screen.getByLabelText("描述（選填）")).toHaveValue("我自己寫的");
+		const body = await save(fetchMock);
+		expect(body.description).toBe("我自己寫的");
+		await waitFor(() =>
+			expect(uploadedPhotoName(fetchMock)).toBe("chosen.jpg"),
+		);
+	});
+
+	it("描述是 AI 的、照片是自己選的：只清描述", async () => {
+		const fetchMock = mockLogMeal();
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		const chosen = new File(["a"], "chosen.jpg", { type: "image/jpeg" });
+		// 文字估算：沒有估算用的照片。
+		await estimateByText();
+		await addAll();
+
+		await userEvent.upload(screen.getByLabelText("照片（選填）"), chosen);
+		await removeAiItem("白飯");
+		await removeAiItem("滷雞腿");
+		await pickNoodles();
+
+		expect(screen.getByLabelText("描述（選填）")).toHaveValue("");
+		const body = await save(fetchMock);
+		expect(body).not.toHaveProperty("description");
+		await waitFor(() =>
+			expect(uploadedPhotoName(fetchMock)).toBe("chosen.jpg"),
+		);
+	});
+
+	it("照片是 AI 的、描述是自己改的：只清照片", async () => {
+		const onSaved = vi.fn();
+		const fetchMock = mockLogMeal();
+		render(wrap(<LogMeal onSaved={onSaved} />));
+		await estimateByPhoto();
+
+		const description = screen.getByLabelText("描述（選填）");
+		await userEvent.clear(description);
+		await userEvent.type(description, "今天的午餐");
+		await removeAiItem("白飯");
+		await removeAiItem("滷雞腿");
+		await pickNoodles();
+
+		expect(screen.queryByAltText("選好的照片")).toBeNull();
+		const body = await save(fetchMock);
+		expect(body.description).toBe("今天的午餐");
+		await waitFor(() => expect(onSaved).toHaveBeenCalled());
+		expect(uploadedPhotoName(fetchMock)).toBeNull();
+	});
+
+	it("改了又改回原樣的描述：跟 AI 填的一模一樣，一樣清掉", async () => {
+		// 看的是「現在的字是不是 AI 填的那一句」，不是「有沒有碰過鍵盤」：多打一個字
+		// 又刪掉，留下的仍然是在說已經移除的那幾樣。
+		mockLogMeal();
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await estimateByText();
+		await addAll();
+
+		await userEvent.type(screen.getByLabelText("描述（選填）"), "x{Backspace}");
+		expect(screen.getByLabelText("描述（選填）")).toHaveValue(AI_DESCRIPTION);
+		await removeAiItem("白飯");
+		await removeAiItem("滷雞腿");
+		await pickNoodles();
+
+		expect(screen.getByLabelText("描述（選填）")).toHaveValue("");
+	});
+
+	it("還有手選的食物：表單還在，描述與照片都留著（看得到，要不要改由使用者決定）", async () => {
+		const fetchMock = mockLogMeal();
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await pickNoodles();
+		await estimateByPhoto();
+
+		await removeAiItem("白飯");
+		await removeAiItem("滷雞腿");
+
+		expect(screen.getByLabelText("描述（選填）")).toHaveValue(AI_DESCRIPTION);
+		expect(screen.getByAltText("選好的照片")).toBeInTheDocument();
+		const body = await save(fetchMock);
+		expect(body.description).toBe(AI_DESCRIPTION);
+		await waitFor(() => expect(uploadedPhotoName(fetchMock)).toBe("bento.jpg"));
+	});
+
+	it("清掉之後再估算一次：新的描述與照片照樣填得進來", async () => {
+		const fetchMock = mockLogMeal();
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+		await estimateByPhoto();
+		await removeAiItem("白飯");
+		await removeAiItem("滷雞腿");
+
+		await estimateByPhoto();
+
+		expect(screen.getByLabelText("描述（選填）")).toHaveValue(AI_DESCRIPTION);
+		const body = await save(fetchMock);
+		expect(body.description).toBe(AI_DESCRIPTION);
+		await waitFor(() => expect(uploadedPhotoName(fetchMock)).toBe("bento.jpg"));
+	});
+
+	it("存好之後，上一餐 AI 填的描述不會讓下一餐自己打的同一句話被清掉", async () => {
+		// 來歷跟著這一餐走：存好就歸零。不歸零的話，下一餐自己打了同一句、又剛好
+		// 加過再移除 AI 的項目（那一次 AI 沒有覆蓋），自己打的字會被當成 AI 的清掉。
+		const onSaved = vi.fn();
+		const fetchMock = mockLogMeal();
+		render(wrap(<LogMeal onSaved={onSaved} />));
+		await estimateByText();
+		await addAll();
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+		await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+		fetchMock.mockClear();
+
+		await pickNoodles();
+		await userEvent.type(screen.getByLabelText("描述（選填）"), AI_DESCRIPTION);
+		await userEvent.click(
+			screen.getByRole("button", { name: "用 AI 估算「雞腿便當」" }),
+		);
+		await addAll();
+		await userEvent.click(screen.getByRole("button", { name: "不記這一樣" }));
+		await removeAiItem("白飯");
+		await removeAiItem("滷雞腿");
+		await pickNoodles();
+
+		expect(screen.getByLabelText("描述（選填）")).toHaveValue(AI_DESCRIPTION);
+	});
+});
+
 describe("記一餐：整段文字就是食物庫裡的食物", () => {
 	it("「用這個」→ 跟從清單選一個一樣：「已選擇」＋份量欄位，焦點在「已選擇」", async () => {
 		const fetchMock = mockLogMeal(SHORTCUT);

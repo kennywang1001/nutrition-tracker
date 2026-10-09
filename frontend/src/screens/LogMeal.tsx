@@ -30,6 +30,21 @@ type MealType = components["schemas"]["MealType"];
  *  （g 或 ml），預設 AI 估的；`key` 只給 React 與欄位的 id 用——同一個食物可以出現兩次。 */
 type AiItem = { key: number; food: Food; quantity: string };
 
+/** 一個欄位現在的值，加上「AI 填進來的那個值」（沒有填過是 null）。
+ *
+ *  為什麼要記來歷（審查 M5）：AI 的項目全部移除、表單收起來之後，AI 填的那句描述與
+ *  那張照片還留在 state 裡——之後手選一個食物，它們會跟著表單一起回來，一按「記錄」
+ *  就記在不相干的一餐上（描述好友看得到）。所以那個時候要清掉，但**只清 AI 填的**：
+ *  `value` 仍然等於 `fromAi`（描述比字串、照片比是不是同一個 `File`）才算。使用者
+ *  自己打的字、自己選的照片，值跟 `fromAi` 不一樣，永遠不清。
+ *
+ *  兩個放在同一個 state 裡：要不要採用 AI 的值是在 updater 裡看「現在」的值決定的
+ *  （規格 D20），來歷得在同一步一起寫，不然兩邊會對不上。 */
+type WithOrigin<T> = { value: T; fromAi: T | null };
+
+const NO_DESCRIPTION: WithOrigin<string> = { value: "", fromAi: null };
+const NO_PHOTO: WithOrigin<File | null> = { value: null, fromAi: null };
+
 type Props = {
 	/** `photoFailed`：這一餐存好了，但選的照片沒傳上去（規格 §5.4）。 */
 	onSaved: (result: { photoFailed: boolean }) => void;
@@ -48,12 +63,18 @@ export function LogMeal({ onSaved }: Props) {
 	const [cost, setCost] = useState("");
 	const [isPrivate, setIsPrivate] = useState(false);
 	// 這一餐吃了什麼的一句話（AI 多樣估算規格 D13）。好友看得到；跟「備註」是兩回事。
-	const [description, setDescription] = useState("");
+	const [descriptionState, setDescriptionState] = useState(NO_DESCRIPTION);
+	const description = descriptionState.value;
 	// AI 估的項目。跟上面手選的那一樣（selectedFood）並存：存的時候兩邊都送。
 	const [aiItems, setAiItems] = useState<AiItem[]>([]);
 	const nextAiKeyRef = useRef(0);
 	// 選填的照片（介面改版 §5.4）。選的當下就檢查大小，不要等到存檔才發現。
-	const [photo, setPhoto] = useState<File | null>(null);
+	const [photoState, setPhotoState] = useState(NO_PHOTO);
+	const photo = photoState.value;
+	/** 使用者自己選的（或移除）：只換現在的值，AI 填過哪一張照舊記著。 */
+	function setPhoto(file: File | null) {
+		setPhotoState((current) => ({ ...current, value: file }));
+	}
 	const [photoError, setPhotoError] = useState<string | null>(null);
 	const [photoPreview, setPhotoPreview] = useState<string | null>(null);
 
@@ -196,9 +217,10 @@ export function LogMeal({ onSaved }: Props) {
 			setSelectedFood(null);
 			portion.reset();
 			setCost("");
-			setDescription("");
+			// 來歷也歸零：它是跟著這一餐的。
+			setDescriptionState(NO_DESCRIPTION);
 			setAiItems([]);
-			setPhoto(null);
+			setPhotoState(NO_PHOTO);
 			setPhotoError(null);
 			setError(null);
 			onSaved(result);
@@ -234,6 +256,21 @@ export function LogMeal({ onSaved }: Props) {
 		},
 	});
 
+	function removeAiItem(key: number) {
+		setAiItems((current) => current.filter((other) => other.key !== key));
+		// 這是最後一樣 AI 的項目，而且沒有手選的食物：表單整個收起來。AI 填的描述與
+		// 照片跟著清掉（見 `WithOrigin`）。還有手選的食物時表單還在、它們看得到，
+		// 留給使用者自己決定。
+		const isLast = aiItems.every((item) => item.key === key);
+		if (!isLast || selectedFood !== null) return;
+		setDescriptionState((current) =>
+			current.value === current.fromAi ? NO_DESCRIPTION : current,
+		);
+		setPhotoState((current) =>
+			current.value === current.fromAi ? NO_PHOTO : current,
+		);
+	}
+
 	return (
 		<section className={styles.screen}>
 			<h1>記一餐</h1>
@@ -262,13 +299,21 @@ export function LogMeal({ onSaved }: Props) {
 							// 估算用的照片當這一餐的照片、AI 的那句話當描述——**已經有就不
 							// 覆蓋**（規格 D20）。用 updater 看「現在」的值：面板建食物的期間
 							// 使用者還能選照片、打字。放進去的是原始檔案（上傳時自己會縮）。
+							// 採用的那一刻一起記下來歷（`fromAi`）：之後 AI 的項目全部移除時，
+							// 靠它分得出哪些是 AI 填的。
 							const { image } = source;
 							if (image !== null) {
-								setPhoto((current) => current ?? image);
+								setPhotoState((current) =>
+									current.value === null
+										? { value: image, fromAi: image }
+										: current,
+								);
 								setPhotoError(null);
 							}
-							setDescription((current) =>
-								current.trim() === "" ? source.description : current,
+							setDescriptionState((current) =>
+								current.value.trim() === ""
+									? { value: source.description, fromAi: source.description }
+									: current,
 							);
 						}}
 					/>
@@ -325,11 +370,7 @@ export function LogMeal({ onSaved }: Props) {
 												className={ui.secondary}
 												aria-label={`移除 ${item.food.name}`}
 												disabled={saveMeal.isPending}
-												onClick={() =>
-													setAiItems((current) =>
-														current.filter((other) => other.key !== item.key),
-													)
-												}
+												onClick={() => removeAiItem(item.key)}
 											>
 												移除
 											</button>
@@ -402,7 +443,11 @@ export function LogMeal({ onSaved }: Props) {
 						maxLength={500}
 						value={description}
 						aria-describedby="meal-description-hint"
-						onChange={(event) => setDescription(event.target.value)}
+						onChange={(event) => {
+							// 只換現在的值：改過的字跟 `fromAi` 不一樣，就不再算 AI 填的。
+							const value = event.target.value;
+							setDescriptionState((current) => ({ ...current, value }));
+						}}
 					/>
 					<p id="meal-description-hint" className={styles.hint}>
 						好友看得到這段描述
