@@ -154,9 +154,17 @@
 	color: var(--color-on-action);
 }
 
+/* aria-disabled="true"：看起來跟原生停用一樣，但還收得到焦點——停用的那一刻它可能
+   正在焦點上（報表的「下個月」、匯出的三顆），原生 disabled 會讓焦點掉回文件開頭。
+   按了沒有反應是元件自己的事（onClick 裡擋），CSS 只管長相。 */
 :where(.screen button:disabled),
-.secondary:disabled {
+.secondary:disabled,
+.secondary[aria-disabled="true"] {
 	opacity: 0.4;
+}
+
+.secondary[aria-disabled="true"] {
+	cursor: not-allowed;
 }
 
 /* 畫面直接底下、長得像按鈕的連結（食物庫的「新增食物」）。 */

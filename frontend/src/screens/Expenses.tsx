@@ -366,13 +366,18 @@ export function Expenses() {
 			</nav>
 
 			{/* 箭頭是裝飾（aria-hidden）：按鈕的名稱就是「上個月」「下個月」。
-			    月份是 role="status"：換月份時螢幕閱讀器會唸出新的月份。 */}
+			    月份是 role="status"：換月份時螢幕閱讀器會唸出新的月份。
+
+			    不能按的時候是 aria-disabled，不是原生的 disabled（審查 M5）：從過去翻到
+			    這個月的那一下，「下個月」正在焦點上——原生停用會讓它把焦點弄丟，用鍵盤的人
+			    得從頁首 Tab 回來。兩顆用同一種作法（「上個月」到 1900-01 為止也一樣）。
+			    瀏覽器不再替我們擋 click：onClick 裡的 `!== null` 就是那道擋。 */}
 			{/* biome-ignore lint/a11y/useSemanticElements: role=group 與 fieldset 語意相同；fieldset 要另外重設 border、padding、min-inline-size（同 MoneyKeypad） */}
 			<div className={styles.monthSwitch} role="group" aria-label="切換月份">
 				<button
 					type="button"
 					className={ui.secondary}
-					disabled={previous === null}
+					aria-disabled={previous === null}
 					onClick={() => {
 						if (previous !== null) goTo(previous);
 					}}
@@ -385,7 +390,7 @@ export function Expenses() {
 				<button
 					type="button"
 					className={ui.secondary}
-					disabled={next === null}
+					aria-disabled={next === null}
 					onClick={() => {
 						if (next !== null) goTo(next);
 					}}

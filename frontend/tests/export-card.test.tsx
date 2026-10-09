@@ -28,14 +28,32 @@ function card() {
 	return within(screen.getByTestId("export-card"));
 }
 
-/** 三顆按鈕現在的文字與能不能按。 */
+/** 三顆按鈕現在的文字與能不能按。
+ *
+ *  「不能按」是 `aria-disabled`，**不是原生的 `disabled`**：原生的會讓按下去的那顆把焦點
+ *  弄丟（下載中三顆一起停用，包括正在焦點上的那一顆）。所以這裡順便確認沒有任何一顆是
+ *  原生 disabled；「按了沒有反應」由「下載中再按」那一條守。 */
 function buttons(): Array<[string, boolean]> {
 	return card()
 		.getAllByRole("button")
-		.map((button) => [
-			button.textContent ?? "",
-			!(button as HTMLButtonElement).disabled,
-		]);
+		.map((button) => {
+			expect(button).not.toBeDisabled();
+			return [
+				button.textContent ?? "",
+				button.getAttribute("aria-disabled") !== "true",
+			];
+		});
+}
+
+/** 「已下載 …」的那一區。**一直都在**（空的），下載完才填字——整個節點連字一起插進來的
+ *  話，有些螢幕閱讀器不會唸（同總覽的 notice）。 */
+function status() {
+	return card().getByRole("status");
+}
+
+function expectAvailable(button: HTMLElement) {
+	expect(button).not.toHaveAttribute("aria-disabled", "true");
+	expect(button).not.toBeDisabled();
 }
 
 beforeEach(() => {
@@ -75,8 +93,8 @@ describe("匯出資料", () => {
 
 			await userEvent.click(card().getByRole("button", { name: label }));
 
-			expect(await card().findByRole("status")).toHaveTextContent(
-				`已下載 ${filename}`,
+			await waitFor(() =>
+				expect(status()).toHaveTextContent(`已下載 ${filename}`),
 			);
 			expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
 				path,
@@ -92,6 +110,64 @@ describe("匯出資料", () => {
 			expect(await (blob as Blob).text()).toBe(BODY.slice(1));
 		},
 	);
+
+	it("「已下載」的那一區一開始就在而且是空的；下載完是同一個節點被填上字", async () => {
+		mockApi([
+			{
+				method: "GET",
+				path: "/api/export/meals.csv",
+				handler: () => csv("meals-2026-10-09.csv"),
+			},
+		]);
+		render(<ExportCard />);
+		const region = status();
+		expect(region).toBeEmptyDOMElement();
+
+		await userEvent.click(card().getByRole("button", { name: "餐點" }));
+
+		await waitFor(() =>
+			expect(region).toHaveTextContent("已下載 meals-2026-10-09.csv"),
+		);
+		expect(status()).toBe(region);
+	});
+
+	it("下載中再按（同一顆、另一顆）沒有反應：只打一次請求、只存一次檔", async () => {
+		// 原生 disabled 的時候這是瀏覽器保證的；改成 aria-disabled 之後要自己擋。
+		let respond: (response: Response) => void = () => {};
+		const fetchMock = mockApi([
+			{
+				method: "GET",
+				path: "/api/export/expenses.csv",
+				handler: () =>
+					new Promise<Response>((resolve) => {
+						respond = resolve;
+					}),
+			},
+			{
+				method: "GET",
+				path: "/api/export/meals.csv",
+				handler: () => csv("meals-2026-10-09.csv"),
+			},
+		]);
+		render(<ExportCard />);
+
+		await userEvent.click(card().getByRole("button", { name: "花費" }));
+		await userEvent.click(card().getByRole("button", { name: "下載中…" }));
+		await userEvent.keyboard("{Enter}");
+		await userEvent.click(card().getByRole("button", { name: "餐點" }));
+
+		expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+			"/api/export/expenses.csv",
+		]);
+
+		respond(csv("expenses-2026-10-09.csv"));
+
+		await waitFor(() =>
+			expect(status()).toHaveTextContent("已下載 expenses-2026-10-09.csv"),
+		);
+		expect(saveBlobMock).toHaveBeenCalledTimes(1);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
 
 	it("下載中：按的那顆寫「下載中…」，三顆都不能按；回來之後恢復", async () => {
 		let respond: (response: Response) => void = () => {};
@@ -114,6 +190,10 @@ describe("匯出資料", () => {
 			["下載中…", false],
 			["補劑", false],
 		]);
+		// 按下去的那顆沒有被原生停用，焦點還在它上面（鍵盤、螢幕閱讀器的人還在原地）。
+		expect(document.activeElement).toBe(
+			card().getByRole("button", { name: "下載中…" }),
+		);
 		expect(saveBlobMock).not.toHaveBeenCalled();
 
 		respond(csv("expenses-2026-10-09.csv"));
@@ -126,6 +206,9 @@ describe("匯出資料", () => {
 			]),
 		);
 		expect(saveBlobMock).toHaveBeenCalledTimes(1);
+		expect(document.activeElement).toBe(
+			card().getByRole("button", { name: "花費" }),
+		);
 	});
 
 	it("429：顯示後端的訊息與還要等幾秒，沒有存任何檔案；再按一次成功就把錯誤清掉", async () => {
@@ -165,12 +248,12 @@ describe("匯出資料", () => {
 		);
 		// 先等到錯誤出現，「沒有存檔」才不是因為還沒跑到（第 41 種）。
 		expect(saveBlobMock).not.toHaveBeenCalled();
-		expect(card().queryByRole("status")).not.toBeInTheDocument();
+		expect(status()).toBeEmptyDOMElement();
 
 		await userEvent.click(card().getByRole("button", { name: "餐點" }));
 
-		expect(await card().findByRole("status")).toHaveTextContent(
-			"已下載 meals-2026-10-09.csv",
+		await waitFor(() =>
+			expect(status()).toHaveTextContent("已下載 meals-2026-10-09.csv"),
 		);
 		expect(card().queryByRole("alert")).not.toBeInTheDocument();
 	});
@@ -221,8 +304,8 @@ describe("匯出資料", () => {
 		render(<ExportCard />);
 
 		await userEvent.click(card().getByRole("button", { name: "餐點" }));
-		expect(await card().findByRole("status")).toHaveTextContent(
-			"已下載 meals-2026-10-09.csv",
+		await waitFor(() =>
+			expect(status()).toHaveTextContent("已下載 meals-2026-10-09.csv"),
 		);
 
 		await userEvent.click(card().getByRole("button", { name: "餐點" }));
@@ -231,7 +314,7 @@ describe("匯出資料", () => {
 		expect(await card().findByRole("alert")).toHaveTextContent(
 			"下載失敗，請再試一次",
 		);
-		expect(card().queryByRole("status")).not.toBeInTheDocument();
+		expect(status()).toBeEmptyDOMElement();
 	});
 
 	it("其他失敗（500、連不上）：「下載失敗，請再試一次」，按鈕恢復可以按", async () => {
@@ -255,7 +338,7 @@ describe("匯出資料", () => {
 			expect(await card().findByRole("alert")).toHaveTextContent(
 				"下載失敗，請再試一次",
 			);
-			expect(card().getByRole("button", { name: label })).toBeEnabled();
+			expectAvailable(card().getByRole("button", { name: label }));
 		}
 		expect(saveBlobMock).not.toHaveBeenCalled();
 	});
@@ -290,8 +373,8 @@ describe("匯出資料", () => {
 
 		await userEvent.click(card().getByRole("button", { name: "花費" }));
 
-		expect(await card().findByRole("status")).toHaveTextContent(
-			"已下載 expenses.csv",
+		await waitFor(() =>
+			expect(status()).toHaveTextContent("已下載 expenses.csv"),
 		);
 		expect(saveBlobMock.mock.calls[0]?.[1]).toBe("expenses.csv");
 	});
@@ -314,9 +397,9 @@ describe("匯出資料", () => {
 				expect(saveBlobMock.mock.calls.length).toBe(before + 1),
 			);
 			await waitFor(() =>
-				expect(card().getByRole("button", { name: "餐點" })).toBeEnabled(),
+				expectAvailable(card().getByRole("button", { name: "餐點" })),
 			);
-			expect(card().queryByRole("status")).not.toBeInTheDocument();
+			expect(status()).toBeEmptyDOMElement();
 			expect(card().queryByRole("alert")).not.toBeInTheDocument();
 		}
 	});

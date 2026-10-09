@@ -119,6 +119,20 @@ const previousButton = () => switcher().getByRole("button", { name: "上個月" 
 const nextButton = () => switcher().getByRole("button", { name: "下個月" });
 const monthLabel = () => switcher().getByRole("status");
 
+/** 「不能按」是 `aria-disabled`，**不是原生的 `disabled`**：原生的會讓正在焦點上的按鈕
+ *  把焦點弄丟——翻到這個月的那一下，「下個月」就在焦點上。所以兩件事都看：螢幕閱讀器
+ *  聽得到「不能按」，而且按鈕還收得到焦點。「按了沒有反應」由下面專門的那一條守
+ *  （原生 disabled 時瀏覽器保證不會 click；現在要自己保證）。 */
+function expectUnavailable(button: HTMLElement) {
+	expect(button).toHaveAttribute("aria-disabled", "true");
+	expect(button).not.toBeDisabled();
+}
+
+function expectAvailable(button: HTMLElement) {
+	expect(button).not.toHaveAttribute("aria-disabled", "true");
+	expect(button).not.toBeDisabled();
+}
+
 beforeEach(() => {
 	localStorage.clear();
 	clearTokens();
@@ -134,8 +148,8 @@ describe("報表：切換月份", () => {
 
 		expect(await screen.findByText("十二月的便當")).toBeInTheDocument();
 		expect(monthLabel()).toHaveTextContent("2026年12月");
-		expect(nextButton()).toBeDisabled();
-		expect(previousButton()).toBeEnabled();
+		expectUnavailable(nextButton());
+		expectAvailable(previousButton());
 		expect(
 			screen.getByRole("heading", { name: "這個月花了多少" }),
 		).toBeInTheDocument();
@@ -160,15 +174,15 @@ describe("報表：切換月份", () => {
 
 		// 清單已經回來了，報表（也就是「這個月是哪個月」）還沒。
 		expect(await screen.findByText("十二月的便當")).toBeInTheDocument();
-		expect(previousButton()).toBeDisabled();
-		expect(nextButton()).toBeDisabled();
+		expectUnavailable(previousButton());
+		expectUnavailable(nextButton());
 		expect(monthLabel()).toHaveTextContent("這個月");
 
 		resolveSummary(json(DEC_SUMMARY));
 
-		await waitFor(() => expect(previousButton()).toBeEnabled());
+		await waitFor(() => expectAvailable(previousButton()));
 		expect(monthLabel()).toHaveTextContent("2026年12月");
-		expect(nextButton()).toBeDisabled();
+		expectUnavailable(nextButton());
 	});
 
 	it("上個月：網址帶上月份，清單與報表都換成那個月，標題跟著改；下個月回到沒有參數的網址", async () => {
@@ -196,7 +210,7 @@ describe("報表：切換月份", () => {
 			"總計 999.00",
 		);
 		expect(screen.queryByText("十二月的便當")).not.toBeInTheDocument();
-		expect(nextButton()).toBeEnabled();
+		expectAvailable(nextButton());
 
 		await userEvent.click(nextButton());
 
@@ -206,7 +220,7 @@ describe("報表：切換月份", () => {
 		expect(
 			screen.getByRole("heading", { name: "這個月花了多少" }),
 		).toBeInTheDocument();
-		expect(nextButton()).toBeDisabled();
+		expectUnavailable(nextButton());
 
 		// 換月份是 push：上一頁回到十一月。
 		await userEvent.click(
@@ -214,6 +228,68 @@ describe("報表：切換月份", () => {
 		);
 		expect(location()).toBe("/reports?month=2026-11");
 		expect(await screen.findByText("十一月的高鐵")).toBeInTheDocument();
+	});
+
+	it("翻到這個月的那一下：「下個月」變成不能按，焦點還在它上面", async () => {
+		mockApi([...NOVEMBER, ...DECEMBER]);
+		renderAt("/reports?month=2026-11");
+		await screen.findByText("十一月的高鐵");
+		await waitFor(() => expectAvailable(nextButton()));
+
+		await userEvent.click(nextButton());
+
+		expect(await screen.findByText("十二月的便當")).toBeInTheDocument();
+		expect(location()).toBe("/reports");
+		expectUnavailable(nextButton());
+		// 用鍵盤、螢幕閱讀器的人還在原地：再按 Shift+Tab 就是「上個月」。
+		expect(document.activeElement).toBe(nextButton());
+	});
+
+	it("這個月的「下個月」按了也沒事（滑鼠、Enter）：不換網址、不發請求", async () => {
+		const fetchMock = mockApi(DECEMBER);
+		renderAt("/", "/reports");
+		await screen.findByText("十二月的便當");
+		expectUnavailable(nextButton());
+		const before = requested(fetchMock).length;
+
+		await userEvent.click(nextButton());
+		await userEvent.keyboard("{Enter}");
+
+		expect(location()).toBe("/reports");
+		expect(monthLabel()).toHaveTextContent("2026年12月");
+		expect(requested(fetchMock)).toHaveLength(before);
+		expect(document.activeElement).toBe(nextButton());
+	});
+
+	it("最早的那個月（1900-01）：「上個月」不能按，按了也沒事", async () => {
+		const fetchMock = mockApi([
+			{
+				method: "GET",
+				path: "/api/expenses/summary?month=1900-01",
+				handler: () =>
+					json({ month: "1900-01", total: "0.00", by_category: [] }),
+			},
+			{
+				method: "GET",
+				path: "/api/expenses?month=1900-01",
+				handler: () => json([]),
+			},
+			...DECEMBER,
+		]);
+		renderAt("/reports?month=1900-01");
+		expect(
+			await screen.findByText("1900年1月沒有記錄花費"),
+		).toBeInTheDocument();
+		await waitFor(() => expectAvailable(nextButton()));
+		expectUnavailable(previousButton());
+		const before = requested(fetchMock).length;
+
+		await userEvent.click(previousButton());
+
+		expect(location()).toBe("/reports?month=1900-01");
+		expect(monthLabel()).toHaveTextContent("1900年1月");
+		expect(requested(fetchMock)).toHaveLength(before);
+		expect(document.activeElement).toBe(previousButton());
 	});
 
 	it("新的月份還在載入：留著上一個月的資料但調淡、標成載入中；月份與標題已經是新的", async () => {
@@ -354,7 +430,7 @@ describe("報表：切換月份", () => {
 		renderAt("/reports?month=2026-11");
 
 		expect(await screen.findByText("十一月的高鐵")).toBeInTheDocument();
-		await waitFor(() => expect(nextButton()).toBeEnabled());
+		await waitFor(() => expectAvailable(nextButton()));
 		expect(monthLabel()).toHaveTextContent("2026年11月");
 		expect(
 			screen.getByRole("heading", { name: "2026年11月" }),
@@ -412,7 +488,7 @@ describe("報表：切換月份", () => {
 		expect(
 			screen.getByRole("heading", { name: "這個月花了多少" }),
 		).toBeInTheDocument();
-		expect(nextButton()).toBeDisabled();
+		expectUnavailable(nextButton());
 
 		await userEvent.click(
 			screen.getByRole("button", { name: "測試用：上一頁" }),
@@ -440,8 +516,8 @@ describe("報表：切換月份", () => {
 		expect(
 			await screen.findByRole("heading", { name: "這個月花了多少" }),
 		).toBeInTheDocument();
-		expect(nextButton()).toBeDisabled();
-		expect(previousButton()).toBeEnabled();
+		expectUnavailable(nextButton());
+		expectAvailable(previousButton());
 		expect(location()).toBe("/reports?month=2026-12");
 	});
 
@@ -460,8 +536,8 @@ describe("報表：切換月份", () => {
 
 		expect(await screen.findByText("十一月的高鐵")).toBeInTheDocument();
 		expect(monthLabel()).toHaveTextContent("2026年11月");
-		expect(previousButton()).toBeEnabled();
-		expect(nextButton()).toBeDisabled();
+		expectAvailable(previousButton());
+		expectUnavailable(nextButton());
 		expect(location()).toBe("/reports?month=2026-11");
 	});
 
