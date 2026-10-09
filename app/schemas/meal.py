@@ -172,3 +172,8 @@ class MealResponse(BaseModel):
     protein_g: Decimal
     fat_g: Decimal
     carb_g: Decimal
+    # 這一餐有幾個讚、幾則留言（社群規格 §5.6；只算現在的好友）。沒有預設值，理由同
+    # description：每一條回 MealResponse 的路徑都要帶真的數字。主人不能讚自己，所以沒有
+    # 「我按了沒」。
+    like_count: int
+    comment_count: int

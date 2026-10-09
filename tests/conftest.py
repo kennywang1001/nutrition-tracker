@@ -16,8 +16,10 @@ from app.db import get_db
 from app.main import app
 from app.models.user import UserRole
 from app.ratelimit import (
+    comment_rate_limiter,
     export_in_flight,
     export_rate_limiter,
+    like_rate_limiter,
     login_rate_limiter,
     session_rate_limiter,
 )
@@ -87,11 +89,15 @@ def _reset_login_rate_limiter() -> None:
     sequence 不會跟著 rollback，目前每個測試的使用者 id 都不同、不重置也不會互相影響——
     重置是讓「全域單例每個測試都從乾淨的狀態開始」這條規矩沒有例外。
     `export_in_flight`（一個人同時一個匯出）同理：哪一條測試漏放了位子，不該拖累下一條。
+    `like_rate_limiter`、`comment_rate_limiter`（社群規格 D20）跟 `export_rate_limiter` 一樣
+    鍵是使用者 id：現在不重置也不會互相影響，重置是同一條「沒有例外」的規矩。
     """
     login_rate_limiter.reset()
     session_rate_limiter.reset()
     export_rate_limiter.reset()
     export_in_flight.reset()
+    like_rate_limiter.reset()
+    comment_rate_limiter.reset()
 
 
 @pytest.fixture(scope="session")

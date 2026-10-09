@@ -611,6 +611,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/social/meals/{meal_id}/like": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Like Meal
+         * @description 按讚。冪等：已經按過就什麼都不做，照樣回 200 與目前的數字。
+         *
+         *     限速在最前面（查不查得到都算一次）。`ON CONFLICT DO NOTHING`：兩個同時到的 PUT，
+         *     第二個等第一個 commit 之後什麼都不寫——不是 IntegrityError。
+         */
+        put: operations["like_meal_api_social_meals__meal_id__like_put"];
+        post?: never;
+        /**
+         * Unlike Meal
+         * @description 收回讚。冪等。回 200 與目前的數字（不是 204）：跟按讚同一個形狀。
+         *     看不到這一餐（包含已經解除好友）就是 404——那個讚本來就被藏起來了。
+         */
+        delete: operations["unlike_meal_api_social_meals__meal_id__like_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/food-revisions": {
         parameters: {
             query?: never;
@@ -761,12 +789,14 @@ export interface paths {
          *     省略 `date` 時預設「使用者時區的今天」，靠 `today_in_timezone()` 算，
          *     不是伺服器所在時區的今天，也不是 UTC 的今天。
          *
-         *     三次查詢，跟這一天有幾筆餐、每筆餐有幾個項目都無關：
+         *     五次查詢，跟這一天有幾筆餐、每筆餐有幾個項目都無關：
          *     第一次查出這天的所有 Meal，第二次用 `meal_id IN (...)` 一次把所有
          *     Meal 的項目、revision、food 都 join 回來，在記憶體裡依 meal_id 分組——
          *     不是對每筆 Meal 各查一次項目（那會是「這天吃了幾餐」次的往返）。
          *     第三次是 `_costs_by_meal`，同樣用一個 `meal_id IN (...)` 查餐費，
          *     所以查詢次數仍然不會隨餐數或項目數增加。
+         *     第四、五次是這幾餐各有幾個讚、幾則留言（社群規格 §5.6）——也是各一個
+         *     `meal_id IN (...)`。**多的只有數字**：這裡讀到的仍然只有自己的餐。
          */
         get: operations["list_meals_api_meals_get"];
         put?: never;
@@ -787,7 +817,8 @@ export interface paths {
         };
         /**
          * Read Meal
-         * @description 讀單一餐點：只有 3 次查詢（餐點、項目、餐費），跟項目數無關（見 `item_join_query`）。
+         * @description 讀單一餐點：只有 5 次查詢（餐點、項目、餐費、讚、留言），跟項目數無關
+         *     （見 `item_join_query`）。
          */
         get: operations["read_meal_api_meals__meal_id__get"];
         put?: never;
@@ -2038,6 +2069,16 @@ export interface components {
             /** Serving Kcal */
             serving_kcal: string;
         };
+        /**
+         * LikeState
+         * @description 按讚與收回都回這個：過濾後的數字，前端拿它對帳（規格 D19）。
+         */
+        LikeState: {
+            /** Like Count */
+            like_count: number;
+            /** Liked By Me */
+            liked_by_me: boolean;
+        };
         /** LikerResponse */
         LikerResponse: {
             /** Display Name */
@@ -2186,6 +2227,10 @@ export interface components {
             fat_g: string;
             /** Carb G */
             carb_g: string;
+            /** Like Count */
+            like_count: number;
+            /** Comment Count */
+            comment_count: number;
         };
         /**
          * MealType
@@ -3923,6 +3968,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SocialMealResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    like_meal_api_social_meals__meal_id__like_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                meal_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LikeState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unlike_meal_api_social_meals__meal_id__like_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                meal_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LikeState"];
                 };
             };
             /** @description Validation Error */

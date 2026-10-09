@@ -369,3 +369,26 @@ export_in_flight = InFlightLimiter(
     message="已經有一個匯出在進行，等它下載完再試",
     max_hold_seconds=EXPORT_MAX_HOLD_SECONDS,
 )
+
+
+LIKE_LIMIT = 60
+COMMENT_LIMIT = 20
+SOCIAL_WINDOW_SECONDS = 60.0
+
+# 按讚與收回**共用**（社群規格 D20），鍵是使用者 id（`str(user.id)`）。分開算的話額度實際上
+# 是兩倍。60：連按、反悔、一口氣滑過一頁動態都在額度內——擋的是寫壞的迴圈與拿 id 亂試的人
+# （限速在可見性檢查之前）。
+like_rate_limiter = KeyedRateLimiter(
+    limit=LIKE_LIMIT,
+    window_seconds=SOCIAL_WINDOW_SECONDS,
+    code="TOO_MANY_LIKES",
+    message="按得太快了，請稍後再試",
+)
+
+# 留言：每一則都會通知餐的主人，所以比讚緊。刪留言不算。
+comment_rate_limiter = KeyedRateLimiter(
+    limit=COMMENT_LIMIT,
+    window_seconds=SOCIAL_WINDOW_SECONDS,
+    code="TOO_MANY_COMMENTS",
+    message="留言太頻繁，請稍後再試",
+)

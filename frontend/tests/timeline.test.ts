@@ -18,6 +18,8 @@ function meal(id: number, eatenAt: string): Meal {
 		protein_g: "0.00",
 		fat_g: "0.00",
 		carb_g: "0.00",
+		like_count: 0,
+		comment_count: 0,
 	};
 }
 

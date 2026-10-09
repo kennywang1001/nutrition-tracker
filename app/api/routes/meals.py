@@ -35,6 +35,7 @@ from app.schemas.meal import (
     MealResponse,
     MealUpdateRequest,
 )
+from app.social_visibility import SocialCounts, social_counts
 from app.storage.photos import (
     UPLOAD_CHUNK_SIZE,
     InvalidImageError,
@@ -260,6 +261,9 @@ async def create_meal(
         protein_g=totals.protein_g,
         fat_g=totals.fat_g,
         carb_g=totals.carb_g,
+        # 剛建立的餐不會有讚與留言。
+        like_count=0,
+        comment_count=0,
     )
 
 
@@ -318,6 +322,7 @@ def _build_meal_response(
     meal: Meal,
     item_rows: Sequence[Row[tuple[MealItem, FoodRevision, Food]]],
     cost: Decimal | None,
+    counts: SocialCounts,
 ) -> MealResponse:
     """把一筆 Meal 與它已經 join 好的項目列組成回應。
 
@@ -349,6 +354,8 @@ def _build_meal_response(
         protein_g=totals.protein_g,
         fat_g=totals.fat_g,
         carb_g=totals.carb_g,
+        like_count=counts.like_count,
+        comment_count=counts.comment_count,
     )
 
 
@@ -383,7 +390,8 @@ async def read_meal(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> MealResponse:
-    """讀單一餐點：只有 3 次查詢（餐點、項目、餐費），跟項目數無關（見 `item_join_query`）。"""
+    """讀單一餐點：只有 5 次查詢（餐點、項目、餐費、讚、留言），跟項目數無關
+    （見 `item_join_query`）。"""
     meal = await _load_owned_meal(db, meal_id, user)
 
     rows = (
@@ -392,7 +400,8 @@ async def read_meal(
         )
     ).all()
     costs = await _costs_by_meal(db, [meal.id])
-    return _build_meal_response(meal, rows, costs.get(meal.id))
+    counts = await social_counts(db, user.id, [meal.id])
+    return _build_meal_response(meal, rows, costs.get(meal.id), counts[meal.id])
 
 
 @router.patch("/{meal_id}", response_model=MealResponse)
@@ -488,7 +497,8 @@ async def update_meal(
         )
     ).all()
     costs = await _costs_by_meal(db, [meal.id])
-    return _build_meal_response(meal, rows, costs.get(meal.id))
+    counts = await social_counts(db, user.id, [meal.id])
+    return _build_meal_response(meal, rows, costs.get(meal.id), counts[meal.id])
 
 
 @router.delete("/{meal_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -539,12 +549,14 @@ async def list_meals(
     省略 `date` 時預設「使用者時區的今天」，靠 `today_in_timezone()` 算，
     不是伺服器所在時區的今天，也不是 UTC 的今天。
 
-    三次查詢，跟這一天有幾筆餐、每筆餐有幾個項目都無關：
+    五次查詢，跟這一天有幾筆餐、每筆餐有幾個項目都無關：
     第一次查出這天的所有 Meal，第二次用 `meal_id IN (...)` 一次把所有
     Meal 的項目、revision、food 都 join 回來，在記憶體裡依 meal_id 分組——
     不是對每筆 Meal 各查一次項目（那會是「這天吃了幾餐」次的往返）。
     第三次是 `_costs_by_meal`，同樣用一個 `meal_id IN (...)` 查餐費，
     所以查詢次數仍然不會隨餐數或項目數增加。
+    第四、五次是這幾餐各有幾個讚、幾則留言（社群規格 §5.6）——也是各一個
+    `meal_id IN (...)`。**多的只有數字**：這裡讀到的仍然只有自己的餐。
     """
     day = date or today_in_timezone(user.timezone)
     start, end = day_bounds(day, user.timezone)
@@ -575,8 +587,11 @@ async def list_meals(
         items_by_meal[row[0].meal_id].append(row)
 
     costs = await _costs_by_meal(db, meal_ids)
+    counts = await social_counts(db, user.id, meal_ids)
     return [
-        _build_meal_response(meal, items_by_meal.get(meal.id, []), costs.get(meal.id))
+        _build_meal_response(
+            meal, items_by_meal.get(meal.id, []), costs.get(meal.id), counts[meal.id]
+        )
         for meal in meals
     ]
 
@@ -622,7 +637,8 @@ async def add_meal_item(
         )
     ).all()
     costs = await _costs_by_meal(db, [meal.id])
-    return _build_meal_response(meal, rows, costs.get(meal.id))
+    counts = await social_counts(db, user.id, [meal.id])
+    return _build_meal_response(meal, rows, costs.get(meal.id), counts[meal.id])
 
 
 @router.patch("/{meal_id}/items/{item_id}", response_model=MealResponse)
@@ -676,7 +692,8 @@ async def update_meal_item(
         )
     ).all()
     costs = await _costs_by_meal(db, [meal.id])
-    return _build_meal_response(meal, rows, costs.get(meal.id))
+    counts = await social_counts(db, user.id, [meal.id])
+    return _build_meal_response(meal, rows, costs.get(meal.id), counts[meal.id])
 
 
 @router.delete("/{meal_id}/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -773,7 +790,8 @@ async def upload_meal_photo(
         )
     ).all()
     costs = await _costs_by_meal(db, [meal.id])
-    return _build_meal_response(meal, rows, costs.get(meal.id))
+    counts = await social_counts(db, user.id, [meal.id])
+    return _build_meal_response(meal, rows, costs.get(meal.id), counts[meal.id])
 
 
 @router.get("/{meal_id}/photo")

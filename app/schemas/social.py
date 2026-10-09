@@ -32,3 +32,10 @@ class SocialMealResponse(BaseModel):
     likes: list[LikerResponse]
     comments: list[CommentResponse]
     comments_truncated: bool
+
+
+class LikeState(BaseModel):
+    """按讚與收回都回這個：過濾後的數字，前端拿它對帳（規格 D19）。"""
+
+    like_count: int
+    liked_by_me: bool

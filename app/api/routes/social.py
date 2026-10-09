@@ -4,18 +4,20 @@
 這裡不直接碰好友關係的表：規則都在可見性模組。"""
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.api.params import ResourceId
 from app.db import get_db
-from app.errors import NotFoundError
+from app.errors import NotFoundError, UnprocessableEntityError
 from app.friend_meals import build_friend_meals
 from app.models.social import MealComment, MealLike
 from app.models.user import User
-from app.schemas.social import CommentResponse, LikerResponse, SocialMealResponse
-from app.social_visibility import author_counts, like_counts, load_visible_meal
+from app.ratelimit import like_rate_limiter
+from app.schemas.social import CommentResponse, LikerResponse, LikeState, SocialMealResponse
+from app.social_visibility import author_counts, like_counts, load_visible_meal, social_counts
 
 router = APIRouter(prefix="/social", tags=["social"])
 
@@ -82,3 +84,49 @@ async def read_social_meal(
         ],
         comments_truncated=len(rows) > COMMENTS_SHOWN,
     )
+
+
+async def _like_state(db: AsyncSession, user_id: int, meal_id: int) -> LikeState:
+    counts = (await social_counts(db, user_id, [meal_id]))[meal_id]
+    return LikeState(like_count=counts.like_count, liked_by_me=counts.liked_by_me)
+
+
+@router.put("/meals/{meal_id}/like", response_model=LikeState)
+async def like_meal(
+    meal_id: ResourceId,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LikeState:
+    """按讚。冪等：已經按過就什麼都不做，照樣回 200 與目前的數字。
+
+    限速在最前面（查不查得到都算一次）。`ON CONFLICT DO NOTHING`：兩個同時到的 PUT，
+    第二個等第一個 commit 之後什麼都不寫——不是 IntegrityError。"""
+    # commit 之後 ORM 物件可能過期：要用的 id 先存成整數。
+    user_id = user.id
+    like_rate_limiter.hit(str(user_id))
+    meal = await load_visible_meal(db, user, meal_id, lock=True)
+    if meal.user_id == user_id:
+        raise UnprocessableEntityError("CANNOT_LIKE_OWN_MEAL", "不能對自己的餐點按讚")
+    await db.execute(
+        pg_insert(MealLike).values(meal_id=meal_id, user_id=user_id).on_conflict_do_nothing()
+    )
+    await db.commit()
+    return await _like_state(db, user_id, meal_id)
+
+
+@router.delete("/meals/{meal_id}/like", response_model=LikeState)
+async def unlike_meal(
+    meal_id: ResourceId,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LikeState:
+    """收回讚。冪等。回 200 與目前的數字（不是 204）：跟按讚同一個形狀。
+    看不到這一餐（包含已經解除好友）就是 404——那個讚本來就被藏起來了。"""
+    user_id = user.id
+    like_rate_limiter.hit(str(user_id))
+    await load_visible_meal(db, user, meal_id, lock=True)
+    await db.execute(
+        delete(MealLike).where(MealLike.meal_id == meal_id, MealLike.user_id == user_id)
+    )
+    await db.commit()
+    return await _like_state(db, user_id, meal_id)
