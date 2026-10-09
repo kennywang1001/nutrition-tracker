@@ -29,7 +29,7 @@
 | 項目 | 數字 |
 |---|---|
 | 端點 | **79**（OpenAPI 的 operation 數，跟 `grep -c "@router\." app/api/routes/*.py` 的加總一樣；2026-10-09） |
-| 測試 | 後端 **1113**（`pytest -q -W error` 全綠，約 2 分 40 秒）；前端 `Test Files 142`、`Tests 1788`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **47** 條、19 個檔案（Playwright；預設 workers 連跑兩次都是 `47 passed`）。2026-10-09 在 `feat/ai-multi-food` 量的 |
+| 測試 | 後端 **1224**（`pytest -q -W error` 全綠，約 2 分 50 秒）；前端 `Test Files 142`、`Tests 1817`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **47** 條、19 個檔案（Playwright；預設 workers 連跑兩次都是 `47 passed`）。2026-10-09 在 `feat/ai-multi-food` 量的（審查後的修正之後） |
 | 覆蓋率 | 96%（2026-09 量的，之後沒再量） |
 | 資料表 | 16（+ `alembic_version`） |
 | Migration | `0001` ~ `0017` |
@@ -1137,20 +1137,33 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
        供應商不收這份 schema 的話，照 estimator 的分類多半是 `502 AI_UPSTREAM_ERROR`（「請稍後再試」，其實等多久都不會好；
        log 的「AI 供應商暫時無法使用」那一行有供應商的原話），訊息裡剛好有 `model` 的 400 則是 `503 AI_MISCONFIGURED`。
        單樣估算（新增食物、加一項）不受影響，多樣的壞了可以先用它們。
-    2. 模型回 9 樣以上、0 樣、或任何一樣超出範圍（名稱清完是空的、負數、超過上限）→ **整次** `502 AI_BAD_RESPONSE`，
-       而且算一次額度。不默默丟掉幾樣：使用者會以為那就是全部。
-    3. **會把思考算進輸出上限的模型可能在 4096 token 之內寫不完** → JSON 被截斷 → `AI_BAD_RESPONSE`。症狀是
-       「AI 這次的回答看不懂」而且**每次都是**、每次都吃一次額度；`AI_BAD_RESPONSE` 後端沒有記原因的 log。上限是 `app/ai/estimator.py` 的
-       `MAX_MEAL_OUTPUT_TOKENS`（單樣仍是 1024）；沒有環境變數可以調，要改程式或換模型。
+    2. 模型回 9 樣以上、或任何一樣超出範圍（名稱清完是空的、負數、超過上限）→ **整次** `502 AI_BAD_RESPONSE`，
+       而且算一次額度。不默默丟掉幾樣：使用者會以為那就是全部。**小數位數不算超出範圍**：模型給的數字先四捨五入到
+       兩位再驗（`0.333` → `0.33`、`0.875` → `0.88`；單樣端點同一條規則），之前第三位小數會讓整餐被拒絕。
+       **0 樣是另一個錯誤碼**：`502 AI_NO_FOOD_FOUND`（模型照提示詞回了空陣列＝看不出任何食物，多半是一張不是
+       食物的照片）。一樣記一列失敗、算一次額度，但畫面顯示後端那一句「AI 看不出這一餐有什麼食物，換一張照片或
+       換個說法再試（這一次也算在今天的次數裡）」，不是 `AI_BAD_RESPONSE` 的「可以再試一次」。
+    3. **會把思考算進輸出上限的模型仍然可能寫不完** → JSON 被截斷 → `AI_BAD_RESPONSE`。上限從 4096 提到 **8192**
+       （`app/ai/estimator.py` 的 `MAX_MEAL_OUTPUT_TOKENS`；單樣仍是 1024；答案本身只有 600～800 token，其餘是留給
+       思考的），沒有環境變數可以調，要改程式或換模型。症狀是「AI 這次的回答看不懂」而且**每次都是**、每次都吃一次額度。
+       **現在有 log 可以對**：兩家 estimator 的 `_complete`（單樣與多樣共用）在回覆不是正常結束、或沒有文字時記一行
+       WARNING「AI 回覆不是正常結束（…）」——Anthropic 帶 `stop_reason`（`max_tokens`、`refusal`…）與
+       `input_tokens`／`output_tokens`；Gemini 帶 `finish_reason`（`MAX_TOKENS`、`SAFETY`…）、`block_reason`（提示被擋）與
+       `prompt`／`candidates`／`thoughts`／`total` 四個 token 數。**只有原因與用量**：提示詞、使用者輸入、照片、模型的輸出
+       都不進 log。**還是沒有 log 的**：模型正常結束、但內容驗證不過的那一種（9 樣、某一樣超出範圍、不是 JSON）。
     4. AI 估的量一律當 g；食物庫同名的那一樣如果是 ml 的，數字照搬（1 g≈1 ml）。
     5. **「加入這 N 樣」建的私人食物是當場真的建了**（餐要到按「記錄」才存）：加入之後放棄這一餐，那幾個私人食物
-       留在食物庫裡，而食物沒有刪除的端點。同名只比名稱、不看品牌；改名後的同名檢查上限 200 筆（同單樣）。
+       留在食物庫裡，而食物沒有刪除的端點。加入到一半就離開記一餐：已經送出去的那一個請求收不回來，還沒輪到的
+       不再建（每一輪開頭看元件還在不在）。同名只比名稱、不看品牌；改名後的同名檢查上限 200 筆（同單樣）。
     6. 「改用 AI 的數字」之後不能改回用食物庫的（重新估算）。取消勾選的那幾樣仍然寫在 AI 的描述裡——描述要自己改。
+       加入之後在記一餐把 AI 的項目**全部**移除、又沒有手選的食物：AI 填的描述與照片跟著清掉（改過的字、自己選的
+       照片不清）；只移除一部分、或還有手選的食物時不清——描述仍然寫著被移除的那幾樣，要自己改。
     7. AI 項目的量只能直接輸入（g／ml），不能選食物的份量；量超過 10000 或超過兩位小數是後端 422、畫面是通用的
        「記錄失敗」。
     8. `ai_analyses` 分不出單樣與多樣（`kind` 仍是 `text`／`image`）。**兩個端點共用同一個額度**（同一張表、同一個
-       `ai_daily_limit`，預設 20。寫文件時才發現：程式認得 `AI_DAILY_LIMIT`，但 `docker-compose.yml` 沒有把它傳進
-       api 容器，所以 NAS 上這個數字改不了——P2 就是這樣，不是這次造成的）。
+       `ai_daily_limit`，預設 20；`docker-compose.yml` 用 `${AI_DAILY_LIMIT:-20}` 把它傳進 api 容器——在
+       `.env.production` 填就改得了，留白是 20。P2 以來 compose 一直沒有傳這個變數，審查後補的；**compose 的預設值與
+       `app/config.py` 的預設值是兩個地方的同一個數字**，`tests/test_config.py` 有一條守著兩邊相等）。
     9. 描述是單行（換行會變空白）；全形空白會變成半形。`PATCH` 送 `null`、空字串、全空白都是清掉。
     10. e2e 的多樣清單是假的估算回應：前後端對 `AnalyzeMealResponse` 的理解一致靠的是 `schema.d.ts` 的型別
         （spec 裡的假回應寫了 `satisfies AnalyzeMealResponse`，只有 `tsc` 看得到）與 CI 的 contract job。
@@ -1795,7 +1808,8 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
 記一餐拍一張照片（或打一段字），AI 一次估出這一餐的每一樣，勾選後一起加進這一餐；AI 說它看到了什麼的那句話存成這一餐的
 「描述」（規格 `docs/superpowers/specs/2026-10-09-ai-multi-food-design.md`、計畫
 `docs/superpowers/plans/2026-10-09-ai-multi-food.md`，計畫的「執行中發現的差異」記了實作跟計畫不一樣的地方）。
-**一個 migration（`0017`，只加一個可以是空的欄位，可以退版）、沒有新的環境變數。**
+**一個 migration（`0017`，只加一個可以是空的欄位，可以退版）、沒有新的環境變數**（`AI_DAILY_LIMIT` 是程式本來就認得的，
+這次只是讓 compose 把它傳進容器）。
 **既有的 `POST /api/ai/analyze` 與 `AiEstimatePanel`（新增食物、編輯這一餐的加一項）沒有動。**
 
 **流程：**
@@ -1806,8 +1820,8 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
 | 估算 | `POST /api/ai/analyze-meal`（請求就是既有的 `AnalyzeRequest`：文字或照片**擇一**）。回一句描述＋1～8 樣，每一樣的形狀跟單樣估算相同，另帶 `library_food`（食物庫有同名的）。**一次呼叫算一次額度、寫一列 `ai_analyses`** | `app/api/routes/ai.py` 的 `analyze_meal`；`app/ai/estimator.py` 的 `parse_raw_meal_estimate` |
 | 文字短路 | 整段文字剛好是一個看得到的食物的名稱 → 不呼叫 LLM、不記一列、不算額度、`analysis_id: null`。畫面是原本那張「食物庫裡已經有「X」」＋「用這個」，**不進勾選清單** | 同上；AI 沒設定時這條路照樣能用 |
 | 清單 | `<section aria-label="AI 估算結果">`：描述、「今天還能用 N 次」、每一樣一個勾選框（預設全勾；名稱、量、熱量——顯示的是**會記下去的那個**熱量）。食物庫同名的標「用食物庫的」＋「改用 AI 的數字」；其餘有「修改」（一次只開一個） | `lib/ai-meal.ts`（純函式）、`components/EstimateDraftFields.tsx` |
-| 加入 | 「加入這 N 樣」**一樣一樣依序**做，每一樣四種來源之一：這一輪已經處理過同名的 → 用那個；用食物庫的 → `GET /api/foods/{id}`；改過名稱而且撞到看得到的同名食物 → 停下來問；其餘 → `POST /api/foods`（撞到自己的同名食物是 `409`，問「用現有的／改名」）。成功的標「已加入」，失敗的留在清單、再按一次只做還沒加入的 | `AiMealPanel.tsx` 的 `resolveFood` 與加入那一輪 |
-| 記一餐的表單 | 多一個「AI 估的項目」清單（每列：食物名、一格量 g／ml、「移除」），跟原本手選的那一樣**並存**；估算用的照片當這一餐的照片、AI 的描述填進「描述（選填）」——**兩者都是已經有就不覆蓋** | `screens/LogMeal.tsx` |
+| 加入 | 「加入這 N 樣」**一樣一樣依序**做，每一樣四種來源之一：用食物庫的 → `GET /api/foods/{id}`；這一輪**剛建好**同名的 → 用那個（只有要建食物的那幾樣才這樣沿用——同名的一樣用食物庫的、一樣「改用 AI 的數字」時各用各的）；改過名稱而且撞到看得到的同名食物 → 停下來問；其餘 → `POST /api/foods`（撞到自己的同名食物是 `409`，問「用現有的／改名」）。成功的標「已加入」，失敗的留在清單、再按一次只做還沒加入的。跑到一半離開記一餐就停，不再往下建 | `AiMealPanel.tsx` 的 `resolveFood` 與加入那一輪 |
+| 記一餐的表單 | 多一個「AI 估的項目」清單（每列：食物名、一格量 g／ml、「移除」），跟原本手選的那一樣**並存**；估算用的照片當這一餐的照片、AI 的描述填進「描述（選填）」——**兩者都是已經有就不覆蓋**。AI 的項目全部移除、又沒有手選的食物時，AI 填的那句描述與那張照片跟著清掉（`WithOrigin`：現在的值仍然等於 AI 填的那個值才清；自己打的字、自己選的照片不清） | `screens/LogMeal.tsx` |
 | 記錄 | 按「記錄」才 `POST /api/meals`：`items` ＝ AI 的幾列（`{ food_id, quantity }`）＋手選的那一樣；描述 trim 後是空的就不帶 | 同上；後端本來就收多個 `items` |
 
 **兩個自由文字欄位的分工：**
@@ -1840,7 +1854,7 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
   （`single_line`、`OptionalSingleLine`）、`app/schemas/meal.py`、`app/schemas/friend.py`、`app/schemas/ai.py`
   （`LibraryFoodMatch`、`AnalyzedMealItem`、`AnalyzeMealResponse`）；`app/ai/estimator.py`（`RawMealEstimate`、
   `MEAL_SYSTEM_PROMPT`、`LLMMealItemSchema`、`LLMMealEstimateSchema`、`parse_raw_meal_estimate`、
-  `MAX_MEAL_ITEMS = 8`、`MAX_MEAL_OUTPUT_TOKENS = 4096`）；兩家 estimator 的 `estimate_meal_text`／`estimate_meal_image`；
+  `MAX_MEAL_ITEMS = 8`、`MAX_MEAL_OUTPUT_TOKENS = 8192`、`_round_to_cents`）；兩家 estimator 的 `estimate_meal_text`／`estimate_meal_image`；
   `app/api/routes/ai.py` 的 `analyze_meal`；`app/api/routes/meals.py`、`friends.py`、`app/export.py`（帶出描述）。
   測試 `tests/test_meals_description.py`、`test_schema_validators.py`、`test_ai_analyze_meal.py`，以及
   `test_ai_estimator.py`、`test_ai_provider_errors.py`、`test_friend_meals.py`、`test_export.py`、`test_ai_analyze.py` 的新增。
@@ -1856,14 +1870,35 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
 **沒有自動測試守的（重要）：**
 
 - **模型實際的輸出。** 沒有任何測試、任何一次手動操作對真的 LLM 打過多樣估算——開發環境沒有金鑰。守住的是兩頭：
-  「送出去的請求」（`max_tokens`／`maxOutputTokens` 是 4096、schema 是多樣的那一份、沒有 `minItems`）與
-  「回來的字怎麼解析」（0 樣、9 樣、某一樣不合格、描述太長、不是 JSON）。中間那一段——兩家供應商收不收這份 schema、
+  「送出去的請求」（`max_tokens`／`maxOutputTokens` 是 8192、schema 是多樣的那一份、沒有 `minItems`）與
+  「回來的字怎麼解析」（0 樣、9 樣、某一樣不合格、三位小數、描述太長、不是 JSON、被截斷的回覆記不記 log）。中間那一段——兩家供應商收不收這份 schema、
   模型照不照提示詞拆——**要部署後有金鑰的人手動拍一張**（部署手冊「各版本的升級備註」的 `0017`）。
 - **e2e 的多樣清單是假的估算回應。** `ai-multi-food.spec.ts` 第二條用 `page.route` 假造
   `POST /api/ai/analyze-meal` 的回應（兩樣：一樣食物庫有、一樣沒有），之後的讀食物、建食物、記一餐、上傳照片、
   飲食頁都是真的後端。原因：CI 沒有金鑰、e2e 不花錢，而不假造就走不到清單（真後端不花錢走得到的只有文字短路與 503，
   那兩條在 `ai-estimate.spec.ts`）。假回應寫了 `satisfies AnalyzeMealResponse`：後端改了回應的形狀，這個 spec 在
   `tsc -b` 就紅——**但 Playwright 自己不做型別檢查**（§7）。
+
+**審查後的修正**（七條，規格的同名那一節逐條寫了改了什麼；commit `d6ff93f`～`b13e842`）：
+
+- **I1** 多樣的輸出上限 4096 → 8192；兩家的 `_complete` 在回覆不是正常結束或沒有文字時記一行 WARNING（原因＋token 數，
+  不含任何內容）。`tests/test_ai_provider_errors.py`。
+- **I2** 模型給的數字先四捨五入到兩位再驗範圍（`_round_to_cents`，寫在 `LLMEstimateSchema` 上——**單樣端點也套用**）。
+  不是數字、不是有限值的照舊拒絕。`tests/test_ai_estimator.py`。
+- **M3** 「加入」跑到一半離開記一餐：不再往下建。**M4** 同名去重只在「要建食物」的幾樣之間，用食物庫的那一樣永遠
+  用它自己的那一筆。`tests/ai-meal-panel.test.tsx`。
+- **M5** AI 的項目全部移除時，AI 填的描述與照片跟著清掉（上表）。`tests/log-meal-ai.test.tsx`。
+- **M6** 0 樣是 `AI_NO_FOOD_FOUND`，畫面顯示後端那一句。單樣端點沒有對應的情況（它的提示詞沒有「看不出就回空」），沒有動。
+- **M7** `docker-compose.yml` 把 `AI_DAILY_LIMIT` 傳進 api 容器（`${AI_DAILY_LIMIT:-20}`）。`tests/test_config.py`。
+
+做這幾條時又看到的兩件事（第 6 節那份清單的老面孔）：
+
+- **多寫的守衛殺不死。** 四捨五入的函式原本先判斷「不是有限值就原樣交回」——拿掉它測試全綠：`Infinity` 的 quantize
+  自己丟例外、`NaN` 的 quantize 還是 `NaN`，兩種本來就由 Pydantic 拒絕。留著它等於一行沒有人守的程式，所以拿掉、
+  把理由寫進註解。同一個函式裡 `Decimal(str(x))` 一律經過 `str()` 的寫法也讓 bool 與型別的判斷變成殺不死的
+  （`str(True)` 解析不了，碰巧擋住）；改成只有 float 經過 `str()` 之後，兩個判斷才各自有一條測試會紅。
+- **突變被型別檢查殺掉不算數。** vitest 會順便跑型別檢查：拿掉一行之後多出一個沒用到的變數，紅的是
+  `TypeCheckError`，不是行為。那三個突變改寫成型別過得去的樣子再跑一次，才知道行為的測試咬不咬得住（都咬得住）。
 
 **已知限制**在 §8.2「AI 估算的已知限制與後續」第一點底下（12 點）。最要緊的三點：沒有對真的 LLM 打過（第 1 點）、
 會把思考算進輸出上限的模型可能寫不完（第 3 點）、「加入」建的私人食物在放棄這一餐之後留著（第 5 點）。
