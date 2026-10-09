@@ -27,6 +27,7 @@ import {
 } from "../lib/ai-food";
 import { formatMacro } from "../lib/decimal";
 import styles from "./AiEstimatePanel.module.css";
+import { EstimateDraftFields } from "./EstimateDraftFields";
 import { PhotoPickerButton } from "./PhotoPickerButton";
 
 type AnalyzeInput =
@@ -443,58 +444,12 @@ export function AiEstimatePanel({
 					className={`${styles.card} ${styles.form}`}
 					onSubmit={(event) => submitDraft(event, estimate)}
 				>
-					<label htmlFor={`${id}-name`}>食物名稱</label>
-					<input
-						ref={nameInputRef}
-						id={`${id}-name`}
-						type="text"
-						maxLength={100}
-						value={draft.name}
-						onChange={(event) => updateDraft({ name: event.target.value })}
-					/>
-					<label
-						htmlFor={`${id}-serving-grams`}
-					>{`一份的重量（${unit}）`}</label>
-					<input
-						id={`${id}-serving-grams`}
-						type="text"
-						inputMode="decimal"
-						value={draft.servingGrams}
-						onChange={(event) =>
-							updateDraft({ servingGrams: event.target.value })
-						}
-					/>
-					<label htmlFor={`${id}-kcal`}>一份的熱量（kcal）</label>
-					<input
-						id={`${id}-kcal`}
-						type="text"
-						inputMode="decimal"
-						value={draft.kcal}
-						onChange={(event) => updateDraft({ kcal: event.target.value })}
-					/>
-					<label htmlFor={`${id}-protein`}>一份的蛋白質（g）</label>
-					<input
-						id={`${id}-protein`}
-						type="text"
-						inputMode="decimal"
-						value={draft.protein_g}
-						onChange={(event) => updateDraft({ protein_g: event.target.value })}
-					/>
-					<label htmlFor={`${id}-fat`}>一份的脂肪（g）</label>
-					<input
-						id={`${id}-fat`}
-						type="text"
-						inputMode="decimal"
-						value={draft.fat_g}
-						onChange={(event) => updateDraft({ fat_g: event.target.value })}
-					/>
-					<label htmlFor={`${id}-carb`}>一份的碳水化合物（g）</label>
-					<input
-						id={`${id}-carb`}
-						type="text"
-						inputMode="decimal"
-						value={draft.carb_g}
-						onChange={(event) => updateDraft({ carb_g: event.target.value })}
+					<EstimateDraftFields
+						idPrefix={id}
+						unit={unit}
+						draft={draft}
+						nameInputRef={nameInputRef}
+						onChange={updateDraft}
 					/>
 					{formError !== null && <p role="alert">{formError}</p>}
 					{existingFoodId !== null && (

@@ -1,0 +1,73 @@
+/* 多樣面板自己的部分。面板外框、入口按鈕、卡片、主要／次要按鈕、表單欄位的外觀
+   都用 AiEstimatePanel.module.css 的（兩個面板同一套）。 */
+
+.description {
+	margin: 0;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+.items {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin: var(--space-2) 0 0;
+	padding: 0;
+	list-style: none;
+}
+
+/* 一樣一列：勾選框＋名稱＋量，右邊是標籤與按鈕；窄的時候按鈕換到下一行。 */
+.item {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-1) var(--space-2);
+	padding-top: var(--space-2);
+	border-top: 1px solid var(--color-border);
+}
+
+/* 整個標籤是勾選框的點擊目標。 */
+.check {
+	display: flex;
+	flex: 1 1 12rem;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-1) var(--space-2);
+	min-width: 0;
+	min-height: 44px;
+}
+
+.check input {
+	flex: none;
+	width: 20px;
+	height: 20px;
+	margin: 0;
+	accent-color: var(--color-action);
+}
+
+.name {
+	font-weight: 700;
+	overflow-wrap: anywhere;
+}
+
+.rowActions button {
+	min-height: 44px;
+	padding: 0 var(--space-3);
+	border-radius: var(--radius-button);
+	font-weight: 600;
+}
+
+/* 錯誤、衝突的提問、修改表單各佔一整行。 */
+.item > p,
+.conflict,
+.editForm {
+	flex-basis: 100%;
+}
+
+.conflict p {
+	margin: 0;
+}
+
+.add[aria-disabled="true"] {
+	opacity: 0.4;
+}

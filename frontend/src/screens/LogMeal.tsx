@@ -11,18 +11,24 @@ import {
 } from "../api/photos";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
-import { AiEstimatePanel } from "../components/AiEstimatePanel";
+import { AiMealPanel } from "../components/AiMealPanel";
 import { FoodPicker } from "../components/FoodPicker";
 import { PhotoPickerButton } from "../components/PhotoPickerButton";
 import {
 	PortionQuantityFields,
 	usePortionQuantity,
 } from "../components/PortionQuantityFields";
+import ui from "../components/ui.module.css";
+import { isPlainPositiveDecimal } from "../lib/decimal";
 import styles from "./LogMeal.module.css";
 
 type Food = components["schemas"]["FoodResponse"];
 type MealResponse = components["schemas"]["MealResponse"];
 type MealType = components["schemas"]["MealType"];
+
+/** AI 多樣估算加進來的一樣（AI 多樣估算規格 D19）。`quantity` 是直接輸入的量
+ *  （g 或 ml），預設 AI 估的；`key` 只給 React 與欄位的 id 用——同一個食物可以出現兩次。 */
+type AiItem = { key: number; food: Food; quantity: string };
 
 type Props = {
 	/** `photoFailed`：這一餐存好了，但選的照片沒傳上去（規格 §5.4）。 */
@@ -43,6 +49,9 @@ export function LogMeal({ onSaved }: Props) {
 	const [isPrivate, setIsPrivate] = useState(false);
 	// 這一餐吃了什麼的一句話（AI 多樣估算規格 D13）。好友看得到；跟「備註」是兩回事。
 	const [description, setDescription] = useState("");
+	// AI 估的項目。跟上面手選的那一樣（selectedFood）並存：存的時候兩邊都送。
+	const [aiItems, setAiItems] = useState<AiItem[]>([]);
+	const nextAiKeyRef = useRef(0);
 	// 選填的照片（介面改版 §5.4）。選的當下就檢查大小，不要等到存檔才發現。
 	const [photo, setPhoto] = useState<File | null>(null);
 	const [photoError, setPhotoError] = useState<string | null>(null);
@@ -81,11 +90,44 @@ export function LogMeal({ onSaved }: Props) {
 			selectedRef.current.focus();
 		}
 	});
+	// AI 的項目加進來之後，面板收起、「加入」那顆按鈕消失：把焦點移到「AI 估的項目」
+	// 的標題（同上面「已選擇」的作法，旗標只在加入那一次移）。
+	const focusAiItemsRef = useRef(false);
+	const aiItemsHeadingRef = useRef<HTMLHeadingElement>(null);
+	useEffect(() => {
+		if (focusAiItemsRef.current && aiItemsHeadingRef.current !== null) {
+			focusAiItemsRef.current = false;
+			aiItemsHeadingRef.current.focus();
+		}
+	});
 	const [mealType, setMealType] = useState<MealType>("snack");
 	const [error, setError] = useState<string | null>(null);
 	const saveMeal = useMutation({
 		mutationFn: async () => {
-			if (selectedFood === null) {
+			// AI 的幾樣在前（估算的順序），手選的那一樣在後。
+			const items = [
+				...aiItems.map((item) => ({
+					food_id: item.food.id,
+					// 直接輸入的量（g／ml）：不帶 portion_id。
+					quantity: item.quantity.trim(),
+				})),
+				...(selectedFood === null
+					? []
+					: [
+							{
+								food_id: selectedFood.id,
+								// 數值一律以字串送出（規格 §5.1），不要 Number()。
+								quantity: portion.quantity,
+								// quantity_g 不在這裡算——伺服器在寫入當下算好並凍結
+								// （交接文件 §4.3）。前端算一次就是把「凍結歷史」
+								// 這個保證從另一頭破壞掉。
+								...(portion.portionId !== null
+									? { portion_id: portion.portionId }
+									: {}),
+							},
+						]),
+			];
+			if (items.length === 0) {
 				throw new Error("尚未選擇食物");
 			}
 			const meal = await apiFetch<MealResponse>("/api/meals", {
@@ -98,19 +140,7 @@ export function LogMeal({ onSaved }: Props) {
 					// 哪一天」才是建立第二個事實來源。
 					eaten_at: new Date().toISOString(),
 					meal_type: mealType,
-					items: [
-						{
-							food_id: selectedFood.id,
-							// 數值一律以字串送出（規格 §5.1），不要 Number()。
-							quantity: portion.quantity,
-							// quantity_g 不在這裡算——伺服器在寫入當下算好並凍結
-							// （交接文件 §4.3）。前端算一次就是把「凍結歷史」
-							// 這個保證從另一頭破壞掉。
-							...(portion.portionId !== null
-								? { portion_id: portion.portionId }
-								: {}),
-						},
-					],
+					items,
 					// **留空時整個不帶這個欄位**，不是送 "" 也不是送 null。
 					// 後端是 `cost: Decimal | None = Field(default=None, gt=0, ...)`：
 					// 送 "" 會被 Pydantic 擋成 422；送 null 雖然合法但語意繞了
@@ -167,6 +197,7 @@ export function LogMeal({ onSaved }: Props) {
 			portion.reset();
 			setCost("");
 			setDescription("");
+			setAiItems([]);
 			setPhoto(null);
 			setPhotoError(null);
 			setError(null);
@@ -210,45 +241,128 @@ export function LogMeal({ onSaved }: Props) {
 			<FoodPicker
 				onSelect={setSelectedFood}
 				renderBelowSearch={(query) => (
-					<AiEstimatePanel
+					<AiMealPanel
 						text={query}
-						onFoodReady={(food, { image }) => {
-							// 份量自動是一份 × 1（AI 估算前端規格 §5.1）：數量不會跟著
-							// 換食物歸位，先 reset，不然上一個食物打的 200 會留下來。
+						onFoodPicked={(food) => {
+							// 整段文字就是食物庫裡的食物：跟從清單選一個一樣（份量歸位，
+							// 不然上一個食物打的 200 會留下來）。
 							portion.reset();
 							setSelectedFood(food);
 							focusSelectedRef.current = true;
-							// 拍照估算的照片當這一餐的照片——但已經選了別張就不覆蓋
-							// （AI 估算前端規格 §5.1）。放進去的是原始檔案：記一餐上傳時
-							// 自己會縮（uploadMealPhoto）。大小已經在面板擋過。
-							// 用 updater 看「現在」的照片：面板存食物的期間使用者還能選
-							// 照片，閉包裡的 photo 是按下確認那一刻的舊值。
-							// photoError 非 null 時 photo 一定是 null，所以直接清掉安全。
+						}}
+						onItemsReady={(ready, source) => {
+							// key 在 updater 外面先取：updater 可能被 React 呼叫兩次。
+							const added = ready.map((item) => ({
+								key: nextAiKeyRef.current++,
+								food: item.food,
+								quantity: item.quantity,
+							}));
+							setAiItems((current) => [...current, ...added]);
+							focusAiItemsRef.current = true;
+							// 估算用的照片當這一餐的照片、AI 的那句話當描述——**已經有就不
+							// 覆蓋**（規格 D20）。用 updater 看「現在」的值：面板建食物的期間
+							// 使用者還能選照片、打字。放進去的是原始檔案（上傳時自己會縮）。
+							const { image } = source;
 							if (image !== null) {
 								setPhoto((current) => current ?? image);
 								setPhotoError(null);
 							}
+							setDescription((current) =>
+								current.trim() === "" ? source.description : current,
+							);
 						}}
 					/>
 				)}
 			/>
 
-			{selectedFood !== null && (
+			{(selectedFood !== null || aiItems.length > 0) && (
 				<form
 					className={styles.form}
 					onSubmit={(event) => {
 						event.preventDefault();
+						const bad = aiItems.find(
+							(item) => !isPlainPositiveDecimal(item.quantity),
+						);
+						if (bad !== undefined) {
+							setError(`「${bad.food.name}」的份量要是大於 0 的數字`);
+							return;
+						}
 						saveMeal.mutate();
 					}}
 				>
-					<p ref={selectedRef} tabIndex={-1} className={styles.selected}>
-						已選擇：{selectedFood.name}
-					</p>
+					{aiItems.length > 0 && (
+						<section aria-labelledby="meal-ai-items" className={styles.aiItems}>
+							<h2 id="meal-ai-items" ref={aiItemsHeadingRef} tabIndex={-1}>
+								AI 估的項目
+							</h2>
+							<ul>
+								{aiItems.map((item) => {
+									const inputId = `meal-ai-item-${item.key}`;
+									const unit = item.food.nutrition?.base_unit ?? "g";
+									return (
+										<li key={item.key}>
+											<label htmlFor={inputId}>
+												{`${item.food.name}（${unit}）`}
+											</label>
+											<input
+												id={inputId}
+												type="text"
+												inputMode="decimal"
+												value={item.quantity}
+												onChange={(event) => {
+													const quantity = event.target.value;
+													setAiItems((current) =>
+														current.map((other) =>
+															other.key === item.key
+																? { ...other, quantity }
+																: other,
+														),
+													);
+												}}
+											/>
+											<button
+												type="button"
+												className={ui.secondary}
+												aria-label={`移除 ${item.food.name}`}
+												disabled={saveMeal.isPending}
+												onClick={() =>
+													setAiItems((current) =>
+														current.filter((other) => other.key !== item.key),
+													)
+												}
+											>
+												移除
+											</button>
+										</li>
+									);
+								})}
+							</ul>
+						</section>
+					)}
 
-					<PortionQuantityFields
-						state={portion}
-						unit={selectedFood.nutrition?.base_unit ?? "g"}
-					/>
+					{selectedFood !== null && (
+						<>
+							<p ref={selectedRef} tabIndex={-1} className={styles.selected}>
+								已選擇：{selectedFood.name}
+							</p>
+							{/* 只有同時有 AI 的項目時才需要：不然不記這一樣＝整張表單收起來，
+							    而且沒有 AI 項目時畫面要跟以前一模一樣。 */}
+							{aiItems.length > 0 && (
+								<button
+									type="button"
+									className={ui.secondary}
+									disabled={saveMeal.isPending}
+									onClick={() => setSelectedFood(null)}
+								>
+									不記這一樣
+								</button>
+							)}
+							<PortionQuantityFields
+								state={portion}
+								unit={selectedFood.nutrition?.base_unit ?? "g"}
+							/>
+						</>
+					)}
 
 					<label htmlFor="meal-type">餐別</label>
 					<select
