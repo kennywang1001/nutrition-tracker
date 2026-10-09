@@ -491,22 +491,6 @@ async def test_a_notifications_shape_must_match_its_type(
     assert "ck_notifications_shape_matches_type" in error
 
 
-async def test_the_right_shapes_are_accepted(db_session, scene):
-    owner, fan, meal = scene
-    comment = await create_comment(db_session, meal=meal, user=fan)
-    for kind, meal_id, comment_id in [
-        ("like", meal.id, None),
-        ("comment", meal.id, comment.id),
-        ("friend_request", None, None),
-        ("friend_accepted", None, None),
-    ]:
-        await db_session.execute(
-            text(_NOTE),
-            {"to": owner.id, "by": fan.id, "type": kind, "meal": meal_id, "comment": comment_id},
-        )
-    assert (await _counts(db_session))[2] == 4
-
-
 async def test_only_one_like_notification_per_actor_and_meal(db_session, scene):
     owner, fan, meal = scene
     first = await create_comment(db_session, meal=meal, user=fan, body="一")
@@ -584,7 +568,7 @@ async def test_deleting_a_user_takes_what_they_did(db_session, scene):
 ./.venv/Scripts/python.exe -m pytest -q -W error tests/test_social_model.py
 ```
 
-Expected：**19 passed**（1＋4＋1＋8＋1＋1＋3；`conftest.py` 的 `alembic upgrade head`＋`alembic check` 在這一步就會跑——`check` 報漂移就是模型與 migration 對不上，先修那個）。
+Expected：**18 passed**（1＋4＋1＋8＋1＋3；對的形狀由後面的 task 經過端點寫進去，這裡不重複；`conftest.py` 的 `alembic upgrade head`＋`alembic check` 在這一步就會跑——`check` 報漂移就是模型與 migration 對不上，先修那個）。
 
 - [ ] **Step 6：突變（每一個改完跑 Step 5，看到指定的紅，再改回）。** migration 與模型要**一起**改（只改一邊紅的是 `alembic check`，那是另一道防線——規矩 8）。
 
@@ -3358,3 +3342,646 @@ git commit -F "$S/social-plan-task8-msg.txt"   # feat(frontend): 讚的按鈕（
 
 ---
 
+## Task 9：前端——餐點頁 `/meals/:id` 與留言
+
+**Files:**
+- Create: `frontend/src/screens/MealDetail.tsx`、`MealDetail.module.css`、`frontend/src/components/CommentForm.tsx`、`CommentList.tsx`、`Comments.module.css`、`frontend/tests/meal-detail.test.tsx`、`comment-form.test.tsx`
+- Modify: `frontend/src/App.tsx`、`frontend/src/api/friends.ts`（`forgetFriend`）、`frontend/src/api/queries.ts`、`frontend/tests/layout.test.ts`、`frontend/tests/friends-card.test.tsx`
+
+- [ ] **Step 1：`CommentForm.tsx`**（整份——焦點與 `aria-disabled` 是這個 task 最容易錯的地方）：
+
+```tsx
+import { useQueryClient } from "@tanstack/react-query";
+import { type FormEvent, useId, useRef, useState } from "react";
+import { ApiError } from "../api/errors";
+import {
+	afterCommentChange,
+	COMMENT_MAX_LENGTH,
+	postComment,
+} from "../api/social";
+import styles from "./Comments.module.css";
+import ui from "./ui.module.css";
+
+/** 剩這麼多字以內才顯示「還可以輸入 N 個字」。 */
+const HINT_WITHIN = 20;
+
+function describeError(caught: unknown): string {
+	if (caught instanceof ApiError && caught.status === 429) {
+		return caught.retryAfterSeconds !== null
+			? `${caught.message}（${caught.retryAfterSeconds} 秒後可再試）`
+			: caught.message;
+	}
+	if (caught instanceof ApiError && caught.status === 404) {
+		return "看不到這一餐了，沒有送出";
+	}
+	return "沒有送出，請再試一次";
+}
+
+export function CommentForm({ mealId }: { mealId: number }) {
+	const queryClient = useQueryClient();
+	const inputId = useId();
+	const hintId = useId();
+	const inputRef = useRef<HTMLInputElement>(null);
+	const [text, setText] = useState("");
+	const [pending, setPending] = useState(false);
+	const busy = useRef(false);
+	const [error, setError] = useState<string | null>(null);
+	const [sent, setSent] = useState(false);
+
+	// code point，不是 UTF-16 的長度：一個表情符號算一個字，跟後端一致。
+	// 後端量的是清理（去頭尾、壓空白）之後的長度，只會比這裡短，不會比這裡長。
+	const length = Array.from(text.trim()).length;
+	const left = COMMENT_MAX_LENGTH - length;
+	const blocked = length === 0 || left < 0 || pending;
+
+	async function submit(event: FormEvent) {
+		event.preventDefault();
+		// aria-disabled 的按鈕照樣收得到點擊與 Enter：在這裡擋，並把焦點放回輸入框。
+		if (blocked || busy.current) {
+			inputRef.current?.focus();
+			return;
+		}
+		busy.current = true;
+		setPending(true);
+		setError(null);
+		setSent(false);
+		try {
+			await postComment(mealId, text);
+			setText("");
+			setSent(true);
+			// 等這一餐重抓完：新留言出現在清單裡之後才放開送出鍵。
+			await afterCommentChange(queryClient, mealId);
+		} catch (caught) {
+			setError(describeError(caught));
+		} finally {
+			busy.current = false;
+			setPending(false);
+			// 按的是送出鍵的話焦點在按鈕上：放回輸入框，可以接著打下一則。
+			inputRef.current?.focus();
+		}
+	}
+
+	return (
+		<form className={styles.form} onSubmit={(event) => void submit(event)}>
+			<label htmlFor={inputId}>留言</label>
+			<div className={styles.row}>
+				<input
+					id={inputId}
+					ref={inputRef}
+					type="text"
+					value={text}
+					autoComplete="off"
+					enterKeyHint="send"
+					aria-describedby={hintId}
+					aria-invalid={left < 0}
+					onChange={(event) => setText(event.target.value)}
+				/>
+				{/* aria-disabled，不是 disabled：送出中按鈕變成不能用時焦點不會被瀏覽器丟掉
+				    （ExportCard 的慣例；handover §7「jsdom 與 disabled 的焦點」）。 */}
+				<button type="submit" className={ui.primary} aria-disabled={blocked}>
+					{pending ? "送出中…" : "送出"}
+				</button>
+			</div>
+			<p id={hintId} className={styles.hint}>
+				{left < 0
+					? `超過 ${-left} 個字`
+					: left <= HINT_WITHIN
+						? `還可以輸入 ${left} 個字`
+						: ""}
+			</p>
+			{error !== null && (
+				<p role="alert" className={styles.error}>
+					{error}
+				</p>
+			)}
+			{/* 區塊一直都在、先是空的（同 ExportCard）。 */}
+			<div role="status">{sent && <p className={styles.hint}>已送出</p>}</div>
+		</form>
+	);
+}
+```
+
+輸入框的字級 ≥ 16px（iOS 會放大，`e2e/mobile-form-zoom.spec.ts`）。
+
+- [ ] **Step 2：`CommentList.tsx`。** `CommentList({ mealId, comments, truncated, onDeleted })`：
+
+- `truncated` → 清單上面 `<p>只顯示最近 100 則</p>`。沒有留言 → `<p>還沒有留言</p>`。
+- `<ol>`，每一列一個 `CommentRow`：`<span>{display_name}</span>`（`is_me` 時後面加「（我）」）、`<time dateTime={created_at}>{formatDateTime(created_at)}</time>`、`<p>{body}</p>`（文字節點；`overflow-wrap: anywhere`）。
+- `can_delete` 的列：照 `Expenses.tsx` 的 `ExpenseRow` 做行內確認——`useState(confirming)`、`useConfirmFocus(confirming)`；「刪除」按鈕 `ref={confirmFocus.triggerRef}`、`aria-label={`刪除 ${display_name} 的留言`}`；確認框 `role="alertdialog" aria-label="確認刪除留言"`，裡面「確定刪除」（`ui.danger`，`aria-disabled={remove.isPending}`）與「取消」（`ref={confirmFocus.cancelRef}`，按下去先 `confirmFocus.cancelled()` 再關）。
+- 刪除：`useMutation({ mutationFn })`，`COMMENT_NOT_FOUND` 當成功（別的裝置已經刪了，同 `EditMealItems`）。**收尾放在 `mutate(undefined, { onSuccess })`**（handover §7：會動到父層的事不放在 `useMutation` 的 `onSuccess`）：`await afterCommentChange(queryClient, mealId)` 之後呼叫 `onDeleted()`。失敗 → 列內 `role="alert"`「刪除失敗，請再試一次」，確認框留著。
+
+- [ ] **Step 3：`MealDetail.tsx`。**
+
+```tsx
+export function MealDetail() {
+	const mealId = Number(useParams().id);
+	const query = useSocialMeal(mealId);
+	const commentsHeading = useRef<HTMLHeadingElement>(null);
+
+	// 404＝看不到（或剛被解除好友、改成私人）：就算快取裡還有舊資料也不顯示。
+	const gone = query.error instanceof ApiError && query.error.status === 404;
+	if (gone || !Number.isFinite(mealId)) {
+		return (
+			<section>
+				<h1>餐點</h1>
+				<p role="alert">看不到這一餐</p>
+				<Link to="/diet" className={styles.back}>回飲食</Link>
+			</section>
+		);
+	}
+	if (query.data === undefined) {
+		return query.isError ? <p role="alert">無法載入這一餐</p> : <p>載入中…</p>;
+	}
+	const { meal, is_mine, likes, comments, comments_truncated } = query.data;
+	const label = `${is_mine ? "我" : meal.user.display_name}的${MEAL_TYPE_LABELS[meal.meal_type]}`;
+	// …
+}
+```
+
+版面由上到下（外層 `<section className={ui.screen}>`，卡片用 `Card`）：
+
+1. `<h1>{label}</h1>`、`<p>{formatDateTime(meal.eaten_at)}</p>`；`is_mine` → `<Link to={`/meals/${meal.id}/edit`}>編輯</Link>`；不是自己的 → 名字連到 `/friends/${meal.user.id}`。
+2. `meal.description ? <p>…</p> : null`。
+3. 照片（`meal.has_photo`）：`is_mine ? <OwnPhoto mealId={meal.id} alt={label} /> : <FriendPhoto meal={meal} />`。**兩個元件分開**（hook 不能放在條件裡）：`FriendPhoto` 是 Task 8 從 `FriendMealCard.tsx` export 的；`OwnPhoto` 寫在這個檔案裡，照 `MealList.tsx` 的 `MealPhoto`（`useMealPhoto(mealId, "thumb")`＋`ZoomablePhoto`，`useFull={() => useMealPhoto(mealId)}`）。
+4. 項目清單、合計（照 `FriendMealCard` 的寫法：`formatMacro`、`base_unit`）。
+5. 讚：`is_mine` → `meal.like_count > 0` 時「♥ N」（同 `MealList` 的寫法）；否則 `<LikeButton mealId label count={meal.like_count} liked={meal.liked_by_me} />`。`likes.length > 0` → `<p>{likes.map((l) => (l.is_me ? "我" : l.display_name)).join("、")} 說讚</p>`。
+6. `<h2 ref={commentsHeading} tabIndex={-1}>留言（{meal.comment_count}）</h2>`、`<CommentList … onDeleted={() => commentsHeading.current?.focus()} />`、`<CommentForm mealId={meal.id} />`。
+
+`App.tsx`：`<Route path="/meals/:id" element={<MealDetail />} />`（放在 `/meals/:id/edit` 旁邊；react-router 依具體程度排名，`/meals/new` 仍然命中靜態那一條）。
+
+`queries.ts` 加 `socialMeals: ["social", "meal"] as const`。`friends.ts` 的 `forgetFriend` 加三行——解除之後這個人寫的東西不該還留在記憶體的快取裡，自己餐點上的數字也變了：
+
+```ts
+	queryClient.removeQueries({ queryKey: queryKeys.socialMeals });
+	void queryClient.invalidateQueries({ queryKey: queryKeys.notifications });
+	void queryClient.invalidateQueries({ queryKey: queryKeys.unreadCount });
+	void queryClient.invalidateQueries({ queryKey: queryKeys.meals });
+```
+
+- [ ] **Step 4：測試。**
+
+`tests/comment-form.test.tsx`（`QueryClientProvider`；路由 `POST /api/social/meals/7/comments` 排在 `GET /api/social/meals/7` 前面）：
+
+| # | 情境 | 斷言 |
+|---|---|---|
+| 1 | 空的 | 送出鍵 `aria-disabled="true"`、**不是** `disabled`；按下去沒有 POST（`spy.mock.calls` 裡沒有 `POST`），焦點在輸入框 |
+| 2 | 只有空白 | 同上 |
+| 3 | 打 180 個字 | 提示是空的；181 個字 →「還可以輸入 19 個字」；200 →「還可以輸入 0 個字」，可以送 |
+| 4 | 201 個字 | 「超過 1 個字」、`aria-invalid="true"`、送出鍵 `aria-disabled`、按下去沒有 POST |
+| 5 | 200 個表情符號（`String.fromCodePoint(0x1f600).repeat(200)`） | 可以送（`.length` 是 400——守的是用 code point 算） |
+| 6 | 送出成功 | body 是 `{"body":"好吃嗎"}`；輸入框清空；`document.activeElement` 是輸入框；`role="status"` 裡有「已送出」；`GET /api/social/meals/7` 被重抓一次 |
+| 7 | 送出中（回應不放行） | 送出鍵 `aria-disabled`、文字「送出中…」；再按一次沒有第二個 POST |
+| 8 | 429 `retry-after: 30` | alert「留言太頻繁，請稍後再試（30 秒後可再試）」；**輸入框的字還在**；焦點在輸入框 |
+| 9 | 500 | alert「沒有送出，請再試一次」；字還在 |
+| 10 | 按 Enter 送出 | 跟按送出鍵一樣（`userEvent.type(input, "嗨{Enter}")`） |
+
+`tests/meal-detail.test.tsx`（`MemoryRouter initialEntries={["/meals/7"]}`＋`Routes`；資料用一個 `socialMeal(overrides)` 工廠）：
+
+| # | 情境 | 斷言 |
+|---|---|---|
+| 1 | 好友的餐 | `heading 鮑伯的午餐`；有讚的按鈕（`讚，鮑伯的午餐`）；**沒有**「編輯」；項目、合計、描述都在；「小卡、我 說讚」 |
+| 2 | 自己的餐（`is_mine`） | `heading 我的午餐`；「編輯」連到 `/meals/7/edit`；**沒有**讚的按鈕；`like_count: 2` → 有「2 個讚」 |
+| 3 | 照片用對的端點 | 好友：請求了 `/api/friends/2/meals/7/photo?size=thumb`、沒有 `/api/meals/7/photo`；自己的：反過來（先等圖片出現再斷言另一個沒被請求） |
+| 4 | 留言 | 依序三則；時間在 `<time>`；`is_me` 的有「（我）」；只有 `can_delete` 的有刪除鈕 |
+| 5 | 留言的內容是文字 | body 是 `<img src=x onerror=alert(1)>` → `getByText` 找得到原字串、`document.querySelector("img[src='x']")` 是 null |
+| 6 | 截斷 | `comments_truncated: true` →「只顯示最近 100 則」；`false` → 沒有 |
+| 7 | 刪除：取消 | 按「刪除 鮑伯 的留言」→ `alertdialog`、焦點在「取消」→ 取消 → 沒有 `DELETE`、焦點回到刪除鈕 |
+| 8 | 刪除：確定 | `DELETE /api/social/meals/7/comments/31`；重抓後那一則不見；**焦點在「留言（N）」的標題** |
+| 9 | 刪除失敗 | alert「刪除失敗，請再試一次」；那一則還在 |
+| 10 | 刪除時已經不在（404 `COMMENT_NOT_FOUND`） | 沒有 alert，照樣重抓 |
+| 11 | 404 `MEAL_NOT_FOUND` | 「看不到這一餐」＋「回飲食」連到 `/diet`；`GET` 只打一次（不重試） |
+| 12 | 500 而且沒有快取 | 「無法載入這一餐」（重試會讓這條慢——測試的 `QueryClient` 設 `retry: false` 蓋不掉 hook 自己的 `retry` 函式；改用 `retryDelay: 0`） |
+
+`tests/layout.test.ts`：表格加 `["/meals/5", "narrow"]`。`tests/friends-card.test.tsx`：334 行那一條「解除後好友的快取被移除」——事先多塞 `queryKeys.socialMeal(7)`，解除後是 `undefined`。
+
+Run：`npx vitest run tests/comment-form.test.tsx tests/meal-detail.test.tsx tests/layout.test.ts tests/friends-card.test.tsx 2>&1 | grep -E "FAIL|Unhandled|Tests |Test Files"`
+
+- [ ] **Step 5：突變。**
+
+| 突變 | 該紅的 |
+|---|---|
+| `Array.from(text.trim()).length` 改成 `text.trim().length` | 表單 #5 |
+| `aria-disabled={blocked}` 改成 `disabled={blocked}` | 表單 #1（「不是 `disabled`」） |
+| `submit` 拿掉 `if (blocked …)` | 表單 #1、#2、#4、#7 |
+| `setText("")` 搬到 `try` 外面（失敗也清） | 表單 #8、#9 |
+| `finally` 拿掉 `inputRef.current?.focus()` | 表單 #6、#8（用**點擊**送出鍵的那幾條；Enter 送出的焦點本來就在輸入框） |
+| `left <= HINT_WITHIN` 改成 `<` | 表單 #3（180 個字那一格） |
+| `MealDetail` 的照片一律用 `FriendPhoto` | 詳情 #3 |
+| `is_mine` 時也畫 `LikeButton` | 詳情 #2 |
+| `onDeleted` 不接 | 詳情 #8 |
+| `gone` 的判斷拿掉 | 詳情 #11 |
+| `forgetFriend` 拿掉 `removeQueries(socialMeals)` | `friends-card` 那一條 |
+
+- [ ] **Step 6：commit。** lint、整套測試、單獨 typecheck、掃看不見的字元。
+
+```bash
+git add frontend/src/screens/MealDetail.tsx frontend/src/screens/MealDetail.module.css frontend/src/components/CommentForm.tsx frontend/src/components/CommentList.tsx frontend/src/components/Comments.module.css frontend/src/App.tsx frontend/src/api/friends.ts frontend/src/api/queries.ts frontend/tests/meal-detail.test.tsx frontend/tests/comment-form.test.tsx frontend/tests/layout.test.ts frontend/tests/friends-card.test.tsx
+git commit -F "$S/social-plan-task9-msg.txt"   # feat(frontend): 餐點頁 /meals/:id——讚、留言、刪留言
+```
+
+---
+
+## Task 10：前端——通知頁、分頁上的未讀標記、「我的」的通知卡片
+
+**Files:**
+- Create: `frontend/src/screens/Notifications.tsx`、`Notifications.module.css`、`frontend/src/components/NotificationsCard.tsx`、`frontend/tests/notifications.test.tsx`
+- Modify: `frontend/src/components/TabBar.tsx`、`TabBar.module.css`、`SideNav.tsx`、`SideNav.module.css`、`frontend/src/screens/Me.tsx`、`frontend/src/App.tsx`、`frontend/tests/tab-bar.test.tsx`、`side-nav.test.tsx`、`me.test.tsx`、`app.test.tsx`、`layout.test.ts`
+
+- [ ] **Step 1：標記。** `TabBar` 與 `SideNav` 都多一個 prop **`unread?: number`（預設 0）**——**不在這兩個元件裡呼叫 `useUnreadCount`**（第 9 點）。`TabBar.tsx` 的 `TabLink`：
+
+```tsx
+function TabLink({ tab, unread }: { tab: NavTab; unread: number }) {
+	const badgeId = useId();
+	const Icon = tab.icon;
+	return (
+		<>
+			<NavLink
+				to={tab.to}
+				end={tab.end}
+				aria-describedby={unread > 0 ? badgeId : undefined}
+				className={({ isActive }) =>
+					isActive ? `${styles.tab} ${styles.active}` : styles.tab
+				}
+			>
+				<Icon aria-hidden="true" size={22} />
+				<span>{tab.label}</span>
+				{/* aria-hidden：數字不進連結的名稱——名稱永遠是「我的」（社群規格 D17；
+				    20 多處測試與 e2e 用這個名稱找它）。 */}
+				{unread > 0 && (
+					<span aria-hidden="true" className={styles.badge}>
+						{unread > 9 ? "9+" : unread}
+					</span>
+				)}
+			</NavLink>
+			{/* 在連結**外面**：放裡面會併進名稱。position: absolute，不佔分頁列的位置。 */}
+			{unread > 0 && (
+				<span id={badgeId} className={ui.srOnly}>
+					{unread} 則新通知
+				</span>
+			)}
+		</>
+	);
+}
+```
+
+呼叫端：`<TabLink key={tab.to} tab={tab} unread={tab.to === "/me" ? unread : 0} />`。`SideNav.tsx` 的 `<li>` 裡做同樣的三件事（`aria-describedby`、`aria-hidden` 的標記、連結外面的隱藏文字）。CSS：`.tab`／`.link` 加 `position: relative`；`.badge { position: absolute; top: 4px; left: 50%; margin-left: 6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--color-danger); color: var(--color-on-badge); font-size: 11px; line-height: 18px; text-align: center; }`（`SideNav` 的放在文字右邊：`position: static; margin-left: auto;`）。
+
+- [ ] **Step 2：`App.tsx`。** `LoggedInShell` 裡：
+
+```tsx
+	const queryClient = useQueryClient();
+	const unread = useUnreadCount().data ?? 0;
+	// 換頁時也重抓一次未讀數：手機上的 PWA 很少有「視窗取得焦點」，最常發生的事是換頁。
+	// 第一次掛載不抓——`useUnreadCount` 自己正在抓。
+	const firstPath = useRef(true);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: pathname 是觸發條件，不是用到的值
+	useEffect(() => {
+		if (firstPath.current) {
+			firstPath.current = false;
+			return;
+		}
+		void queryClient.invalidateQueries({ queryKey: queryKeys.unreadCount });
+	}, [pathname, queryClient]);
+```
+
+`<SideNav unread={unread} />`、`<TabBar unread={unread} />`；新路由 `<Route path="/notifications" element={<Notifications />} />`。（`useQueryClient` 在 `PersistQueryClientProvider` 底下拿得到；biome 不需要那個 ignore 的話會報「沒有作用的 suppression」，那就拿掉。）
+
+- [ ] **Step 3：`Notifications.tsx`。**
+
+```tsx
+function describe(item: NotificationItem): { text: string; to: string } {
+	const who = item.actor_name;
+	const meal = item.meal ? MEAL_TYPE_LABELS[item.meal.meal_type] : "餐點";
+	const mealPath = item.meal ? `/meals/${item.meal.id}` : "/diet";
+	switch (item.type) {
+		case "like":
+			return { text: `${who} 對你的${meal}按了讚`, to: mealPath };
+		case "comment":
+			return {
+				text: `${who} 在你的${meal}留言：${item.comment_preview ?? ""}`,
+				to: mealPath,
+			};
+		case "friend_request":
+			return { text: `${who} 想加你為好友`, to: "/me" };
+		case "friend_accepted":
+			return { text: `${who} 接受了你的好友邀請`, to: "/me" };
+	}
+}
+
+export function Notifications() {
+	const queryClient = useQueryClient();
+	const query = useNotifications();
+	const newest = query.data?.[0]?.id;
+	const hasUnread = query.data?.some((item) => !item.is_read) ?? false;
+	// 這一份清單已經送過已讀了（StrictMode 的 effect 會跑兩次；重抓回來同一份也不再送）。
+	const marked = useRef<number | null>(null);
+
+	useEffect(() => {
+		if (newest === undefined || !hasUnread || marked.current === newest) return;
+		marked.current = newest;
+		// 帶清單裡最新那一則的 id：載入之後才到的通知不會沒被看過就變成已讀（D15）。
+		// 只更新未讀數；**不重抓清單**——這一次的畫面上，剛看到的還標著未讀。
+		markAllRead(newest).then(
+			(count) => queryClient.setQueryData(queryKeys.unreadCount, count),
+			() => {
+				marked.current = null; // 失敗：下一次清單回來時再試
+			},
+		);
+	}, [newest, hasUnread, queryClient]);
+	// …
+}
+```
+
+畫面：`<h1>通知</h1>`；`isPending` →「載入中…」；`isError` 而且沒有資料 → `role="alert"`「無法載入通知」；空的 →「還沒有通知」；否則 `<ul>`，每一列一個 `<Link to={to}>`（整列可以按，`min-height: 44px`）：未讀的列加 `styles.unread`（左邊一個 `--color-action` 的點）與 `<span className={ui.srOnly}>未讀</span>`，文字、`<time dateTime>`（`formatDateTime`）。`comment_preview` 是文字節點。
+
+- [ ] **Step 4：`NotificationsCard.tsx`，放在 `Me.tsx` 的 `<AccountCard />` 前面。**
+
+```tsx
+export function NotificationsCard() {
+	const unread = useUnreadCount().data ?? 0;
+	return (
+		<Card testId="notifications-card">
+			<h2 className={ui.sectionTitle}>通知</h2>
+			<p>{unread > 0 ? `${unread} 則新通知` : "沒有新通知"}</p>
+			{/* 數字不放進連結的名稱：名稱固定，e2e 與螢幕閱讀器都好找。 */}
+			<Link to="/notifications" className={styles.link}>
+				看通知
+			</Link>
+		</Card>
+	);
+}
+```
+
+- [ ] **Step 5：測試。**
+
+`tests/tab-bar.test.tsx`、`tests/side-nav.test.tsx`（**既有的測試一條都不改**——不傳 `unread` 就是 0）各加：
+
+| # | 情境 | 斷言 |
+|---|---|---|
+| 1 | `unread={3}` | `getByRole("link", { name: "我的" })`（名稱沒變）`toHaveAccessibleDescription("3 則新通知")`；連結裡看得到「3」 |
+| 2 | `unread={10}` | 連結裡是「9+」；描述是「10 則新通知」（唸出來的是真的數字） |
+| 3 | `unread={0}`、不傳 | 連結沒有 `aria-describedby`；`textContent` 是「我的」；畫面上沒有「則新通知」 |
+| 4 | 其他三個分頁 | `unread={3}` 時「總覽」「報表」「飲食」都沒有 `aria-describedby` |
+
+`tests/notifications.test.tsx`：
+
+| # | 情境 | 斷言 |
+|---|---|---|
+| 1 | 四種通知 | 四個連結的文字與 `href`：`/meals/7`、`/meals/7`、`/me`、`/me`；留言的預覽在文字裡 |
+| 2 | 未讀的標記 | `is_read: false` 的列有「未讀」；`true` 的沒有 |
+| 3 | 載入後送已讀 | `POST /api/notifications/read-all` **一次**、body `{"up_to":<第一則的 id>}`；`client.getQueryData(queryKeys.unreadCount)` 變成回應的 `count`；送完之後**沒有第二次** `GET /api/notifications`；未讀的列仍然標著「未讀」 |
+| 4 | 全部都讀過了 | 先等清單出現，再斷言沒有 `POST` |
+| 5 | 空的 | 「還沒有通知」；沒有 `POST` |
+| 6 | 載入失敗 | alert「無法載入通知」；沒有 `POST` |
+| 7 | `<React.StrictMode>` 包著 render | `POST` 仍然只有一次 |
+| 8 | `read-all` 失敗 | 沒有未處理的 rejection（`Unhandled`）；未讀數的快取沒被改 |
+
+`tests/me.test.tsx`：`unread-count` 回 3 → `within(getByTestId("notifications-card"))` 有「3 則新通知」、連結「看通知」到 `/notifications`；回 0 →「沒有新通知」；卡片是「我的」裡**第一張**（在帳號卡片之前——比 DOM 順序）。這個檔案其他測試沒有準備 `unread-count` 的路由：`mockApi` 會 throw、query 變成 error、卡片顯示「沒有新通知」——**預期仍然全綠**；有哪一條因此紅了，替它補上路由，不要改元件。
+
+`tests/app.test.tsx`：`mockBackend` 的預設路由加 `/api/notifications/unread-count` → `{ count: 0 }`。新增：(a) 回 `{ count: 2 }` → 分頁列的「我的」描述是「2 則新通知」；(b) 點「報表」之後 `unread-count` 被請求了**第二次**（換頁重抓）；剛載入時只有**一次**（第一次掛載不重抓）。`tests/layout.test.ts`：加 `["/notifications", "narrow"]`。
+
+Run：`npx vitest run tests/tab-bar.test.tsx tests/side-nav.test.tsx tests/notifications.test.tsx tests/me.test.tsx tests/app.test.tsx tests/layout.test.ts 2>&1 | grep -E "FAIL|Unhandled|Tests |Test Files"`
+
+- [ ] **Step 6：突變。**
+
+| 突變 | 該紅的 |
+|---|---|
+| 標記的 `aria-hidden="true"` 拿掉 | 導覽 #1（名稱變成「我的3」——`{ name: "我的" }` 是完整比對）。**這是整個 D17 的釘子**：看到它紅才算數 |
+| 隱藏文字搬進 `<NavLink>` 裡面 | 導覽 #1 |
+| `unread > 9 ? "9+"` 改成 `>= 9` | 導覽：補一格 `unread={9}` 顯示「9」 |
+| `tab.to === "/me" ? unread : 0` 改成一律 `unread` | 導覽 #4 |
+| `marked.current === newest` 的判斷拿掉 | 通知 #7 |
+| `!hasUnread` 的判斷拿掉 | 通知 #4 |
+| `markAllRead(newest)` 改成 `markAllRead(Number.MAX_SAFE_INTEGER)` | 通知 #3（body） |
+| 成功之後多一個 `invalidateQueries(notifications)` | 通知 #3（第二次 GET） |
+| `App` 的 effect 拿掉 `firstPath` 的判斷；整個 effect 拿掉 | app (b) 的後半；前半 |
+| `Me` 把 `NotificationsCard` 放到最後 | me 的順序那一條 |
+
+- [ ] **Step 7：既有測試確認、commit。** `npm run -s lint && npm run -s test 2>&1 | grep -E "FAIL|Unhandled|Tests |Test Files"`；單獨 `npm run -s typecheck`。規格 §6.5 列的單元測試（`app.test.tsx` 153、320 行，`tab-bar`、`side-nav`）**原本的斷言一個字都沒改**——`git diff` 裡這幾個檔案只有新增的行。
+
+```bash
+git add frontend/src/screens/Notifications.tsx frontend/src/screens/Notifications.module.css frontend/src/components/NotificationsCard.tsx frontend/src/components/TabBar.tsx frontend/src/components/TabBar.module.css frontend/src/components/SideNav.tsx frontend/src/components/SideNav.module.css frontend/src/screens/Me.tsx frontend/src/App.tsx frontend/tests/notifications.test.tsx frontend/tests/tab-bar.test.tsx frontend/tests/side-nav.test.tsx frontend/tests/me.test.tsx frontend/tests/app.test.tsx frontend/tests/layout.test.ts
+git commit -F "$S/social-plan-task10-msg.txt"   # feat(frontend): 通知頁、「我的」分頁上的未讀數字、通知卡片
+```
+
+---
+
+## Task 11：e2e
+
+**Files:**
+- Create: `frontend/e2e/social.spec.ts`
+- Modify: `frontend/e2e/touch-targets.spec.ts`（有現成的清單就加兩個新畫面；沒有就在新 spec 裡量）
+
+先 `docker compose up -d --build api`（**一定要 `--build`**：migration `0018` 烤在映像裡），確認 `docker compose exec api alembic current` 是 `0018`。
+
+- [ ] **Step 1：`e2e/social.spec.ts`。** 兩個新帳號（`newAccount`）、**各一個 context**、登入後**只用點擊換頁**。A 的那一餐用 API 建（這條測試要測的不是記一餐）。
+
+```ts
+import { type APIRequestContext, expect, type Page, test } from "@playwright/test";
+import { loginAs, type NewAccount, newAccount } from "./new-account.ts";
+
+const PHONE = { width: 390, height: 844 };
+
+async function seedMeal(request: APIRequestContext, owner: NewAccount, food: string) {
+	const login = await request.post("/api/auth/login", {
+		data: { email: owner.email, password: owner.password },
+	});
+	expect(login.ok()).toBe(true);
+	const headers = { authorization: `Bearer ${(await login.json()).access_token}` };
+	const created = await request.post("/api/foods", {
+		headers,
+		data: {
+			name: food,
+			nutrition: { base_unit: "g", kcal: "123.00", protein_g: "10.00", fat_g: "5.00", carb_g: "5.00" },
+		},
+	});
+	expect(created.ok()).toBe(true);
+	const meal = await request.post("/api/meals", {
+		headers,
+		data: {
+			eaten_at: new Date().toISOString(),
+			meal_type: "snack",
+			items: [{ food_id: (await created.json()).id, quantity: "1" }],
+		},
+	});
+	expect(meal.ok()).toBe(true);
+}
+
+/** 點分頁換頁，等那一頁自己的 h1 出現（換頁後第一個斷言選新頁面才有的東西）。
+ *  分頁的連結是 `/diet`（不帶 `?view=`），所以點「飲食」一定回到「我的」那個檢視。 */
+async function go(page: Page, tab: "總覽" | "飲食" | "我的") {
+	await page.getByRole("link", { name: tab, exact: true }).click();
+	await expect(page.getByRole("heading", { name: tab, exact: true, level: 1 })).toBeVisible();
+}
+
+async function openFriendFeed(page: Page) {
+	await go(page, "飲食");
+	// 切換的單選鈕是藏起來的 input：點它的文字（同 e2e/friends.spec.ts）。
+	await page.getByText("好友", { exact: true }).click();
+	await expect(page.getByRole("region", { name: "好友動態", exact: true })).toBeVisible();
+}
+
+test("社群：按讚、留言、通知、刪留言、解除好友之後讚不見", async ({ browser, request }) => {
+	test.setTimeout(120_000);
+	const stamp = Date.now();
+	const a = await newAccount(request, "social-a");
+	const b = await newAccount(request, "social-b");
+	const food = `E2E 社群點心 ${stamp}`;
+	const comment = `看起來好好吃 ${stamp}`;
+	await seedMeal(request, a, food);
+
+	const contextA = await browser.newContext({ viewport: PHONE });
+	const contextB = await browser.newContext({ viewport: PHONE });
+	const pageA = await contextA.newPage();
+	const pageB = await contextB.newPage();
+	await loginAs(pageA, a);
+	await loginAs(pageB, b);
+
+	// ── 加好友：A 用 B 的好友碼送邀請，B 接受 ─────────────────────────────
+	await go(pageB, "我的");
+	const code = (await pageB.getByTestId("friend-code").textContent())?.trim() ?? "";
+	expect(code).not.toBe("");
+	await go(pageA, "我的");
+	await pageA.getByLabel("朋友的好友碼").fill(code);
+	await pageA.getByRole("button", { name: "送出邀請", exact: true }).click();
+	await expect(pageA.getByText(`已送出邀請給${b.name}，等對方接受`)).toBeVisible();
+	// B 換頁再回來：未讀數在換頁時重抓，「我的」上有 A 的邀請那一則。
+	await go(pageB, "總覽");
+	await expect(pageB.getByRole("link", { name: "我的", exact: true })).toHaveAccessibleDescription(
+		"1 則新通知",
+	);
+	await go(pageB, "我的");
+	await pageB.getByRole("button", { name: `接受${a.name}的邀請`, exact: true }).click();
+	await expect(
+		pageB.getByRole("button", { name: `解除和${a.name}的好友`, exact: true }),
+	).toBeVisible();
+
+	// ── B 在好友動態按讚、進餐點頁留言 ───────────────────────────────────
+	await openFriendFeed(pageB);
+	const like = pageB.getByRole("button", { name: `讚，${a.name}的點心`, exact: true });
+	await expect(like).toHaveAttribute("aria-pressed", "false");
+	await like.click();
+	await expect(like).toHaveAttribute("aria-pressed", "true");
+	await expect(like).toHaveAccessibleDescription("1 個讚");
+	await pageB.getByRole("link", { name: `${a.name}的點心，留言 0 則`, exact: true }).click();
+	await expect(pageB.getByRole("heading", { name: `${a.name}的點心`, exact: true })).toBeVisible();
+	await pageB.getByLabel("留言", { exact: true }).fill(comment);
+	await pageB.getByRole("button", { name: "送出", exact: true }).click();
+	await expect(pageB.getByRole("listitem").filter({ hasText: comment })).toBeVisible();
+	await expect(pageB.getByLabel("留言", { exact: true })).toBeFocused();
+	await expect(pageB.getByLabel("留言", { exact: true })).toHaveValue("");
+
+	// ── A：分頁上的數字 → 通知 → 餐點頁 → 刪掉 B 的留言 ───────────────────
+	await go(pageA, "總覽");
+	const mine = pageA.getByRole("link", { name: "我的", exact: true });
+	// 三則：B 接受邀請、B 按讚、B 留言。
+	await expect(mine).toHaveAccessibleDescription("3 則新通知");
+	await go(pageA, "我的");
+	await expect(pageA.getByTestId("notifications-card")).toContainText("3 則新通知");
+	await pageA.getByRole("link", { name: "看通知", exact: true }).click();
+	await expect(pageA.getByRole("heading", { name: "通知", exact: true })).toBeVisible();
+	await expect(pageA.getByText(`${b.name} 對你的點心按了讚`, { exact: true })).toBeVisible();
+	await expect(pageA.getByText(`${b.name} 接受了你的好友邀請`, { exact: true })).toBeVisible();
+	// 打開就標成已讀：分頁上的數字不見了。
+	await expect(mine).not.toHaveAttribute("aria-describedby", /.+/);
+	await pageA.getByRole("link", { name: new RegExp(`^.*${b.name} 在你的點心留言：`) }).click();
+	await expect(pageA.getByRole("heading", { name: "我的點心", exact: true })).toBeVisible();
+	await expect(pageA.getByText(`${b.name} 說讚`, { exact: true })).toBeVisible();
+	await expect(pageA.getByRole("listitem").filter({ hasText: comment })).toBeVisible();
+	await pageA.getByRole("button", { name: `刪除 ${b.name} 的留言`, exact: true }).click();
+	await pageA.getByRole("button", { name: "確定刪除", exact: true }).click();
+	await expect(pageA.getByRole("heading", { name: "留言（0）", exact: true })).toBeFocused();
+	await expect(pageA.getByText(comment)).toHaveCount(0);
+
+	// ── B 回動態：留言數回到 0，進去也看不到 ─────────────────────────────
+	await openFriendFeed(pageB);
+	await pageB.getByRole("link", { name: `${a.name}的點心，留言 0 則`, exact: true }).click();
+	await expect(pageB.getByRole("heading", { name: "留言（0）", exact: true })).toBeVisible();
+	await expect(pageB.getByText(comment)).toHaveCount(0);
+
+	// ── A 解除好友：B 的讚從 A 的餐上消失 ────────────────────────────────
+	await go(pageA, "我的");
+	await pageA.getByRole("button", { name: `解除和${b.name}的好友`, exact: true }).click();
+	await pageA.getByRole("button", { name: "確定解除", exact: true }).click();
+	await expect(
+		pageA.getByRole("button", { name: `解除和${b.name}的好友`, exact: true }),
+	).toHaveCount(0);
+	await go(pageA, "飲食");
+	await pageA.getByRole("link", { name: /^.+點心，留言 \d+ 則$/ }).click();
+	// 解除時餐點頁的快取被拿掉了：標題出現＝這是剛抓回來的資料。
+	await expect(pageA.getByRole("heading", { name: "我的點心", exact: true })).toBeVisible();
+	await expect(pageA.getByText(`${b.name} 說讚`, { exact: true })).toHaveCount(0);
+	await expect(pageA.getByText("1 個讚", { exact: true })).toHaveCount(0);
+
+	// B 那一邊：動態是空的。
+	await go(pageB, "飲食");
+	await pageB.getByText("好友", { exact: true }).click();
+	await expect(pageB.getByText("還沒有好友。到「我的」→「好友」用好友碼加朋友")).toBeVisible();
+
+	await contextA.close();
+	await contextB.close();
+});
+```
+
+**這條 spec 沒有跑過**（寫計畫時功能還不存在）。既有畫面的選擇器對過原始碼：`friend-code`、`朋友的好友碼`、「已送出邀請給…，等對方接受」、`接受${name}的邀請`、`解除和${name}的好友`、「確定解除」（`FriendsCard.tsx`）；三個分頁的 `<h1>`；切到好友用 `getByText("好友", { exact: true })`（`friends.spec.ts`）。新畫面的選擇器照 Task 8–10 寫出來的實際名稱為準，對不上就改 spec 並記進「與規格的差異」。biome 會把長的行重排，照它的結果。
+
+- [ ] **Step 2：觸控目標。** 在這條測試的適當位置（B 在餐點頁、A 在通知頁）用 `e2e/touch-targets.ts` 既有的量法量：讚的按鈕、「留言 N」連結、送出鍵、刪除鈕、通知的每一列 ≥ 44px。電腦版寬度（1280）另外開一個 context 看一次餐點頁與通知頁：內容寬度是 `narrow`、側邊導覽的「我的」有標記。
+
+- [ ] **Step 3：跑。**
+
+```bash
+cd frontend && npx playwright test e2e/social.spec.ts            # Expected: 1 passed
+npx playwright test                                               # Expected: 48 passed（47＋1），連跑兩次
+npm run -s typecheck                                              # Playwright 不做型別檢查（handover §7）
+```
+
+整套一定要跑：規格 §6.5 列的 e2e（`account-settings`、`admin`、`ai-multi-food`、`auth`、`reports-export`、`desktop-layout`）都用名稱「我的」找連結——**一條都不該紅，也一個字都不用改**。
+
+- [ ] **Step 4：突變（e2e 也要看它紅）。**
+
+| 突變（改完要 `docker compose up -d --build api` 的標 ★） | 該紅的那一行 |
+|---|---|
+| ★ `social_counts` 的讚拿掉 `like_counts(...)` 過濾 | 最後的 `1 個讚` 的 `toHaveCount(0)`——**不會**（主人的餐點頁用的是名單查詢）；改成拿掉 `read_social_meal` 名單查詢的過濾 → `說讚` 的 `toHaveCount(0)` |
+| ★ `notify_comment` 不寫 | 「3 則新通知」 |
+| `Notifications.tsx` 不呼叫 `markAllRead` | `not.toHaveAttribute("aria-describedby", …)` |
+| `App.tsx` 換頁不重抓未讀數 | B 的「1 則新通知」（要等 60 秒的輪詢才會出現，斷言先逾時） |
+| `CommentForm` 的 `finally` 不把焦點放回去 | `toBeFocused()` |
+
+- [ ] **Step 5：commit。**
+
+```bash
+cd frontend && npm run -s typecheck && cd .. && git add frontend/e2e/social.spec.ts && git commit -F "$S/social-plan-task11-msg.txt"   # test(e2e): 社群——按讚、留言、通知、刪留言、解除好友
+```
+
+---
+
+## Task 12：文件
+
+**Files:** `docs/handover.md`、`docs/deployment.md`、`docs/superpowers/specs/2026-10-10-social-interactions-design.md`、這份計畫的「與規格的差異」
+
+- [ ] **Step 1：量。** 後端 `pytest -q -W error` 的條數與秒數；前端 `npm run -s test` 印出來的 `Test Files`／`Tests`；e2e 條數與檔案數；`grep -c "@router\." app/api/routes/*.py` 加總（預期 87）；資料表 19；migration `0001`～`0018`。**寫量到的，不寫這份計畫預期的。**
+- [ ] **Step 2：`docs/handover.md`。**
+  - §2 的數字表與「階段進度」：新增一列「按讚、留言、通知（社群第三步）」；「UI 改版 第三階段／社群」那一列改成：讚、留言、通知已完成；**封鎖、好友的趨勢仍然沒做**。
+  - §4.10 補一段：`app/social_visibility.py` 是第二個可見性模組；「解除好友＝讀的時候過濾，不刪資料」；`/api/meals` 從它只拿 `social_counts`（掃描測試的第二條）。
+  - §6 加一小節「按讚、留言、通知」：執行時真的踩到的假綠燈（至少這三個寫計畫時就看到的：共用交易裡 `now()` 不動，比兩次已讀時間看不出差別；`type` 的 CHECK 永遠被形狀那一條先擋；短的餐費數字會剛好出現在 id 裡）。
+  - §7 的表格：`ON CONFLICT DO NOTHING` 也會吃掉 identity 值；`aria-hidden` 的子元素不進可及名稱、`aria-describedby` 要指到連結外面；TanStack 的 `refetchInterval` 預設背景不抓。
+  - §8.2 已知限制：規格 §9.1 的五點，加上「留言的預覽照 code point 切，可能切在表情符號的組合序列中間」「自己的餐點清單上的數字最多慢 60 秒（全域 `staleTime`）」。
+  - §10 新增「按讚、留言、通知」一節：端點表、可見性的兩張表、通知的寫入點、前端的鍵與「不進離線快取」、分頁標記為什麼不改名稱。
+- [ ] **Step 3：`docs/deployment.md`。** 照 `0017` 那一段的寫法加 `0018_create_social_tables`：三張新表、`deploy.sh` 自己跑、**可以退版**（不在 `ROLLBACK_UNSAFE_REVISIONS`）、退版後表留著；沒有新的環境變數；限速在記憶體裡（重啟歸零）。
+- [ ] **Step 4：規格。** 狀態改成「已實作」；「與原始決定的差異」後面加「執行中發現的差異」，把這份計畫「與規格的差異」累積的每一條搬過去（預期存活的突變、改過的選擇器、對不上的條數）。
+- [ ] **Step 5：commit。** Markdown 用 Edit 工具改（不要用 Windows 的 Python 文字模式重寫整份——CRLF，handover §7）。
+
+```bash
+git add docs/handover.md docs/deployment.md docs/superpowers/specs/2026-10-10-social-interactions-design.md docs/superpowers/plans/2026-10-10-social-interactions.md
+git commit -F "$S/social-plan-task12-msg.txt"   # docs: 按讚、留言、通知——handover、部署手冊、規格的狀態
+```
+
+---
+
+## 完成條件
+
+- [ ] 後端 `pytest -q -W error` 全綠（含 `alembic check`）；`ruff check .`、`mypy app` 乾淨。
+- [ ] 前端 `npm run -s test` 沒有 `FAIL`／`Unhandled`；`typecheck`、`lint` 乾淨；`schema.d.ts` 重新產生後 `git diff` 是空的。
+- [ ] e2e 整套連跑兩次都綠；規格 §6.5 列的每一處「我的」都沒有改。
+- [ ] 每個 task 的突變表都跑過：紅的寫了是哪一條，存活的寫了理由。
+- [ ] `git status` 只剩 `lunch.jpg`；沒有 push。
