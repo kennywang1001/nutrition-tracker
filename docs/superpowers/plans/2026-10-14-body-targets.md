@@ -87,7 +87,7 @@
 | `tests/test_body_privacy.py`（新）、`tests/test_targets_today.py` | 5 | 掃描；清掉套用體重 |
 | `frontend/src/api/schema.d.ts` | 3–5 | 每個後端 task 重新產生 |
 | `frontend/src/api/{body.ts（新）,queries.ts}`、`src/lib/{body.ts（新）,weights.ts（新）,decimal.ts,civil-date.ts}` | 6 | API 層、標籤、移動平均、數字與日期 |
-| `frontend/tests/helpers/body-routes.ts`（新）、`tests/{body-api,weights-lib}.test.ts`（新）、`decimal.test.ts`、`civil-date.test.ts` | 6 | |
+| `frontend/tests/helpers/body-routes.ts`（新）、`tests/weights-lib.test.ts`、`tests/body-api.test.tsx`（新）、`decimal.test.ts`、`civil-date.test.ts` | 6 | |
 | `frontend/src/screens/BodyProfile.tsx`、`components/BodyProfileCard.tsx`（新）、`Me.tsx`、`App.tsx`、`lib/layout.ts` | 7 | `/me/body` |
 | `frontend/src/components/{WeightCard,WeightForm,WeightChart}.tsx`、`screens/Weight.tsx`、`components/Segmented.module.css`（新）、`screens/Trend.{tsx,module.css}`、`index.css` | 8 | 體重 |
 | `frontend/src/components/TargetSuggestion.tsx`（新）、`TargetsCard.tsx`、`screens/Targets.tsx`、`api/export.ts` | 9 | 建議、提示、匯出 |

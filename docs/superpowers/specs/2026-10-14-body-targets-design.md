@@ -219,7 +219,7 @@
 | `api/queries.ts` | `bodyProfile: ["body","profile"]`、`targetSuggestion: ["body","suggestion"]`、`weights: ["body","weights"]`、`bodyAll: ["body"]` |
 | `lib/body.ts`（新） | 列舉的中文標籤（性別、五個活動量含說明、三個目標、兩個速度）、`MISSING_LABELS` |
 | `lib/weights.ts`（新） | `movingAverage`、`weekChange`、`entriesInSpan` |
-| `lib/decimal.ts` | `differenceOf`、`paddedExtent`、`positionIn`、`checkWeightInput` |
+| `lib/decimal.ts` | `differenceOf`、`paddedExtent`、`positionIn`、`checkRangeInput` |
 | `lib/civil-date.ts` | `daysBetween` |
 | `components/BodyProfileCard.tsx`、`WeightCard.tsx`、`WeightChart.tsx`、`TargetSuggestion.tsx`（新） | |
 | `components/Segmented.module.css`（新，從 `Trend.module.css` 搬來） | 分段切換 |
@@ -228,7 +228,7 @@
 
 ### 6.2 「我的」的兩張卡片
 
-- **身體資料**：一行摘要（「男・36 歲・175 cm・中度活動・減重每週 0.5 公斤・目標 72 公斤」，沒設的略過；整份都沒設：「還沒有填」），
+- **身體資料**：一行摘要（「男・1990 年生・175 cm・中度活動・減重每週 0.5 公斤・目標 72 公斤」，沒設的略過；整份都沒設：「還沒有填」），
   「修改」連結（可及名稱「修改身體資料」）到 `/me/body`。
 - **體重**：最新一筆（「72.4 公斤・10/14」）、跟 7 天前比（`weekChange`：最新一筆跟「日期 ≤ 最新 − 7 天」的最新一筆比；
   沒有就不顯示）；「記錄體重」按鈕展開行內表單（體重、日期，日期預設 `today`、`max=today`、`min=today − 730`），存了收起來；
@@ -238,7 +238,7 @@
 
 `form` 寬度。性別、目標、速度是 `fieldset`＋單選鈕（`legend` 看得到）；活動量是 `<select>`（五個選項帶說明：「中度（每週運動 3–5 天）」）；
 出生年、身高、目標體重是 `inputMode="decimal"` 的輸入框（16px）。速度只在目標是減重或增重時出現（維持時送它原本的值，不清掉——
-切回減重時還在）。送出前在前端檢查範圍（`checkWeightInput` 等），錯誤列在 `role="alert"`。儲存成功 → 失效 `["body"]`、導回 `/me`。
+切回減重時還在）。送出前在前端檢查範圍（`checkRangeInput` 等），錯誤列在 `role="alert"`。儲存成功 → 失效 `["body"]`、導回 `/me`。
 預填規則見 D27。
 
 ### 6.4 `/weight`
@@ -248,7 +248,7 @@
   `paddedExtent`（所有體重、目標體重，各往外留 1 公斤、取整）。每筆一個 `<circle role="img" aria-label="10/14，72.4 公斤">`；
   移動平均是一條 `<polyline>`（`aria-hidden`，摘要寫在圖下面）；目標體重是一條虛線（`.trend-target` 同款）。幾何全部算成屬性（同 `TrendChart`）。
 - 圖下面：「最近 7 天平均 72.1 公斤」。
-- 清單：由新到舊，每列「10/14　72.4 公斤」＋「修改」（就地變成輸入框＋儲存／取消）＋「刪除」（`window.confirm`）。
+- 清單：由新到舊，每列「10/14　72.4 公斤」＋「修改」（就地變成輸入框＋儲存／取消）＋「刪除」（畫面上的確認框 `role="alertdialog"`，同報表的花費列；不用 `window.confirm`）。
 - 沒有任何紀錄：「還沒有體重紀錄」＋記錄的表單。
 
 ### 6.5 建議目標（`/me/targets` 的上半）
