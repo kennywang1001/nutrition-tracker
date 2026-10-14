@@ -5,6 +5,7 @@ import {
 } from "@tanstack/react-query";
 import { type FormEvent, useId, useState } from "react";
 import { useNavigate } from "react-router";
+import { invalidateBody } from "../api/body";
 import { ApiError, describeFieldErrors } from "../api/errors";
 import { queryKeys } from "../api/queries";
 import { type DailyStats, useFreshDailyStats } from "../api/stats";
@@ -119,6 +120,9 @@ function TargetsForm({ current }: { current: DailyStats["target"] }) {
 			// 導頁之後元件卸載，這裡照樣會跑（失效是快取的事，不是畫面的事）。
 			void queryClient.invalidateQueries({ queryKey: queryKeys.dailyStats });
 			void queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatsAll });
+			// 後端同時清掉了套用建議時的體重（身體資料規格 D16）：建議裡的 `resuggest` 要重抓，
+			// 不然「我的」上「體重變了…要重算建議目標嗎？」還留著（審查 I1）。
+			void invalidateBody(queryClient);
 		},
 	});
 

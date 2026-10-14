@@ -94,6 +94,14 @@ function statsGets(spy: ReturnType<typeof mockApi>): number {
 	).length;
 }
 
+function suggestionGets(spy: ReturnType<typeof mockApi>): number {
+	return spy.mock.calls.filter(
+		([input, init]) =>
+			(init?.method ?? "GET") === "GET" &&
+			String(input).includes("/api/me/target-suggestion"),
+	).length;
+}
+
 /** 斷言「沒有送出」之前先等一下：mutate 是非同步的，立刻斷言在守衛壞掉時也成立（第 41 種）。 */
 function settle(): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, 50));
@@ -224,6 +232,34 @@ describe("/me/targets", () => {
 		expect(client.getQueryState(rangeKey)?.isInvalidated).toBe(true);
 		// 今天的統計在這一頁掛著：失效會立刻重抓（staleTime 60 秒，不失效就不會再打一次）。
 		await waitFor(() => expect(statsGets(spy)).toBe(2));
+	});
+
+	it("存好之後 [body] 也失效：後端清掉了套用時的體重，「要重算嗎」的提示要跟著消失（審查 I1）", async () => {
+		const spy = mockApi([
+			...bodyRoutes({ suggestion: { ...READY_SUGGESTION, resuggest: true } }),
+			statsRoute(),
+			putRoute(() => json(SAVED)),
+		]);
+		const client = renderScreen();
+		// 「我的」的體重卡片讀的那一份：這一頁沒人觀察，失效之後留著 `isInvalidated`。
+		client.setQueryData(queryKeys.weights, {
+			today: "2019-07-04",
+			entries: [],
+		});
+		expect(client.getQueryState(queryKeys.weights)?.isInvalidated).toBe(false);
+
+		await screen.findByRole("button", { name: "套用建議目標" });
+		expect(suggestionGets(spy)).toBe(1);
+		await userEvent.click(
+			await within(manualSection()).findByRole("button", { name: "儲存" }),
+		);
+
+		expect(
+			await screen.findByRole("heading", { name: "我的" }),
+		).toBeInTheDocument();
+		expect(client.getQueryState(queryKeys.weights)?.isInvalidated).toBe(true);
+		// 建議在這一頁掛著（存的那一刻）：失效會立刻重抓——「我的」的提示看的是這一份。
+		await waitFor(() => expect(suggestionGets(spy)).toBe(2));
 	});
 
 	it.each([

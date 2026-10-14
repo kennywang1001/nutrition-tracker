@@ -200,6 +200,24 @@ test("缺資料時說還差什麼；填身體資料、記體重、套用建議�
 	await applySuggestion(page);
 	await expect(targetsCard).toContainText(`${lighter} kcal`);
 	await expect(targetsCard).not.toContainText("體重變了");
+
+	// 體重又變了，這次不重算、自己手動設目標（審查 I1）：手打的目標不是建議（D16），
+	// 回到「我的」提示要消失——不能留著快取裡的舊建議。
+	await recordWeightOnMe(page, "77");
+	await expect(targetsCard).toContainText(
+		"體重變了 -1.5 公斤，要重算建議目標嗎？",
+	);
+	await openTargets(page);
+	const manual = page.getByRole("region", { name: "自己設定", exact: true });
+	const manualKcal = manual.getByLabel("熱量（kcal）", { exact: true });
+	await expect(manualKcal).toHaveValue(lighter);
+	await manualKcal.fill("1900");
+	await manual.getByRole("button", { name: "儲存", exact: true }).click();
+	await expect(
+		page.getByRole("heading", { name: "我的", exact: true, level: 1 }),
+	).toBeVisible();
+	await expect(targetsCard).toContainText("1900 kcal");
+	await expect(targetsCard).not.toContainText("體重變了");
 });
 
 test("只差體重時只給「記錄體重」；記了之後有目標線，建議調到最低熱量", async ({
