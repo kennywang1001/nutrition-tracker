@@ -224,9 +224,9 @@ estimate_kcal(met, weight_kg, minutes) = round_half_up(met × weight_kg × minut
 | 檔案 | 內容 |
 |---|---|
 | `api/exercises.ts`（新） | `useActivities`、`useExerciseEstimate`、`useTodayExercises`、`useExercise`、`createExercise`、`updateExercise`、`deleteExercise`、`invalidateExercises` |
-| `api/queries.ts` | `exercisesAll: ["exercises"]`、`exercisesToday: ["exercises","today"]`、`exercise(id): ["exercises", id]`、`exerciseActivities: ["exercises","activities"]`、`exerciseEstimate(...)`: `["exercise-estimate", activity, minutes, performedAt]` |
+| `api/queries.ts` | `exercisesAll: ["exercises"]`、`exercisesToday: ["exercises","today"]`、`exercise(id): ["exercises", id]`、`exerciseActivities: ["exercise-activities"]`（獨立命名空間：記一筆運動不該連帶重抓固定的清單）、`exerciseEstimate(...)`: `["exercise-estimate", activity, minutes, performedAt]` |
 | `api/persist.ts` | `NOT_PERSISTED` 加 `"exercise-estimate"` |
-| `api/stats.ts` | `kcalBudgetOf(stats)`、`exerciseKcalOf(stats)`、`exerciseInBudget(stats)`：離線快取的舊回應沒有新欄位（`undefined`）時退回目標／`"0"`／`false` |
+| `api/stats.ts` | `kcalBudgetOf(stats)`、`exerciseKcalOf(stats)`、`exerciseInBudgetOf(stats)`：離線快取的舊回應沒有新欄位（`undefined`）時退回目標／`"0"`／`false` |
 | `lib/timeline.ts` | 第三種列 `kind: "exercise"` |
 | `lib/layout.ts` | `/exercises/new` 是 `form` |
 | `components/ExerciseForm.tsx`（新） | 新增與編輯共用的表單 |
@@ -258,7 +258,7 @@ estimate_kcal(met, weight_kg, minutes) = round_half_up(met × weight_kg × minut
 
 ### 7.4 總覽
 
-- **今天熱量**：分母是 `kcalBudgetOf(stats)`；`exerciseInBudget(stats)` 而且 `exercise_kcal` 不是 0 時，數字下面一行小字
+- **今天熱量**：分母是 `kcalBudgetOf(stats)`；`exerciseInBudgetOf(stats)` 而且 `exercise_kcal` 不是 0 時，數字下面一行小字
   「含運動 +343」（`formatMacro`）。進度條的比例是 `ratioOf(actual, 額度)`。
 - **時間線**：`buildTimeline(meals, expenses, exercises)`，運動列是連結到編輯畫面：圖示（lucide `Dumbbell`）、「跑步・30 分鐘」、時間、「-343 kcal」。
   運動清單載入失敗跟餐點一樣算「無法載入今天的紀錄」。
