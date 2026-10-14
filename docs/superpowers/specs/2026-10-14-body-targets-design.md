@@ -64,7 +64,7 @@
 | D13 | 記一筆 | `PUT /api/weights/{date}`：`INSERT … ON CONFLICT (user_id, date) DO UPDATE … RETURNING`。日期 **≤ 使用者的今天**、**≥ 今天 − 730 天**（後端判斷） | 冪等；同一天記兩次是更正。日期界線跟其他地方一樣只有後端算 |
 | D14 | 讀清單 | `GET /api/weights?from=&to=`：**兩個都可省略**（`to` 預設今天、`from` 預設 `to − 799`），最多 800 天；回 `{today, entries}`，由舊到新 | 前端不用先問今天是哪天（瀑布）；`today` 順便給表單當預設日期、給圖表當右端 |
 | D15 | 套用 | **後端端點 `POST /api/me/target-suggestion/apply`**：同一個交易裡重算建議、存成今天起的目標（跟 `PUT /api/targets/today` 共用寫入函式）、記下 `targets_applied_weight_kg`。請求帶**畫面上看到的四個數字**，跟重算的不一樣 → `409 SUGGESTION_CHANGED`，什麼都不寫 | 一個事實來源，存的數字不來自前端；但使用者按下去的那一刻，看到的必須就是會存的（另一個分頁剛記了體重、離線快取裡的舊建議） |
-| D16 | 手動改目標之後 | `PUT /api/targets/today` 在同一個交易裡把 `targets_applied_weight_kg` 清成 null | 「體重變了，要重算嗎」只對「目前的目標來自建議」有意義；自己手打的目標不該被提醒蓋掉 |
+| D16 | 手動改目標之後 | **每一條手動寫目標的路**（`PUT /api/targets/today`、`POST /api/targets`、`PATCH /api/targets/{id}`）都在同一個交易裡把 `targets_applied_weight_kg` 清成 null（審查 M2 補上後兩條） | 「體重變了，要重算嗎」只對「目前的目標來自建議」有意義；自己手打的目標不該被提醒蓋掉 |
 | D17 | 重算提示的資料 | 建議的回應多三個欄位：`applied_weight_kg`、`weight_change_kg`（最新 − 套用時，沒套用過是 null）、`resuggest`（`|變化| ≥ 1`） | 判斷在後端，前端只顯示；數字差用 Decimal 算 |
 | D18 | 體重匯出 | **做**：`GET /api/export/weights.csv`（日期、體重），共用既有的限速、單一匯出、串流 | `app/export.py` 的形狀照抄一支 generator；前端 `EXPORT_KINDS` 多一項 |
 | D19 | 隱私 | 不進任何好友或社群的回應；不寫 log；**進離線快取**（自己的資料，跟今日營養素一樣） | 健康資料只給本人。離線時看得到自己的體重是功能；裝置本身是本人的（§7） |
@@ -203,7 +203,7 @@
 
 ### 5.4 既有端點的改變
 
-- `PUT /api/targets/today`：同一個交易裡 `UPDATE user_profiles SET targets_applied_weight_kg = NULL`（D16）。回應不變。
+- `PUT /api/targets/today`、`POST /api/targets`、`PATCH /api/targets/{id}`：同一個交易裡 `UPDATE user_profiles SET targets_applied_weight_kg = NULL`（D16，都走 `clear_applied_weight`）；目標寫不進去（409）就一起 rollback。回應不變。
 - `PUT /api/targets/today` 的寫入邏輯抽成 `write_target_from_today(db, user_id, today, values)`（留在 `routes/targets.py`，
   既有測試 monkeypatch 的 `today_in_timezone`、`_new_period_end` 照樣生效）。
 

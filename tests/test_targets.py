@@ -1,9 +1,12 @@
 from datetime import date
+from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
 
+from app.models.body import UserProfile
 from app.security.tokens import create_access_token
-from tests.factories import create_target, create_user
+from tests.factories import create_profile, create_target, create_user
 
 
 def auth(user):
@@ -606,3 +609,100 @@ async def test_update_target_rejects_effective_to_not_after_its_own_effective_fr
     )
 
     assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# 身體資料規格 D16（審查 M2）：每一條手動寫目標的路都清掉套用時的體重——
+# 不只 `PUT /api/targets/today`。手打的目標不是建議，之後體重變了不該提示重算。
+# ---------------------------------------------------------------------------
+
+
+async def _applied_weights(db_session, user_ids: list[int]) -> dict[int, Decimal | None]:
+    await db_session.rollback()  # 第 11 種：看的是真的 commit 了的
+    rows = await db_session.execute(
+        select(UserProfile.user_id, UserProfile.targets_applied_weight_kg).where(
+            UserProfile.user_id.in_(user_ids)
+        )
+    )
+    return dict(rows.tuples().all())
+
+
+async def test_creating_a_target_forgets_the_applied_weight(client, db_session):
+    user, other = await create_user(db_session), await create_user(db_session)
+    await create_profile(db_session, user=user, targets_applied_weight_kg=80)
+    await create_profile(db_session, user=other, targets_applied_weight_kg=70)
+    user_id, other_id = user.id, other.id
+
+    response = await client.post(
+        "/api/targets",
+        headers=auth(user),
+        json={"kcal": "2000", "effective_from": "2026-01-01"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["kcal"] == "2000.00"
+    assert await _applied_weights(db_session, [user_id, other_id]) == {
+        user_id: None,
+        other_id: Decimal("70.00"),
+    }
+
+
+async def test_a_create_that_overlaps_keeps_the_applied_weight(client, db_session):
+    """目標沒寫進去（409）：清掉套用體重也跟著 rollback——同一個交易。"""
+    user = await create_user(db_session)
+    await create_profile(db_session, user=user, targets_applied_weight_kg=80)
+    await create_target(db_session, user=user, kcal=1800, effective_from=date(2026, 1, 1))
+    user_id = user.id
+
+    response = await client.post(
+        "/api/targets",
+        headers=auth(user),
+        json={"kcal": "2000", "effective_from": "2026-03-01"},
+    )
+
+    assert response.status_code == 409
+    assert await _applied_weights(db_session, [user_id]) == {user_id: Decimal("80.00")}
+
+
+async def test_updating_a_target_forgets_the_applied_weight(client, db_session):
+    user, other = await create_user(db_session), await create_user(db_session)
+    await create_profile(db_session, user=user, targets_applied_weight_kg=80)
+    await create_profile(db_session, user=other, targets_applied_weight_kg=70)
+    target = await create_target(db_session, user=user, kcal=1800, effective_from=date(2026, 1, 1))
+    user_id, other_id, target_id = user.id, other.id, target.id
+
+    response = await client.patch(
+        f"/api/targets/{target_id}",
+        headers=auth(user),
+        json={"kcal": "2200", "effective_from": "2026-06-01"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["kcal"] == "2200.00"
+    assert await _applied_weights(db_session, [user_id, other_id]) == {
+        user_id: None,
+        other_id: Decimal("70.00"),
+    }
+
+
+async def test_an_update_that_overlaps_keeps_the_applied_weight(client, db_session):
+    user = await create_user(db_session)
+    await create_profile(db_session, user=user, targets_applied_weight_kg=80)
+    target = await create_target(
+        db_session,
+        user=user,
+        kcal=1800,
+        effective_from=date(2026, 1, 1),
+        effective_to=date(2026, 6, 1),
+    )
+    await create_target(db_session, user=user, kcal=2000, effective_from=date(2026, 8, 1))
+    user_id, target_id = user.id, target.id
+
+    response = await client.patch(
+        f"/api/targets/{target_id}",
+        headers=auth(user),
+        json={"kcal": "2200", "effective_from": "2026-07-01"},
+    )
+
+    assert response.status_code == 409
+    assert await _applied_weights(db_session, [user_id]) == {user_id: Decimal("80.00")}

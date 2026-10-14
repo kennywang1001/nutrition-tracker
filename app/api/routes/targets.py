@@ -54,6 +54,10 @@ async def create_target(
         effective_from=payload.effective_from,
         effective_to=payload.effective_to,
     )
+    # 身體資料規格 D16：每一條手動寫目標的路都清掉套用時的體重（審查 M2）。在 add 之前：
+    # 這句 UPDATE 不會先 autoflush 出新的目標，撞期只會在下面的 commit 發生，
+    # rollback 連它一起復原。
+    await clear_applied_weight(db, user.id)
     db.add(target)
     try:
         await db.commit()
@@ -297,6 +301,8 @@ async def update_target(
         await db.rollback()
         raise ConflictError("TARGET_OVERLAPS", "這段期間已經有重疊的目標") from exc
 
+    # 身體資料規格 D16（審查 M2）：手動改的目標不是建議。同一個交易，撞期的話上面已經 rollback。
+    await clear_applied_weight(db, user.id)
     await db.commit()
     await db.refresh(new_target)
     return target_response(new_target)
