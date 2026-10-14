@@ -8,17 +8,22 @@ from app.models.body import UserProfile, WeightEntry
 
 
 async def load_profile(db: AsyncSession, user_id: int) -> UserProfile | None:
-    return await db.scalar(select(UserProfile).where(UserProfile.user_id == user_id))
+    # db.scalar 的型別是 Any：先放進有註解的變數，mypy 才會檢查呼叫端（同 routes/targets.py）。
+    profile: UserProfile | None = await db.scalar(
+        select(UserProfile).where(UserProfile.user_id == user_id)
+    )
+    return profile
 
 
 async def latest_weight(db: AsyncSession, user_id: int) -> WeightEntry | None:
     """**日期**最新的一筆（不是最後寫的那一筆：補記上週的不會變成「目前體重」）。"""
-    return await db.scalar(
+    latest: WeightEntry | None = await db.scalar(
         select(WeightEntry)
         .where(WeightEntry.user_id == user_id)
         .order_by(WeightEntry.date.desc())
         .limit(1)
     )
+    return latest
 
 
 def inputs_from(profile: UserProfile | None, latest: WeightEntry | None) -> BodyInputs:
