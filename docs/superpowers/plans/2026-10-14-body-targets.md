@@ -67,6 +67,64 @@
 
 （執行中發現的寫在這裡。）
 
+## 執行中發現的差異
+
+### Task 1–5（後端，2026-10-14）
+
+**數字：** 後端整套 **1592** 條（開工前 1450，新增 142：五個新測試檔 133 條、`test_export.py` +6、
+`test_targets_today.py` +3）；端點 **95**；`alembic` 在測試資料庫 upgrade → check → downgrade -1（`0018`）→
+upgrade（`0019`）→ check 都乾淨。dev 資料庫沒有碰（Task 10 的 e2e 前再 `upgrade head`）。
+
+**Task 1**
+1. 模型沒用 `created_at, updated_at = _timestamps()`，直接照 `app/models/social.py` 每個欄位各寫一次（行為一樣）。
+2. **只改 migration 的突變（拿掉 `rate_valid`、拿掉 `CASCADE`、改主鍵）在 conftest 的 `alembic check` 就先炸了**：
+   18 條全部是 setup ERROR，不是指定的那一條紅。要看到指定的測試紅，模型與 migration 要**一起改**
+   （`rate_valid` → 只有 `[rate-…]` 紅；`CASCADE` → 只有 cascade 那條紅）。只改 CHECK 的文字
+   （`height_cm > 100 AND …`、`weight_kg BETWEEN 25 AND 351`）不會漂移，照計畫只有那一條紅。
+   模型拿掉 `rate_valid` → `alembic check` 報 `remove_constraint`（照計畫）。
+
+**Task 2**
+3. 五組（A–E）與 floor-raw、F 兩組用獨立的 Decimal 腳本重算過，全部對得上。
+4. 多一條 `test_a_raw_value_exactly_at_the_floor_does_not_count_as_floored`（女、39 歲、160 cm、35.6 kg、久坐、維持：
+   BMR 1000、TDEE 剛好 1200）：`raw < floor` 改成 `<=` 的突變原本存活。共 22 條（計畫 21）。
+
+**Task 3**
+5. 條數：`test_body_profile.py` 36、`test_target_suggestion.py` 13（計畫約 30／10）——多了幾格邊界
+   （目標體重三位小數、速度 `"1"`、速度 null、出生年 null 不檢查、`+0.99` 不提示、年齡跟著「端點拿到的今天」）。
+6. Step 4 的紅不是 404：`seen_timezones` 夾具 monkeypatch `app.api.routes.body.today_in_timezone`，模組不存在時是夾具的
+   import 錯誤；只有 401 那幾條是 404。
+7. `app/body_data.py` 的兩個讀取函式 mypy 報 `no-any-return`（`db.scalar` 是 Any）：照 `routes/targets.py` 先放進有註解的
+   變數。**Task 3 的 commit 帶著這兩個 mypy 錯誤**（檢查時把 mypy 接了 `| tail -1`，退出碼被吃掉），下一個 commit 修掉。
+   教訓：mypy／ruff 不要接管線。
+8. 突變 3（`set_` 拿掉 `updated_at`）照預期存活。另外多做：PUT 也清掉套用體重 → `test_put_does_not_touch_the_applied_weight` 紅；
+   `load_profile` 不看 user_id → 跨使用者那條紅。
+
+**Task 4**
+9. 800 天的邊界：2026-10-14 往回 799 天是 **2024-08-06**（`from=2024-08-06` 是 800 天、`2024-08-05` 是 801 天）；
+   多一條 `test_the_800_day_fixture_dates_are_right` 守著手算的日期（第一次就算錯了一天）。`test_weights.py` 27 條。
+10. **規格 §8.1 的「並行第一次存身體資料」計畫的 Task 3 沒列**：加在 `test_weights_concurrency.py`
+    （`test_two_first_time_profile_saves_at_once_both_succeed`）——第一條連線 INSERT 不 commit，第二條直接呼叫真的
+    `save_body_profile`，卡在主鍵上；第一條 commit 之後第二條走 DO UPDATE。突變成「先查有沒有、沒有就 INSERT／有就 UPDATE」
+    只有這條紅。
+11. `test_export.py`：體重也加進 `EXPORT_PATHS` 與 `_some_of_each`（每個 index 一天一筆）——「session 撐到最後一塊」
+    「送的時候沒有交易」「送的時候連線在池子裡」三條也跑體重；限速那條改名 `test_the_exports_share_one_budget_per_user`、
+    輪流打四個；「只有自己的」那條也看體重。
+12. 突變 4（先查再寫）除了並行那條，`test_put_creates_then_corrects_the_same_day` 也紅——但只是因為突變版回的是請求的
+    `"80.4"` 不是資料庫的 `"80.40"`；語意上的錯只有並行那條抓得到（照計畫）。`>` 改 `>=` 的游標是無限迴圈，120 秒逾時。
+
+**Task 5**
+13. Step 1 的重構先**不**放 `clear_applied_weight`（純重構，既有 61 條綠），等 D16 的測試紅了才加回去。
+    `_to_response` 有 6 處呼叫（不是 3 處）。
+14. D16 的測試 parametrize 兩條寫入的路（今天才開始的原地改、更早開始的關閉＋開新）；另加
+    `test_a_clash_keeps_the_applied_weight`（409 時清掉的動作也 rollback）。
+15. 掃描的第一條實際掃到 **21** 個模型（計畫寫 22）；`>= 20` 仍成立。四個掃描突變（`FriendMeal` 加 `weight_kg`、
+    `NotificationMeal` 加 `body_profile_id`、`friends.py` 註解寫 `WeightEntry`、`weights.py` 加 `import logging`）各自只紅
+    對應的那一條。
+16. 突變 7（原地改那支 `flush` 換成 `commit`）照預期存活。
+
+**環境**
+17. 突變小工具印 pytest 輸出時遇到 cp950 編不了的字元會整個停下（檔案有還原）：跑之前設 `PYTHONIOENCODING=utf-8`。
+
 ---
 
 ## 檔案結構
