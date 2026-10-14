@@ -2,48 +2,17 @@
 碰得到那兩張表、那幾個模組不寫 log。掃的是型別與原始碼——端點測試只看得到「這一次的回應
 沒有」，看不到「某天有人把它加進白名單」。"""
 
-import importlib
 import re
-from pathlib import Path
-
-from pydantic import BaseModel
 
 import app.schemas.friend as friend_schemas
 import app.schemas.social as social_schemas
+from tests.privacy_helpers import APP, SOCIAL_MODULES, models_reachable_from, names_defined_in
 
-APP = Path(__file__).resolve().parent.parent / "app"
 HEALTH_WORDS = ("weight", "height", "birth", "sex", "activity", "goal", "profile")
 
 
-def _models_reachable_from(module) -> set[type[BaseModel]]:
-    """模組裡每個 BaseModel，連同欄位型別裡巢狀的（list[X]、X | None）。"""
-    seen: set[type[BaseModel]] = set()
-    stack = [
-        value
-        for value in vars(module).values()
-        if isinstance(value, type) and issubclass(value, BaseModel) and value is not BaseModel
-    ]
-    while stack:
-        model = stack.pop()
-        if model in seen:
-            continue
-        seen.add(model)
-        for field in model.model_fields.values():
-            for inner in _types_in(field.annotation):
-                if isinstance(inner, type) and issubclass(inner, BaseModel):
-                    stack.append(inner)
-    return seen
-
-
-def _types_in(annotation) -> list:
-    args = getattr(annotation, "__args__", None)
-    if not args:
-        return [annotation]
-    return [inner for arg in args for inner in _types_in(arg)]
-
-
 def test_no_friend_or_social_response_has_a_health_field():
-    models = _models_reachable_from(friend_schemas) | _models_reachable_from(social_schemas)
+    models = models_reachable_from(friend_schemas) | models_reachable_from(social_schemas)
     assert len(models) >= 20  # 掃到東西了：寫計畫時兩個模組頂層就有 22 個模型（含 import 進來的）
     offenders = sorted(
         f"{model.__name__}.{name}"
@@ -89,12 +58,7 @@ def test_the_body_modules_do_not_log():
     assert offenders == []
 
 
-# 好友與社群的模組：檔名帶 friend／social／notification 的都算（之後新增的也掃得到）。
-SOCIAL_MODULES = sorted(
-    path
-    for path in APP.rglob("*.py")
-    if any(word in path.name for word in ("friend", "social", "notification"))
-)
+# 好友與社群的模組（`SOCIAL_MODULES`）：檔名帶 friend／social／notification 的都算。
 # 間接的路（審查 M3）：上一條只認表名與模型名，好友的模組 `from app.body_data import
 # latest_weight` 一樣拿得到體重，那一條卻是綠的。這裡擋的是「碰到身體資料的模組」本身。
 BODY_MODULE_REFERENCES = (
@@ -110,12 +74,7 @@ BODY_MODULE_REFERENCES = (
 def _names_defined_in(module_name: str) -> set[str]:
     """模組自己定義的函式與類別（不含 import 進來的）。`round_half_up` 是通用的四捨五入，
     不是身體資料；真的從 `app.body_targets` import 它，上面的模組名稱照樣擋得到。"""
-    module = importlib.import_module(module_name)
-    return {
-        name
-        for name, value in vars(module).items()
-        if not name.startswith("_") and getattr(value, "__module__", None) == module_name
-    } - {"round_half_up"}
+    return names_defined_in(module_name) - {"round_half_up"}
 
 
 def test_the_friend_and_social_modules_do_not_reach_the_body_modules():

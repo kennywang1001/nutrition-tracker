@@ -1,3 +1,5 @@
+import pytest
+
 from app.security.tokens import create_access_token
 from tests.factories import create_user
 
@@ -162,3 +164,56 @@ async def test_an_explicit_null_display_name_is_rejected_not_a_500(client, db_se
     )
 
     assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# 運動消耗加回熱量額度的設定（運動規格 D14）
+# ---------------------------------------------------------------------------
+
+
+async def test_me_has_the_exercise_setting_on_by_default(client, db_session):
+    user = await create_user(db_session)
+    token = create_access_token(user.id)
+
+    response = await client.get("/api/me", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 200
+    assert response.json()["exercise_adds_to_budget"] is True
+
+
+async def test_the_exercise_setting_can_be_turned_off(client, db_session):
+    user = await create_user(db_session, display_name="原本的名字")
+    token = create_access_token(user.id)
+
+    response = await client.patch(
+        "/api/me",
+        json={"exercise_adds_to_budget": False},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["exercise_adds_to_budget"] is False
+    # 其他欄位不動。
+    assert body["display_name"] == "原本的名字"
+    assert body["timezone"] == "Asia/Taipei"
+    await db_session.refresh(user)
+    assert user.exercise_adds_to_budget is False
+
+
+@pytest.mark.parametrize("value", [None, "maybe", 2])
+async def test_a_bad_exercise_setting_is_422_not_a_500(client, db_session, value):
+    """null 撞 NOT NULL 會是 500，所以在 schema 擋（同 timezone）。`"no"`、`0` 這種 Pydantic 的
+    寬鬆布林照收（同 `MealUpdateRequest.is_private`），解析不了的才是 422。"""
+    user = await create_user(db_session)
+    token = create_access_token(user.id)
+
+    response = await client.patch(
+        "/api/me",
+        json={"exercise_adds_to_budget": value},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 422
+    await db_session.refresh(user)
+    assert user.exercise_adds_to_budget is True

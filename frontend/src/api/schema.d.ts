@@ -239,11 +239,12 @@ export interface paths {
          * Update Me
          * @description 超出規格第 7.1 節的新增（計畫 3 Task 3）：時區設定進去卻改不掉是 bug。
          *
-         *     範圍嚴格限制在 display_name / timezone。沒有路徑參數 —— 這個端點改的
+         *     範圍嚴格限制在 display_name / timezone / exercise_adds_to_budget（運動規格 D14）。
+         *     沒有路徑參數 —— 這個端點改的
          *     永遠是 token 解出來的那個使用者，`user` 本身就是 `get_current_user`
          *     已經驗證過的那一列，這裡不再另外做一次「擁有權」查詢。
          *
-         *     用 exclude_unset 而不是 exclude_none：兩個欄位在資料庫都是 NOT NULL，
+         *     用 exclude_unset 而不是 exclude_none：三個欄位在資料庫都是 NOT NULL，
          *     這個區別今天不可見，但這是為了以後加可為 null 的欄位時養成的習慣。
          */
         patch: operations["update_me_api_me_patch"];
@@ -1581,9 +1582,12 @@ export interface paths {
          *     `GET /api/supplements/today` 用同一個 `today_in_timezone()`（陷阱 1：
          *     三個端點對「同一天」的判斷必須完全一致）。
          *
-         *     固定 3 次查詢（食物一次、補劑一次、目標一次），跟這一天有幾個餐點項目、
-         *     幾筆補劑打卡都無關——`app/stats.py` 的 `daily_macros()` 已經保證了
-         *     食物與補劑各自只發一次查詢，這裡再加一次目標查詢。
+         *     固定 4 次查詢（食物一次、補劑一次、目標一次、運動的 SUM 一次），跟這一天有幾個
+         *     餐點項目、幾筆補劑打卡、幾筆運動都無關——`app/stats.py` 的 `daily_macros()` 已經
+         *     保證了食物與補劑各自只發一次查詢，這裡再加目標與運動各一次。
+         *
+         *     熱量額度（運動規格 D15）：`kcal_budget` 是目標加上那一天的運動（設定關掉時就是目標）；
+         *     `ratio` 刻意不跟著變（D16）。設定只看**現在**的值，查過去某一天也一樣（D17）。
          */
         get: operations["get_daily_stats_api_stats_daily_get"];
         put?: never;
@@ -1843,6 +1847,26 @@ export interface paths {
          * @description 自己全部的體重：一天一列，由舊到新。
          */
         get: operations["export_weights_api_export_weights_csv_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/export/exercises.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Exercises
+         * @description 自己全部的運動：一筆一列，由舊到新。時間是帳號時區。
+         */
+        get: operations["export_exercises_api_export_exercises_csv_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2124,6 +2148,12 @@ export interface components {
          *     `None` 代表「這一天完全沒有生效的目標」（決定 2：不是 0，也不是省略），
          *     跟裡面個別欄位的 `None`（陷阱 3：目標存在，但這個營養素沒設）是
          *     兩層不同的「沒有」，不能混為一談。
+         *
+         *     運動（運動規格 §6、D15、D16）：`exercise_kcal` 是那一天的合計（沒有是 0.00）；
+         *     `kcal_budget` 是熱量的分母（目標＋運動，設定關掉時就是目標；沒有熱量目標是 null）；
+         *     `exercise_adds_to_budget` 是設定**現在**的值（D17），畫面靠它決定要不要寫「含運動」。
+         *     `ratio.kcal` 刻意不變（仍是 實際/目標），跟 `/stats/range` 的同一天一致；
+         *     畫面用 `kcal_budget` 自己算比例。
          */
         DailyStatsResponse: {
             /**
@@ -2135,6 +2165,12 @@ export interface components {
             target: components["schemas"]["NullableMacrosResponse"] | null;
             ratio: components["schemas"]["NullableMacrosResponse"] | null;
             breakdown: components["schemas"]["BreakdownResponse"];
+            /** Exercise Kcal */
+            exercise_kcal: string;
+            /** Exercise Adds To Budget */
+            exercise_adds_to_budget: boolean;
+            /** Kcal Budget */
+            kcal_budget: string | null;
         };
         /**
          * DayTrendResponse
@@ -3526,10 +3562,10 @@ export interface components {
          * UpdateMeRequest
          * @description `PATCH /api/me` 的請求 —— 超出規格第 7.1 節的新增（見計畫 3 Task 3）。
          *
-         *     範圍嚴格限制在 `display_name` 與 `timezone`：沒有 email、密碼、角色、
-         *     刪除帳號，也沒有 `relationship()`。
+         *     範圍嚴格限制在 `display_name`、`timezone` 與 `exercise_adds_to_budget`（運動規格 D14）：
+         *     沒有 email、密碼、角色、刪除帳號，也沒有 `relationship()`。
          *
-         *     兩個欄位都是 `X | None = None`，其中 `None` 是「這次請求沒帶這個欄位」的哨兵。
+         *     三個欄位都是 `X | None = None`，其中 `None` 是「這次請求沒帶這個欄位」的哨兵。
          *     路由層用 `model_dump(exclude_unset=True)` 決定要更新哪些欄位 ——
          *     不能用 `exclude_none`，兩者只在「client 明確送 null」時行為不同
          *     （`exclude_unset` 會保留、視為要求設成 null；`exclude_none` 會悄悄丟掉）。
@@ -3542,13 +3578,15 @@ export interface components {
          *
          *     修法不是退回 `exclude_none`（那會把明確的 null 悄悄吞掉，讓
          *     `{"timezone": null}` 靜默地變成 no-op），而是在這裡明講：
-         *     **這兩個欄位可以不帶，但不接受 null。** 哨兵留給型別，語意由驗證器把關。
+         *     **這三個欄位可以不帶，但不接受 null。** 哨兵留給型別，語意由驗證器把關。
          */
         UpdateMeRequest: {
             /** Display Name */
             display_name?: string | null;
             /** Timezone */
             timezone?: string | null;
+            /** Exercise Adds To Budget */
+            exercise_adds_to_budget?: boolean | null;
         };
         /** UserResponse */
         UserResponse: {
@@ -3561,6 +3599,8 @@ export interface components {
             role: components["schemas"]["UserRole"];
             /** Timezone */
             timezone: string;
+            /** Exercise Adds To Budget */
+            exercise_adds_to_budget: boolean;
         };
         /**
          * UserRole
@@ -6619,6 +6659,26 @@ export interface operations {
         };
     };
     export_weights_api_export_weights_csv_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description CSV（UTF-8，開頭有 BOM） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+        };
+    };
+    export_exercises_api_export_exercises_csv_get: {
         parameters: {
             query?: never;
             header?: never;

@@ -9,6 +9,8 @@ from app.api.deps import get_current_user
 from app.days import today_in_timezone
 from app.db import get_db
 from app.errors import UnprocessableEntityError
+from app.exercise import kcal_budget
+from app.exercise_data import exercise_kcal_on
 from app.models.target import UserTarget
 from app.models.user import User
 from app.nutrition import Macros
@@ -66,13 +68,19 @@ async def get_daily_stats(
     `GET /api/supplements/today` 用同一個 `today_in_timezone()`（陷阱 1：
     三個端點對「同一天」的判斷必須完全一致）。
 
-    固定 3 次查詢（食物一次、補劑一次、目標一次），跟這一天有幾個餐點項目、
-    幾筆補劑打卡都無關——`app/stats.py` 的 `daily_macros()` 已經保證了
-    食物與補劑各自只發一次查詢，這裡再加一次目標查詢。
-    """
-    day = date or today_in_timezone(user.timezone)
+    固定 4 次查詢（食物一次、補劑一次、目標一次、運動的 SUM 一次），跟這一天有幾個
+    餐點項目、幾筆補劑打卡、幾筆運動都無關——`app/stats.py` 的 `daily_macros()` 已經
+    保證了食物與補劑各自只發一次查詢，這裡再加目標與運動各一次。
 
-    day_macros = await daily_macros(db, user_id=user.id, tz_name=user.timezone, day=day)
+    熱量額度（運動規格 D15）：`kcal_budget` 是目標加上那一天的運動（設定關掉時就是目標）；
+    `ratio` 刻意不跟著變（D16）。設定只看**現在**的值，查過去某一天也一樣（D17）。
+    """
+    # 先讀成純值：之後的查詢不再碰 `user` 這個 ORM 物件。
+    user_id, tz_name = user.id, user.timezone
+    adds_exercise = user.exercise_adds_to_budget
+    day = date or today_in_timezone(tz_name)
+
+    day_macros = await daily_macros(db, user_id=user_id, tz_name=tz_name, day=day)
     actual = day_macros.actual
 
     # 半開區間判斷「那一天生效的目標」：跟 GET /api/targets?date= 是同一條
@@ -80,11 +88,13 @@ async def get_daily_stats(
     # 無窮遠的未來），兩處不能有一處用 <=。
     target_row = await db.scalar(
         select(UserTarget).where(
-            UserTarget.user_id == user.id,
+            UserTarget.user_id == user_id,
             UserTarget.effective_from <= day,
             or_(UserTarget.effective_to.is_(None), UserTarget.effective_to > day),
         )
     )
+    exercise_kcal = await exercise_kcal_on(db, user_id=user_id, tz_name=tz_name, day=day)
+    target_kcal = target_row.kcal if target_row is not None else None
 
     target_response: NullableMacrosResponse | None = None
     ratio_response: NullableMacrosResponse | None = None
@@ -111,6 +121,9 @@ async def get_daily_stats(
             food=_macros_response(day_macros.food),
             supplement=_macros_response(day_macros.supplement),
         ),
+        exercise_kcal=exercise_kcal,
+        exercise_adds_to_budget=adds_exercise,
+        kcal_budget=kcal_budget(target_kcal, exercise_kcal, adds_exercise),
     )
 
 

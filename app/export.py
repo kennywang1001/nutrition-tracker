@@ -1,5 +1,5 @@
-"""匯出自己的資料（報表月份與匯出規格 §3、身體資料規格 D18）：四支 async generator，一塊一塊地讀、
-一塊一塊地吐，交給 `StreamingResponse`。
+"""匯出自己的資料（報表月份與匯出規格 §3、身體資料規格 D18、運動規格 D28）：
+五支 async generator，一塊一塊地讀、一塊一塊地吐，交給 `StreamingResponse`。
 
 **記憶體不隨資料量長。** 每一塊是一次 keyset 查詢（`(時間, id) > 上一塊的最後一列`、
 `LIMIT`），寫成 CSV 位元組就交出去，下一塊才讀。不用 OFFSET：越後面越慢，而且匯出到
@@ -29,8 +29,10 @@ from sqlalchemy import Row, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.csv_export import Cell, encode_header, encode_rows
+from app.exercise import KcalSource, label_for
 from app.meal_reads import item_join_query
 from app.models.body import WeightEntry
+from app.models.exercise import ExerciseEntry
 from app.models.expense import Expense, ExpenseCategory
 from app.models.food import Food, FoodRevision
 from app.models.meal import Meal, MealItem, MealType
@@ -61,6 +63,7 @@ MEAL_COLUMNS = (
 )
 EXPENSE_COLUMNS = ("日期", "時間", "分類", "金額", "備註", "是否餐費")
 WEIGHT_COLUMNS = ("日期", "體重(kg)")
+EXERCISE_COLUMNS = ("日期", "時間", "活動", "分鐘", "熱量(kcal)", "熱量來源", "備註")
 SUPPLEMENT_COLUMNS = (
     "日期",
     "時間",
@@ -90,6 +93,10 @@ EXPENSE_CATEGORY_LABELS: dict[ExpenseCategory, str] = {
     ExpenseCategory.MEDICAL: "醫療",
     ExpenseCategory.HOUSING: "居住",
     ExpenseCategory.OTHER: "其他",
+}
+KCAL_SOURCE_LABELS: dict[KcalSource, str] = {
+    KcalSource.ESTIMATED: "估算",
+    KcalSource.MANUAL: "手動",
 }
 
 _YES, _NO = "是", "否"
@@ -223,6 +230,55 @@ async def weight_csv(db: AsyncSession, *, user_id: int) -> AsyncIterator[bytes]:
             return
         yield encode_rows([(row.date.isoformat(), row.weight_kg) for row in rows])
         after = rows[-1].date
+
+
+async def exercise_csv(
+    db: AsyncSession, *, user_id: int, tz_name: str
+) -> AsyncIterator[bytes]:
+    """運動：一筆一列，由舊到新（運動規格 D28）。活動欄是畫面上的名字（固定活動是中文標籤、
+    「其他」是使用者取的名稱，`label_for`）——名稱是使用者打的字，走 `encode_rows` 的
+    guard_text 處理公式字元，跟備註同一條路。"""
+    tz = ZoneInfo(tz_name)
+    yield encode_header(EXERCISE_COLUMNS)
+    after: tuple[datetime, int] | None = None
+    while True:
+        # 選欄位而不是整個 ORM 物件：拿到的一定是資料庫裡的值（理由同 expense_csv）。
+        query = (
+            select(
+                ExerciseEntry.id,
+                ExerciseEntry.performed_at,
+                ExerciseEntry.activity,
+                ExerciseEntry.name,
+                ExerciseEntry.minutes,
+                ExerciseEntry.kcal,
+                ExerciseEntry.kcal_source,
+                ExerciseEntry.note,
+            )
+            .where(ExerciseEntry.user_id == user_id)
+            .order_by(ExerciseEntry.performed_at, ExerciseEntry.id)
+            .limit(EXPORT_CHUNK_ROWS)
+        )
+        if after is not None:
+            query = query.where(tuple_(ExerciseEntry.performed_at, ExerciseEntry.id) > after)
+        rows = (await db.execute(query)).all()
+        if not rows:
+            return
+        lines: list[Sequence[Cell]] = []
+        for row in rows:
+            day, clock = _local(row.performed_at, tz)
+            lines.append(
+                (
+                    day,
+                    clock,
+                    label_for(row.activity, row.name),
+                    str(row.minutes),
+                    row.kcal,
+                    KCAL_SOURCE_LABELS[row.kcal_source],
+                    row.note,
+                )
+            )
+        yield encode_rows(lines)
+        after = (rows[-1].performed_at, rows[-1].id)
 
 
 async def meal_csv(db: AsyncSession, *, user_id: int, tz_name: str) -> AsyncIterator[bytes]:

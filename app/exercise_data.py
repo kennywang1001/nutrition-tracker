@@ -7,11 +7,16 @@ from datetime import date, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.body_data import weight_as_of
+from app.days import day_bounds
 from app.errors import UnprocessableEntityError
 from app.exercise import ACTIVITY_BY_CODE, MAX_KCAL, ActivityCode, estimate_kcal
+from app.models.exercise import ExerciseEntry
+
+_CENTS = Decimal("0.01")
 
 
 @dataclass(frozen=True)
@@ -52,3 +57,17 @@ async def estimate_for(
             f"估算是 {kcal} kcal，超過 {MAX_KCAL}：請手動輸入熱量，或拆成兩筆",
         )
     return Estimate(kcal=kcal, met=met, weight_kg=entry.weight_kg, weight_date=entry.date)
+
+
+async def exercise_kcal_on(db: AsyncSession, *, user_id: int, tz_name: str, day: date) -> Decimal:
+    """那一天（使用者時區）所有運動的熱量合計；沒有是 0.00。一次 SUM，跟筆數無關
+    （`/stats/daily` 的查詢數固定，`tests/test_stats_daily.py` 數著）。"""
+    start, end = day_bounds(day, tz_name)
+    total: Decimal | None = await db.scalar(
+        select(func.sum(ExerciseEntry.kcal)).where(
+            ExerciseEntry.user_id == user_id,
+            ExerciseEntry.performed_at >= start,
+            ExerciseEntry.performed_at < end,
+        )
+    )
+    return (total if total is not None else Decimal(0)).quantize(_CENTS)

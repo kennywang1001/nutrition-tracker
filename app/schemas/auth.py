@@ -62,6 +62,8 @@ class UserResponse(BaseModel):
     # 使用者沒有任何方式讀回自己剛設定的值。GET /api/me 也一併補上，兩個端點
     # 用同一個 response model，答案本該一致。
     timezone: str
+    # 運動消耗要不要加回熱量額度（運動規格 D14）：PATCH /api/me 改得到，就要讀得回來。
+    exercise_adds_to_budget: bool
 
 
 class TokenResponse(BaseModel):

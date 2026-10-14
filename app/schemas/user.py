@@ -10,10 +10,10 @@ from app.security.password import MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH
 class UpdateMeRequest(BaseModel):
     """`PATCH /api/me` 的請求 —— 超出規格第 7.1 節的新增（見計畫 3 Task 3）。
 
-    範圍嚴格限制在 `display_name` 與 `timezone`：沒有 email、密碼、角色、
-    刪除帳號，也沒有 `relationship()`。
+    範圍嚴格限制在 `display_name`、`timezone` 與 `exercise_adds_to_budget`（運動規格 D14）：
+    沒有 email、密碼、角色、刪除帳號，也沒有 `relationship()`。
 
-    兩個欄位都是 `X | None = None`，其中 `None` 是「這次請求沒帶這個欄位」的哨兵。
+    三個欄位都是 `X | None = None`，其中 `None` 是「這次請求沒帶這個欄位」的哨兵。
     路由層用 `model_dump(exclude_unset=True)` 決定要更新哪些欄位 ——
     不能用 `exclude_none`，兩者只在「client 明確送 null」時行為不同
     （`exclude_unset` 會保留、視為要求設成 null；`exclude_none` 會悄悄丟掉）。
@@ -26,11 +26,13 @@ class UpdateMeRequest(BaseModel):
 
     修法不是退回 `exclude_none`（那會把明確的 null 悄悄吞掉，讓
     `{"timezone": null}` 靜默地變成 no-op），而是在這裡明講：
-    **這兩個欄位可以不帶，但不接受 null。** 哨兵留給型別，語意由驗證器把關。
+    **這三個欄位可以不帶，但不接受 null。** 哨兵留給型別，語意由驗證器把關。
     """
 
     display_name: Annotated[DisplayName, Field(min_length=1, max_length=50)] | None = None
     timezone: IanaTimezone | None = None
+    # 布林照 Pydantic 的寬鬆規則（同 `MealUpdateRequest.is_private`）；null 由下面的驗證器擋。
+    exercise_adds_to_budget: bool | None = None
 
     @model_validator(mode="after")
     def _reject_explicit_nulls(self) -> "UpdateMeRequest":

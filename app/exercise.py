@@ -90,3 +90,13 @@ def label_for(activity: ActivityCode, name: str | None) -> str:
     if activity is ActivityCode.OTHER:
         return name or ACTIVITY_BY_CODE[ActivityCode.OTHER].label
     return ACTIVITY_BY_CODE[activity].label
+
+
+def kcal_budget(
+    target_kcal: Decimal | None, exercise_kcal: Decimal, adds_exercise: bool
+) -> Decimal | None:
+    """今天的熱量額度（D15）：沒有熱量目標就沒有額度（不是「額度＝運動消耗」）；
+    設定關掉時是目標本身。只動熱量，三大營養素不動（D12）。"""
+    if target_kcal is None:
+        return None
+    return target_kcal + exercise_kcal if adds_exercise else target_kcal

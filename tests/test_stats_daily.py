@@ -9,12 +9,14 @@ null，設了目標則逐欄位處理（陷阱 3：某個營養素沒設 -> 那�
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import event
 
 from app.models.food import FoodRevision
 from app.models.user import UserRole
 from app.security.tokens import create_access_token
 from tests.factories import (
+    create_exercise,
     create_food,
     create_intake,
     create_meal,
@@ -379,7 +381,134 @@ async def test_daily_stats_query_count_does_not_scale_with_item_count(client, db
 
     assert response.status_code == 200
     assert response.json()["breakdown"]["food"]["kcal"] == "100.00"
-    # 目前的實作：食物一次查詢、補劑一次查詢、目標一次查詢 = 3 次，
+    # 目前的實作：食物一次查詢、補劑一次查詢、目標一次查詢、運動的 SUM 一次 = 4 次
+    # （運動規格 §6：多的是那一天運動熱量的合計，跟筆數無關），
     # 跟 10 個項目、5 筆打卡完全無關。這裡斷言一個固定的小數字，
     # 之後如果多了一次查詢（=出現 N+1），這個數字會被撐大，測試會抓到。
-    assert statement_count == 3
+    assert statement_count == 4
+
+
+# ---------------------------------------------------------------------------
+# 運動與熱量額度（運動規格 §6、D15、D16）。一律帶 ?date=（stats 的「今天」沒有被
+# monkeypatch）；使用者時區 America/New_York，用錯時區算日界線才測得出來。
+# ---------------------------------------------------------------------------
+
+# 紐約的 2026-10-14 12:00（EDT，UTC−4）。
+EXERCISE_NOON = datetime(2026, 10, 14, 16, 0, tzinfo=UTC)
+
+
+async def _new_yorker(db_session):
+    user = await create_user(db_session)
+    user.timezone = "America/New_York"
+    await db_session.commit()
+    return user
+
+
+async def _daily_on_the_14th(client, user) -> dict:
+    response = await client.get(
+        "/api/stats/daily", headers=auth(user), params={"date": "2026-10-14"}
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+async def test_daily_stats_without_exercise_uses_the_target_as_the_budget(client, db_session):
+    user = await _new_yorker(db_session)
+    await create_target(db_session, user=user, kcal=2000, effective_from=date(2026, 10, 1))
+
+    body = await _daily_on_the_14th(client, user)
+
+    assert body["exercise_kcal"] == "0.00"
+    assert body["exercise_adds_to_budget"] is True
+    assert body["kcal_budget"] == "2000.00"
+
+
+async def test_daily_stats_adds_the_days_exercise_to_the_kcal_budget(client, db_session):
+    """D15：額度＝目標＋運動。D16：ratio.kcal 仍是 實際 / 目標（1000 / 2000），
+    不是 實際 / 額度（1000 / 2443 = 0.41）。"""
+    user = await _new_yorker(db_session)
+    await create_target(db_session, user=user, kcal=2000, effective_from=date(2026, 10, 1))
+    food = await create_food(db_session, created_by=user, kcal=1000, protein_g=0, fat_g=0, carb_g=0)
+    revision = await _revision(db_session, food)
+    await create_meal(
+        db_session, user=user, eaten_at=EXERCISE_NOON, items=[(revision, Decimal("100"))]
+    )
+    await create_exercise(db_session, user=user, performed_at=EXERCISE_NOON, kcal=343)
+    await create_exercise(
+        db_session, user=user, performed_at=datetime(2026, 10, 14, 22, 0, tzinfo=UTC), kcal=100
+    )
+
+    body = await _daily_on_the_14th(client, user)
+
+    assert body["exercise_kcal"] == "443.00"
+    assert body["kcal_budget"] == "2443.00"
+    assert body["target"]["kcal"] == "2000.00"
+    assert body["ratio"]["kcal"] == "0.50"
+
+
+async def test_daily_stats_with_the_setting_off_keeps_the_target_as_the_budget(
+    client, db_session
+):
+    user = await _new_yorker(db_session)
+    user.exercise_adds_to_budget = False
+    await db_session.commit()
+    await create_target(db_session, user=user, kcal=2000, effective_from=date(2026, 10, 1))
+    await create_exercise(db_session, user=user, performed_at=EXERCISE_NOON, kcal=343)
+    await create_exercise(db_session, user=user, performed_at=EXERCISE_NOON, kcal=100)
+
+    body = await _daily_on_the_14th(client, user)
+
+    # 運動的合計照樣回（畫面可能還是要顯示），只是不加進額度。
+    assert body["exercise_kcal"] == "443.00"
+    assert body["exercise_adds_to_budget"] is False
+    assert body["kcal_budget"] == "2000.00"
+
+
+@pytest.mark.parametrize("target", ["none", "no_kcal"])
+async def test_daily_stats_without_a_kcal_target_has_no_budget(client, db_session, target):
+    """D15：「沒有目標」不能變成「額度＝運動消耗」。"""
+    user = await _new_yorker(db_session)
+    if target == "no_kcal":
+        await create_target(
+            db_session, user=user, kcal=None, protein_g=100, effective_from=date(2026, 10, 1)
+        )
+    await create_exercise(db_session, user=user, performed_at=EXERCISE_NOON, kcal=343)
+
+    body = await _daily_on_the_14th(client, user)
+
+    assert body["exercise_kcal"] == "343.00"
+    assert body["kcal_budget"] is None
+
+
+async def test_daily_stats_counts_exercise_by_the_users_local_day(client, db_session):
+    """紐約的 10/14 是 [10/14 04:00Z, 10/15 04:00Z)。"""
+    user = await _new_yorker(db_session)
+    await create_target(db_session, user=user, kcal=2000, effective_from=date(2026, 10, 1))
+    for hour, day, kcal in [(3, 14, 1000), (4, 14, 100), (3, 15, 200), (4, 15, 2000)]:
+        await create_exercise(
+            db_session,
+            user=user,
+            performed_at=datetime(2026, 10, day, hour, 0 if hour == 4 else 59, tzinfo=UTC),
+            kcal=kcal,
+        )
+
+    body = await _daily_on_the_14th(client, user)
+
+    # 只有 10/14 04:00Z（100）與 10/15 03:59Z（200）。
+    assert body["exercise_kcal"] == "300.00"
+    assert body["kcal_budget"] == "2300.00"
+
+
+async def test_daily_stats_ignores_other_users_exercise(client, db_session):
+    alice = await _new_yorker(db_session)
+    bob = await _new_yorker(db_session)
+    await create_target(db_session, user=alice, kcal=2000, effective_from=date(2026, 10, 1))
+    await create_exercise(db_session, user=bob, performed_at=EXERCISE_NOON, kcal=343)
+
+    alices = await _daily_on_the_14th(client, alice)
+    bobs = await _daily_on_the_14th(client, bob)
+
+    # 先確認 bob 自己算得到：不然「alice 看不到」可能只是什麼都沒算。
+    assert bobs["exercise_kcal"] == "343.00"
+    assert alices["exercise_kcal"] == "0.00"
+    assert alices["kcal_budget"] == "2000.00"

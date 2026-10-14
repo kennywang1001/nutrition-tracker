@@ -41,6 +41,12 @@ class DailyStatsResponse(BaseModel):
     `None` 代表「這一天完全沒有生效的目標」（決定 2：不是 0，也不是省略），
     跟裡面個別欄位的 `None`（陷阱 3：目標存在，但這個營養素沒設）是
     兩層不同的「沒有」，不能混為一談。
+
+    運動（運動規格 §6、D15、D16）：`exercise_kcal` 是那一天的合計（沒有是 0.00）；
+    `kcal_budget` 是熱量的分母（目標＋運動，設定關掉時就是目標；沒有熱量目標是 null）；
+    `exercise_adds_to_budget` 是設定**現在**的值（D17），畫面靠它決定要不要寫「含運動」。
+    `ratio.kcal` 刻意不變（仍是 實際/目標），跟 `/stats/range` 的同一天一致；
+    畫面用 `kcal_budget` 自己算比例。
     """
 
     date: date
@@ -48,6 +54,9 @@ class DailyStatsResponse(BaseModel):
     target: NullableMacrosResponse | None
     ratio: NullableMacrosResponse | None
     breakdown: BreakdownResponse
+    exercise_kcal: Decimal
+    exercise_adds_to_budget: bool
+    kcal_budget: Decimal | None
 
 
 class DayTrendResponse(BaseModel):

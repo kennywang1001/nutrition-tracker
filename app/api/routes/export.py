@@ -1,8 +1,8 @@
 """匯出自己的資料成 CSV（報表月份與匯出規格 §3）。
 
-四個端點共用一個限速額度、同一種回應：`text/csv; charset=utf-8`、開頭有 BOM、
-`Content-Disposition: attachment`，檔名帶使用者時區的今天。內容在 `app/export.py`，
-CSV 的寫法在 `app/csv_export.py`。
+五個端點（餐點、花費、補劑、體重、運動）共用一個限速額度、同一種回應：
+`text/csv; charset=utf-8`、開頭有 BOM、`Content-Disposition: attachment`，檔名帶使用者時區的
+今天。內容在 `app/export.py`，CSV 的寫法在 `app/csv_export.py`。
 
 **讀的人不讀了，伺服器就卡在「送」上**（uvicorn 的寫入緩衝滿了就等）——而且可以一直卡著。
 這個模組為此做了兩件事（規格 §8 第 10 點）：
@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.days import today_in_timezone
 from app.db import get_db
-from app.export import expense_csv, meal_csv, supplement_csv, weight_csv
+from app.export import exercise_csv, expense_csv, meal_csv, supplement_csv, weight_csv
 from app.models.user import User
 from app.ratelimit import export_in_flight, export_rate_limiter
 
@@ -48,7 +48,7 @@ async def export_slot(user: User = Depends(get_current_user)) -> AsyncIterator[N
 
     **先算次數、再看有沒有在跑**：被「已經有一個在跑」擋下來的也算進每分鐘的額度，
     對著進行中的匯出狂打的迴圈一樣會被限速擋下來。兩個都在碰匯出的查詢之前；鍵都是
-    這個使用者（`str(user.id)`），四個端點共用。
+    這個使用者（`str(user.id)`），每個匯出端點共用。
 
     **「回應結束之後才放掉」管不到不結束的回應**：不讀、也不斷線的用戶端讓這個依賴一直
     停在 `yield`。位子因此有時間上限（`app/ratelimit.py` 的 `EXPORT_MAX_HOLD_SECONDS`）——
@@ -66,7 +66,7 @@ async def export_slot(user: User = Depends(get_current_user)) -> AsyncIterator[N
         export_in_flight.release(key, hold)
 
 
-# 掛在 router 上：之後加的匯出端點（體重是第四個）不會忘了限速與「一次一個」。
+# 掛在 router 上：之後加的匯出端點（體重是第四個、運動是第五個）不會忘了限速與「一次一個」。
 router = APIRouter(prefix="/export", tags=["export"], dependencies=[Depends(export_slot)])
 
 # OpenAPI 上寫明回的是 CSV（預設會寫成 application/json）。
@@ -207,3 +207,17 @@ async def export_weights(
 ) -> StreamingResponse:
     """自己全部的體重：一天一列，由舊到新。"""
     return await _csv_response(db, weight_csv(db, user_id=user.id), name="weights", user=user)
+
+
+@router.get("/exercises.csv", response_class=StreamingResponse, responses=_CSV_RESPONSES)
+async def export_exercises(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    """自己全部的運動：一筆一列，由舊到新。時間是帳號時區。"""
+    return await _csv_response(
+        db,
+        exercise_csv(db, user_id=user.id, tz_name=user.timezone),
+        name="exercises",
+        user=user,
+    )

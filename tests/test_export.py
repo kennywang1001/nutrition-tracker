@@ -1,4 +1,4 @@
-"""`GET /api/export/{meals,expenses,supplements}.csv`（報表月份與匯出規格 §3）。
+"""`GET /api/export/{meals,expenses,supplements,weights,exercises}.csv`（報表月份與匯出規格 §3）。
 
 讀回來一律用 `csv.reader`（跟試算表同一種讀法），不是自己切逗號——備註裡有逗號、
 引號、換行。`httpx.ASGITransport` 會把整個回應收完才交回來，所以「是不是一塊一塊吐」
@@ -29,8 +29,10 @@ from sqlalchemy.util import await_only
 from app.api.routes import export as export_routes
 from app.db import get_db
 from app.errors import TooManyRequestsError
+from app.exercise import ActivityCode, KcalSource
 from app.export import (
     EXPENSE_CATEGORY_LABELS,
+    KCAL_SOURCE_LABELS,
     MEAL_TYPE_LABELS,
     expense_csv,
     meal_csv,
@@ -45,6 +47,7 @@ from app.ratelimit import EXPORT_LIMIT, EXPORT_MAX_HOLD_SECONDS, InFlightLimiter
 from app.security.tokens import create_access_token
 from tests.conftest import TEST_DATABASE_URL
 from tests.factories import (
+    create_exercise,
     create_expense,
     create_food,
     create_intake,
@@ -58,6 +61,7 @@ MEALS = "/api/export/meals.csv"
 EXPENSES = "/api/export/expenses.csv"
 SUPPLEMENTS = "/api/export/supplements.csv"
 WEIGHTS = "/api/export/weights.csv"
+EXERCISES = "/api/export/exercises.csv"
 
 # 標題列寫死在測試裡，不 import `app.export` 的常數——拿它自己比自己永遠是綠的（第 10 種）。
 MEAL_HEADER = [
@@ -69,6 +73,7 @@ SUPPLEMENT_HEADER = [
     "日期", "時間", "補劑", "品牌", "份數", "熱量(kcal)", "蛋白質(g)", "脂肪(g)", "碳水(g)",
 ]  # fmt: skip
 WEIGHT_HEADER = ["日期", "體重(kg)"]
+EXERCISE_HEADER = ["日期", "時間", "活動", "分鐘", "熱量(kcal)", "熱量來源", "備註"]
 
 BOM = b"\xef\xbb\xbf"
 
@@ -112,6 +117,7 @@ def seen_timezones(monkeypatch) -> list[str]:
         (EXPENSES, "expenses-2019-07-04.csv", EXPENSE_HEADER),
         (SUPPLEMENTS, "supplements-2019-07-04.csv", SUPPLEMENT_HEADER),
         (WEIGHTS, "weights-2019-07-04.csv", WEIGHT_HEADER),
+        (EXERCISES, "exercises-2019-07-04.csv", EXERCISE_HEADER),
     ],
 )
 async def test_an_export_is_a_utf8_csv_attachment_named_after_the_users_today(
@@ -132,7 +138,7 @@ async def test_an_export_is_a_utf8_csv_attachment_named_after_the_users_today(
     assert response.content == BOM + (",".join(header) + "\r\n").encode()
 
 
-@pytest.mark.parametrize("path", [MEALS, EXPENSES, SUPPLEMENTS, WEIGHTS])
+@pytest.mark.parametrize("path", [MEALS, EXPENSES, SUPPLEMENTS, WEIGHTS, EXERCISES])
 async def test_exports_require_authentication(client, path):
     response = await client.get(path)
 
@@ -141,7 +147,7 @@ async def test_exports_require_authentication(client, path):
 
 
 def test_openapi_says_the_exports_return_csv():
-    for path in (MEALS, EXPENSES, SUPPLEMENTS, WEIGHTS):
+    for path in (MEALS, EXPENSES, SUPPLEMENTS, WEIGHTS, EXERCISES):
         ok = app.openapi()["paths"][path]["get"]["responses"]["200"]
         assert list(ok["content"]) == ["text/csv"]
 
@@ -321,7 +327,65 @@ async def test_a_meal_just_after_local_midnight_lands_on_the_new_day(client, db_
 def test_every_enum_member_has_a_chinese_label():
     assert set(MEAL_TYPE_LABELS) == set(MealType)
     assert set(EXPENSE_CATEGORY_LABELS) == set(ExpenseCategory)
+    assert set(KCAL_SOURCE_LABELS) == set(KcalSource)
     assert all(MEAL_TYPE_LABELS.values()) and all(EXPENSE_CATEGORY_LABELS.values())
+    assert all(KCAL_SOURCE_LABELS.values())
+
+
+async def test_exercises_carry_the_label_the_local_time_and_the_kcal_source(client, db_session):
+    """一筆估算的跑步、一筆手動的「其他」。紐約的帳號：UTC 10/15 03:30 是紐約 10/14 23:30
+    （用 UTC 算日期會寫成 10/15）。活動欄是畫面上的名字：固定活動是中文標籤、「其他」是名稱。"""
+    user = await create_user(db_session)
+    user.timezone = "America/New_York"
+    await db_session.commit()
+    await create_exercise(
+        db_session,
+        user=user,
+        performed_at=datetime(2026, 10, 15, 3, 30, tzinfo=UTC),
+        activity=ActivityCode.OTHER,
+        name="划船",
+        minutes=45,
+        kcal="250.5",
+        kcal_source=KcalSource.MANUAL,
+        note="湖上, 有風",
+    )
+    await create_exercise(
+        db_session, user=user, performed_at=datetime(2026, 10, 14, 11, 5, tzinfo=UTC)
+    )
+
+    response = await client.get(EXERCISES, headers=auth(user.id))
+
+    assert response.status_code == 200
+    assert _table(response.content) == [
+        EXERCISE_HEADER,
+        ["2026-10-14", "07:05", "跑步（約 10 km/h）", "30", "343.00", "估算", ""],
+        ["2026-10-14", "23:30", "划船", "45", "250.50", "手動", "湖上, 有風"],
+    ]
+
+
+async def test_exercises_come_oldest_first_across_chunks_and_only_the_callers(
+    client, db_session, monkeypatch
+):
+    """跨兩塊（chunk 調成 2）。寫入的順序故意不是時間的順序；同一個時刻的兩筆用 id 排。"""
+    monkeypatch.setattr("app.export.EXPORT_CHUNK_ROWS", 2)
+    user = await create_user(db_session)
+    other = await create_user(db_session)
+    noon = datetime(2026, 10, 14, 4, 0, tzinfo=UTC)  # 台北 12:00
+    for minutes, offset in [(30, 2), (10, 0), (20, 1), (40, 2)]:
+        await create_exercise(
+            db_session, user=user, performed_at=noon + timedelta(hours=offset), minutes=minutes
+        )
+    await create_exercise(db_session, user=other, performed_at=noon, minutes=99, note="別人的")
+
+    rows = _table((await client.get(EXERCISES, headers=auth(user.id))).content)
+
+    assert [(row[1], row[3]) for row in rows[1:]] == [
+        ("12:00", "10"),
+        ("13:00", "20"),
+        ("14:00", "30"),
+        ("14:00", "40"),
+    ]
+    assert all("別人的" not in row for row in rows)
 
 
 # ── 只有自己的 ────────────────────────────────────────────────────────────────
@@ -487,7 +551,7 @@ async def test_meals_are_read_a_few_meals_at_a_time(db_session, monkeypatch, sel
 
 
 async def _some_of_each(db: AsyncSession, user: User, *, count: int = 1) -> None:
-    """四種資料各 `count` 筆，時間一筆一筆往後（餐點沒有項目：一餐一列；體重一天一筆）。"""
+    """五種資料各 `count` 筆，時間一筆一筆往後（餐點沒有項目：一餐一列；體重一天一筆）。"""
     start = datetime(2026, 3, 10, 4, 0, tzinfo=UTC)
     pill = await create_supplement(db, created_by=user, owner=user)
     for index in range(count):
@@ -496,14 +560,16 @@ async def _some_of_each(db: AsyncSession, user: User, *, count: int = 1) -> None
         await create_expense(db, user=user, spent_at=moment)
         await create_intake(db, user=user, supplement=pill, taken_at=moment)
         await create_weight(db, user=user, day=moment.date() + timedelta(days=index))
+        await create_exercise(db, user=user, performed_at=moment)
 
 
-# 四條匯出的路：網址，與 route 模組裡那支 generator 的名字（測試要把它包一層）。
+# 五條匯出的路：網址，與 route 模組裡那支 generator 的名字（測試要把它包一層）。
 EXPORT_PATHS = [
     pytest.param(MEALS, "meal_csv", id="meals"),
     pytest.param(EXPENSES, "expense_csv", id="expenses"),
     pytest.param(SUPPLEMENTS, "supplement_csv", id="supplements"),
     pytest.param(WEIGHTS, "weight_csv", id="weights"),
+    pytest.param(EXERCISES, "exercise_csv", id="exercises"),
 ]
 
 
@@ -511,8 +577,8 @@ EXPORT_PATHS = [
 async def test_the_database_session_stays_open_until_the_last_chunk(
     db_session, monkeypatch, path, generator
 ):
-    """`get_db` 的收尾要在串流**結束之後**——四個端點各自宣告自己的 `Depends(get_db)`，
-    所以四個都要守（只測花費的話，把餐點那一支改成 `scope="function"` 沒有人會發現）。
+    """`get_db` 的收尾要在串流**結束之後**——每個端點各自宣告自己的 `Depends(get_db)`，
+    所以每個都要守（只測花費的話，把餐點那一支改成 `scope="function"` 沒有人會發現）。
 
     FastAPI 0.118 之前、或把依賴改成 `scope="function"`，session 會在第一塊送出之前就被關掉
     ——而共用 session 的 `client` 夾具根本不關 session，看不到這件事（第 14 種）。
@@ -657,7 +723,7 @@ async def one_connection_pool(migrated_database: None, monkeypatch) -> AsyncIter
 
 @pytest_asyncio.fixture
 async def committed_user(migrated_database: None) -> AsyncIterator[int]:
-    """**真的 commit 進資料庫**的使用者（三種資料各三筆）——別的連線才看得到。測試結束時
+    """**真的 commit 進資料庫**的使用者（每種資料各三筆）——別的連線才看得到。測試結束時
     刪掉，其他的跟著 `ON DELETE CASCADE` 走。
 
     用自己的 engine，不用被測的那個池子：那個池子漏了連線（這幾條測試紅的樣子）的時候，
@@ -803,7 +869,7 @@ async def test_a_disconnect_in_the_middle_of_a_database_step_does_not_cost_the_c
 async def test_the_exports_share_one_budget_per_user(client, db_session):
     alice = await create_user(db_session)
     bob = await create_user(db_session)
-    paths = [MEALS, EXPENSES, SUPPLEMENTS, WEIGHTS]
+    paths = [MEALS, EXPENSES, SUPPLEMENTS, WEIGHTS, EXERCISES]
 
     allowed = [
         await client.get(paths[index % len(paths)], headers=auth(alice.id))
