@@ -28,11 +28,11 @@
 
 | 項目 | 數字 |
 |---|---|
-| 端點 | **87**（OpenAPI 的 operation 數，跟 `grep -c "@router\." app/api/routes/*.py` 的加總一樣；2026-10-10） |
-| 測試 | 後端 **1450**（`pytest -q -W error` 全綠，約 3 分 45 秒）；前端 `Test Files 154`、`Tests 2128`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **50** 條、20 個檔案（Playwright；預設 workers 連跑兩次都是 `50 passed`）。2026-10-10 在 `feat/social-interactions` 量的（審查後的六項修正之後；修正之前是後端 1384、前端 152／2083，e2e 條數沒有變） |
+| 端點 | **95**（OpenAPI 的 operation 數，跟 `grep -c "@router\." app/api/routes/*.py` 的加總一樣；2026-10-14） |
+| 測試 | 後端 **1592**（`pytest -q -W error` 全綠，約 3 分 57 秒）；前端 `Test Files 166`、`Tests 2306`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **53** 條、21 個檔案（Playwright；預設 workers 連跑兩次都是 `53 passed`）。2026-10-14 在 `feat/body-targets` 量的（開工前是後端 1450、前端 154／2128、e2e 50，跟 2026-10-10 在 `feat/social-interactions` 量的一樣） |
 | 覆蓋率 | 96%（2026-09 量的，之後沒再量） |
-| 資料表 | 19（+ `alembic_version`） |
-| Migration | `0001` ~ `0018` |
+| 資料表 | 21（+ `alembic_version`；2026-10-14 在 dev 資料庫數的） |
+| Migration | `0001` ~ `0019` |
 | Commit | 600+ |
 | PR | 5 個，全部經 CI 驗證後合併 |
 
@@ -57,6 +57,7 @@
 | 報表看其他月份、匯出資料 | 報表頂端的「‹ 上個月｜月份｜下個月 ›」（`?month=YYYY-MM`，沒有就是這個月；**這個月是哪個月由後端決定**）；「我的」的匯出資料：餐點／花費／補劑各下載一個 CSV（UTF-8＋BOM、帳號時區、分塊串流、每人每分鐘 6 次、同時一個）。沒有 migration（規格 `docs/superpowers/specs/2026-10-09-reports-month-export-design.md`、計畫 `docs/superpowers/plans/2026-10-09-reports-month-export.md`；見第 10 節「報表看其他月份與匯出資料」） | ✅（`feat/reports-month-export`） |
 | AI 一次估算多樣食物、餐點的描述 | 記一餐的 AI 入口改成一餐一次估（`POST /api/ai/analyze-meal`：一句描述＋最多 8 樣，**算一次額度**）；估完是勾選清單，食物庫同名的預設用食物庫的，「加入這 N 樣」把每一樣變成食物放進這一餐（部分失敗可以重試）。這一餐多一個「描述」（`meals.description`，migration `0017`）：**好友看得到**（備註仍然只有自己看得到），飲食頁與好友的卡片、餐點 CSV 都有。新增食物與編輯這一餐的「加一項」仍然是一次一樣（規格 `docs/superpowers/specs/2026-10-09-ai-multi-food-design.md`、計畫 `docs/superpowers/plans/2026-10-09-ai-multi-food.md`；見第 10 節「AI 多樣估算與餐點描述」） | ✅（`feat/ai-multi-food`；**沒有對真的 LLM 打過**，見 §8.2） |
 | 按讚、留言、通知（社群第三步） | 餐點頁 `/meals/:id`（自己的餐與看得到的好友的餐：照片、項目、合計、描述，底下是讚與留言）；讚（一人一餐一個，卡片上的愛心與數字）；留言（一行、1–200 字，不能改，作者與餐的主人可以刪）；通知（只在 app 裡：讚、留言、好友邀請、邀請被接受）——「我的」分頁上的未讀數字、「我的」最上面的通知卡片、`/notifications`。**解除好友不刪資料，讀的時候過濾**；端點全部是新的（`/api/social/…`、`/api/notifications…`），`/api/meals` 仍然只回自己的餐。migration `0018`（三張新表，可以退版）（規格 `docs/superpowers/specs/2026-10-10-social-interactions-design.md`、計畫 `docs/superpowers/plans/2026-10-10-social-interactions.md`；見第 10 節「按讚、留言、通知」） | ✅（`feat/social-interactions`） |
+| 身體資料與目標（含體重紀錄） | 「我的」多兩張卡片：身體資料（`/me/body`：性別、出生年、身高、活動量、目標、速度、目標體重）與體重（最新一筆、跟 7 天前比、行內記錄）；`/weight` 是圖表（30 天／90 天／全部、每天一點、7 天移動平均、目標體重線）與清單（修改、刪除）。`/me/targets` 上面多一個「建議目標」（Mifflin-St Jeor → 活動量 → 依目標加減 → 下限 → 三大營養素）與「套用建議目標」；體重跟套用時差 1 公斤以上，「每日目標」卡片提示重算。匯出多一個 `weights.csv`。**體重與身體資料不給好友看**。migration `0019`（兩張新表，可以退版）（規格 `docs/superpowers/specs/2026-10-14-body-targets-design.md`、計畫 `docs/superpowers/plans/2026-10-14-body-targets.md`；見第 10 節「身體資料與目標」） | ✅（`feat/body-targets`） |
 | UI 改版 第三階段 | 社群（P7）：「開帳號的路」「好友關係」「按讚、留言、通知」三步都已完成。**還沒做：封鎖與檢舉、好友的趨勢／統計／目標**（好友規格 §1.3 剩下的項目）；推播也沒有（通知只在 app 裡，見 §8.2） | 🟡 |
 
 > **P4 早於 P2/P3 完成是刻意的，但當初的理由有瑕疵。**
@@ -1079,6 +1080,31 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
 - **Write／Edit 工具又把「反斜線 u」解成真的字元一次**（§7 那一格）。M2 的測試檔第一次寫出來有 64 個原樣的看不見的字元；
   commit 之前掃一遍（控制字元、`Cf`、變體選擇符）才抓到。測試檔裡的那些字現在都是跳脫或 `chr()`。
 
+### 身體資料與目標：第 12、14 種又一次，另外幾條「突變存活才發現」
+
+沒有編新的號碼。逐條的經過在計畫 `docs/superpowers/plans/2026-10-14-body-targets.md` 的「執行中發現的差異」。
+
+- **公式的下限：`<` 改 `<=` 存活。** 五組手算的資料沒有一組的原始熱量**剛好**等於下限。補了一組剛好在下限上的
+  （女、39 歲、160 cm、35.6 kg、久坐、維持：BMR 1000、TDEE 1200），D8 說那不算「套用了下限」。**邊界的測試資料要有一組剛好落在邊界上。**
+- **第 14 種（共用 session 的 `now()`）：`updated_at` 在端點測試裡看不到。** 整條測試是同一個外層交易，
+  拿掉身體資料 upsert 的 `updated_at = now()`（突變）照預期存活——計畫一開始就說不寫那種斷言。
+- **「先查有沒有、沒有就 INSERT」只有真的並行那一條抓得到**（`test_weights_concurrency.py` 兩條獨立的連線）：
+  另一條紅的只是因為突變版回的是請求的 `"80.4"` 而不是資料庫的 `"80.40"`，語意上的錯它看不到。
+- **只改 migration 的突變全部變成 setup ERROR。** conftest 每次跑 `alembic check`：只拿掉 migration 的一個約束，模型與
+  migration 就漂移，18 條全部在 setup 炸掉，不是指定的那一條紅。要看到指定的那一條紅，模型與 migration **一起改**。
+- **`daysBetween` 的 `Math.round` 改 `Math.floor` 存活**（前端 Task 6）：兩個日期都是 UTC 的午夜，相減一定是整天的倍數，
+  兩種寫法等價——留著 `round` 是防禦（萬一有人傳了帶時間的值），沒有測試守得到它。
+- **「套用之後導回 `/me`」搬到 hook 層的 `onSuccess` 存活**（Task 9）：單元測試裡套用的元件不會在回應回來之前卸載，
+  放在 `useMutation({ onSuccess })` 與 `mutate(vars, { onSuccess })` 看起來一樣（§7 TanStack 那一格說的差別只在卸載之後）。
+- **第 12 種：函式還不存在時就綠的測試。** 「不是 YYYY-MM-DD 就丟例外」在 `daysBetween` 還沒寫的時候也是綠的（`TypeError`
+  也是例外）。只算順手補的守衛，不算「看過它紅」。
+- **mypy 接了管線，退出碼被吃掉**：Task 3 的 commit 帶著兩個 `no-any-return` 進去，下一個 commit 才修。`ruff`／`mypy`
+  不要接 `| tail`。
+- **e2e：標題先出來、表單還在載入。** 「量每個輸入框的字級」在 `/me/body` 的 h1 看得到之後就開始數：單獨跑是綠的，
+  整套並行跑時身體資料還沒回來、數到 0 個而紅（第一次整套就紅了）。先等一個表單才有的欄位看得到再數。
+- **e2e：水平的 SVG 線在 Playwright 是「看不見」。** 目標體重線 `y1 == y2`，外框高度 0，`toBeVisible()` 永遠紅；
+  只能看它在不在（`toHaveCount(1)`）。
+
 ---
 
 ## 7. 踩過的技術坑（節錄，完整版在各計畫文件）
@@ -1112,7 +1138,7 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
 | vitest 的 `Test Files` / `Tests` | **`Test Files` 是實際檔案數的兩倍；`Tests` 大約兩倍、但不是剛好兩倍。** `vite.config.ts` 的 `typecheck.include` 跟一般 include 蓋到同一組檔案，每個檔案被跑兩次（一次執行、一次交給 tsc）；`it.each` 在執行那次展開成好幾條、在型別那次算一條，所以 `Tests` 除以二不是整數也不是真的條數。**文件裡一律寫 vitest 印出來的數字**（§2），不要自己換算 |
 | 只 grep `Tests ` 那一行 | **會漏掉整個檔案沒編譯成功**。一個 transform parse error 讓 vitest 同時印出 `FAIL tests/x.test.tsx (0 test)` 與 `Tests 8 passed (8)`。驗證要一起 grep `FAIL` 與 `Unhandled` |
 | render 期例外的錯誤訊息 | `Failed Tests` 第一層顯示的是 `TestingLibraryElementError`（找不到元素），**真正的 `TypeError` 在要往下翻的 `Unhandled Errors` 區塊** —— 元件樹整個沒畫出來，沒有 error boundary 接住 |
-| biome `noAriaHiddenOnFocusable` 對 SVG `<text>` | **誤判**。SVG 的 `<text>` 不能聚焦，但規則把它當成可聚焦元素；趨勢圖日期軸的文字是裝飾（柱子的 aria-label 已經有日期），用 `biome-ignore` 加理由（`TrendChart.tsx`） |
+| biome `noAriaHiddenOnFocusable` 對 SVG `<text>`、`<polyline>` | **誤判**。SVG 的 `<text>` 不能聚焦，但規則把它當成可聚焦元素；趨勢圖日期軸的文字是裝飾（柱子的 aria-label 已經有日期），用 `biome-ignore` 加理由（`TrendChart.tsx`）。體重圖的平均線（`<polyline aria-hidden>`）也一樣，多一條 `biome-ignore`（`WeightChart.tsx`） |
 | 份量的「預設」沒有部分唯一索引 | 「同一個擁有者、同一個食物只有一個預設」靠的是同一個交易裡先取消其他預設，**兩個同時送出的請求可能各自成功**、留下兩個預設。單人使用不會發生；要擋就加 `WHERE is_default` 的部分唯一索引（要 migration） |
 | 限速的上限只在單元測試裡驗 | **單元測試每個測試都重置計數器、各用一個新帳號，永遠碰不到「同一個帳號在真實使用裡一分鐘打幾次」**。換票限速一開始定 10 次，單元測試全綠，完整 e2e（同一個帳號一直開新頁，每次整頁載入都換票）才紅。定上限之前先量真實的頻率（`docker compose logs api` 數 `POST /api/auth/refresh`） |
 | `// biome-ignore` 在 JSX children 位置 | **會被當成文字**，裡面的 `<rect>` 之類會被解析成開始標籤 → parse error。那個位置要用 `{/* biome-ignore … */}`；`return (` 之後屬於運算式位置，`//` 形式合法 |
@@ -1156,6 +1182,11 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
 | `Number(useParams().id)` | `Number("1.5")`、`Number("-3")`、`Number("")` 都是數字：會真的送出一個 422 的請求。路徑參數要的是正整數就用 `/^[1-9]\d*$/` 先比，再用 `Number.isSafeInteger` 擋太長的——全是數字、但超過 2^53 − 1 的會被 `Number()` 悄悄四捨五入成**另一個** id，超過 2^63 − 1 的後端回 422（不是 404，所以會被重試三次）。`lib/resource-id.ts` 的 `parseResourceId`（餐點頁與編輯頁共用；社群審查 M6） |
 | e2e：巢狀清單的 `listitem` | 卡片是 `<li>`、裡面每一項食物也是 `<li>`：`getByRole("listitem").filter({ hasText: 食物 })` 兩層都中。要卡片就 `.first()`（文件順序外層在前）或用卡片才有的東西過濾 |
 | e2e：直接打開一個深的網址 | 還沒登入時 `goto("/meals/5")` 看到的是登入表單，**登入之後留在那個網址**（`App` 只是換外框，不導頁）——一個 context 一次 `goto` 就能測「用網址直接開」，不用登入之後再 `goto`（那會多換一次票） |
+
+| 畫出「我的」的單元測試 | 「我的」掛了身體資料、體重兩張卡片，每日目標卡片也讀建議：**每一個掛 `<Me />` 的測試**路由清單最前面都要 `bodyRoutes()`（`tests/helpers/body-routes.ts`）——不只 `me.test.tsx`，`invite-friends.test.tsx` 也掛它。`mock-api.ts` 依序用 `url.includes` 比對，`/api/me` 會吃掉 `/api/me/body-profile`。`app.test.tsx` 的 `mockBackend` 是手寫的 `if` 串：身體資料、建議、`/api/weights` 要排在 `/api/me` 之前，否則 `/api/me` 那一行把使用者物件當成身體資料回去（卡片因為 `?? null` 沒炸，看不出來） |
+| 從另一個測試檔 import 夾具 | vitest 會把**那個檔案的 `describe` 一起註冊**進來，測試跑兩份。共用的資料放 `tests/helpers/`（建議的 `READY_SUGGESTION` 在 `body-routes.ts`） |
+| `components/Segmented.module.css` | 趨勢頁的營養素切換與 `/weight` 的期間切換**共用**（從 `Trend.module.css` 搬出來的）。改它兩個畫面一起變 |
+| e2e：水平線的 `toBeVisible()` | SVG `<line>` 的 `y1 == y2` 時外框高度是 0，Playwright 判成看不見（體重圖的目標線）。看它在不在用 `toHaveCount(1)` |
 
 ---
 
@@ -1482,6 +1513,19 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
       多一個請求）；`FoodDetail` 的 `/foods/1.5` 這一類會重試三次才顯示錯誤。
   21. **留言以外的舊端點還有 30 個 `db.refresh`**（`meals`、`foods`、`targets`…，多半在 commit 之後；審查 M4 只改了留言）：
       同一個形狀——commit 之後那一列剛好被刪掉就是 500。那些端點的列多半只有本人（或管理員）改得到，空檔要自己跟自己搶。
+- **身體資料與目標的已知限制**（規格 §9 的七點，加上執行中發現的）：
+  1. 年齡只看出生年，最多差一歲（約 5 kcal）。
+  2. 公式是族群平均：個人的實際消耗可能差 ±10% 以上；活動量是自評。
+  3. 「全部」是最近 800 天：兩年多以前記的會慢慢掉出圖表與清單（資料還在，`weights.csv` 匯出看得到）。
+  4. 蛋白質乘的是目前體重：體重很高的人蛋白質偏高、碳水可能被擠到 0（套用時存成「未設定」，D9）。
+  5. 只有男／女兩種 BMR 公式。
+  6. 重算提示只看體重，不看身體資料或活動量改過。
+  7. 目標只能從今天起（沿用帳號設定的限制）。
+  8. **公式不適合未成年、懷孕、哺乳、慢性病**：沒有擋，只有建議區塊裡一直顯示的免責聲明（D26）。出生年最晚到「今年 − 13」。
+  9. **單位只有公分與公斤**：沒有英尺、英吋、磅的輸入或顯示。
+  10. **體重與身體資料不給好友看**（刻意的，規格 §7；`tests/test_body_privacy.py` 守著）：沒有「分享體重」的選項。
+  11. **體重圖在電腦版隨寬度等比放大**（跟趨勢圖一樣）：刻度與日期的字約兩倍大。
+  12. **目標體重離目前體重很遠時，點擠在圖的上面**：y 軸要包含目標體重（規格 §6.4），範圍被拉開。
 - **編輯自己已送出的提案**：後端沒有這個端點，目前只能等審核結果。
 
 ---
@@ -2156,6 +2200,63 @@ B 看 A 的餐時，C 的留言算不算只看 C 與 A 的關係）：
 
 **已知限制**在 §8.2「按讚、留言、通知的已知限制」（21 點；第 15 點起是審查後的修正帶來的或留下的）。最要緊的三點：共同好友看得到彼此的名字與留言（第 1 點）、
 沒有推播（第 4 點）、通知不會自己清（第 3 點）。
+
+### 身體資料與目標
+
+填身體資料、每天記體重，`/me/targets` 就有用公式算的建議目標，一鍵套用；體重跟套用時差 1 公斤以上，「每日目標」卡片提示重算
+（規格 `docs/superpowers/specs/2026-10-14-body-targets-design.md`、計畫 `docs/superpowers/plans/2026-10-14-body-targets.md`，
+計畫的「執行中發現的差異」記了實作跟計畫不一樣的地方）。**一個 migration（`0019`，兩張新表，可以退版）、沒有新的環境變數。**
+
+**端點**（8 個，87 → 95；全部要登入、只讀寫自己的，路徑上沒有使用者 id）：
+
+| 端點 | 做什麼 | 要記得的 |
+|---|---|---|
+| `GET`／`PUT /api/me/body-profile` | 七個欄位（性別、出生年、身高、活動量、目標、速度、目標體重）；沒有那一列＝全部 null | PUT 是**整組取代**：七個鍵都必填、值可以 null（D5），`INSERT … ON CONFLICT (user_id) DO UPDATE`。出生年的範圍跟「使用者的今天」有關，在端點擋（`422 BIRTH_YEAR_OUT_OF_RANGE`）；資料庫只擋 1900–2100。**不回** `targets_applied_weight_kg` |
+| `GET /api/me/target-suggestion` | `{ready: true, kcal, …, resuggest}` 或 `{ready: false, missing}` | 兩個模型的**普通聯集，不加 discriminator**（D10：bool 當 discriminator 會讓產生的型別變成 `ready: "True"`）。`missing` 是固定順序（D11）。`weight_change_kg`＝最新體重 − 套用時的體重，`resuggest`＝變化的絕對值 ≥ 1 |
+| `POST /api/me/target-suggestion/apply` | body 是畫面上看到的四個數字 → `TargetResponse` | 一個交易：重算 → 跟四個數字比（不一樣 `409 SUGGESTION_CHANGED`，什麼都不寫）→ `write_target_from_today`（從 `set_target_from_today` 抽出來、不 commit）→ 記下 `targets_applied_weight_kg` → commit。撞期 `409 TARGET_CONFLICT` 時體重不會被記成「套用過」。碳水 0 存 null（D9）。缺資料 `422 PROFILE_INCOMPLETE` |
+| `PUT /api/weights/{date}` | 記一筆或更正（同一天第二次是更正），200 | 日期 ≤ 使用者的今天、≥ 今天 − 730 天（`422 WEIGHT_DATE_IN_FUTURE`／`WEIGHT_DATE_TOO_OLD`）。`ON CONFLICT (user_id, date) DO UPDATE … RETURNING`，明確設 `updated_at` |
+| `DELETE /api/weights/{date}` | 204；沒有那一筆 `404 WEIGHT_NOT_FOUND` | |
+| `GET /api/weights?from=&to=` | `{today, entries}`，由舊到新 | 兩個參數都可省略（`to` 預設今天、`from` 預設 `to − 799`），最多 800 天。**`today` 是前端唯一的「今天」**：表單的預設日期、圖表的右端都用它 |
+| `GET /api/export/weights.csv` | `日期,體重(kg)` | 跟其他三個匯出共用限速（每人每分鐘 6 次）與「同時一個」 |
+
+既有端點的改變：`PUT /api/targets/today` 在同一個交易裡把 `targets_applied_weight_kg` 清成 null（D16：自己手打的目標不該被
+「要重算嗎」提醒蓋掉）。
+
+**公式**（`app/body_targets.py`，純函式，全程 `Decimal`／`ROUND_HALF_UP`）：年齡＝使用者今天的年份 − 出生年 → Mifflin-St Jeor BMR →
+× 活動係數＝TDEE → 加減 `速度 × 7700 / 7`（275、550）→ **先看原始值有沒有低於下限**（女 1200、男 1500），低於就用下限、
+`floor_applied: true`；否則四捨五入到 10（D8）→ 蛋白質 g/kg × 目前體重、脂肪 25%、碳水是剩下的（用**已經四捨五入的**蛋白質與脂肪，
+四個數字自洽；小於 0 夾在 0）。讀資料的小函式在 `app/body_data.py`（`load_profile`、`latest_weight`、`inputs_from`、`clear_applied_weight`）。
+「目前體重」是**日期**最新的那一筆，不是最後寫的。
+
+**前端：**
+
+| 東西 | 在哪裡 | 要記得的 |
+|---|---|---|
+| query 的鍵 | `api/queries.ts`：`["body","profile"]`、`["body","suggestion"]`、`["body","weights"]`；`invalidateBody` 失效整個 `["body"]` | **刻意不掛在 `["me"]` 底下**。`["body", …]` **進離線快取**（自己的資料，D19）——舊回應可能少欄位，畫面一律 `?? null` |
+| API 層 | `api/body.ts`：`useBodyProfile`、`useFreshBodyProfile`、`saveBodyProfile`、`useTargetSuggestion`、`applySuggestion`、`useWeights`、`saveWeight`、`deleteWeight` | 數字運算只在 `lib/decimal.ts`（`differenceOf`、`paddedExtent`、`positionIn`、`checkRangeInput`）；日期加減只在 `lib/civil-date.ts`（`daysBetween`、UTC） |
+| `/me/body` | `screens/BodyProfile.tsx`（`form` 寬度） | **預填同 `/me/targets`**（D27）：離線快取還原完才掛、`useFreshBodyProfile` 掛載時一定重抓、只用掛載後抓回來的那一份——PUT 是整組取代，拿舊快取預填會把沒動的欄位悄悄改回去。速度只在減重、增重時出現（切到維持不清掉）。存好失效 `["body"]`、導回 `/me` |
+| 卡片 | `components/BodyProfileCard.tsx`（「修改身體資料」）、`WeightCard.tsx`（「記錄體重」展開 `WeightForm`、「看全部」）、`TargetsCard.tsx`（重算提示＋「重算建議目標」） | 「我的」的順序：通知 → 帳號 → 每日目標 → 身體資料 → 體重 → 好友 → 匯出（D21）。卡片**不算年齡**（年齡要使用者的今天）。「比 7 天前」與重算提示的正負號都用 `lib/weights.ts` 的 `signedKg`（變重寫 `+`） |
+| `/weight` | `screens/Weight.tsx`、`components/WeightChart.tsx`、`WeightForm.tsx` | 一個 query（800 天），30／90／全部在前端篩（D22）。平均用**全部**的紀錄算、只畫範圍內的；y 軸也包含畫出來的平均與目標體重。每個點是 `role="img"`＋名稱「10/12，79 公斤」，跟今天不同年的寫「2025/10/12」（`dateLabel`；清單的「修改 …」「刪除 …」也是）。刪除是畫面上的 `alertdialog`，「刪除」用 `aria-disabled`＋ref 擋重複送出 |
+| 建議目標 | `components/TargetSuggestion.tsx`（`/me/targets` 上面，手動表單在「自己設定」那一區） | 「套用建議目標」送的是畫面上的四個數字；`SUGGESTION_CHANGED` → 重抓建議、說「建議目標剛剛變了」。成功失效 `dailyStats`、`rangeStatsAll`、`["body"]`（hook 層），導回 `/me`（`mutate` 的 callback）。缺資料：「還差：…」＋「填寫身體資料」（到 `/me/body`）／「記錄體重」（到 `/weight`） |
+| 匯出 | `api/export.ts` 的 `EXPORT_KINDS` | 「匯出資料」多一顆「體重」（四顆） |
+
+**新的東西在哪裡：**
+
+- 後端：`migrations/versions/0019_create_body_tables.py`；`app/models/body.py`（`UserProfile`、`WeightEntry`、`Sex`、`ActivityLevel`、`Goal`）；
+  `app/body_targets.py`、`app/body_data.py`；`app/schemas/body.py`；`app/api/routes/body.py`、`weights.py`；`routes/targets.py`
+  （`write_target_from_today`、清掉套用體重）；`app/export.py`／`routes/export.py`（體重）。測試 `tests/test_body_model.py`、
+  `test_body_targets.py`、`test_body_profile.py`、`test_target_suggestion.py`、`test_weights.py`、`test_weights_concurrency.py`
+  （兩條真的連線）、`test_body_privacy.py`（好友與社群的回應裡沒有身體資料、身體資料的模組不寫 log），以及 `test_export.py`、
+  `test_targets_today.py` 的新增。
+- 前端：上表的檔案，加上 `lib/body.ts`（中文標籤、`MISSING_LABELS`）、`lib/weights.ts`、`components/Segmented.module.css`
+  （從趨勢頁搬出來、兩頁共用）、`index.css` 的 `.weight-point`。測試 `tests/body-api.test.tsx`、`body-profile.test.tsx`、
+  `weight-chart.test.tsx`、`weight.test.tsx`、`weights-lib.test.ts`、`target-suggestion.test.tsx`，共用的路由與資料在
+  `tests/helpers/body-routes.ts`；`me`、`targets`、`app`、`invite-friends`、`export-card`、`layout`、`decimal`、`civil-date` 的新增。
+- e2e：`e2e/body-targets.spec.ts`（三條，各開新帳號、手機尺寸）：缺資料 → 填身體資料 → 記體重 → 套用 → 總覽的分母 → 同一天更正體重 →
+  重算提示 → 重算再套用；只差體重 → `/weight` 的空狀態、目標線、下限 1200；`/weight` 記四天、切期間、改一筆、刪一筆、卡片的「比 7 天前」。
+  `reports-export.spec.ts` 檢查四顆匯出按鈕。
+
+**已知限制**在 §8.2「身體資料與目標的已知限制」（12 點）。
 
 ---
 

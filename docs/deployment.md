@@ -493,6 +493,12 @@ sudo docker compose --env-file .env.production \
 > 跨過 `0012` 時腳本會印退版警告（見「退版」）：這次如果新版起不來、被自動退回到 NAS 上原本那一版，
 > 舊版**無法建立新帳號**——修好新版再部署一次就好，不用還原。`0015` 有重複餐費時會停在第 5 步。
 
+- **`0019_create_body_tables`（身體資料與目標）**：兩張新表（`user_profiles`、`weight_entries`），只有新增、不動任何既有的表，
+  `deploy.sh` 會自己跑，**可以退版**（舊版程式不讀也不寫這兩張表，不在 `ROLLBACK_UNSAFE_REVISIONS` 裡——那個清單仍然只有
+  `0012`，`scripts/deploy.sh` 這一版沒有改）。退版之後表與資料留著，再升版時身體資料與體重都還在；退版期間手動存的目標照舊寫進
+  `user_targets`，只是不會清掉「套用時的體重」（舊版不知道那一欄），升版之後若體重差 1 公斤以上，「每日目標」卡片可能多提示一次重算（這一段是照程式讀的，沒有實際退版試過）。
+  **沒有新的環境變數**：建議目標是後端的純公式，不呼叫 AI、不用金鑰。`weights.csv` 跟其他匯出共用既有的限速（每人每分鐘 6 次、同時一個）。
+  後端**不在 log 裡寫體重或身體資料**（`tests/test_body_privacy.py` 守著那幾個模組沒有 `logging`）；好友與社群的任何回應裡都沒有它們。
 - **`0018_create_social_tables`（按讚、留言、通知）**：三張新表（`meal_likes`、`meal_comments`、`notifications`），
   全部只有新增、不動任何既有的表，`deploy.sh` 會自己跑，**可以退版**（舊版程式不讀也不寫這三張表，不在
   `ROLLBACK_UNSAFE_REVISIONS` 裡——那個清單仍然只有 `0012`，`scripts/deploy.sh` 這一版沒有改）。退版之後表與資料留著，
