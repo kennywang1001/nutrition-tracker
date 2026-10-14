@@ -29,7 +29,7 @@
 | 項目 | 數字 |
 |---|---|
 | 端點 | **95**（OpenAPI 的 operation 數，跟 `grep -c "@router\." app/api/routes/*.py` 的加總一樣；2026-10-14） |
-| 測試 | 後端 **1592**（`pytest -q -W error` 全綠，約 3 分 57 秒）；前端 `Test Files 166`、`Tests 2306`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **53** 條、21 個檔案（Playwright；預設 workers 連跑兩次都是 `53 passed`）。2026-10-14 在 `feat/body-targets` 量的（開工前是後端 1450、前端 154／2128、e2e 50，跟 2026-10-10 在 `feat/social-interactions` 量的一樣） |
+| 測試 | 後端 **1606**（`pytest -q -W error` 全綠，約 4 分 42 秒）；前端 `Test Files 166`、`Tests 2312`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **53** 條、21 個檔案（Playwright；`--workers=3` 連跑兩次都是 `53 passed`。預設的 6 個 workers 連跑四次都只紅 `account-settings.spec.ts` 的「重設密碼連結」一條、30 秒逾時——dev 資料庫已經 932 個帳號，管理員的「我的」逐顆量觸控高度太慢，單獨跑 18.6 秒；見 §8.2「帳號與目標設定」第 6 點）。2026-10-14 在 `feat/body-targets` 修完審查之後量的（審查之前是後端 1592、前端 166／2306、e2e 53；開工前是後端 1450、前端 154／2128、e2e 50，跟 2026-10-10 在 `feat/social-interactions` 量的一樣） |
 | 覆蓋率 | 96%（2026-09 量的，之後沒再量） |
 | 資料表 | 21（+ `alembic_version`；2026-10-14 在 dev 資料庫數的） |
 | Migration | `0001` ~ `0019` |
@@ -1526,6 +1526,8 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
   10. **體重與身體資料不給好友看**（刻意的，規格 §7；`tests/test_body_privacy.py` 守著）：沒有「分享體重」的選項。
   11. **體重圖在電腦版隨寬度等比放大**（跟趨勢圖一樣）：刻度與日期的字約兩倍大。
   12. **目標體重離目前體重很遠時，點擠在圖的上面**：y 軸要包含目標體重（規格 §6.4），範圍被拉開。
+  13. **`GET /api/weights` 的 `from`／`to` 不能早於 1900-01-01**（`422 INVALID_RANGE`，審查 M1）：只是衛生下限，真的紀錄不會早於兩年前。
+  14. **`routes/targets.py` 既有的三個端點（`POST`、`PATCH`、`PUT /today`）仍是 commit 之後 `db.refresh`**：審查 M6 只改了這個分支新增的套用端點（同上面第 21 點的形狀；目標只有本人改得到，空檔要自己跟自己搶）。
 - **編輯自己已送出的提案**：後端沒有這個端點，目前只能等審核結果。
 
 ---
@@ -1822,7 +1824,7 @@ refresh（14 天）。`POST /api/auth/refresh` 換新的。
    一張失效的票的裝置，會先閃一下這頁說明（一個請求加一次換票的時間），接著直接變成重設密碼的表單。
 5. 「所有帳號」看不到「這個人有沒有一條還沒用的連結」；再產生一次，舊的就失效。
 6. 「所有帳號」**沒有分頁也沒有搜尋**。正式環境只有個位數帳號沒差；**dev 資料庫會一直長**——每次跑 e2e 都會開新帳號
-   （邀請、好友、帳號設定的 spec），從來不刪（2026-10-08 已經一百多個）。管理員的「我的」因此很長，`account-settings.spec.ts`
+   （邀請、好友、帳號設定的 spec），從來不刪（2026-10-08 已經一百多個，2026-10-14 是 932 個——預設 6 個 workers 時「重設密碼連結」那一條會超過 30 秒逾時，`--workers=3` 才穩）。管理員的「我的」因此很長，`account-settings.spec.ts`
    在那一頁量每一顆按鈕的觸控高度，帳號越多越慢；按鈕要用完整的可及名稱「產生重設密碼連結：{名字}（{email}）」找。
 7. **`/reset-password`（與 `/join`）的同分頁限制**：碼只在第一次 render 讀。在同一個分頁把網址換成只有 `#` 後面不同的另一條連結，
    瀏覽器不重新載入，畫面停在上一條連結的結果；重新整理或開新分頁就好。
@@ -2213,14 +2215,14 @@ B 看 A 的餐時，C 的留言算不算只看 C 與 A 的關係）：
 |---|---|---|
 | `GET`／`PUT /api/me/body-profile` | 七個欄位（性別、出生年、身高、活動量、目標、速度、目標體重）；沒有那一列＝全部 null | PUT 是**整組取代**：七個鍵都必填、值可以 null（D5），`INSERT … ON CONFLICT (user_id) DO UPDATE`。出生年的範圍跟「使用者的今天」有關，在端點擋（`422 BIRTH_YEAR_OUT_OF_RANGE`）；資料庫只擋 1900–2100。**不回** `targets_applied_weight_kg` |
 | `GET /api/me/target-suggestion` | `{ready: true, kcal, …, resuggest}` 或 `{ready: false, missing}` | 兩個模型的**普通聯集，不加 discriminator**（D10：bool 當 discriminator 會讓產生的型別變成 `ready: "True"`）。`missing` 是固定順序（D11）。`weight_change_kg`＝最新體重 − 套用時的體重，`resuggest`＝變化的絕對值 ≥ 1 |
-| `POST /api/me/target-suggestion/apply` | body 是畫面上看到的四個數字 → `TargetResponse` | 一個交易：重算 → 跟四個數字比（不一樣 `409 SUGGESTION_CHANGED`，什麼都不寫）→ `write_target_from_today`（從 `set_target_from_today` 抽出來、不 commit）→ 記下 `targets_applied_weight_kg` → commit。撞期 `409 TARGET_CONFLICT` 時體重不會被記成「套用過」。碳水 0 存 null（D9）。缺資料 `422 PROFILE_INCOMPLETE` |
+| `POST /api/me/target-suggestion/apply` | body 是畫面上看到的四個數字 → `TargetResponse` | 一個交易：重算 → 跟四個數字比（不一樣 `409 SUGGESTION_CHANGED`，什麼都不寫）→ `write_target_from_today`（從 `set_target_from_today` 抽出來、不 commit）→ 記下 `targets_applied_weight_kg` → commit。撞期 `409 TARGET_CONFLICT` 時體重不會被記成「套用過」。碳水 0 存 null（D9）。缺資料 `422 PROFILE_INCOMPLETE`。**回應在 commit 之前組好**（審查 M6：commit 之後再 refresh，空檔裡目標被刪就是 500；測試守著「commit 之後不送任何 SQL」） |
 | `PUT /api/weights/{date}` | 記一筆或更正（同一天第二次是更正），200 | 日期 ≤ 使用者的今天、≥ 今天 − 730 天（`422 WEIGHT_DATE_IN_FUTURE`／`WEIGHT_DATE_TOO_OLD`）。`ON CONFLICT (user_id, date) DO UPDATE … RETURNING`，明確設 `updated_at` |
 | `DELETE /api/weights/{date}` | 204；沒有那一筆 `404 WEIGHT_NOT_FOUND` | |
-| `GET /api/weights?from=&to=` | `{today, entries}`，由舊到新 | 兩個參數都可省略（`to` 預設今天、`from` 預設 `to − 799`），最多 800 天。**`today` 是前端唯一的「今天」**：表單的預設日期、圖表的右端都用它 |
+| `GET /api/weights?from=&to=` | `{today, entries}`，由舊到新 | 兩個參數都可省略（`to` 預設今天、`from` 預設 `to − 799`，但不早於 1900-01-01），最多 800 天。明確給的 `from`／`to` 早於 1900-01-01 是 `422 INVALID_RANGE`（審查 M1：以前 `to=0001-01-01` 算預設的 `from` 會溢位、500）。**`today` 是前端唯一的「今天」**：表單的預設日期、圖表的右端都用它 |
 | `GET /api/export/weights.csv` | `日期,體重(kg)` | 跟其他三個匯出共用限速（每人每分鐘 6 次）與「同時一個」 |
 
-既有端點的改變：`PUT /api/targets/today` 在同一個交易裡把 `targets_applied_weight_kg` 清成 null（D16：自己手打的目標不該被
-「要重算嗎」提醒蓋掉）。
+既有端點的改變：**每一條手動寫目標的路**（`PUT /api/targets/today`、`POST /api/targets`、`PATCH /api/targets/{id}`）都在同一個交易裡
+呼叫 `clear_applied_weight`，把 `targets_applied_weight_kg` 清成 null（D16：自己手打的目標不該被「要重算嗎」提醒蓋掉；後兩條是審查 M2 補的）。撞期 409 時一起 rollback。
 
 **公式**（`app/body_targets.py`，純函式，全程 `Decimal`／`ROUND_HALF_UP`）：年齡＝使用者今天的年份 − 出生年 → Mifflin-St Jeor BMR →
 × 活動係數＝TDEE → 加減 `速度 × 7700 / 7`（275、550）→ **先看原始值有沒有低於下限**（女 1200、男 1500），低於就用下限、
@@ -2237,7 +2239,7 @@ B 看 A 的餐時，C 的留言算不算只看 C 與 A 的關係）：
 | `/me/body` | `screens/BodyProfile.tsx`（`form` 寬度） | **預填同 `/me/targets`**（D27）：離線快取還原完才掛、`useFreshBodyProfile` 掛載時一定重抓、只用掛載後抓回來的那一份——PUT 是整組取代，拿舊快取預填會把沒動的欄位悄悄改回去。速度只在減重、增重時出現（切到維持不清掉）。存好失效 `["body"]`、導回 `/me` |
 | 卡片 | `components/BodyProfileCard.tsx`（「修改身體資料」）、`WeightCard.tsx`（「記錄體重」展開 `WeightForm`、「看全部」）、`TargetsCard.tsx`（重算提示＋「重算建議目標」） | 「我的」的順序：通知 → 帳號 → 每日目標 → 身體資料 → 體重 → 好友 → 匯出（D21）。卡片**不算年齡**（年齡要使用者的今天）。「比 7 天前」與重算提示的正負號都用 `lib/weights.ts` 的 `signedKg`（變重寫 `+`） |
 | `/weight` | `screens/Weight.tsx`、`components/WeightChart.tsx`、`WeightForm.tsx` | 一個 query（800 天），30／90／全部在前端篩（D22）。平均用**全部**的紀錄算、只畫範圍內的；y 軸也包含畫出來的平均與目標體重。每個點是 `role="img"`＋名稱「10/12，79 公斤」，跟今天不同年的寫「2025/10/12」（`dateLabel`；清單的「修改 …」「刪除 …」也是）。刪除是畫面上的 `alertdialog`，「刪除」用 `aria-disabled`＋ref 擋重複送出 |
-| 建議目標 | `components/TargetSuggestion.tsx`（`/me/targets` 上面，手動表單在「自己設定」那一區） | 「套用建議目標」送的是畫面上的四個數字；`SUGGESTION_CHANGED` → 重抓建議、說「建議目標剛剛變了」。成功失效 `dailyStats`、`rangeStatsAll`、`["body"]`（hook 層），導回 `/me`（`mutate` 的 callback）。缺資料：「還差：…」＋「填寫身體資料」（到 `/me/body`）／「記錄體重」（到 `/weight`） |
+| 建議目標 | `components/TargetSuggestion.tsx`（`/me/targets` 上面，手動表單在「自己設定」那一區） | 「套用建議目標」送的是畫面上的四個數字；`SUGGESTION_CHANGED` → 重抓建議、說「建議目標剛剛變了」；`PROFILE_INCOMPLETE`（另一個分頁剛刪了體重）→ 失效 `["body"]`、說「身體資料或體重剛剛變了，已經重新整理建議」，重抓回來缺東西就換成「還差：…」（審查 M4）。成功失效 `dailyStats`、`rangeStatsAll`、`["body"]`（hook 層），導回 `/me`（`mutate` 的 callback）。缺資料：「還差：…」＋「填寫身體資料」（到 `/me/body`）／「記錄體重」（到 `/weight`）。**下面的手動儲存（`screens/Targets.tsx`）也失效 `["body"]`**：後端清掉了套用時的體重，不失效的話「我的」上的重算提示還在（審查 I1） |
 | 匯出 | `api/export.ts` 的 `EXPORT_KINDS` | 「匯出資料」多一顆「體重」（四顆） |
 
 **新的東西在哪裡：**
@@ -2246,17 +2248,17 @@ B 看 A 的餐時，C 的留言算不算只看 C 與 A 的關係）：
   `app/body_targets.py`、`app/body_data.py`；`app/schemas/body.py`；`app/api/routes/body.py`、`weights.py`；`routes/targets.py`
   （`write_target_from_today`、清掉套用體重）；`app/export.py`／`routes/export.py`（體重）。測試 `tests/test_body_model.py`、
   `test_body_targets.py`、`test_body_profile.py`、`test_target_suggestion.py`、`test_weights.py`、`test_weights_concurrency.py`
-  （兩條真的連線）、`test_body_privacy.py`（好友與社群的回應裡沒有身體資料、身體資料的模組不寫 log），以及 `test_export.py`、
-  `test_targets_today.py` 的新增。
+  （兩條真的連線）、`test_body_privacy.py`（好友與社群的回應裡沒有身體資料、只有身體資料的模組碰那兩張表、好友與社群的模組不提身體資料的模組與它們的函式（`load_profile`、`latest_weight`……，審查 M3）、身體資料的模組不寫 log），以及 `test_export.py`、
+  `test_targets_today.py`、`test_targets.py`（POST／PATCH 也清套用體重）的新增。
 - 前端：上表的檔案，加上 `lib/body.ts`（中文標籤、`MISSING_LABELS`）、`lib/weights.ts`、`components/Segmented.module.css`
   （從趨勢頁搬出來、兩頁共用）、`index.css` 的 `.weight-point`。測試 `tests/body-api.test.tsx`、`body-profile.test.tsx`、
   `weight-chart.test.tsx`、`weight.test.tsx`、`weights-lib.test.ts`、`target-suggestion.test.tsx`，共用的路由與資料在
   `tests/helpers/body-routes.ts`；`me`、`targets`、`app`、`invite-friends`、`export-card`、`layout`、`decimal`、`civil-date` 的新增。
 - e2e：`e2e/body-targets.spec.ts`（三條，各開新帳號、手機尺寸）：缺資料 → 填身體資料 → 記體重 → 套用 → 總覽的分母 → 同一天更正體重 →
-  重算提示 → 重算再套用；只差體重 → `/weight` 的空狀態、目標線、下限 1200；`/weight` 記四天、切期間、改一筆、刪一筆、卡片的「比 7 天前」。
+  重算提示 → 重算再套用 → 體重又變、改成手動存目標 → 提示消失；只差體重 → `/weight` 的空狀態、目標線、下限 1200；`/weight` 記四天、切期間、改一筆、刪一筆、卡片的「比 7 天前」。
   `reports-export.spec.ts` 檢查四顆匯出按鈕。
 
-**已知限制**在 §8.2「身體資料與目標的已知限制」（12 點）。
+**已知限制**在 §8.2「身體資料與目標的已知限制」（14 點）。實作後審查找到的問題與修法在規格 §11「審查後的修正」（I1、M1–M6）。
 
 ---
 
