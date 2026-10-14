@@ -172,7 +172,7 @@ async def test_post_other_with_a_name_and_kcal(client, db_session, clock):
         {"activity": "other", "kcal": "300"},  # 沒有名稱
         {"activity": "other", "name": "划船"},  # 沒有熱量
         # 清完是空的：零寬空白＋一個空白。
-        {"activity": "other", "name": "​ ", "kcal": "300"},
+        {"activity": "other", "name": "\u200b ", "kcal": "300"},
     ],
 )
 async def test_post_other_without_a_name_or_kcal_is_422(client, db_session, clock, body):
