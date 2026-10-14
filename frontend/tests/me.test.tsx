@@ -19,7 +19,7 @@ import {
 } from "../src/auth/store";
 import { Me } from "../src/screens/Me";
 import { bodyRoutes, EMPTY_PROFILE } from "./helpers/body-routes";
-import { json, mockApi } from "./helpers/mock-api";
+import { json, mockApi, type Route } from "./helpers/mock-api";
 
 function me(role: "user" | "admin") {
 	return {
@@ -632,6 +632,182 @@ describe("我的：身體資料卡片", () => {
 		const friends = screen.getByRole("heading", { name: "好友" });
 		expect(
 			targets.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		expect(
+			card.compareDocumentPosition(friends) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+	});
+});
+
+describe("我的：體重卡片", () => {
+	const WEIGHTS = {
+		today: "2026-10-14",
+		entries: [
+			{ date: "2026-10-07", weight_kg: "80.00" },
+			{ date: "2026-10-10", weight_kg: "79.60" },
+			{ date: "2026-10-14", weight_kg: "79.00" },
+		],
+	};
+
+	function renderWith(weights: unknown, extra: Route[] = []) {
+		const spy = mockApi([
+			...extra,
+			...bodyRoutes({ weights }),
+			statsRoute(),
+			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
+		]);
+		render(wrap(<Me />));
+		return { spy, card: screen.getByTestId("weight-card") };
+	}
+
+	function puts(spy: ReturnType<typeof mockApi>) {
+		return spy.mock.calls
+			.filter(([, init]) => init?.method === "PUT")
+			.map(([url, init]) => ({ url: String(url), body: init?.body }));
+	}
+
+	it("最新一筆與「比 7 天前」：跟 7 天前那一筆比，不是跟前一筆比", async () => {
+		const { card } = renderWith(WEIGHTS);
+
+		expect(await within(card).findByText("79 公斤・10/14")).toBeInTheDocument();
+		// 前一筆是 10/10 的 79.6（差 −0.6）；7 天前是 10/07 的 80（差 −1）。
+		expect(within(card).getByText("比 7 天前 -1 公斤")).toBeInTheDocument();
+		expect(
+			within(card).getByRole("heading", { name: "體重" }),
+		).toBeInTheDocument();
+		expect(within(card).getByRole("link", { name: "看全部" })).toHaveAttribute(
+			"href",
+			"/weight",
+		);
+	});
+
+	it("變重了寫 +；七天以前沒有紀錄就不寫「比 7 天前」；沒有紀錄寫「還沒有體重紀錄」", async () => {
+		const { card } = renderWith({
+			today: "2026-10-14",
+			entries: [
+				{ date: "2026-10-01", weight_kg: "70" },
+				{ date: "2026-10-14", weight_kg: "70.5" },
+			],
+		});
+		expect(
+			await within(card).findByText("比 7 天前 +0.5 公斤"),
+		).toBeInTheDocument();
+		cleanup();
+		vi.restoreAllMocks();
+
+		const second = renderWith({
+			today: "2026-10-14",
+			entries: [{ date: "2026-10-10", weight_kg: "70" }],
+		}).card;
+		expect(
+			await within(second).findByText("70 公斤・10/10"),
+		).toBeInTheDocument();
+		expect(within(second).queryByText(/比 7 天前/)).not.toBeInTheDocument();
+		cleanup();
+		vi.restoreAllMocks();
+
+		const third = renderWith({ today: "2026-10-14", entries: [] }).card;
+		expect(
+			await within(third).findByText("還沒有體重紀錄"),
+		).toBeInTheDocument();
+	});
+
+	it("記錄體重：展開表單（日期預設、上下限是後端給的今天），存了收起來、焦點回到按鈕", async () => {
+		const { spy, card } = renderWith(WEIGHTS, [
+			{
+				method: "PUT",
+				path: "/api/weights/2026-10-14",
+				handler: () => json({ date: "2026-10-14", weight_kg: "78.50" }),
+			},
+		]);
+
+		await userEvent.click(
+			await within(card).findByRole("button", { name: "記錄體重" }),
+		);
+		const weight = within(card).getByLabelText("體重（公斤）");
+		expect(weight).toHaveFocus();
+		expect(weight).toHaveAttribute("inputmode", "decimal");
+		const date = within(card).getByLabelText("日期");
+		expect(date).toHaveAttribute("type", "date");
+		expect(date).toHaveValue("2026-10-14");
+		expect(date).toHaveAttribute("max", "2026-10-14");
+		expect(date).toHaveAttribute("min", "2024-10-14");
+
+		await userEvent.type(weight, "78.5");
+		await userEvent.click(within(card).getByRole("button", { name: "儲存" }));
+
+		await waitFor(() =>
+			expect(puts(spy)).toEqual([
+				{ url: "/api/weights/2026-10-14", body: '{"weight_kg":"78.5"}' },
+			]),
+		);
+		await waitFor(() =>
+			expect(
+				within(card).getByRole("button", { name: "記錄體重" }),
+			).toHaveFocus(),
+		);
+		expect(
+			within(card).queryByLabelText("體重（公斤）"),
+		).not.toBeInTheDocument();
+	});
+
+	it("體重不合規則不送；取消收起來、焦點回到「記錄體重」", async () => {
+		const { spy, card } = renderWith(WEIGHTS, [
+			{
+				method: "PUT",
+				path: "/api/weights/",
+				handler: () => new Promise<Response>(() => {}),
+			},
+		]);
+
+		await userEvent.click(
+			await within(card).findByRole("button", { name: "記錄體重" }),
+		);
+		await userEvent.type(within(card).getByLabelText("體重（公斤）"), "24");
+		await userEvent.click(within(card).getByRole("button", { name: "儲存" }));
+
+		expect(await within(card).findByRole("alert")).toHaveTextContent(
+			"體重要在 25 到 350 公斤之間，最多兩位小數",
+		);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(puts(spy)).toEqual([]);
+
+		await userEvent.click(within(card).getByRole("button", { name: "取消" }));
+		expect(
+			within(card).getByRole("button", { name: "記錄體重" }),
+		).toHaveFocus();
+	});
+
+	it("送出中「儲存」是 aria-disabled（焦點還在它身上），再按不會送第二次", async () => {
+		const { spy, card } = renderWith(WEIGHTS, [
+			{
+				method: "PUT",
+				path: "/api/weights/",
+				handler: () => new Promise<Response>(() => {}),
+			},
+		]);
+
+		await userEvent.click(
+			await within(card).findByRole("button", { name: "記錄體重" }),
+		);
+		await userEvent.type(within(card).getByLabelText("體重（公斤）"), "78");
+		const save = within(card).getByRole("button", { name: "儲存" });
+		await userEvent.click(save);
+		await waitFor(() => expect(save).toHaveAttribute("aria-disabled", "true"));
+		expect(save).not.toBeDisabled();
+		await userEvent.click(save);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(puts(spy)).toHaveLength(1);
+	});
+
+	it("順序：身體資料之後、好友之前（規格 D21）", async () => {
+		const { card } = renderWith(WEIGHTS);
+		await within(card).findByText("79 公斤・10/14");
+
+		const body = screen.getByTestId("body-profile-card");
+		const friends = screen.getByRole("heading", { name: "好友" });
+		expect(
+			body.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING,
 		).toBeTruthy();
 		expect(
 			card.compareDocumentPosition(friends) & Node.DOCUMENT_POSITION_FOLLOWING,

@@ -188,6 +188,29 @@ a {
 	font-size: 10px;
 }
 
+/* 體重圖（身體資料規格 §6.4）：點、7 天移動平均、刻度、底線。目標線沿用 .trend-target、
+   起訖日期沿用 .trend-date。 */
+.weight-point {
+	fill: var(--color-accent);
+}
+
+.weight-average {
+	fill: none;
+	stroke: var(--color-action);
+	stroke-width: 2;
+	stroke-linejoin: round;
+}
+
+.weight-axis {
+	fill: var(--color-text-muted);
+	font-size: 10px;
+}
+
+.weight-baseline {
+	stroke: var(--color-border);
+	stroke-width: 1;
+}
+
 /* 食物庫（P3-B 計畫二 Task 3）。 */
 .food-results {
 	list-style: none;

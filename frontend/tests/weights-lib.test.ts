@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	dateLabel,
 	entriesInSpan,
 	movingAverage,
 	recentAverage,
@@ -85,5 +86,12 @@ describe("recentAverage", () => {
 			),
 		).toBe("78.5");
 		expect(recentAverage([e("2026-10-01", "80")], "2026-10-14")).toBeNull();
+	});
+});
+
+describe("dateLabel", () => {
+	it("跟今天同一年只寫月/日；不同年加上年份（「全部」最多兩年多，10/10 可能有兩筆）", () => {
+		expect(dateLabel("2026-10-10", "2026-10-14")).toBe("10/10");
+		expect(dateLabel("2025-10-10", "2026-10-14")).toBe("2025/10/10");
 	});
 });

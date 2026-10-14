@@ -1,0 +1,54 @@
+/* 分段切換（趨勢頁的營養素與期間、體重頁的期間；身體資料規格「與原始決定的差異」第 8 點）：
+   一排分段按鈕。底下是原生的單選鈕（鍵盤與螢幕閱讀器照常用），視覺上藏起來，標籤本身是點擊目標。
+   從 Trend.module.css 原樣搬來——兩個畫面直接 import 對方的 CSS 模組會互相綁住。 */
+.group {
+	display: flex;
+	/* .screen 的 fieldset 通用規則是 column；這裡要一排。 */
+	flex-direction: row;
+	gap: var(--space-1);
+	margin: 0;
+	padding: var(--space-1);
+	border: none;
+	border-radius: var(--radius-button);
+	background: var(--color-surface);
+}
+
+/* legend 給螢幕閱讀器（這組單選鈕叫「營養素」「期間」），畫面上不需要。 */
+.legend {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
+
+.option {
+	position: relative;
+	flex: 1;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 44px;
+	border-radius: var(--radius-button);
+	color: var(--color-text-muted);
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.option:has(input:checked) {
+	background: var(--color-accent-soft);
+	color: var(--color-action);
+}
+
+.option:has(input:focus-visible) {
+	outline: 2px solid var(--color-action);
+	outline-offset: 2px;
+}
+
+.input {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	opacity: 0;
+}

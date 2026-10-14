@@ -1,0 +1,113 @@
+/* /weight（身體資料規格 §6.4）。只用 index.css 的變數。 */
+
+.summary {
+	margin-top: var(--space-2);
+	font-size: 14px;
+}
+
+/* 圖例：點與線各是什麼。色塊是裝飾，字本身就說了。 */
+.legend {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-1) var(--space-2);
+	margin-top: var(--space-2);
+	font-size: 12px;
+	color: var(--color-text-muted);
+}
+
+.swatchPoint {
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--color-accent);
+}
+
+.swatchLine {
+	display: inline-block;
+	width: 16px;
+	height: 2px;
+	margin-left: var(--space-2);
+	background: var(--color-action);
+}
+
+.empty {
+	margin-bottom: var(--space-2);
+}
+
+.list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.row {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	padding: var(--space-2) 0;
+	border-bottom: 1px solid var(--color-border);
+}
+
+.row:last-child {
+	border-bottom: none;
+}
+
+/* 一列：日期、體重在左，按鈕在右。 */
+.line {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2);
+}
+
+.date {
+	min-width: 3.5rem;
+	color: var(--color-text-muted);
+	font-variant-numeric: tabular-nums;
+}
+
+.value {
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+.actions {
+	display: inline-flex;
+	gap: var(--space-2);
+	margin-left: auto;
+}
+
+/* 修改：輸入框佔滿剩下的寬度，兩顆按鈕跟在後面。 */
+.editor {
+	display: flex;
+	flex-direction: row;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2);
+}
+
+.editor input {
+	flex: 1 1 6rem;
+	width: auto;
+	min-width: 0;
+}
+
+.confirm {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	padding: var(--space-3);
+	border-radius: var(--radius-card);
+	background: var(--color-bg);
+}
+
+.confirm .actions {
+	margin-left: 0;
+}
+
+.error {
+	margin: 0;
+	color: var(--color-danger);
+}

@@ -1,0 +1,41 @@
+.title {
+	margin: 0 0 var(--space-2);
+}
+
+.text {
+	margin: 0;
+}
+
+.latest {
+	margin: 0;
+	font-size: 18px;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+.change {
+	margin: var(--space-1) 0 0;
+	color: var(--color-text-muted);
+	font-variant-numeric: tabular-nums;
+}
+
+.form {
+	margin-top: var(--space-3);
+}
+
+.actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2);
+	margin-top: var(--space-3);
+}
+
+/* 連結也是點擊目標：至少 44px 高。 */
+.link {
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+	padding: 0 var(--space-2);
+	font-weight: 600;
+}

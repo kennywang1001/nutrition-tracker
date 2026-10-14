@@ -4,6 +4,7 @@ import { apiFetch } from "../api/client";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
 import { useDailyStats } from "../api/stats";
+import segmented from "../components/Segmented.module.css";
 import {
 	TREND_METRIC_ORDER,
 	TREND_METRICS,
@@ -125,34 +126,34 @@ export function Trend() {
 			    使用者還要能切回已經有快取的那一段。 */}
 			{today !== null && (
 				<>
-					<fieldset className={styles.metrics}>
-						<legend className={styles.legend}>營養素</legend>
+					<fieldset className={segmented.group}>
+						<legend className={segmented.legend}>營養素</legend>
 						{TREND_METRIC_ORDER.map((option) => (
-							<label key={option} className={styles.metric}>
+							<label key={option} className={segmented.option}>
 								<input
 									type="radio"
 									name="trend-metric"
 									value={option}
 									checked={metric === option}
 									onChange={() => setMetric(option)}
-									className={styles.metricInput}
+									className={segmented.input}
 								/>
 								{TREND_METRICS[option].label}
 							</label>
 						))}
 					</fieldset>
 
-					<fieldset className={styles.metrics}>
-						<legend className={styles.legend}>期間</legend>
+					<fieldset className={segmented.group}>
+						<legend className={segmented.legend}>期間</legend>
 						{SPANS.map((option) => (
-							<label key={option} className={styles.metric}>
+							<label key={option} className={segmented.option}>
 								<input
 									type="radio"
 									name="trend-span"
 									value={option}
 									checked={span === option}
 									onChange={() => setSpan(option)}
-									className={styles.metricInput}
+									className={segmented.input}
 								/>
 								{option} 天
 							</label>

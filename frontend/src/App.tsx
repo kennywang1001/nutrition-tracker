@@ -53,6 +53,7 @@ import { Supplements } from "./screens/Supplements";
 import { Targets } from "./screens/Targets";
 import { Today } from "./screens/Today";
 import { Trend } from "./screens/Trend";
+import { Weight } from "./screens/Weight";
 
 /** `/meals/new`（介面改版）：記完一餐之後導回總覽；照片沒傳上去時帶著通知回總覽。
  *
@@ -243,6 +244,8 @@ export function App() {
 							<Route path="/me/targets" element={<Targets />} />
 							{/* 身體資料（身體資料規格 §6.3），入口是「我的」的身體資料卡片與建議目標的「填寫身體資料」。 */}
 							<Route path="/me/body" element={<BodyProfile />} />
+							{/* 體重的圖與清單（身體資料規格 §6.4），入口是「我的」體重卡片的「看全部」。 */}
+							<Route path="/weight" element={<Weight />} />
 							{/* 修改密碼（帳號設定規格 §5.3），入口是「我的」帳號卡片的「修改密碼」。 */}
 							<Route path="/me/password" element={<ChangePassword />} />
 							{/* 通知（社群規格 §6.4），入口是「我的」最上面的通知卡片。 */}

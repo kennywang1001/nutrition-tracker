@@ -1,0 +1,48 @@
+/* 記錄體重的表單：卡片裡（不在 .screen 底下）與 /weight（在 .screen 底下）共用，所以輸入框的
+   樣式寫在這裡，不靠 .screen 的通用規則（同帳號卡片的行內表單）。 */
+.form {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+
+/* 體重與日期並排：兩格都短，手機寬度也放得下。 */
+.fields {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+}
+
+.field {
+	flex: 1 1 8rem;
+	min-width: 0;
+}
+
+.field label {
+	display: block;
+	margin-bottom: var(--space-1);
+	font-size: 13px;
+	color: var(--color-text-muted);
+}
+
+.field input {
+	box-sizing: border-box;
+	width: 100%;
+	min-height: 44px;
+	padding: var(--space-2) var(--space-3);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-button);
+	background: var(--color-bg);
+	color: var(--color-text);
+}
+
+.actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+}
+
+.error {
+	margin: 0;
+	color: var(--color-danger);
+}

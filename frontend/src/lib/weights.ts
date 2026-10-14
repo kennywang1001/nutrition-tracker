@@ -1,4 +1,4 @@
-import { shiftDays } from "./civil-date";
+import { formatCivilDate, shiftDays } from "./civil-date";
 import { averageOf, differenceOf, type Numeric } from "./decimal";
 
 /** 體重的純函式（身體資料規格 §6.2、§6.4）。數字運算全部經過 `lib/decimal.ts`，
@@ -75,4 +75,13 @@ export function recentAverage(
 			.filter((entry) => within(entry, start, today))
 			.map((w) => w.weight_kg),
 	);
+}
+
+/** 清單與圖上的日期：跟今天同一年只寫「10/10」，不同年寫「2025/10/10」。
+ *  「全部」最多 800 天，同一個月/日可能有兩筆——可及名稱（「修改 10/10」）要分得出來。 */
+export function dateLabel(date: string, today: string): string {
+	const short = formatCivilDate(date);
+	return date.slice(0, 4) === today.slice(0, 4)
+		? short
+		: `${date.slice(0, 4)}/${short}`;
 }
