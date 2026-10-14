@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
 	averageOf,
+	checkRangeInput,
 	checkTargetInput,
+	differenceOf,
 	formatMacro,
 	formatMoney,
 	isPlainPositiveDecimal,
 	isPositiveAmount,
+	paddedExtent,
 	perServingToPer100,
+	positionIn,
 	ratioOf,
 	sumMacros,
 } from "../src/lib/decimal";
@@ -215,5 +219,65 @@ describe("checkTargetInput（每日目標的一格，帳號設定規格 §5.2）
 		["20000.01", "too-large"],
 	] as const)("%j → %s", (value, expected) => {
 		expect(checkTargetInput(value, "20000")).toBe(expected);
+	});
+});
+
+describe("differenceOf", () => {
+	it("字串進字串出，正負號都留著", () => {
+		expect(differenceOf("78.50", "80.00")).toBe("-1.5");
+		expect(differenceOf("80.1", "80")).toBe("0.1");
+		expect(differenceOf("80", "80.00")).toBe("0");
+	});
+});
+
+describe("paddedExtent", () => {
+	it("最小值往下、最大值往上各留 pad，再取整", () => {
+		expect(paddedExtent(["72.4", "70.2", "71"], "1")).toEqual({
+			lo: "69",
+			hi: "74",
+		});
+	});
+	it("全部一樣也有範圍", () => {
+		expect(paddedExtent(["70"], "1")).toEqual({ lo: "69", hi: "71" });
+	});
+	it("空陣列是 null", () => {
+		expect(paddedExtent([], "1")).toBeNull();
+	});
+});
+
+describe("positionIn", () => {
+	it("lo 是 0、hi 是 1、中間照比例", () => {
+		expect(positionIn("69", "69", "74")).toBe(0);
+		expect(positionIn("74", "69", "74")).toBe(1);
+		expect(positionIn("71.5", "69", "74")).toBe(0.5);
+	});
+	it("範圍是 0 時回 0.5，不除以零", () => {
+		expect(positionIn("70", "70", "70")).toBe(0.5);
+	});
+});
+
+describe("checkRangeInput", () => {
+	const weight = { min: "25", max: "350", places: 2 } as const;
+	it.each([
+		["", "empty"],
+		["abc", "not-decimal"],
+		["1e2", "not-decimal"],
+		["-70", "not-decimal"],
+		["70.123", "too-precise"],
+		["24.99", "out-of-range"],
+		["350.01", "out-of-range"],
+		["25", null],
+		[" 350 ", null],
+		["72.4", null],
+	] as const)("%j → %j", (raw, problem) => {
+		expect(checkRangeInput(raw, weight)).toBe(problem);
+	});
+	it("places 0 只收整數", () => {
+		expect(
+			checkRangeInput("1990.5", { min: "1900", max: "2100", places: 0 }),
+		).toBe("too-precise");
+		expect(
+			checkRangeInput("1990", { min: "1900", max: "2100", places: 0 }),
+		).toBeNull();
 	});
 });

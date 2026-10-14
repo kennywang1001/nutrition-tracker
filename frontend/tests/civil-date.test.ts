@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { formatCivilDate, shiftDays } from "../src/lib/civil-date";
+import { daysBetween, formatCivilDate, shiftDays } from "../src/lib/civil-date";
 
 describe("shiftDays", () => {
 	it("往回推六天就是最近七天的起點", () => {
@@ -126,5 +126,21 @@ describe("civil-date.ts 不得依賴本地時區", () => {
 		];
 
 		expect(forbidden.filter((name) => code.includes(name))).toEqual([]);
+	});
+});
+
+describe("daysBetween", () => {
+	it.each([
+		["2026-10-14", "2026-10-14", 0],
+		["2026-10-01", "2026-10-14", 13],
+		["2026-10-14", "2026-10-01", -13],
+		["2026-12-31", "2027-01-01", 1],
+		["2028-02-28", "2028-03-01", 2], // 閏年
+		["2026-03-28", "2026-03-30", 2], // 跨日光節約（UTC 沒有）
+	] as const)("%s → %s = %d", (from, to, days) => {
+		expect(daysBetween(from, to)).toBe(days);
+	});
+	it("不是 YYYY-MM-DD 就丟例外", () => {
+		expect(() => daysBetween("2026-1-1", "2026-10-14")).toThrow();
 	});
 });

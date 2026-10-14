@@ -74,3 +74,25 @@ export function formatCivilDate(isoDate: string): string {
 	}
 	return `${Number(isoDate.slice(5, 7))}/${Number(isoDate.slice(8, 10))}`;
 }
+
+const DAY_MS = 86_400_000;
+
+/** `YYYY-MM-DD` 的 UTC 午夜（毫秒）。同 `shiftDays` 用 `slice` 取三段、只用 `Date.UTC`。 */
+function utcMidnight(isoDate: string): number {
+	if (!ISO_DATE.test(isoDate)) {
+		throw new Error(
+			`daysBetween 只接受 YYYY-MM-DD，收到：${JSON.stringify(isoDate)}`,
+		);
+	}
+	return Date.UTC(
+		Number(isoDate.slice(0, 4)),
+		Number(isoDate.slice(5, 7)) - 1,
+		Number(isoDate.slice(8, 10)),
+	);
+}
+
+/** `to` 比 `from` 晚幾天（可以是負的）。給體重圖的 x 軸用（身體資料規格 §6.4）。
+ *  兩個都是 UTC 午夜，UTC 沒有日光節約，相減一定是整天數；`Math.round` 只是保險。 */
+export function daysBetween(from: string, to: string): number {
+	return Math.round((utcMidnight(to) - utcMidnight(from)) / DAY_MS);
+}

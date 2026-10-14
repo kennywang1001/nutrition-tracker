@@ -182,3 +182,62 @@ export function maxOf(values: readonly Numeric[]): Numeric {
 		)
 		.toString();
 }
+
+/** a − b（體重的變化）。字串進字串出，`toString()` 會去掉尾數的 0（"-1.50" → "-1.5"）。 */
+export function differenceOf(a: Numeric, b: Numeric): Numeric {
+	return new Decimal(a).minus(b).toString();
+}
+
+/** 圖表的 y 軸範圍：最小值減 `pad` 往下取整、最大值加 `pad` 往上取整。空陣列回 `null`。
+ *  所有值一樣時上下仍各有 `pad`，範圍不會是 0。
+ *  比大小要經過 `Decimal`（同 `maxOf` 的理由），所以放在這個檔案而不是圖表元件裡。 */
+export function paddedExtent(
+	values: readonly Numeric[],
+	pad: Numeric,
+): { lo: Numeric; hi: Numeric } | null {
+	if (values.length === 0) return null;
+	const decimals = values.map((value) => new Decimal(value));
+	return {
+		lo: Decimal.min(...decimals)
+			.minus(pad)
+			.floor()
+			.toString(),
+		hi: Decimal.max(...decimals)
+			.plus(pad)
+			.ceil()
+			.toString(),
+	};
+}
+
+/** `value` 在 [lo, hi] 裡的位置：lo → 0、hi → 1（給 SVG 座標用，所以回 number）。
+ *  範圍是 0 時回 0.5——不除以零，畫在正中間。 */
+export function positionIn(value: Numeric, lo: Numeric, hi: Numeric): number {
+	const span = new Decimal(hi).minus(lo);
+	if (span.isZero()) return 0.5;
+	return new Decimal(value).minus(lo).dividedBy(span).toNumber();
+}
+
+export type RangeInputProblem =
+	| "empty"
+	| "not-decimal"
+	| "too-precise"
+	| "out-of-range";
+
+/** 有範圍、有小數位數限制的一格（體重、身高、目標體重；身體資料規格 §5）。`null`＝沒問題。
+ *  寫法限制同 `checkTargetInput`（不收 `1e3`、`+5`、`-1`）；空白是 `"empty"`，要不要接受
+ *  由呼叫端決定（身體資料的欄位可以留空，體重不行）。不丟例外：表單打到一半的值是常態。 */
+export function checkRangeInput(
+	value: string,
+	rule: { min: Numeric; max: Numeric; places: number },
+): RangeInputProblem | null {
+	const v = value.trim();
+	if (v === "") return "empty";
+	if (!PLAIN_DECIMAL.test(v)) return "not-decimal";
+	const dot = v.indexOf(".");
+	const places = dot === -1 ? 0 : v.length - dot - 1;
+	if (places > rule.places) return "too-precise";
+	const number = new Decimal(v);
+	if (number.lessThan(rule.min) || number.greaterThan(rule.max))
+		return "out-of-range";
+	return null;
+}

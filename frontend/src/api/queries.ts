@@ -70,6 +70,14 @@ export const queryKeys = {
 	portions: (foodId: number) => ["foods", foodId, "portions"] as const,
 	/** 目前登入者。我的（Me.tsx）用它的 `role` 決定要不要顯示「審核」。 */
 	me: ["me"] as const,
+	/** 身體資料、建議、體重（身體資料規格 §6.1）：全部在 `"body"` 底下——記一筆體重、改身體資料
+	 *  都可能改變建議，失效 `bodyAll` 一次打到三個。**刻意不掛在 `["me"]` 底下**：失效 `me`
+	 *  （改名字之類）不該連帶重抓建議。**進離線快取**（D19：自己的資料，離線看得到自己的
+	 *  體重是功能），所以不加進 `persist.ts` 的 `NOT_PERSISTED`。 */
+	bodyProfile: ["body", "profile"] as const,
+	targetSuggestion: ["body", "suggestion"] as const,
+	weights: ["body", "weights"] as const,
+	bodyAll: ["body"] as const,
 	/** 單一食物。**刻意是 `portions` 與 `foodRevisions` 的前綴。**
 	 *
 	 *  審核通過之後，那個食物的目前數值、份量、編輯歷史都該重取 ——
