@@ -2405,3 +2405,312 @@ cd frontend && npm run -s typecheck && cd .. && git add frontend/src/api/body.ts
 ```
 
 訊息：`feat(frontend): 身體資料與體重的 API 層、移動平均與圖表用的數字工具`。
+
+---
+
+## Task 7：前端——`/me/body` 與「身體資料」卡片
+
+**Files:**
+- Create: `frontend/src/screens/BodyProfile.tsx`、`frontend/src/components/BodyProfileCard.tsx`、`frontend/src/components/BodyProfileCard.module.css`、`frontend/tests/body-profile.test.tsx`
+- Modify: `frontend/src/screens/Me.tsx`、`frontend/src/App.tsx`、`frontend/src/lib/layout.ts`、`frontend/tests/layout.test.ts`、`frontend/tests/me.test.tsx`（及其他畫出「我的」的測試）
+
+- [ ] **Step 1：先寫測試。** `tests/body-profile.test.tsx`（`QueryClient` 由測試建立、`staleTime: 60_000`，照 `tests/targets.test.tsx` 的 `renderScreen`；「整頁重新載入」那條照抄它的兩個 `QueryClient` 經 localStorage 交接的寫法）：
+
+1. 「預填的是掛載之後抓回來的」：快取先 `setQueryData(bodyProfile, 舊的)`，API 回新的（身高 175）→ 表單的「身高（cm）」是 `175`，從沒出現過舊值（`findByLabelText` 之後 `toHaveValue`）。
+2. 「整頁重新載入：還原期間不預填」：照 `targets.test.tsx` 那條——localStorage 裡是舊的、API 掛著不回 → 畫面是「載入中…」，沒有表單；放行之後是新的。
+3. 「讀不到就不給表單」：API 500 → `role="alert"`「無法載入身體資料」，沒有「儲存」。
+4. 「送出整組七個鍵」：改身高、選「維持」→ 按「儲存」→ PUT 的 body 是七個鍵，`rate_kg_per_week` 是原本的值（維持時速度欄位藏起來但值不清掉，D3）、空白的目標體重送 `null`；成功後導到 `/me`、`bodyAll` 被失效（`queryClient.getQueryState(queryKeys.targetSuggestion)?.isInvalidated`）。
+5. 「速度只在減重、增重時出現」：選「維持」→ 沒有「速度」這組單選；選「增重」→ 有。
+6. 「前端擋範圍」：身高 `99`、體重 `24.9`、出生年 `199` → 三則錯誤、沒有送出（`spy` 裡沒有 PUT）。
+7. 「後端的 422 顯示訊息」：PUT 回 `422 BIRTH_YEAR_OUT_OF_RANGE`「出生年要在 1926 到 2013 之間」→ 畫面上有那句話。
+8. 「可及性」：性別、目標、速度各是一個 `group`（`fieldset`，`getByRole("group", { name: "性別" })`）；活動量是 `combobox`，選項的名稱是「中度（每週運動 3–5 天）」。
+
+`tests/me.test.tsx` 加：「身體資料卡片」——沒填：「還沒有填」＋連結「修改身體資料」（`href="/me/body"`）；填了：`男・1990 年生・175 cm・中度活動・減重每週 0.5 公斤・目標 72 公斤`（沒設的段落略過）。**既有的每一個 `mockApi([...])` 在最前面加 `...bodyRoutes()`**（開工前必讀第 8 點）；`targets.test.tsx`、`app.test.tsx` 等會畫出「我的」或 `/me/targets` 的也一樣——先跑一次整套，看哪些檔案因為新卡片紅或印 `Unhandled`，就在那些檔案加。
+
+`tests/layout.test.ts` 加：`contentWidthFor("/me/body") === "form"`、`contentWidthFor("/weight") === "narrow"`。
+
+- [ ] **Step 2：跑，看它紅。** `npx vitest run tests/body-profile.test.tsx tests/me.test.tsx tests/layout.test.ts` → FAIL。
+
+- [ ] **Step 3：`/me/body`。** `screens/BodyProfile.tsx` 的骨架照 `screens/Targets.tsx`（`BodyProfile` → 還原完才掛 `BodyProfileLoader` → 第一份新鮮的資料記下來 → `BodyProfileForm`）。表單的值全部是字串（輸入框）或選項：
+
+```ts
+type Values = {
+	sex: Sex | null;
+	birthYear: string;
+	heightCm: string;
+	activityLevel: ActivityLevel | null;
+	goal: Goal | null;
+	rate: "0.25" | "0.5" | null;
+	targetWeightKg: string;
+};
+
+function initialValues(profile: BodyProfile): Values {
+	const rate = profile.rate_kg_per_week === null ? null : formatMacro(profile.rate_kg_per_week);
+	return {
+		sex: profile.sex,
+		birthYear: profile.birth_year === null ? "" : String(profile.birth_year),
+		heightCm: profile.height_cm === null ? "" : formatMacro(profile.height_cm),
+		activityLevel: profile.activity_level,
+		goal: profile.goal,
+		rate: rate === "0.25" || rate === "0.5" ? rate : null,
+		targetWeightKg: profile.target_weight_kg === null ? "" : formatMacro(profile.target_weight_kg),
+	};
+}
+
+const HEIGHT = { min: "100", max: "250", places: 1 } as const;
+const WEIGHT = { min: "25", max: "350", places: 2 } as const;
+
+/** 空白＝不設定（null）；有字就要合規則。回傳要送的 body，或一串錯誤。 */
+function toRequest(values: Values): { body: BodyProfileInput } | { errors: string[] } {
+	const errors: string[] = [];
+	const birth = values.birthYear.trim();
+	if (birth !== "" && !/^\d{4}$/.test(birth)) errors.push("出生年要是四位數的西元年");
+	const height = checkRangeInput(values.heightCm, HEIGHT);
+	if (height !== null && height !== "empty") errors.push("身高要在 100 到 250 公分之間，最多一位小數");
+	const target = checkRangeInput(values.targetWeightKg, WEIGHT);
+	if (target !== null && target !== "empty") errors.push("目標體重要在 25 到 350 公斤之間，最多兩位小數");
+	if (errors.length > 0) return { errors };
+	return {
+		body: {
+			sex: values.sex,
+			birth_year: birth === "" ? null : Number(birth),
+			height_cm: values.heightCm.trim() === "" ? null : values.heightCm.trim(),
+			activity_level: values.activityLevel,
+			goal: values.goal,
+			// 維持時藏起來但照送原本的值（D3）：切回減重時還在。
+			rate_kg_per_week: values.rate,
+			target_weight_kg: values.targetWeightKg.trim() === "" ? null : values.targetWeightKg.trim(),
+		},
+	};
+}
+```
+
+（`Number(birth)` 在 `/^\d{4}$/` 之後是安全的；這不是 Decimal 運算。）
+
+畫面（`ui.screen`，h1「身體資料」；每一組都是 `.screen` 的通用樣式，不另寫 CSS）：
+
+- `<fieldset><legend>性別</legend>` 兩個 `<label><input type="radio" name="sex" …/>男</label>`。
+- 「出生年」`<input inputMode="numeric" autoComplete="bday-year">`；「身高（cm）」、「目標體重（kg，選填）」`inputMode="decimal"`。
+- 「活動量」`<select>`：第一個選項 `<option value="">請選擇</option>`，其餘 `ACTIVITY_OPTIONS` 的 `${label}（${hint}）`。
+- `<fieldset><legend>目標</legend>` 三個單選；`goal` 是 `lose`／`gain` 時才畫 `<fieldset><legend>速度</legend>` 兩個單選。
+- 說明一行：「這些資料只用來算建議目標，好友看不到。」
+- 錯誤 `<ul role="alert">`；「儲存」是 submit，送出中 `disabled`（跟 `/me/targets` 一樣是表單的送出鈕，焦點留在原處沒關係——成功就導頁）。
+- 送出：`useMutation({ mutationFn: saveBodyProfile, onSuccess: () => invalidateBody(queryClient) })`；`save.mutate(body, { onSuccess: () => navigate("/me"), onError })`——422 用 `describeFieldErrors`（`BIRTH_YEAR_OUT_OF_RANGE` 沒有 `errors` 陣列，會退回 `error.message`），其他「儲存失敗，請再試一次」。
+
+- [ ] **Step 4：卡片。** `components/BodyProfileCard.tsx`：`useBodyProfile()`；標題 `h2`「身體資料」（`ui.sectionTitle`）；載入中／讀不到同 `TargetsCard` 的寫法；摘要：
+
+```ts
+function summary(profile: BodyProfile): string | null {
+	const parts = [
+		SEX_OPTIONS.find((o) => o.value === profile.sex)?.label,
+		profile.birth_year === null ? undefined : `${profile.birth_year} 年生`,
+		profile.height_cm === null ? undefined : `${formatMacro(profile.height_cm)} cm`,
+		ACTIVITY_OPTIONS.find((o) => o.value === profile.activity_level)?.label.concat("活動"),
+		goalText(profile),
+		profile.target_weight_kg === null ? undefined : `目標 ${formatMacro(profile.target_weight_kg)} 公斤`,
+	].filter((part): part is string => part !== undefined);
+	return parts.length === 0 ? null : parts.join("・");
+}
+```
+
+`goalText`：維持 →「維持體重」；減重／增重有速度 →「減重每週 0.5 公斤」；沒有速度 →「減重」。`null` 時顯示「還沒有填」。連結「修改」，`aria-label="修改身體資料"`，到 `/me/body`。CSS 只用 `index.css` 的變數（同 `TargetsCard.module.css`，可以直接複製它的 `.title`／`.text`／`.link`）。
+
+- [ ] **Step 5：接上。** `Me.tsx`：`<TargetsCard />` 後面加 `<BodyProfileCard />`（D21；體重卡片 Task 8 再加），註解寫順序的理由。`App.tsx`：`<Route path="/me/body" element={<BodyProfile />} />`（放在 `/me/targets` 旁邊）。`lib/layout.ts`：`FORM` 加 `"/me/body"`，註解的 `/me/targets`、`/me/password` 那句一起改成三個。
+
+- [ ] **Step 6：跑。** 同 Step 2 → PASS；整套 `npm run -s test` → 綠（grep `FAIL`／`Unhandled`）。
+
+- [ ] **Step 7：突變**：
+  1. `BodyProfile` 拿掉 `useIsRestoring` 那一層（直接掛 loader）→ 第 2 條紅。
+  2. loader 的 `isFetchedAfterMount &&` 拿掉 → 第 1 條紅。
+  3. `rate_kg_per_week: values.rate` 改成 `values.goal === "maintain" ? null : values.rate` → 第 4 條紅。
+  4. 卡片的 `.filter(...)` 改成不濾 `undefined` → 摘要多出 `undefined`，卡片那條紅。
+
+- [ ] **Step 8：commit。** `npm run -s lint`；typecheck 單獨跑、`&&` 串 commit：
+
+```bash
+cd frontend && npm run -s typecheck && cd .. && git add frontend/src/screens/BodyProfile.tsx frontend/src/components/BodyProfileCard.tsx frontend/src/components/BodyProfileCard.module.css frontend/src/screens/Me.tsx frontend/src/App.tsx frontend/src/lib/layout.ts frontend/tests/body-profile.test.tsx frontend/tests/me.test.tsx frontend/tests/layout.test.ts && git commit -F "$S/body-t7-msg.txt"
+```
+
+（Step 1 裡另外改到的測試檔一併列出來 add。）訊息：`feat(frontend): 身體資料的表單（/me/body）與「我的」的身體資料卡片`。
+
+---
+
+## Task 8：前端——體重卡片、`/weight` 與圖表
+
+**Files:**
+- Create: `frontend/src/components/{WeightCard,WeightForm,WeightChart}.tsx`、`WeightCard.module.css`、`frontend/src/components/Segmented.module.css`、`frontend/src/screens/Weight.tsx`、`Weight.module.css`、`frontend/tests/{weight-chart,weight}.test.tsx`
+- Modify: `frontend/src/screens/Trend.tsx`、`Trend.module.css`、`frontend/src/index.css`、`frontend/src/screens/Me.tsx`、`frontend/src/App.tsx`、`frontend/tests/me.test.tsx`
+
+- [ ] **Step 1：分段切換搬家（純搬，先跑趨勢的測試）。** 把 `Trend.module.css` 的 `.metrics`、`.legend`、`.metric`、`.metricInput` 四條原樣搬到新的 `components/Segmented.module.css`，改名 `.group`、`.legend`、`.option`、`.input`（檔頭註解照搬）；`Trend.tsx` 改 `import segmented from "../components/Segmented.module.css"`，兩組切換的四個 className 換過去；`Trend.module.css` 只剩 `.summary`、`.stale`。`npx vitest run tests/trend.test.tsx` → PASS。（畫面不變；e2e 的 `touch-targets` 量得到這些標籤。）
+
+- [ ] **Step 2：先寫測試。**
+
+`tests/weight-chart.test.tsx`（純渲染，給固定的 props）：
+
+```tsx
+const entries = [
+	{ date: "2026-10-01", weight_kg: "80" },
+	{ date: "2026-10-08", weight_kg: "78" },
+	{ date: "2026-10-14", weight_kg: "79" },
+];
+
+function chart(props: Partial<Parameters<typeof WeightChart>[0]> = {}) {
+	return render(
+		<WeightChart
+			entries={entries}
+			average={movingAverage(entries)}
+			start="2026-10-01"
+			end="2026-10-14"
+			targetKg={null}
+			{...props}
+		/>,
+	);
+}
+```
+
+1. 「每筆一個點，可以按角色找到」：`getAllByRole("img")` 三個，名稱「10/1，80 公斤」……（`formatCivilDate` 的格式以現況為準）。
+2. 「x 照日期、y 照體重」：y 軸是 `paddedExtent(["80","78","79"], "1")` = 77–81；第一點 `cx` 是左邊界（`PAD_X`）、最後一點是右邊界（`VIEW_WIDTH − PAD_X`）、10/08 的 `cx` 在 7/13 的位置（`toBeCloseTo`）；`cy`：80 → `VIEW_HEIGHT × (1 − 3/4)`、78 → `VIEW_HEIGHT × (1 − 1/4)`。常數從元件 export。
+3. 「平均線」：`getByTestId("weight-average")` 的 `points` 有三組座標，第三組的 y 是 78.5 的位置——10/14 的視窗是 10/08–10/14（78、79），**不是**最後一筆的 79。
+4. 「目標線」：`targetKg="72"` → `weight-target` 存在、y 在 72 的位置，而且 y 軸範圍把 72 包進去（71–81）；`null` → 沒有。
+5. 「只有一筆」（`start === end`）：不除以零，點畫在左邊界 `PAD_X`（除數是 `Math.max(天數, 1)`）。
+6. 「圖的名稱」：`getByRole("group", { name: "體重" })`。
+
+`tests/weight.test.tsx`（`/weight`，`MemoryRouter`、`bodyRoutes({ weights: { today: "2026-10-14", entries: [...] } })`）：
+
+1. 「預設 30 天」：有 2026-07-01 與 2026-10-10 兩筆 → 圖上只有 10/10 一點；選「全部」→ 兩點；選「90 天」→ 一點（7/01 在 90 天外：90 天是 7/17 起）。三個選項是 `radio`，在名稱「期間」的 `group` 裡。
+2. 「清單由新到舊、修改」：按「修改 10/10」→ 那一列變成輸入框（名稱「10/10 的體重（公斤）」）＋「儲存」＋「取消」；改成 `78.2` 存 → `PUT /api/weights/2026-10-10` body `{"weight_kg":"78.2"}`、`bodyAll` 失效。
+3. 「刪除要確認」：按「刪除 10/10」→ `alertdialog`「刪除 10/10 的體重？」、焦點在「取消」；按「刪除」→ `DELETE /api/weights/2026-10-10`；按「取消」→ 焦點回到「刪除 10/10」（`useConfirmFocus`）。
+4. 「沒有紀錄」：「還沒有體重紀錄」，記錄的表單在。
+5. 「最近 7 天平均」與「目標 72 公斤」（`bodyRoutes({ profile: { …EMPTY_PROFILE, target_weight_kg: "72.00" } })`）出現在圖下面。
+
+`tests/me.test.tsx` 加「體重卡片」：
+
+1. 有 10/07 的 80 與 10/14 的 79 →「79 公斤・10/14」與「比 7 天前 −1 公斤」。
+2. 「記錄體重」→ 展開表單：體重輸入框（`inputMode="decimal"`）、日期 `type="date"` 預設 `2026-10-14`、`max="2026-10-14"`、`min="2024-10-14"`（`shiftDays(today, -730)`）；填 `78.5` 按「儲存」→ `PUT /api/weights/2026-10-14`、表單收起、焦點回到「記錄體重」。
+3. 「體重不合規則不送」：`24` → 錯誤「體重要在 25 到 350 公斤之間，最多兩位小數」，沒有 PUT。
+4. 「看全部」連到 `/weight`。
+
+- [ ] **Step 3：跑，看它紅。**
+
+- [ ] **Step 4：圖表。** `components/WeightChart.tsx`（純渲染；檔頭說明照 `TrendChart` 的三點：幾何算成屬性、`role="img"` 不能拿、不量容器）：
+
+```tsx
+import { daysBetween, formatCivilDate } from "../lib/civil-date";
+import { formatMacro, paddedExtent, positionIn, type Numeric } from "../lib/decimal";
+import type { WeightPoint } from "../lib/weights";
+
+export const VIEW_WIDTH = 280;
+export const VIEW_HEIGHT = 160;
+/** 左右各留一點，第一點與最後一點的圓不會被 viewBox 切掉一半。 */
+export const PAD_X = 6;
+const AXIS_PAD_KG = "1";
+
+type Props = {
+	entries: readonly WeightPoint[];
+	average: readonly WeightPoint[];
+	start: string;
+	end: string;
+	targetKg: Numeric | null;
+};
+
+export function WeightChart({ entries, average, start, end, targetKg }: Props) {
+	const values = entries.map((entry) => entry.weight_kg);
+	const extent = paddedExtent(targetKg === null ? values : [...values, targetKg], AXIS_PAD_KG);
+	if (extent === null) return null;
+	const days = Math.max(daysBetween(start, end), 1);
+	const x = (date: string) => PAD_X + (daysBetween(start, date) / days) * (VIEW_WIDTH - 2 * PAD_X);
+	const y = (value: Numeric) => VIEW_HEIGHT * (1 - positionIn(value, extent.lo, extent.hi));
+	const shownDates = new Set(entries.map((entry) => entry.date));
+	const line = average
+		.filter((point) => shownDates.has(point.date))
+		.map((point) => `${x(point.date)},${y(point.weight_kg)}`)
+		.join(" ");
+
+	return (
+		// biome-ignore lint/a11y/useSemanticElements: 同 TrendChart：它建議的 <fieldset> 對一張 SVG 圖沒有意義
+		<svg viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`} className="trend-chart" role="group" aria-label="體重" data-testid="weight-chart">
+			{/* biome-ignore lint/a11y/noAriaHiddenOnFocusable: SVG <text> 不能聚焦（同 TrendChart）；刻度是裝飾 */}
+			<text x={0} y={10} className="weight-axis" aria-hidden="true">{extent.hi}</text>
+			{/* biome-ignore lint/a11y/noAriaHiddenOnFocusable: 同上 */}
+			<text x={0} y={VIEW_HEIGHT - 2} className="weight-axis" aria-hidden="true">{extent.lo}</text>
+			{targetKg !== null && (
+				<line data-testid="weight-target" className="trend-target" x1={0} x2={VIEW_WIDTH} y1={y(targetKg)} y2={y(targetKg)} />
+			)}
+			{line !== "" && (
+				<polyline data-testid="weight-average" className="weight-average" points={line} aria-hidden="true" />
+			)}
+			{entries.map((entry) => (
+				// biome-ignore lint/a11y/noInteractiveElementToNoninteractiveRole: circle 不是互動元素（同 TrendChart 的 rect）；拿掉 role 點會對螢幕閱讀器消失
+				<circle
+					key={entry.date}
+					data-testid={`weight-point-${entry.date}`}
+					role="img"
+					aria-label={`${formatCivilDate(entry.date)}，${formatMacro(entry.weight_kg)} 公斤`}
+					cx={x(entry.date)}
+					cy={y(entry.weight_kg)}
+					r={3}
+					className="weight-point"
+				/>
+			))}
+		</svg>
+	);
+}
+```
+
+> biome 的忽略註解在 JSX children 位置要用 `{/* … */}`（handover §7）；`map` 回傳的 JSX 前面那一行是運算式位置，`//` 合法。實際需要哪幾條忽略以 `npm run -s lint` 為準，**不要為了 lint 拿掉 `role`**。
+
+`index.css` 在 `.trend-date` 後面加（只用變數）：
+
+```css
+/* 體重圖（身體資料規格 §6.4）：點、7 天移動平均、刻度。目標線沿用 .trend-target。 */
+.weight-point {
+	fill: var(--color-accent);
+}
+
+.weight-average {
+	fill: none;
+	stroke: var(--color-action);
+	stroke-width: 2;
+}
+
+.weight-axis {
+	fill: var(--color-text-muted);
+	font-size: 10px;
+}
+```
+
+- [ ] **Step 5：表單。** `components/WeightForm.tsx`：props `{ today: string; onDone: () => void; cancelRef? }`。體重（`inputMode="decimal"`、`autoComplete="off"`）、日期（`type="date"`、`min={shiftDays(today, -730)}`、`max={today}`、預設 `today`）、「儲存」「取消」。送出前 `checkRangeInput(weight, { min: "25", max: "350", places: 2 })`；`useMutation({ mutationFn: ({ date, weight }) => saveWeight(date, weight), onSuccess: () => invalidateBody(queryClient) })`、`mutate(vars, { onSuccess: onDone })`。日期在範圍外（使用者手打）交給後端的 422 訊息（`WEIGHT_DATE_IN_FUTURE`／`TOO_OLD`，`caught.message`）。「儲存」送出中 `aria-disabled`（焦點在它身上，D：會變成不能按的按鈕用 `aria-disabled`），用 ref 擋重複送出（同 `ExportCard`）。
+
+- [ ] **Step 6：卡片。** `components/WeightCard.tsx`：`useWeights()`；標題「體重」；有紀錄：`<p>{formatMacro(latest.weight_kg)} 公斤・{formatCivilDate(latest.date)}</p>`，`weekChange` 不是 null 時 `<p>比 7 天前 {signed(change)} 公斤</p>`（`signed`：開頭不是 `-` 而且不是 `0` 就加 `+`；負號顯示成 `−`？**不換**，照 `formatMacro` 的 `-`，跟重算提示一致）；沒有紀錄：「還沒有體重紀錄」。按鈕「記錄體重」（`ui.secondary`）切換 `WeightForm`（打開時按鈕卸載、表單收起時焦點回到按鈕——`useConfirmFocus` 的同一個模式，或一個 `ref` + effect）。連結「看全部」到 `/weight`。`Me.tsx`：`<BodyProfileCard />` 後面加 `<WeightCard />`。
+
+- [ ] **Step 7：`/weight`。** `screens/Weight.tsx`（`ui.screen`，h1「體重」）：
+
+```tsx
+const SPANS = [
+	{ value: 30, label: "30 天" },
+	{ value: 90, label: "90 天" },
+	{ value: "all", label: "全部" },
+] as const satisfies readonly { value: WeightSpan; label: string }[];
+```
+
+- `useWeights()`、`useBodyProfile()`（目標體重；讀不到就當沒有）。載入中／讀不到：「載入中…」／`role="alert"`「無法載入體重」。
+- 期間切換：`<fieldset className={segmented.group}><legend className={segmented.legend}>期間</legend>…`（同趨勢頁）。
+- `const average = movingAverage(all)`（**用全部算，再只畫範圍內的**——範圍開頭那幾天的平均要用到範圍外的紀錄）；`entriesInSpan(all, today, span)` 給 `entries` 與 `start`；`<WeightChart … end={today} />`。
+- 圖下面 `<p>`：`recentAverage(all, today)` 不是 null 時「最近 7 天平均 X 公斤」；有目標體重時「目標 X 公斤」。
+- `<WeightForm today={today} … />`（標題「記錄體重」）。
+- 清單 `<ul>` 由新到舊（`[...all].reverse()`）：每列 `WeightRow`——顯示模式：「10/10　78.2 公斤」＋「修改」（`aria-label="修改 10/10"`）＋「刪除」（`aria-label="刪除 10/10"`）；修改模式：輸入框（`aria-label="10/10 的體重（公斤）"`）＋儲存＋取消；確認模式：照 `Expenses.tsx` 的 `ExpenseRow`（`role="alertdialog"`、`useConfirmFocus`、`aria-labelledby` 指到「刪除 10/10 的體重？」）。刪除用 `useMutation` + `invalidateBody`。
+- `App.tsx`：`<Route path="/weight" element={<Weight />} />`。寬度是預設的 `narrow`，`layout.ts` 不用改（Task 7 的測試已經守著）。
+- `Weight.module.css`：清單列的排版（名稱在左、按鈕在右、按鈕 ≥ 44px），只用變數。
+
+- [ ] **Step 8：跑。** `npx vitest run tests/weight-chart.test.tsx tests/weight.test.tsx tests/me.test.tsx tests/trend.test.tsx` → PASS；整套 → 綠。
+
+- [ ] **Step 9：突變**：
+  1. `WeightChart` 的 `x` 拿掉 `daysBetween`、改成照索引平均分配（`index / (n − 1)`）→ 第 2 條的 10/08 紅（7/13 ≠ 1/2）。
+  2. `y` 拿掉 `1 −` → 第 2 條的 `cy` 紅（重的畫在下面）。
+  3. `extent` 不把 `targetKg` 包進去 → 第 4 條紅。
+  4. `Weight.tsx` 的平均改成 `movingAverage(entriesInSpan(...).entries)` → **存活**（測試資料的範圍開頭沒有前一週的紀錄）。補一條：30 天的範圍從 9/15 起、9/12 有一筆 80、9/16 有一筆 78 → 平均線第一點是 79，不是 78。再跑突變確認紅。
+  5. 卡片的 `weekChange` 換成「跟前一筆比」→ 卡片那條紅（前一筆不是 7 天前）。
+  6. 刪除不經確認直接送 → 第 3 條紅。
+  7. 把 `role="img"` 從 `<circle>` 拿掉 → 圖表第 1 條紅。
+
+- [ ] **Step 10：commit。** `npm run -s lint`；typecheck 單獨跑、`&&` 串 commit；`git add` 列出這個 task 的每一個檔案（`Trend.tsx`、`Trend.module.css`、`Segmented.module.css`、`index.css`、新的元件、畫面、測試、`Me.tsx`、`App.tsx`）。訊息（`$S/body-t8-msg.txt`）：`feat(frontend): 體重卡片、/weight 的圖表（7 天移動平均、目標線）與清單`。
