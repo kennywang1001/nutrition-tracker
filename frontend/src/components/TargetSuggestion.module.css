@@ -36,7 +36,7 @@
 .links {
 	display: flex;
 	flex-wrap: wrap;
-	gap: var(--space-2);
+	gap: var(--space-2) var(--space-4);
 }
 
 /* 連結也是點擊目標：至少 44px 高。 */

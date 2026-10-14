@@ -1,0 +1,7 @@
+/* 單選的選項排成一列（性別兩個、目標三個、速度兩個都很短）：一個一行的話表單長到要捲兩頁。
+   legend 仍然看得到（.screen 的通用規則）；每個標籤仍然 ≥ 44px 高。 */
+.choices {
+	flex-direction: row;
+	flex-wrap: wrap;
+	column-gap: var(--space-4);
+}

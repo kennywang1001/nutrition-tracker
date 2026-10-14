@@ -22,6 +22,7 @@ import {
 	SEX_OPTIONS,
 } from "../lib/body";
 import { checkRangeInput, formatMacro } from "../lib/decimal";
+import styles from "./BodyProfile.module.css";
 
 type Values = {
 	sex: BodyProfileData["sex"];
@@ -173,7 +174,7 @@ function BodyProfileForm({ current }: { current: BodyProfileData }) {
 		<form onSubmit={handleSubmit} noValidate>
 			<p>這些資料只用來算建議目標，好友看不到。留空＝不設定。</p>
 
-			<fieldset>
+			<fieldset className={styles.choices}>
 				<legend>性別</legend>
 				{SEX_OPTIONS.map((option) => (
 					<label key={option.value}>
@@ -233,7 +234,7 @@ function BodyProfileForm({ current }: { current: BodyProfileData }) {
 				</select>
 			</div>
 
-			<fieldset>
+			<fieldset className={styles.choices}>
 				<legend>目標</legend>
 				{GOAL_OPTIONS.map((option) => (
 					<label key={option.value}>
@@ -250,7 +251,7 @@ function BodyProfileForm({ current }: { current: BodyProfileData }) {
 			</fieldset>
 
 			{showRate && (
-				<fieldset>
+				<fieldset className={styles.choices}>
 					<legend>速度</legend>
 					{RATE_OPTIONS.map((option) => (
 						<label key={option.value}>

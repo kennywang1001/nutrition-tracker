@@ -192,6 +192,9 @@ a {
    起訖日期沿用 .trend-date。 */
 .weight-point {
 	fill: var(--color-accent);
+	/* 卡片底色的細框：點壓在同色系的平均線上時分得出來（深色模式尤其）。 */
+	stroke: var(--color-surface);
+	stroke-width: 1.5;
 }
 
 .weight-average {
