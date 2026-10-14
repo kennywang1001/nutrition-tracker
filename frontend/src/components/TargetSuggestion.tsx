@@ -114,6 +114,14 @@ function Ready({ suggestion }: { suggestion: SuggestionReady }) {
 							queryKey: queryKeys.targetSuggestion,
 						});
 						setError("建議目標剛剛變了，請看過新的數字再套用");
+					} else if (
+						caught instanceof ApiError &&
+						caught.code === "PROFILE_INCOMPLETE"
+					) {
+						// 另一個分頁剛刪了體重或清了身體資料：畫面上的「可以套用」是舊的（審查 M4）。
+						// 身體資料、體重、建議一起重抓——重抓回來缺東西，這一塊就換成「還差：…」。
+						void invalidateBody(queryClient);
+						setError("身體資料或體重剛剛變了，已經重新整理建議");
 					} else if (caught instanceof ApiError && caught.status === 409) {
 						setError(caught.message);
 					} else {

@@ -235,6 +235,73 @@ describe("建議目標", () => {
 		).not.toHaveAttribute("aria-disabled", "true");
 	});
 
+	it("422 資料不全（另一個分頁剛刪了體重）：重抓建議，畫面換成缺什麼（審查 M4）", async () => {
+		let suggestion: unknown = READY;
+		const { spy } = renderSection([
+			// 伺服器上的狀態在按下去之前就變了：之後再讀建議就是缺體重。
+			applyRoute(() => {
+				suggestion = { ready: false, missing: ["weight"] };
+				return json(
+					{
+						error: {
+							code: "PROFILE_INCOMPLETE",
+							message: "身體資料或體重還沒填完",
+							details: { missing: ["weight"] },
+						},
+					},
+					422,
+				);
+			}),
+			{
+				method: "GET",
+				path: "/api/me/target-suggestion",
+				handler: () => json(suggestion),
+			},
+			...bodyRoutes(),
+		]);
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "套用建議目標" }),
+		);
+
+		expect(await section().findByText("還差：體重")).toBeInTheDocument();
+		expect(suggestionGets(spy)).toBe(2);
+		expect(
+			section().getByRole("link", { name: "記錄體重" }),
+		).toBeInTheDocument();
+		expect(
+			section().queryByRole("button", { name: "套用建議目標" }),
+		).not.toBeInTheDocument();
+		expect(screen.queryByRole("heading", { name: "我的" })).toBeNull();
+	});
+
+	it("422 資料不全、重抓回來又是建議（資料剛好又補上了）：說一聲，不是「套用失敗」", async () => {
+		const { spy } = renderSection([
+			applyRoute(() =>
+				json(
+					{
+						error: {
+							code: "PROFILE_INCOMPLETE",
+							message: "身體資料或體重還沒填完",
+							details: { missing: ["weight"] },
+						},
+					},
+					422,
+				),
+			),
+			...bodyRoutes({ suggestion: READY }),
+		]);
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "套用建議目標" }),
+		);
+
+		expect(await section().findByRole("alert")).toHaveTextContent(
+			"身體資料或體重剛剛變了，已經重新整理建議",
+		);
+		await waitFor(() => expect(suggestionGets(spy)).toBe(2));
+	});
+
 	it("其他 409（目標剛被另一台改過）：顯示後端的訊息", async () => {
 		renderSection([
 			applyRoute(() =>
