@@ -1,5 +1,6 @@
 from app.models.ai_analysis import AiAnalysis, AnalysisKind
 from app.models.base import Base
+from app.models.body import ActivityLevel, Goal, Sex, UserProfile, WeightEntry
 from app.models.expense import Expense, ExpenseCategory
 from app.models.food import BaseUnit, Food, FoodPortion, FoodRevision, RevisionStatus
 from app.models.friendship import Friendship, FriendshipStatus
@@ -13,6 +14,7 @@ from app.models.target import UserTarget
 from app.models.user import User, UserRole
 
 __all__ = [
+    "ActivityLevel",
     "AiAnalysis",
     "AnalysisKind",
     "Base",
@@ -24,6 +26,7 @@ __all__ = [
     "FoodRevision",
     "Friendship",
     "FriendshipStatus",
+    "Goal",
     "Invite",
     "Meal",
     "MealComment",
@@ -35,11 +38,14 @@ __all__ = [
     "PasswordResetToken",
     "RefreshSession",
     "RevisionStatus",
+    "Sex",
     "Supplement",
     "SupplementIntake",
     "SupplementPlan",
     "TimeOfDay",
     "User",
+    "UserProfile",
     "UserRole",
     "UserTarget",
+    "WeightEntry",
 ]

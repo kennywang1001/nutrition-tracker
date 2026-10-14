@@ -6,6 +6,7 @@ from itertools import count
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.invites import INVITE_LIFETIME, hash_invite_token, new_invite_token
+from app.models.body import ActivityLevel, Goal, Sex, UserProfile, WeightEntry
 from app.models.expense import Expense, ExpenseCategory
 from app.models.food import BaseUnit, Food, FoodPortion, FoodRevision, RevisionStatus
 from app.models.friendship import Friendship, FriendshipStatus
@@ -488,3 +489,48 @@ async def create_comment(
     await db_session.commit()
     await db_session.refresh(comment)
     return comment
+
+
+async def create_profile(
+    db_session: AsyncSession,
+    *,
+    user: User,
+    sex: Sex | None = Sex.MALE,
+    birth_year: int | None = 1990,
+    height_cm: Decimal | int | str | None = 175,
+    activity_level: ActivityLevel | None = ActivityLevel.MODERATE,
+    goal: Goal | None = Goal.LOSE,
+    rate_kg_per_week: Decimal | str | None = "0.5",
+    target_weight_kg: Decimal | int | str | None = None,
+    targets_applied_weight_kg: Decimal | int | str | None = None,
+) -> UserProfile:
+    """預設是規格 §3.2 那一位（男、1990、175 cm、中度、減重每週 0.5）——配上 80 kg 的體重
+    與 2026-10-14 的「今天」就是 2110 kcal。"""
+
+    def dec(value: Decimal | int | str | None) -> Decimal | None:
+        return None if value is None else Decimal(str(value))
+
+    profile = UserProfile(
+        user_id=user.id,
+        sex=sex,
+        birth_year=birth_year,
+        height_cm=dec(height_cm),
+        activity_level=activity_level,
+        goal=goal,
+        rate_kg_per_week=dec(rate_kg_per_week),
+        target_weight_kg=dec(target_weight_kg),
+        targets_applied_weight_kg=dec(targets_applied_weight_kg),
+    )
+    db_session.add(profile)
+    await db_session.commit()
+    return profile
+
+
+async def create_weight(
+    db_session: AsyncSession, *, user: User, day: date, weight_kg: Decimal | int | str = 80
+) -> WeightEntry:
+    """直接寫一筆體重——不經過端點的日期界線。"""
+    entry = WeightEntry(user_id=user.id, date=day, weight_kg=Decimal(str(weight_kg)))
+    db_session.add(entry)
+    await db_session.commit()
+    return entry
