@@ -14,6 +14,7 @@ import {
 import { PHOTO_UPLOAD_FAILED_NOTICE } from "../src/screens/LogMeal";
 import { setDesktop } from "../src/test/media";
 import { EMPTY_PROFILE, NO_WEIGHTS, NOT_READY } from "./helpers/body-routes";
+import { ACTIVITY_LIST, NO_EXERCISE } from "./helpers/exercise-routes";
 
 // 上傳會呼叫 shrinkToLongestEdge（用 canvas，jsdom 沒有）。
 vi.mock("../src/lib/resize-image", () => ({
@@ -82,6 +83,10 @@ function mockBackend(
 			// **`/api/meals` 必須在 `/api/me` 之前**："/api/meals".includes("/api/me")
 			// 為真——順序反過來，總覽的餐點清單會拿到使用者物件然後當掉。
 			if (url.includes("/api/meals")) return jsonResponse([]);
+			// 運動（運動規格 §7）：活動清單與今天的運動。兩個字串都不包含 "/api/me"。
+			if (url.includes("/api/exercise/activities"))
+				return jsonResponse(ACTIVITY_LIST);
+			if (url.includes("/api/exercises")) return jsonResponse(NO_EXERCISE);
 			if (url.includes("/api/me")) return jsonResponse(ME);
 			// 外框一掛上去就會問未讀通知數（社群規格 §6.4）。
 			if (url.includes("/api/notifications/unread-count"))
@@ -203,6 +208,61 @@ describe("App", () => {
 		expect(
 			screen.getByRole("navigation", { name: "主要導覽" }),
 		).toBeInTheDocument();
+	});
+
+	it("從「＋」點「記運動」到得了表單，內容寬度是表單的", async () => {
+		// 內容寬度的 class 只有電腦版的外框才有：從左側導覽的「新增紀錄」進去。
+		setDesktop(true);
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockBackend();
+		render(<App />);
+
+		expect(
+			await screen.findByRole("heading", { name: "總覽" }),
+		).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
+		await userEvent.click(screen.getByRole("link", { name: "記運動" }));
+
+		expect(
+			await screen.findByRole("heading", { level: 1, name: "記運動" }),
+		).toBeInTheDocument();
+		expect(window.location.pathname).toBe("/exercises/new");
+		expect(
+			await screen.findByRole("option", { name: "跑步（約 10 km/h）" }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("main").querySelector(".app-content-form"),
+		).not.toBeNull();
+	});
+
+	it("直接打開 /exercises/31/edit 是編輯運動", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockBackend((url) =>
+			url.includes("/api/exercises/31")
+				? jsonResponse({
+						id: 31,
+						performed_at: "2026-10-01T10:30:00Z",
+						activity: "running",
+						label: "跑步（約 10 km/h）",
+						name: null,
+						minutes: 30,
+						kcal: "343.00",
+						kcal_source: "estimated",
+						note: null,
+						created_at: "2026-10-01T10:31:00Z",
+						updated_at: "2026-10-01T10:31:00Z",
+					})
+				: undefined,
+		);
+		window.history.replaceState(null, "", "/exercises/31/edit");
+		render(<App />);
+
+		expect(
+			await screen.findByRole("heading", { level: 1, name: "編輯運動" }),
+		).toBeInTheDocument();
+		await waitFor(() =>
+			expect(screen.getByLabelText("分鐘")).toHaveValue("30"),
+		);
 	});
 
 	it("直接打開 /expenses/new 也不顯示分頁列", async () => {

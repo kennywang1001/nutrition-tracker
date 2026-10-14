@@ -57,6 +57,24 @@ describe("TabBar", () => {
 		);
 	});
 
+	it("面板裡有「記運動」，連到 /exercises/new；點了面板關掉", async () => {
+		// 入口測試（運動規格 §7.1）：拿掉這個連結，記運動就只能打網址。
+		renderAt("/");
+		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
+
+		const sheet = screen.getByRole("dialog", { name: "新增紀錄" });
+		expect(
+			within(sheet)
+				.getAllByRole("link")
+				.map((link) => link.textContent),
+		).toEqual(["記帳", "記一餐", "記運動"]);
+		const exercise = within(sheet).getByRole("link", { name: "記運動" });
+		expect(exercise).toHaveAttribute("href", "/exercises/new");
+
+		await userEvent.click(exercise);
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+
 	it("「新增紀錄」打開面板，裡面有記帳與記一餐兩個入口", async () => {
 		// **入口測試。** 這個專案三次蓋好後端卻沒有前端入口（食物、補劑、
 		// 記帳——handover §6）。拿掉面板裡任何一個連結，這條會紅。

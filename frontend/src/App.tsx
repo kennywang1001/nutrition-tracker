@@ -32,12 +32,14 @@ import { AddExpense } from "./screens/AddExpense";
 import { AdminRevisions } from "./screens/AdminRevisions";
 import { BodyProfile } from "./screens/BodyProfile";
 import { ChangePassword } from "./screens/ChangePassword";
+import { EditExercise } from "./screens/EditExercise";
 import { EditMeal } from "./screens/EditMeal";
 import { Expenses } from "./screens/Expenses";
 import { FoodDetail } from "./screens/FoodDetail";
 import { FoodLibrary } from "./screens/FoodLibrary";
 import { FriendDay } from "./screens/FriendDay";
 import { Join, JoinWhileLoggedIn } from "./screens/Join";
+import { LogExercise } from "./screens/LogExercise";
 import { Login } from "./screens/Login";
 import { LogMeal, PHOTO_UPLOAD_FAILED_NOTICE } from "./screens/LogMeal";
 import { Me } from "./screens/Me";
@@ -255,6 +257,9 @@ export function App() {
 							{/* 修改或刪除一筆已經記下的餐（編輯餐點規格 §4.2）。入口：飲食頁
 									餐點卡片的「編輯」、總覽時間線的餐點列。 */}
 							<Route path="/meals/:id/edit" element={<EditMeal />} />
+							{/* 運動（運動規格 §7.1）：入口是「＋」的「記運動」、總覽時間線與飲食頁的運動列。 */}
+							<Route path="/exercises/new" element={<LogExercise />} />
+							<Route path="/exercises/:id/edit" element={<EditExercise />} />
 							{/* 一餐的唯讀畫面，底下是讚與留言（社群規格 §6.3）：自己的餐與看得到的
 									好友的餐都能開。入口：兩種卡片上的「留言 N」、通知。`/meals/new`
 									仍然命中上面靜態的那一條（react-router 依具體程度排名）。 */}

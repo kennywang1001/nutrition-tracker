@@ -9,6 +9,10 @@ import styles from "./IconBadge.module.css";
 
 type Size = "small" | "large";
 
+/** 運動的徽章色（「＋」的「記運動」、總覽與飲食頁的運動列共用，運動規格 §7）。用「正面狀態」的
+ *  綠：跟每個支出分類的顏色都不一樣，時間線上一眼分得出是運動；它是設計變數，深色模式跟著換。 */
+export const EXERCISE_COLOR = "var(--color-success)";
+
 type Props = {
 	icon: LucideIcon;
 	/** 任何 CSS 顏色：分類色（`CATEGORY_COLORS`）或 `var(--color-action)`。 */

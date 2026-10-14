@@ -31,7 +31,8 @@
 
 .choices {
 	display: grid;
-	grid-template-columns: 1fr 1fr;
+	/* 三個入口一列（運動規格 §7.1）：手機寬度 390 每格約 110px，圖示加兩個字放得下。 */
+	grid-template-columns: repeat(3, minmax(0, 1fr));
 	gap: var(--space-3);
 }
 

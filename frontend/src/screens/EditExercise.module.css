@@ -1,0 +1,22 @@
+/* /exercises/:id/edit（運動規格 §7.3）。卡片、按鈕的長相靠 ui.module.css 的 .screen 規則；
+   這裡只放確認框與「回總覽」。只用 index.css 的變數。 */
+
+/* 確認框：問句在上、兩顆按鈕並排在下（它本身就佔了整張卡片，不用另一層底色）。 */
+.confirm {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+
+.actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+}
+
+.back {
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+	font-weight: 600;
+}

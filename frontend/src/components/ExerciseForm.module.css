@@ -1,0 +1,52 @@
+/* 記運動與編輯運動的表單（運動規格 §7.2）。表單放在 .screen 底下：標籤、輸入框、按鈕、勾選框那一列
+   （44px）的長相都靠 ui.module.css 的通用規則，這裡只放這個表單特有的。只用 index.css 的變數。 */
+
+/* 預覽的那一行：灰色小字。沒有字的時候也佔一行高，答案回來時下面的欄位不會跳。 */
+.preview {
+	min-height: 1.5em;
+	font-size: 14px;
+	color: var(--color-text-muted);
+}
+
+/* 「先記一次體重，就能自動估算」＋連結。 */
+.hint {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	column-gap: var(--space-2);
+	font-size: 14px;
+	color: var(--color-text-muted);
+}
+
+/* 句子裡的連結也是點擊目標：至少 44px 高。 */
+.link {
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+	font-weight: 600;
+}
+
+/* 日期與時間並排：兩格都短，手機寬度也放得下。 */
+.when {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: var(--space-2);
+}
+
+.field {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	min-width: 0;
+}
+
+.error {
+	color: var(--color-danger);
+}
+
+/* 錯誤清單：每句一行，不要清單的點。顏色由 .screen 的 [role="alert"] 規則給。 */
+.problems {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+}

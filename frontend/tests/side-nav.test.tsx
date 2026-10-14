@@ -82,6 +82,16 @@ describe("SideNav", () => {
 		expect(button).toHaveFocus();
 	});
 
+	it("選單裡有「記運動」，連到 /exercises/new；點了選單關掉", async () => {
+		renderAt("/");
+		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
+
+		const exercise = screen.getByRole("link", { name: "記運動" });
+		expect(exercise).toHaveAttribute("href", "/exercises/new");
+		await userEvent.click(exercise);
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+
 	it("點選單裡的「記帳」：換頁，選單關掉", async () => {
 		renderAt("/");
 		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
