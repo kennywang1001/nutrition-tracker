@@ -2,7 +2,7 @@
 
 **專案：** nutrition-tracker —— 飲食紀錄系統
 **Repo：** https://github.com/kennywang1001/nutrition-tracker（公開）
-**狀態：** 後端完成並可部署、session 撤銷已完成；介面改版第一階段、食物的一份、修改與刪除已記錄的餐點、AI 估算的前端已合併；介面改版第二階段已實作於 `feat/ui-phase2`；帳號與目標設定已實作於 `feat/account-settings`；報表看其他月份與匯出資料已實作於 `feat/reports-month-export`；AI 一次估算多樣食物與餐點的描述已實作於 `feat/ai-multi-food`；按讚、留言、通知已實作於 `feat/social-interactions`
+**狀態：** 後端完成並可部署、session 撤銷已完成；介面改版第一階段、食物的一份、修改與刪除已記錄的餐點、AI 估算的前端已合併；介面改版第二階段已實作於 `feat/ui-phase2`；帳號與目標設定已實作於 `feat/account-settings`；報表看其他月份與匯出資料已實作於 `feat/reports-month-export`；AI 一次估算多樣食物與餐點的描述已實作於 `feat/ai-multi-food`；按讚、留言、通知已實作於 `feat/social-interactions`；身體資料與目標已實作於 `feat/body-targets`；運動紀錄已實作於 `feat/exercise`
 **文件產出日：** 2026-09-11（session 撤銷完成後更新於 2026-09-12；§2 的數字更新於 2026-10-10）
 
 ---
@@ -28,11 +28,11 @@
 
 | 項目 | 數字 |
 |---|---|
-| 端點 | **95**（OpenAPI 的 operation 數，跟 `grep -c "@router\." app/api/routes/*.py` 的加總一樣；2026-10-14） |
-| 測試 | 後端 **1606**（`pytest -q -W error` 全綠，約 4 分 42 秒）；前端 `Test Files 166`、`Tests 2312`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **53** 條、21 個檔案（Playwright；預設 6 個 workers 連跑兩次都是 `53 passed`。之前「重設密碼連結」那一條在 dev 資料庫 932 個帳號時會逾時，已改成只量清單以外的按鈕加上那個人那一列——單獨跑從 18.6 秒降到 3.3 秒；見 §8.2「帳號與目標設定」第 6 點）。2026-10-14 在 `feat/body-targets` 修完審查之後量的（審查之前是後端 1592、前端 166／2306、e2e 53；開工前是後端 1450、前端 154／2128、e2e 50，跟 2026-10-10 在 `feat/social-interactions` 量的一樣） |
+| 端點 | **103**（OpenAPI 的 operation 數；`@router.` 101 ＋ `@activities_router.` 2——運動有兩個 router，只 grep `@router\.` 會少 2；2026-10-14 在 `feat/exercise` 量的。之前 95） |
+| 測試 | 後端 **1745**（`pytest -q -W error` 全綠，約 4 分 19 秒）；前端 `Test Files 178`、`Tests 2538`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **54** 條、22 個檔案（Playwright；預設 6 個 workers 連跑兩次都是 `54 passed`，各約 37 秒）。2026-10-14 在 `feat/exercise` 量的（開工前是後端 1606、前端 166／2312、e2e 53，跟下一句 `feat/body-targets` 的一樣）。**dev 資料庫 1090 個帳號時** `invites.spec.ts` 量「我的」每一顆按鈕的觸控高度逾時（第 1036 顆），改成跟 `account-settings.spec.ts` 一樣不量清單那一顆（見 §8.2「帳號與目標設定」第 6 點）。（`feat/body-targets` 修完審查之後：後端 1606、前端 166／2312、e2e 53 條 21 個檔案） |
 | 覆蓋率 | 96%（2026-09 量的，之後沒再量） |
-| 資料表 | 21（+ `alembic_version`；2026-10-14 在 dev 資料庫數的） |
-| Migration | `0001` ~ `0019` |
+| 資料表 | 22（+ `alembic_version`；2026-10-14 在 dev 資料庫數的。之前 21） |
+| Migration | `0001` ~ `0020` |
 | Commit | 600+ |
 | PR | 5 個，全部經 CI 驗證後合併 |
 
@@ -58,6 +58,7 @@
 | AI 一次估算多樣食物、餐點的描述 | 記一餐的 AI 入口改成一餐一次估（`POST /api/ai/analyze-meal`：一句描述＋最多 8 樣，**算一次額度**）；估完是勾選清單，食物庫同名的預設用食物庫的，「加入這 N 樣」把每一樣變成食物放進這一餐（部分失敗可以重試）。這一餐多一個「描述」（`meals.description`，migration `0017`）：**好友看得到**（備註仍然只有自己看得到），飲食頁與好友的卡片、餐點 CSV 都有。新增食物與編輯這一餐的「加一項」仍然是一次一樣（規格 `docs/superpowers/specs/2026-10-09-ai-multi-food-design.md`、計畫 `docs/superpowers/plans/2026-10-09-ai-multi-food.md`；見第 10 節「AI 多樣估算與餐點描述」） | ✅（`feat/ai-multi-food`；**沒有對真的 LLM 打過**，見 §8.2） |
 | 按讚、留言、通知（社群第三步） | 餐點頁 `/meals/:id`（自己的餐與看得到的好友的餐：照片、項目、合計、描述，底下是讚與留言）；讚（一人一餐一個，卡片上的愛心與數字）；留言（一行、1–200 字，不能改，作者與餐的主人可以刪）；通知（只在 app 裡：讚、留言、好友邀請、邀請被接受）——「我的」分頁上的未讀數字、「我的」最上面的通知卡片、`/notifications`。**解除好友不刪資料，讀的時候過濾**；端點全部是新的（`/api/social/…`、`/api/notifications…`），`/api/meals` 仍然只回自己的餐。migration `0018`（三張新表，可以退版）（規格 `docs/superpowers/specs/2026-10-10-social-interactions-design.md`、計畫 `docs/superpowers/plans/2026-10-10-social-interactions.md`；見第 10 節「按讚、留言、通知」） | ✅（`feat/social-interactions`） |
 | 身體資料與目標（含體重紀錄） | 「我的」多兩張卡片：身體資料（`/me/body`：性別、出生年、身高、活動量、目標、速度、目標體重）與體重（最新一筆、跟 7 天前比、行內記錄）；`/weight` 是圖表（30 天／90 天／全部、每天一點、7 天移動平均、目標體重線）與清單（修改、刪除）。`/me/targets` 上面多一個「建議目標」（Mifflin-St Jeor → 活動量 → 依目標加減 → 下限 → 三大營養素）與「套用建議目標」；體重跟套用時差 1 公斤以上，「每日目標」卡片提示重算。匯出多一個 `weights.csv`。**體重與身體資料不給好友看**。migration `0019`（兩張新表，可以退版）（規格 `docs/superpowers/specs/2026-10-14-body-targets-design.md`、計畫 `docs/superpowers/plans/2026-10-14-body-targets.md`；見第 10 節「身體資料與目標」） | ✅（`feat/body-targets`） |
+| 運動紀錄 | 「＋ 新增」多「記運動」（`/exercises/new`、`/exercises/:id/edit`）：活動（18 個固定活動＋「其他」）、分鐘、時間、備註；後端用 **MET × 運動那一天或之前最新的體重 × 小時**估算熱量（沒有體重就手動輸入，表單先預覽）。今天的**熱量額度**＝目標＋運動（「我的」每日目標卡片的開關「運動消耗加回今天的熱量額度」，預設開），總覽與飲食頁用額度當分母、寫「含運動 +N」；總覽時間線與飲食頁「今日運動」卡片看得到運動，可改可刪。匯出多一個 `exercises.csv`。**運動不給好友看**；三大營養素、趨勢不變。migration `0020`（一張新表＋`users` 一個有預設值的欄位，可以退版）（規格 `docs/superpowers/specs/2026-10-14-exercise-design.md`、計畫 `docs/superpowers/plans/2026-10-14-exercise.md`；見第 10 節「運動紀錄」） | ✅（`feat/exercise`） |
 | UI 改版 第三階段 | 社群（P7）：「開帳號的路」「好友關係」「按讚、留言、通知」三步都已完成。**還沒做：封鎖與檢舉、好友的趨勢／統計／目標**（好友規格 §1.3 剩下的項目）；推播也沒有（通知只在 app 裡，見 §8.2） | 🟡 |
 
 > **P4 早於 P2/P3 完成是刻意的，但當初的理由有瑕疵。**
@@ -1105,6 +1106,32 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
 - **e2e：水平的 SVG 線在 Playwright 是「看不見」。** 目標體重線 `y1 == y2`，外框高度 0，`toBeVisible()` 永遠紅；
   只能看它在不在（`toHaveCount(1)`）。
 
+### 運動紀錄：第 5、12 種又一次，另外幾條「突變存活才發現」
+
+沒有編新的號碼。逐條的經過在計畫 `docs/superpowers/plans/2026-10-14-exercise.md` 的「執行中發現的差異」。
+
+- **掃描印出來了，commit 照樣進去（第 5 種的變形：檢查有跑，但不會讓任何東西變紅）。** Task 3 的測試要一個「名稱裡的零寬空白」，
+  Write 工具把打進去的跳脫寫法解成**真的 U+200B**，`tests/test_exercises.py` 帶著它進了 `414ed95`。提交前的掃描**有**印出那一行，
+  但小工具的退出碼永遠是 0、跟 `git commit` 用 `&&` 串也擋不住；下一個 commit `7875dc7` 改回跳脫寫法，掃描小工具改成找到就 `exit 1`。
+  **看得見的輸出不是守衛，退出碼才是**——Task 9 的掃描先餵一個有 U+200B 的檔案看它 `exit 1` 才用。
+- **模型的 `server_default=true()` 改 `false()` 存活**（Task 1）：`migrations/env.py` 沒開 `compare_server_default`，`alembic check`
+  不比預設值；raw INSERT 那條測試看的是 migration 建出來的資料庫。補了「migration 的 `server_default` 改 `sa.false()`」那一條，它紅。
+  模型的 `server_default` 只影響 `metadata.create_all`（沒有人用），沒有另外的守衛。
+- **只改 migration 的突變有兩種下場**：拿掉約束、拿掉 `CASCADE` 這一類，conftest 的 `alembic check` 在 setup 就炸、每一條都 ERROR
+  （同身體資料）；但**只改 CHECK 的文字**（從 `activity_valid` 的清單拿掉 `jump_rope`）`alembic check` 看不出來——要靠
+  `test_the_activity_check_lists_every_code` 直接讀資料庫裡的約束定義，它是唯一紅的。
+- **公式的兩個突變在「主要那一組」存活**（Task 2）：`Decimal("9.8")` 改 `Decimal(9.8)`（float），343 四捨五入之後一樣——只有
+  「MET 是字串建的 Decimal」那兩條紅；`/ 60` 改 `// 60`，147.41 用 floor 也是 147（C 沒紅，B、D、F、G、H 紅）。**一組資料只證明一件事**，
+  九組裡要有會被每一種錯法弄歪的。
+- **防禦性的 `else` 存活**（Task 3 ⑫）：CHECK `other_is_manual` 讓那條路不可能走到，計畫預告過。
+- **等價突變**（Task 6 N8）：拿掉勾選框 `onChange` 裡的 `if (forcedManual) return`——`manual = values.manual || forcedManual`，
+  鎖住時怎麼點畫面上都還是勾著，守衛只是不讓沒用的 state 變動。**存活**（N2）：拿掉 `settled === typed`（用停下來的舊參數去問）——
+  舊值只在打字的 400 ms 裡、停下來之後一定換成新的，畫面上測不出差別。
+- **預期存活、結果紅**（Task 8 Q4「送出中不顯示要變成的值」）：測試在送出中就斷言了。e2e 的「開關不失效 `dailyStats`」（計畫打了問號）
+  也紅：回到總覽時快取還新（`staleTime` 之內），掛載不重抓，畫面停在 `/ 2686 kcal`——守著它的就是開關 hook 層的那一行失效。
+- **e2e 量觸控高度的範圍跟著 dev 資料庫長**：`invites.spec.ts` 量管理員「我的」的 `main button:visible`，帳號 1090 個時第 1036 顆
+  逾時（整套第一次就紅）。`account-settings.spec.ts` 早就改過，這一個漏了。**只量有界的一組**。
+
 ---
 
 ## 7. 踩過的技術坑（節錄，完整版在各計畫文件）
@@ -1163,7 +1190,7 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
 | `transform_schema()`（anthropic SDK）與給 LLM 的 Pydantic 類別 | 類別的 **docstring** 會進送給模型的 JSON schema 的 `description`；欄位的上下限有的保留（`min_length` → `minItems`）、有的變成 `description` 裡的提示（`maxItems: 8`）。給 LLM 用的 schema 類別**用 `#` 註解、不寫給人看的 docstring**；「至少一樣」這種下限不寫在 schema 上（模型會被逼著生一樣出來），放在事後的解析裡檢查（`app/ai/estimator.py` 的 `parse_raw_meal_estimate`） |
 | 必填欄位加進 `MealResponse` 之後 | **有型別標註**的測試資料（`tests/timeline.test.ts`）會讓 `tsc -b` 紅——其他測試資料是沒有標註的物件，不會，所以紅的只有那一處。另外**離線快取裡的舊餐沒有那個 key**（`undefined`，不是 `null`）：畫面判斷要用真值（`meal.description ? … : null`），寫 `!== null` 會畫出一個空的 `<p>`；受控輸入框的 `value` 要 `?? ""` |
 | e2e 選擇器裡的時間 | `formatTime` 是 `toLocaleTimeString(undefined, …)`——跟瀏覽器語系走。Playwright 的 Chromium 預設 **en-US**（「05:42 PM」），台灣的手機是「下午05:42」。可及名稱帶時間的元素（飲食頁卡片的「編輯 … 點心」）不要用 `\d{2}:\d{2}` 去對；CSV 裡的時間是後端寫的，才是固定的 `HH:MM` |
-| Write／Edit 工具與「反斜線 u」跳脫 | 工具會把參數裡「反斜線 u＋四位十六進位」解成**真的字元**（`\x00`、`\n` 不會）。要在原始碼裡留跳脫寫法（BOM、雙向控制字元）就不能直接打：用腳本從計畫依行號原樣取出，或寫完再用腳本換回去；commit 前掃一次 Cf／Zl／Zp 類的字元（同上面 BOM 那一格的「反方向也會」） |
+| Write／Edit 工具與「反斜線 u」跳脫 | 工具會把參數裡「反斜線 u＋四位十六進位」解成**真的字元**（`\x00`、`\n` 不會）。要在原始碼裡留跳脫寫法（BOM、雙向控制字元）就不能直接打：用腳本從計畫依行號原樣取出，或寫完再用腳本換回去；commit 前掃一次 Cf／Zl／Zp 類的字元（同上面 BOM 那一格的「反方向也會」）。**掃描找到東西時要 `exit 1`、跟 `git commit` 用 `&&` 串**：運動 Task 3 的掃描印出了一個 U+200B，退出碼卻是 0，commit 照樣進去（`414ed95`，`7875dc7` 才修；§6「運動紀錄」） |
 | Bash heredoc 裡的腳本 | **反斜線會少一層**：要寫進檔案的「反斜線＋b」變成真的退格字元（0x08）、「反斜線＋n」變成真的換行；帶反引號、樣板字串、中文註解的內容還會整個變成 `unexpected EOF while looking for matching`。退格是 `Cc` 類，上一格的掃描（`Cf`／`Zl`／`Zp`）**掃不到**——掃描要連 `Cc`（Tab、換行除外）、CR、BOM 一起看。超過幾行的腳本一律用 Write 工具寫成檔案再跑 |
 | `INSERT … ON CONFLICT DO NOTHING` | 衝突時 `RETURNING` **沒有列**（`scalar` 是 `None`——「真的新增了才寫通知」靠它）；而且**照樣吃掉一個 identity 值**，id 會跳號，不要斷言 id 連續。它不丟 `IntegrityError`，所以不用 savepoint，共用 session 的測試夾具也不會壞 |
 | `created_at` 當排序依據 | `server_default now()` 是**交易開始**的時間，同一個交易裡寫的幾列一模一樣。要「寫入的先後」用 identity 的 `id`（通知的清單、`read-all` 的 `up_to` 都是 id） |
@@ -1187,6 +1214,13 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
 | 從另一個測試檔 import 夾具 | vitest 會把**那個檔案的 `describe` 一起註冊**進來，測試跑兩份。共用的資料放 `tests/helpers/`（建議的 `READY_SUGGESTION` 在 `body-routes.ts`） |
 | `components/Segmented.module.css` | 趨勢頁的營養素切換與 `/weight` 的期間切換**共用**（從 `Trend.module.css` 搬出來的）。改它兩個畫面一起變 |
 | e2e：水平線的 `toBeVisible()` | SVG `<line>` 的 `y1 == y2` 時外框高度是 0，Playwright 判成看不見（體重圖的目標線）。看它在不在用 `toHaveCount(1)` |
+| `useDebounced` 一個物件 | **每 400 ms 重畫一次、停不下來**：物件每次 render 都是新的，effect 依賴它、每次 render 重設計時器，計時器一到 `setState` 又觸發 render、又是新物件。debounce **字串**（`JSON.stringify(params)`），比「停下來的跟現在打的一樣」用 `===`（運動表單的預覽，`ExerciseForm.tsx`） |
+| `getByText`：testing-library 與 Playwright 不一樣 | 文字跟連結在同一個 `<p>` 裡（「先記一次體重，就能自動估算」＋連結「記錄體重」）：testing-library 只比**元素自己的文字節點**，`findByText("先記一次體重，就能自動估算")` 對得上；Playwright 比**整個元素的文字**（含連結），`exact: true` 對不上。e2e 用不帶 `exact` 的或正規表示式，連結用 `getByRole("link")` 另外找 |
+| Biome 與 `role="switch"` | `useAriaPropsForRole` 要 `role="switch"` 帶 `aria-checked`——原生 checkbox 的 `checked` 已經表達狀態也一樣。給跟 `checked` 同一個值（`ExerciseBudgetSwitch.tsx`），兩邊不會不一致 |
+| 只改 migration 的突變 | conftest 每次跑 `alembic check`：拿掉 migration 的一個約束（模型沒拿）就是漂移，**每一條測試在 setup 都 ERROR**，不是指定的那一條紅。要看到指定的那一條紅，模型與 migration 一起改。例外：只改 CHECK 的**文字**（`IN (...)` 少一項）`alembic check` 看不出來，見下一格 |
+| `alembic check` 看不到的漂移 | **不比 CHECK 的文字**（身體資料 Task 1），也**不比 `server_default`**：`migrations/env.py` 沒開 `compare_server_default`，模型的 `server_default=true()` 改 `false()` 不算漂移。這兩種要另外的測試直接讀資料庫：`test_the_activity_check_lists_every_code`（讀約束定義）、raw INSERT 不帶那一欄再讀回來（`users.exercise_adds_to_budget`） |
+| `AwareDatetime` 當查詢參數 | FastAPI＋Pydantic 現在的版本可以直接寫 `performed_at: AwareDatetime \| None = None`：naive 的 `2026-10-14T12:00:00` 是 422、`…Z` 照收、省略是 `None`，端點不用自己擋（`GET /api/exercise/estimate`）。前端送 `toISOString()`（帶 `Z`） |
+| `aria-disabled` 的勾選框長得跟能勾的一樣 | 原生 `disabled` 會把焦點弄丟（勾選框可能在焦點正在它身上時鎖住），所以用 `aria-disabled`＋`onChange` 擋——但瀏覽器不會替它淡掉。樣式要自己給（`.manual input[aria-disabled="true"]`）；Playwright 的 `toBeDisabled()` 認 `aria-disabled`、jest-dom 的不認（同上面 jsdom 那一格） |
 
 ---
 
@@ -1528,6 +1562,24 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
   12. **目標體重離目前體重很遠時，點擠在圖的上面**：y 軸要包含目標體重（規格 §6.4），範圍被拉開。
   13. **`GET /api/weights` 的 `from`／`to` 不能早於 1900-01-01**（`422 INVALID_RANGE`，審查 M1）：只是衛生下限，真的紀錄不會早於兩年前。
   14. **`routes/targets.py` 既有的三個端點（`POST`、`PATCH`、`PUT /today`）仍是 commit 之後 `db.refresh`**：審查 M6 只改了這個分支新增的套用端點（同上面第 21 點的形狀；目標只有本人改得到，空檔要自己跟自己搶）。
+- **運動紀錄的已知限制**（規格 §10 的七點，加上執行中發現的）：
+  1. **MET 是近似**：Compendium 本身是族群平均，實際消耗依體能、強度、體重組成可以差 ±30%；每個活動只有一個強度
+     （重量訓練分兩級）。表上的值逐一對過 2011 年版的代碼（跳繩原本寫 11.0，改成 15552 moderate 的 11.8）。
+  2. 只看體重，不看性別、年齡（MET 的定義就是這樣）。
+  3. **設定只看現在**（D17）：關掉之後，過去每一天的額度也一起變回目標。
+  4. **預覽跟存的時候算的可能不同**：預覽是表單上問的那一刻，存的時候後端再算一次；中間另一個分頁改了或刪了體重（或改了運動那一天之前的體重），
+     存下去的數字跟剛才看到的不一樣（存好的回應、時間線上的是準的）。體重剛被刪掉時存檔是 `EXERCISE_NEEDS_WEIGHT`，表單換成手動。
+  5. **新增活動要一個 migration**（D3：`activity_valid` 的 CHECK 列出每一個代碼）。
+  6. 運動紀錄沒有「多久以前」的下限（體重有兩年）；`performed_at` 只擋未來（5 分鐘的時鐘誤差）。
+  7. **趨勢、報表、好友看到的熱量都不含運動**（D13）：趨勢的比例仍是「實際 / 目標」，不是額度——運動多的那一天趨勢上看起來吃超過了。
+  8. **三大營養素的目標不跟著運動變**（D12）：只有熱量的額度變大，蛋白質、脂肪、碳水的分母照舊是目標。
+  9. **升級之後第一次離線打開總覽**：離線快取是舊版存的、沒有 `["exercises","today"]`，運動清單「失敗而且沒有資料」——時間線說
+     「無法載入今天的紀錄」，而不是顯示快取裡的餐（運動跟餐點一樣，抓不到就不能說「今天還沒有紀錄」）。上線抓一次之後就好。
+     「今天熱量」不受影響（`kcalBudgetOf` 系列對舊回應退回目標）。
+  10. **只有今天的運動看得到、改得到**：總覽時間線與「今日運動」卡片都只列今天的；補記到過去某一天的運動（日期欄可以往前選）
+      存好之後**畫面上沒有入口**再打開它（`/exercises/:id/edit` 在，只是沒有連結），只能從 `exercises.csv` 看到。等有「看某一天」的畫面。
+  11. **運動不給好友看**（刻意的，規格 §8；`tests/test_exercise_privacy.py` 守著，含一條沿著 import 走的掃描）。身體資料的隱私掃描還沒有
+      「沿著 import 走」那一條（不在這次範圍，值得補）。
 - **編輯自己已送出的提案**：後端沒有這個端點，目前只能等審核結果。
 
 ---
@@ -2260,6 +2312,77 @@ B 看 A 的餐時，C 的留言算不算只看 C 與 A 的關係）：
   `reports-export.spec.ts` 檢查四顆匯出按鈕。
 
 **已知限制**在 §8.2「身體資料與目標的已知限制」（14 點）。實作後審查找到的問題與修法在規格 §11「審查後的修正」（I1、M1–M6）。
+
+### 運動紀錄
+
+記下運動（活動、分鐘、時間），後端用 MET × 那一天或之前最新的體重 × 小時估算消耗（沒有體重就手動輸入）；今天的熱量額度可以加回運動消耗
+（設定，預設開），總覽與飲食頁用額度當分母（規格 `docs/superpowers/specs/2026-10-14-exercise-design.md`、計畫
+`docs/superpowers/plans/2026-10-14-exercise.md`，計畫的「執行中發現的差異」記了實作跟計畫不一樣的地方，「與規格的差異」是摘要）。
+**一個 migration（`0020`：一張新表＋`users` 一個有預設值的欄位，可以退版）、沒有新的環境變數。**
+
+**端點**（8 個，95 → 103；全部要登入、只讀寫自己的；別人的 id 一律 `404 EXERCISE_NOT_FOUND`，body 跟不存在的一樣）：
+
+| 端點 | 做什麼 | 要記得的 |
+|---|---|---|
+| `GET /api/exercise/activities` | `[{code, label, met}]`，`other` 的 `met` 是 null | 清單只有一份：`app/exercise.py` 的 `ACTIVITIES`（18 個＋「其他」，順序就是選單的順序）。前端不抄 |
+| `GET /api/exercise/estimate?activity=&minutes=&performed_at=` | `{ready: true, kcal, met, weight_kg, weight_date}` 或 `{ready: false, missing: "weight"}` | 普通聯集、不加 discriminator（同身體資料 D10）。`performed_at` 是**時刻**（`AwareDatetime`，naive 的 422；省略＝現在），後端用帳號時區換成那一天。`422 EXERCISE_NOT_ESTIMABLE`（`other`）、`EXERCISE_ESTIMATE_TOO_HIGH`（> 5000，不夾住）、`EXERCISE_IN_FUTURE` |
+| `GET /api/exercises?date=` | `{date, total_kcal, entries}`，由舊到新 | 省略 `date`＝使用者的今天（前端不算今天）。`total_kcal` 是後端加的，卡片的「共 -N kcal」用它 |
+| `POST /api/exercises` | 201 `ExerciseResponse` | 帶 `kcal` → `manual`；省略 → 估算（`estimated`），沒有體重 `422 EXERCISE_NEEDS_WEIGHT`。`performed_at` 超過現在＋5 分鐘 `422 EXERCISE_IN_FUTURE`（**後端也擋**，餐點只有前端擋）。非「其他」送了 `name` 存 null |
+| `GET /api/exercises/{id}` | `ExerciseResponse`（`label`：固定活動的中文標籤，「其他」是 `name`） | |
+| `PATCH /api/exercises/{id}` | 部分更新 | `kcal: null`＝改回估算。`estimated` 的一筆改了 `activity`／`minutes`／`performed_at` 任何一個就重估（換時間可能換一筆體重）；只改備註不重估（D22）。合併之後「其他」沒有名稱或要估算 → `EXERCISE_NEEDS_NAME`／`EXERCISE_NEEDS_KCAL` |
+| `DELETE /api/exercises/{id}` | 204 | |
+| `GET /api/export/exercises.csv` | `日期,時間,活動,分鐘,熱量(kcal),熱量來源,備註` | 帳號時區、由舊到新、keyset（時間, id）；跟其他四個匯出共用限速與「同時一個」 |
+
+POST／PATCH 的回應**在 commit 之前組好**（flush → refresh → 組回應 → commit；D21，身體資料審查 M6 的教訓）。
+
+既有端點的改變：`GET /api/stats/daily` 多三個欄位——`exercise_kcal`（那一天的合計，沒有是 `0.00`）、`exercise_adds_to_budget`（設定）、
+`kcal_budget`（設定開：目標＋運動；關：目標；那天沒有目標或熱量沒設：`null`——「沒有目標」不會變成「額度＝運動」）。查詢 3 次變 4 次（多一次 `SUM`），
+跟筆數無關。`ratio.kcal` **不變**（仍是實際 / 目標，跟 `/stats/range` 同一套語意；畫面用 `ratioOf(actual, 額度)` 自己算）。
+`GET`／`PATCH /api/me`（`register` 回的也是 `UserResponse`）多 `exercise_adds_to_budget`，PATCH 不收 null。
+
+**公式與 MET**（`app/exercise.py`，純函式）：`estimate_kcal = MET × kg × 分鐘 / 60`，全程 `Decimal`、`ROUND_HALF_UP` 到整數，存 `numeric(7,2)`。
+MET 一律用字串建 Decimal（`Decimal("9.8")`，不經 float）。值取自 *Compendium of Physical Activities*（Ainsworth 等 2011；2024 成人版），
+每一項逐一對過 2011 年版的代碼（17190、17200、12020、12050、01015、02017、18310、02054、02050、02150、02105、02040、17080、17133、15055、
+15030、15660）；**跳繩從規格原本的 11.0 改成 11.8**（代碼 15552，rope jumping moderate pace 100–120 skips/min；慢 8.8、快 12.3——
+11.0 不是 Compendium 的值）。跑步 9.8 × 70 kg × 30 分鐘 = 343。
+
+**哪一筆體重**：`app/body_data.py` 的 `weight_as_of(db, user_id, day)`＝`date <= day` 日期最新的一筆，`day` 是 `performed_at` 換成**帳號時區**的日期
+（台北的 10/14 00:30 是 UTC 的 10/13）。補記上個月的運動用上個月的體重；之後才記的不算（D7）。沒有體重**不給預設值**（D8）。
+讀資料庫的小函式在 `app/exercise_data.py`（`estimate_for`、`exercise_kcal_on`）；「現在」是 `app/days.py` 的 `utc_now()`（測試 monkeypatch 它）。
+
+**前端：**
+
+| 東西 | 在哪裡 | 要記得的 |
+|---|---|---|
+| query 的鍵 | `api/queries.ts`：`["exercises"]`（`exercisesAll`）、`["exercises","today"]`、`["exercises", id]`；`["exercise-activities"]`；`["exercise-estimate", activity, minutes, performedAt]` | 新增、修改、刪除之後 `invalidateExercises` 失效 `["exercises"]` 與 `dailyStats`。活動清單**刻意不掛在 `["exercises"]` 底下**（記一筆不該重抓固定的清單，`staleTime: Infinity`）。`["exercises", …]` 進離線快取；`exercise-estimate` **不進**（`persist.ts` 的 `NOT_PERSISTED`，同 `food-search`） |
+| 舊快取的相容 | `api/stats.ts` 的 `kcalBudgetOf`、`exerciseInBudgetOf`；`api/me.ts` 的 `exerciseAddsToBudgetOf` | 離線快取裡的舊回應沒有新欄位（`undefined`，不是 `null`）：額度退回目標、「含運動」不顯示、設定當成開。**畫面一律經過這三個小函式讀**，不直接碰 `stats.kcal_budget` |
+| 表單 | `components/ExerciseForm.tsx`（新增與編輯共用）、`lib/exercise.ts`（檢查、預覽的參數） | 預覽：活動與分鐘有效時停 400 ms 再問後端——**debounce 的是 `JSON.stringify(params)`**（§7）。「沒有體重」記住到下一個「有」的答案（`lastReady`），改分鐘時熱量欄不閃。沒有體重：提示＋「記錄體重」連到 `/weight`，「手動輸入熱量」勾著而且鎖住——**用 `aria-disabled`＋`onChange` 擋**（可能在焦點正在它身上時鎖住）。日期與時間是裝置時區（`lib/dates.ts`），未來的時間前端也擋 |
+| 兩個畫面 | `screens/LogExercise.tsx`（`/exercises/new`，`form` 寬度）、`EditExercise.tsx`（`/exercises/:id/edit`，`narrow`） | 編輯照 `Targets` 的形狀（送完整的一組）：離線快取還原完才掛、**只用掛載之後抓回來的那一份預填**（`ExerciseLoader`，`key={id}`）。存好導回總覽。「刪除這筆運動」→ `alertdialog`「刪除這筆運動？」（焦點在「取消」）→ 先 `removeQueries(exercise(id))` 再失效 |
+| 入口 | `AddSheet.tsx` | 「＋ 新增」三個：記帳、記一餐、記運動（`repeat(3, …)`）。運動的顏色 `EXERCISE_COLOR`（`IconBadge.tsx`，`--color-success`） |
+| 總覽 | `screens/Overview.tsx` | 「今天熱量」的分母是額度，下面一行「含運動 +N」；時間線第三種列（`lib/timeline.ts` 的 `kind: "exercise"`）：「跑步（約 10 km/h）・30 分鐘」、時間、「-343 kcal」（ASCII 減號），連到編輯。運動清單抓不到跟餐點一樣算「無法載入今天的紀錄」 |
+| 飲食頁 | `screens/Today.tsx`、`components/TodayExercises.tsx`、`MacroBar.tsx`（`note`） | 熱量那一列用額度、`note`「含運動 +N」；其他三列不變。「今日運動」卡片（`<h2>` 與清單同名）每筆一列連到編輯、「共 -N kcal」、「記運動」；只在「我的」那一邊掛（看好友時不畫也不抓）。電腦版在左欄補劑下面 |
+| 設定 | `components/ExerciseBudgetSwitch.tsx`（`TargetsCard.tsx` 底部，「修改」後面） | `<input type="checkbox" role="switch">`「運動消耗加回今天的熱量額度」。`PATCH /api/me` → 回應寫回 `["me"]`、失效 `dailyStats`（hook 層）。送出中顯示要變成的值、`aria-disabled`＋ref 擋重複；失敗回到原值＋「沒有存到，請再試一次」 |
+| 匯出 | `api/export.ts` 的 `EXPORT_KINDS` | 五顆：手機 3＋2（grid `repeat(auto-fit, minmax(5rem, 1fr))`），電腦版一列 |
+
+**新的東西在哪裡：**
+
+- 後端：`migrations/versions/0020_create_exercise_entries.py`；`app/models/exercise.py`（`ExerciseEntry`）、`models/user.py`（`exercise_adds_to_budget`）；
+  `app/exercise.py`（`ActivityCode`、`KcalSource`、`ACTIVITIES`、`estimate_kcal`、`label_for`、`kcal_budget`）、`app/exercise_data.py`、
+  `app/body_data.py`（`weight_as_of`）、`app/days.py`（`utc_now`）；`app/schemas/exercise.py`；`app/api/routes/exercises.py`（`activities_router`、`router`）；
+  `routes/stats.py`、`schemas/stats.py`、`schemas/auth.py`、`schemas/user.py`、`routes/me.py`；`app/export.py`（`exercise_csv`、`KCAL_SOURCE_LABELS`）／`routes/export.py`。
+  測試 `tests/test_exercise_model.py`、`test_exercise_formula.py`、`test_exercise_estimate.py`、`test_exercises.py`、`test_exercise_privacy.py`
+  （欄位名、只有運動的模組碰那張表、不寫 log、好友與社群的模組不提運動的模組，**加一條沿著 import 走**）、`tests/privacy_helpers.py`（從
+  `test_body_privacy.py` 搬出來共用），以及 `test_stats_daily.py`、`test_me.py`（設定）、`test_export.py` 的新增。
+- 前端：上表的檔案，加上 `lib/decimal.ts`（`isZero`、`toWholeNumber`）、`lib/layout.ts`。測試 `tests/exercise-api.test.tsx`、`exercise-lib.test.ts`、
+  `exercise-form.test.tsx`、`edit-exercise.test.tsx`、`today-exercises.test.tsx`、`exercise-budget-switch.test.tsx`，共用的路由在
+  `tests/helpers/exercise-routes.ts`（**每個畫出總覽或飲食頁的測試都要準備 `/api/exercises`**）；`overview`、`today`、`offline`、`timeline`、`app`、
+  `layout`、`tab-bar`、`side-nav`、`me`、`export-card`、`decimal` 的新增。
+- e2e：`e2e/exercise.spec.ts`（一條，新帳號、手機尺寸）：目標 2000 → 沒有體重時手動鎖住、提示連到 `/weight` → 記 70 公斤 → 預覽「約 343 kcal（依 M/D 的體重 70 公斤）」
+  （測試自己算 MET × 公斤 × 小時）→ 總覽「/ 2343 kcal」「含運動 +343」、時間線那一列 → 改 60 分鐘（686）→ 飲食頁卡片與合計 → 關掉開關：分母回到 2000、
+  運動仍在 → 刪除 → 時間線空了、「今天還沒有運動」。量表單的輸入框字級與觸控高度（有界的一組）。`reports-export.spec.ts` 檢查五顆匯出按鈕與 `exercises.csv` 的標題列。
+
+**已知限制**在 §8.2「運動紀錄的已知限制」（11 點）。最要緊的三點：MET 是近似（第 1 點）、預覽跟存的時候可能不同（第 4 點）、
+補記到過去的運動畫面上打不開（第 10 點）。
 
 ---
 

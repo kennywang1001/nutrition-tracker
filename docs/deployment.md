@@ -493,6 +493,15 @@ sudo docker compose --env-file .env.production \
 > 跨過 `0012` 時腳本會印退版警告（見「退版」）：這次如果新版起不來、被自動退回到 NAS 上原本那一版，
 > 舊版**無法建立新帳號**——修好新版再部署一次就好，不用還原。`0015` 有重複餐費時會停在第 5 步。
 
+- **`0020_create_exercise_entries`（運動紀錄）**：一張新表（`exercise_entries`）＋`users` 一個欄位
+  `exercise_adds_to_budget boolean NOT NULL DEFAULT true`（既有使用者一律是開），`deploy.sh` 會自己跑，**可以退版**（不在
+  `ROLLBACK_UNSAFE_REVISIONS` 裡——那個清單仍然只有 `0012`，`scripts/deploy.sh` 這一版沒有改）：舊版程式不讀也不寫新表；
+  舊版建使用者（註冊、`create-user`）的 INSERT 不提新欄位，吃資料庫的預設值。**這一點實際試過**：用 `master`（`0019` 時代）的
+  `User` 模型對升到 `0020` 的 dev 資料庫建一個使用者（交易最後 rollback），INSERT 成功、讀回來 `exercise_adds_to_budget = true`、
+  舊版的 `select` 也讀得回來。退版之後表與資料留著，再升版時運動都還在；退版期間「今天熱量」的分母是目標（舊版不加運動），
+  手機上留著新版前端（PWA 快取）的話運動清單與「記運動」會失敗（舊的 API 沒有那幾個端點）。
+  **沒有新的環境變數**：估算是後端的純公式（MET × 體重 × 小時），不呼叫 AI、不用金鑰。`exercises.csv` 跟其他匯出共用既有的限速
+  （每人每分鐘 6 次、同時一個）。後端**不在 log 裡寫運動**（`tests/test_exercise_privacy.py` 守著那幾個模組沒有 `logging`）；好友與社群的任何回應裡都沒有它。
 - **`0019_create_body_tables`（身體資料與目標）**：兩張新表（`user_profiles`、`weight_entries`），只有新增、不動任何既有的表，
   `deploy.sh` 會自己跑，**可以退版**（舊版程式不讀也不寫這兩張表，不在 `ROLLBACK_UNSAFE_REVISIONS` 裡——那個清單仍然只有
   `0012`，`scripts/deploy.sh` 這一版沒有改）。退版之後表與資料留著，再升版時身體資料與體重都還在；退版期間手動存的目標照舊寫進
