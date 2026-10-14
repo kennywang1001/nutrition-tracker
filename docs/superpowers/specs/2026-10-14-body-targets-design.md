@@ -59,7 +59,7 @@
 | D8 | 下限與四捨五入的順序 | 先算原始熱量；**原始值低於下限 → 用下限、`floor_applied: true`**；否則四捨五入到 10 | 下限本身是 10 的倍數；「有沒有套用下限」看的是原始值，不是四捨五入後的值（1497 → 1500 也算套用了下限） |
 | D9 | 碳水 < 0 | 夾在 0；**套用時 0 存成 null（未設定）** | `PUT /api/targets/today` 不收 0（帳號設定規格：0 的目標算不出比例，畫面上跟未設定分不出來）；套用走同一條規矩 |
 | D10 | 建議的回應形狀 | `{ready: true, …}` 與 `{ready: false, missing: [...]}` 兩個 Pydantic 模型的**普通聯集，不加 discriminator** | 實測（§10）：加了 `Field(discriminator="ready")`，OpenAPI 的 mapping 鍵是字串 `"True"`／`"False"`，openapi-typescript 產生 `ready: "True"`——型別是錯的；不加的話是 `ready: true`／`ready: false`，前端可以直接收窄 |
-| D11 | 缺什麼 | `missing` 依固定順序：`sex`、`birth_year`、`height_cm`、`activity_level`、`goal`、`rate_kg_per_week`（只有減重／增重缺它時）、`weight` | 前端照順序列出、決定連到 `/me/body` 還是「記錄體重」 |
+| D11 | 缺什麼 | `missing` 依固定順序：`sex`、`birth_year`、`height_cm`、`activity_level`、`goal`、`rate_kg_per_week`（減重／增重**或目標還沒選**時缺它；只有維持不需要，見 §11 M5）、`weight` | 前端照順序列出、決定連到 `/me/body` 還是「記錄體重」 |
 | D12 | 體重表 | `weight_entries`：**主鍵 `(user_id, date)`**、`weight_kg numeric(5,2)`、`created_at`、`updated_at` | 一人一天一筆就是主鍵；不需要另一個 id 跟唯一索引。前端用日期當 key |
 | D13 | 記一筆 | `PUT /api/weights/{date}`：`INSERT … ON CONFLICT (user_id, date) DO UPDATE … RETURNING`。日期 **≤ 使用者的今天**、**≥ 今天 − 730 天**（後端判斷） | 冪等；同一天記兩次是更正。日期界線跟其他地方一樣只有後端算 |
 | D14 | 讀清單 | `GET /api/weights?from=&to=`：**兩個都可省略**（`to` 預設今天、`from` 預設 `to − 799`），最多 800 天；回 `{today, entries}`，由舊到新 | 前端不用先問今天是哪天（瀑布）；`today` 順便給表單當預設日期、給圖表當右端 |
@@ -341,3 +341,28 @@
 
 **寫規格時實測過的事：** Pydantic 的 bool discriminator 在 OpenAPI 變成 `"True"`／`"False"` 字串的 mapping，openapi-typescript 7.13 產生
 `ready: "True"`；不加 discriminator 是 `anyOf`，產生 `ready: true`／`ready: false`（D10）。§3 的五組數字用同一套 `Decimal` 運算的腳本算過。
+
+---
+
+## 11. 審查後的修正
+
+實作完成後的審查（2026-10-14）找到的問題與修法。每一條都先寫會紅的測試、修好、再把修法拿掉確認測試會紅（mutation check）。
+
+- **I1　手動存目標之後「要重算嗎」還在。** 後端在 `PUT /api/targets/today` 清掉了套用時的體重（D16），但 `/me/targets` 的手動儲存
+  只失效 `dailyStats`、`rangeStatsAll`，快取裡的建議還是 `resuggest: true`。手動儲存的 `onSuccess` 多失效 `["body"]`（`invalidateBody`）。
+  單元測試（`targets.test.tsx`）＋ e2e（提示出現之後手動存目標，回「我的」提示消失）。
+- **M1　`GET /api/weights?to=0001-01-01` 是 500。** `from` 的預設（`to − 799 天`）超出 `date` 的範圍。明確給的 `from`／`to` 早於
+  1900-01-01 一律 `422 INVALID_RANGE`；預設的 `from` 夾在 1900-01-01（§5.3）。
+- **M2　`POST /api/targets`、`PATCH /api/targets/{id}` 不清套用時的體重。** 兩條路都在同一個交易裡呼叫 `clear_applied_weight`，
+  撞期（409）就一起 rollback。D16 改成「每一條手動寫目標的路」（§5.4）。
+- **M3　隱私掃描擋不到間接的路。** 第 2 條只認表名與模型名；好友的模組 `from app.body_data import latest_weight` 一樣拿得到體重。
+  多一條掃描（§7 第 4 條）：好友與社群的模組不准提到身體資料的模組名稱，或它們定義的函式與類別（動態列出）。
+- **M4　套用遇到 `422 PROFILE_INCOMPLETE` 只說「套用失敗」。** 畫面上留著舊的「可以套用」。改成失效 `["body"]`、說「身體資料或體重剛剛變了，
+  已經重新整理建議」，重抓回來缺東西就換成「還差：…」（§6.5）。
+- **M5　D11 跟程式不一致（只改文件）。** 目標是 null 時程式也把 `rate_kg_per_week` 列進 `missing`——**這是刻意的**：還不知道目標的時候，
+  使用者接下來選的多半是減重或增重，速度很可能也要填；先列出來，填身體資料時一次補齊，不會選完目標才又冒出「還差：速度」。
+  選了「維持」之後速度就不再列。D11 照這個改寫；`tests/test_body_targets.py` 守著這個行為。
+- **M6　套用建議在 commit 之後才 `refresh`。** commit 到 refresh 的空檔裡另一台裝置刪掉那筆目標，refresh 讀不到列就是 500（目標其實存好了）。
+  改成 commit 之前 refresh、組好回應再 commit；測試：commit 一回來就刪掉目標仍是 200，而且 commit 之後不送任何 SQL。
+  `routes/body.py`、`routes/weights.py` 沒有別的 commit 之後再讀的地方（`routes/targets.py` 既有的三個端點仍是 commit 之後 refresh，
+  不在這次範圍，見 handover 的已知限制）。
