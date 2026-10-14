@@ -150,7 +150,7 @@ test("匯出花費：下載的 CSV 檔名帶日期、開頭有 BOM、內容有�
 		),
 	);
 	expect(lines[2]).toBe("");
-	// 三顆按鈕都恢復可以按；下載中它們是 aria-disabled 而不是原生停用，所以按下去的
+	// 四顆按鈕都恢復可以按；下載中它們是 aria-disabled 而不是原生停用，所以按下去的
 	// 那一顆從頭到尾沒有把焦點弄丟。
 	const expensesButton = card.getByRole("button", {
 		name: "花費",
@@ -158,7 +158,7 @@ test("匯出花費：下載的 CSV 檔名帶日期、開頭有 BOM、內容有�
 	});
 	await expect(expensesButton).toBeEnabled();
 	await expect(expensesButton).toBeFocused();
-	for (const name of ["餐點", "補劑"]) {
+	for (const name of ["餐點", "補劑", "體重"]) {
 		await expect(card.getByRole("button", { name, exact: true })).toBeEnabled();
 	}
 });
