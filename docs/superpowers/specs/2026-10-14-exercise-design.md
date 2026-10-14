@@ -118,7 +118,7 @@ Compendium 本身就是族群平均，同一個活動依速度、強度差一倍
 | `basketball` | 籃球 | 6.5 | basketball, general |
 | `badminton` | 羽球 | 5.5 | badminton, social singles and doubles, general |
 | `table_tennis` | 桌球 | 4.0 | table tennis, ping pong |
-| `jump_rope` | 跳繩 | 11.0 | rope jumping, moderate pace（Compendium 依速度約 8.8–12.3，取中間） |
+| `jump_rope` | 跳繩 | 11.8 | rope jumping, moderate pace, 100–120 skips/min（2011 代碼 15552；慢 8.8、快 12.3。原本寫 11.0，Compendium 沒有這個值——實作時改正） |
 | `other` | 其他 | — | 只能手動輸入熱量 |
 
 MET 存成 `Decimal("9.8")` 這種字串建構的 Decimal（不經 float）。
@@ -147,8 +147,9 @@ estimate_kcal(met, weight_kg, minutes) = round_half_up(met × weight_kg × minut
 | E | 桌球 4.0、45.5 kg、3 分鐘 | 9.1 | **9** | 很短 |
 | F | 走路 3.5、60 kg、1 分鐘 | 3.5 | **4** | 剛好 .5 → HALF_UP（`ROUND_HALF_EVEN` 會是 4，所以另加 G） |
 | G | 走路 3.5、66 kg、10 分鐘 | 38.5 | **39** | .5 進位；HALF_EVEN 會給 38 |
-| H | 跳繩 11.0、350 kg、80 分鐘 | 5133.33… | **422** `EXERCISE_ESTIMATE_TOO_HIGH` | 超過 5000 |
-| I | 跳繩 11.0、300 kg、90 分鐘 | 4950 | **4950** | 5000 以內 |
+| H | 跳繩 11.8、350 kg、80 分鐘 | 5506.66… | **422** `EXERCISE_ESTIMATE_TOO_HIGH` | 超過 5000 |
+| I | 跳繩 11.8、300 kg、80 分鐘 | 4720 | **4720** | 5000 以內 |
+| J | 重量訓練（高強度）6.0、250 kg、200 分鐘 | 5000 | **5000** | 剛好在上限上：擋的是 `>`，不是 `>=` |
 
 最小可能的估算：瑜伽 2.5 × 25 kg × 1 分鐘 / 60 = 1.04 → 1，不會低於 1 kcal 的下限。
 
@@ -297,7 +298,7 @@ estimate_kcal(met, weight_kg, minutes) = round_half_up(met × weight_kg × minut
 
 ### 9.1 後端
 
-- `tests/test_exercise_formula.py`：§4.2 的 A–I、MET 表的每一項是 `Decimal`、代碼唯一、`other` 沒有 MET、HALF_UP。
+- `tests/test_exercise_formula.py`：§4.2 的 A–J、MET 表的每一項是 `Decimal`、代碼唯一、`other` 沒有 MET、HALF_UP。
 - `tests/test_exercise_model.py`：每個 CHECK（斷言約束名）、cascade、`users.exercise_adds_to_budget` 預設 true。
 - `tests/test_exercise_estimate.py`：活動清單；估算的兩種形狀；**體重用運動那一天或之前**（之後的不算；時區邊界：台北的 10/14 00:30 是 UTC 10/13）；
   `other`、太高、未來。
