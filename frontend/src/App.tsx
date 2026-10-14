@@ -30,6 +30,7 @@ import { readLinkToken } from "./lib/link-token";
 import { useIsDesktop } from "./lib/use-is-desktop";
 import { AddExpense } from "./screens/AddExpense";
 import { AdminRevisions } from "./screens/AdminRevisions";
+import { BodyProfile } from "./screens/BodyProfile";
 import { ChangePassword } from "./screens/ChangePassword";
 import { EditMeal } from "./screens/EditMeal";
 import { Expenses } from "./screens/Expenses";
@@ -240,6 +241,8 @@ export function App() {
 							<Route path="/me" element={<Me />} />
 							{/* 每日目標（帳號設定規格 §5.2），入口是「我的」的每日目標卡片。 */}
 							<Route path="/me/targets" element={<Targets />} />
+							{/* 身體資料（身體資料規格 §6.3），入口是「我的」的身體資料卡片與建議目標的「填寫身體資料」。 */}
+							<Route path="/me/body" element={<BodyProfile />} />
 							{/* 修改密碼（帳號設定規格 §5.3），入口是「我的」帳號卡片的「修改密碼」。 */}
 							<Route path="/me/password" element={<ChangePassword />} />
 							{/* 通知（社群規格 §6.4），入口是「我的」最上面的通知卡片。 */}

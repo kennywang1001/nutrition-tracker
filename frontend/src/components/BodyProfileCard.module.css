@@ -1,0 +1,15 @@
+.title {
+	margin: 0 0 var(--space-2);
+}
+
+.text {
+	margin: 0;
+}
+
+/* 連結也是點擊目標：至少 44px 高（同每日目標卡片）。 */
+.link {
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+	font-weight: 600;
+}

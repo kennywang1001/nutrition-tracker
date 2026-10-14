@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+	cleanup,
+	render,
+	screen,
+	waitFor,
+	within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router";
@@ -12,6 +18,7 @@ import {
 	setTokens,
 } from "../src/auth/store";
 import { Me } from "../src/screens/Me";
+import { bodyRoutes, EMPTY_PROFILE } from "./helpers/body-routes";
 import { json, mockApi } from "./helpers/mock-api";
 
 function me(role: "user" | "admin") {
@@ -65,6 +72,7 @@ beforeEach(() => {
 describe("我的", () => {
 	it("顯示帳號的 email", async () => {
 		mockApi([
+			...bodyRoutes(),
 			statsRoute(),
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
 		]);
@@ -78,6 +86,7 @@ describe("我的", () => {
 		// 從 tab bar 的第五格搬過來（介面改版）。前端藏起連結只是可用性，
 		// 真正的授權在後端 require_admin。
 		mockApi([
+			...bodyRoutes(),
 			statsRoute(),
 			{ method: "GET", path: "/api/me", handler: () => json(me("admin")) },
 		]);
@@ -92,6 +101,7 @@ describe("我的", () => {
 
 	it("一般使用者看不到「審核」", async () => {
 		mockApi([
+			...bodyRoutes(),
 			statsRoute(),
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
 		]);
@@ -109,6 +119,7 @@ describe("我的", () => {
 	it("管理員有「所有帳號」，一般使用者沒有（也不打帳號清單的端點）", async () => {
 		// 「所有帳號」的行為在 accounts-admin.test.tsx；這裡只守「我的」有沒有把它放進來、只給管理員。
 		mockApi([
+			...bodyRoutes(),
 			statsRoute(),
 			{ method: "GET", path: "/api/admin/users", handler: () => json([]) },
 			{ method: "GET", path: "/api/me", handler: () => json(me("admin")) },
@@ -121,6 +132,7 @@ describe("我的", () => {
 
 		vi.restoreAllMocks();
 		const spy = mockApi([
+			...bodyRoutes(),
 			statsRoute(),
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
 		]);
@@ -157,6 +169,7 @@ describe("我的", () => {
 		// 是不是重新整理帶來的（第 52 種）。
 		let calls = 0;
 		const fetchMock = mockApi([
+			...bodyRoutes(),
 			statsRoute(),
 			{
 				method: "GET",
@@ -185,6 +198,7 @@ describe("我的", () => {
 		const listener = vi.fn();
 		const unsubscribe = onLoggedOut(listener);
 		mockApi([
+			...bodyRoutes(),
 			statsRoute(),
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
 			{
@@ -206,6 +220,7 @@ describe("我的", () => {
 	it("「重新整理」失敗時顯示提示，不丟出未處理的 rejection", async () => {
 		let calls = 0;
 		mockApi([
+			...bodyRoutes(),
 			statsRoute(),
 			{
 				method: "GET",
@@ -230,6 +245,7 @@ describe("我的", () => {
 describe("我的：帳號卡片", () => {
 	it("顯示名字與 email，有「修改密碼」連結", async () => {
 		mockApi([
+			...bodyRoutes(),
 			statsRoute(),
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
 		]);
@@ -247,6 +263,7 @@ describe("我的：帳號卡片", () => {
 	it("修改名稱：只送 display_name，存好之後畫面換成新名字，焦點回到「修改名稱」", async () => {
 		let current = me("user");
 		const spy = mockApi([
+			...bodyRoutes(),
 			statsRoute(),
 			{
 				method: "PATCH",
@@ -282,6 +299,7 @@ describe("我的：帳號卡片", () => {
 
 	it("名稱是空白不送；取消不送、焦點回到「修改名稱」", async () => {
 		const spy = mockApi([
+			...bodyRoutes(),
 			statsRoute(),
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
 		]);
@@ -309,6 +327,7 @@ describe("我的：帳號卡片", () => {
 
 	it("後端 422 顯示欄位訊息，表單留著", async () => {
 		mockApi([
+			...bodyRoutes(),
 			statsRoute(),
 			{
 				method: "PATCH",
@@ -349,6 +368,7 @@ describe("我的：帳號卡片", () => {
 
 	it("其他錯誤：「儲存失敗，請再試一次」", async () => {
 		mockApi([
+			...bodyRoutes(),
 			statsRoute(),
 			{
 				method: "PATCH",
@@ -373,6 +393,7 @@ describe("我的：帳號卡片", () => {
 describe("我的：每日目標卡片", () => {
 	it("顯示四個值，沒設的寫「未設定」，連到 /me/targets", async () => {
 		mockApi([
+			...bodyRoutes(),
 			statsRoute(),
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
 		]);
@@ -392,6 +413,7 @@ describe("我的：每日目標卡片", () => {
 
 	it("今天沒有目標（target 是 null）：四格都是「未設定」", async () => {
 		mockApi([
+			...bodyRoutes(),
 			statsRoute({ ...STATS, target: null, ratio: null }),
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
 		]);
@@ -405,6 +427,7 @@ describe("我的：每日目標卡片", () => {
 
 	it("讀不到統計：「無法載入目前的目標」", async () => {
 		mockApi([
+			...bodyRoutes(),
 			statsRoute(
 				{ error: { code: "INTERNAL_ERROR", message: "壞了", details: {} } },
 				500,
@@ -425,6 +448,7 @@ describe("我的：匯出資料", () => {
 	it("每個人都有「匯出資料」卡片，在登出之前；畫出來的時候不打任何匯出端點", async () => {
 		// 卡片自己的行為在 export-card.test.tsx；這裡只守「我的」有沒有把它放進來。
 		const fetchMock = mockApi([
+			...bodyRoutes(),
 			statsRoute(),
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
 		]);
@@ -464,6 +488,7 @@ describe("我的：通知卡片（社群規格 §6.4）", () => {
 
 	it("有新通知：寫幾則，「看通知」連到通知頁；是「我的」裡的第一張卡片", async () => {
 		mockApi([
+			...bodyRoutes(),
 			unreadRoute(() => json({ count: 3 })),
 			statsRoute(),
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
@@ -495,6 +520,7 @@ describe("我的：通知卡片（社群規格 §6.4）", () => {
 	it("沒有新通知：「沒有新通知」，連結照樣在", async () => {
 		let answered = false;
 		mockApi([
+			...bodyRoutes(),
 			unreadRoute(() => {
 				answered = true;
 				return json({ count: 0 });
@@ -520,6 +546,7 @@ describe("我的：通知卡片（社群規格 §6.4）", () => {
 	it("未讀數抓不到（斷線）：當成沒有新通知，不顯示錯誤", async () => {
 		let answered = false;
 		mockApi([
+			...bodyRoutes(),
 			unreadRoute(() => {
 				answered = true;
 				return json({ error: { code: "X", message: "x", details: {} } }, 500);
@@ -535,5 +562,79 @@ describe("我的：通知卡片（社群規格 §6.4）", () => {
 		const card = screen.getByTestId("notifications-card");
 		expect(within(card).getByText("沒有新通知")).toBeInTheDocument();
 		expect(within(card).queryByRole("alert")).not.toBeInTheDocument();
+	});
+});
+
+describe("我的：身體資料卡片", () => {
+	function renderWith(profile: unknown) {
+		mockApi([
+			...bodyRoutes({ profile }),
+			statsRoute(),
+			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
+		]);
+		render(wrap(<Me />));
+		return screen.getByTestId("body-profile-card");
+	}
+
+	it("還沒填：「還沒有填」，「修改身體資料」連到 /me/body", async () => {
+		const card = renderWith(EMPTY_PROFILE);
+
+		expect(await within(card).findByText("還沒有填")).toBeInTheDocument();
+		expect(
+			within(card).getByRole("heading", { name: "身體資料" }),
+		).toBeInTheDocument();
+		expect(
+			within(card).getByRole("link", { name: "修改身體資料" }),
+		).toHaveAttribute("href", "/me/body");
+	});
+
+	it("填了：一行摘要，用「・」隔開", async () => {
+		const card = renderWith({
+			sex: "male",
+			birth_year: 1990,
+			height_cm: "175.0",
+			activity_level: "moderate",
+			goal: "lose",
+			rate_kg_per_week: "0.50",
+			target_weight_kg: "72.00",
+		});
+
+		expect(
+			await within(card).findByText(
+				"男・1990 年生・175 cm・中度活動・減重每週 0.5 公斤・目標 72 公斤",
+			),
+		).toBeInTheDocument();
+	});
+
+	it("沒設的段落略過；維持不寫速度；減重沒有速度只寫「減重」", async () => {
+		const card = renderWith({
+			...EMPTY_PROFILE,
+			sex: "female",
+			height_cm: "160.5",
+			goal: "maintain",
+			rate_kg_per_week: "0.25",
+		});
+		expect(
+			await within(card).findByText("女・160.5 cm・維持體重"),
+		).toBeInTheDocument();
+		cleanup();
+		vi.restoreAllMocks();
+
+		const second = renderWith({ ...EMPTY_PROFILE, goal: "gain" });
+		expect(await within(second).findByText("增重")).toBeInTheDocument();
+	});
+
+	it("順序：每日目標之後、好友之前（規格 D21）", async () => {
+		const card = renderWith(EMPTY_PROFILE);
+		await within(card).findByText("還沒有填");
+
+		const targets = screen.getByTestId("targets-card");
+		const friends = screen.getByRole("heading", { name: "好友" });
+		expect(
+			targets.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		expect(
+			card.compareDocumentPosition(friends) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
 	});
 });

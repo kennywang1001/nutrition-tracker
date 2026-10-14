@@ -13,6 +13,7 @@ import {
 } from "../src/auth/store";
 import { PHOTO_UPLOAD_FAILED_NOTICE } from "../src/screens/LogMeal";
 import { setDesktop } from "../src/test/media";
+import { EMPTY_PROFILE, NO_WEIGHTS, NOT_READY } from "./helpers/body-routes";
 
 // 上傳會呼叫 shrinkToLongestEdge（用 canvas，jsdom 沒有）。
 vi.mock("../src/lib/resize-image", () => ({
@@ -71,6 +72,13 @@ function mockBackend(
 				typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
 			);
 			if (custom !== undefined) return custom;
+			// 「我的」的身體資料、體重卡片與每日目標卡片的重算提示（身體資料規格 §6.2）。
+			// **要在 `/api/me` 之前**：`/api/me/body-profile` 也包含 "/api/me"。
+			if (url.includes("/api/me/body-profile"))
+				return jsonResponse(EMPTY_PROFILE);
+			if (url.includes("/api/me/target-suggestion"))
+				return jsonResponse(NOT_READY);
+			if (url.includes("/api/weights")) return jsonResponse(NO_WEIGHTS);
 			// **`/api/meals` 必須在 `/api/me` 之前**："/api/meals".includes("/api/me")
 			// 為真——順序反過來，總覽的餐點清單會拿到使用者物件然後當掉。
 			if (url.includes("/api/meals")) return jsonResponse([]);

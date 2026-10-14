@@ -8,6 +8,7 @@ import { queryKeys } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { Me } from "../src/screens/Me";
+import { bodyRoutes } from "./helpers/body-routes";
 import { json, mockApi, type Route } from "./helpers/mock-api";
 
 function me(role: "user" | "admin") {
@@ -65,6 +66,7 @@ function adminBackend(
 ) {
 	const counts = { list: 0 };
 	const spy = mockApi([
+		...bodyRoutes(),
 		...extra,
 		{
 			method: "GET",
@@ -100,6 +102,7 @@ beforeEach(() => {
 describe("邀請朋友", () => {
 	it("一般使用者看不到，也不打邀請的端點", async () => {
 		const spy = mockApi([
+			...bodyRoutes(),
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
 		]);
 
