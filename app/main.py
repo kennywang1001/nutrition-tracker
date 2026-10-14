@@ -8,6 +8,7 @@ from app.api.routes import (
     admin_users,
     ai,
     auth,
+    body,
     expenses,
     export,
     foods,
@@ -41,6 +42,7 @@ register_error_handlers(app)
 app.include_router(health.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
 app.include_router(me.router, prefix="/api")
+app.include_router(body.router, prefix="/api")
 app.include_router(foods.router, prefix="/api")
 app.include_router(friends.router, prefix="/api")
 app.include_router(social.router, prefix="/api")

@@ -272,6 +272,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/me/body-profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Body Profile
+         * @description 自己的身體資料。還沒填過＝七個都是 null（200，不是 404）。
+         */
+        get: operations["read_body_profile_api_me_body_profile_get"];
+        /**
+         * Save Body Profile
+         * @description 整組取代自己的身體資料（D5）。`INSERT … ON CONFLICT DO UPDATE`：兩台裝置同時第一次存
+         *     不會撞主鍵變 500。套用時的體重不在這裡改（`set_` 只有七個欄位）。
+         */
+        put: operations["save_body_profile_api_me_body_profile_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/me/target-suggestion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Target Suggestion
+         * @description 依身體資料與**日期最新**的體重算建議目標（規格 §3）；缺什麼就回缺什麼（D11）。
+         *
+         *     `resuggest`：最新體重跟套用建議時的體重差 ≥ 1 公斤（D17）。從沒套用過、或之後手動改過
+         *     目標（D16）時 `applied_weight_kg` 是 null，不提示。
+         */
+        get: operations["read_target_suggestion_api_me_target_suggestion_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/foods": {
         parameters: {
             query?: never;
@@ -1625,6 +1673,11 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * ActivityLevel
+         * @enum {string}
+         */
+        ActivityLevel: "sedentary" | "light" | "moderate" | "active" | "very_active";
+        /**
          * AdminUserItem
          * @description `GET /api/admin/users` 的一列（規格 §3.3）。白名單：沒有時區、好友碼、建立時間。
          */
@@ -1746,6 +1799,43 @@ export interface components {
          * @enum {string}
          */
         BaseUnit: "g" | "ml";
+        /**
+         * BodyProfileRequest
+         * @description `PUT /api/me/body-profile`：**七個鍵都必填、值可以 null**（D5，同 `TargetTodayRequest`）。
+         *
+         *     出生年這裡只擋衛生範圍（同資料庫的 CHECK）；「今年 − 100 到今年 − 13」要知道使用者的
+         *     今天，在端點擋（D4）。
+         */
+        BodyProfileRequest: {
+            sex: components["schemas"]["Sex"] | null;
+            /** Birth Year */
+            birth_year: number | null;
+            /** Height Cm */
+            height_cm: number | string | null;
+            activity_level: components["schemas"]["ActivityLevel"] | null;
+            goal: components["schemas"]["Goal"] | null;
+            /** Rate Kg Per Week */
+            rate_kg_per_week: number | string | null;
+            /** Target Weight Kg */
+            target_weight_kg: number | string | null;
+        };
+        /**
+         * BodyProfileResponse
+         * @description 沒有那一列＝七個都是 null（不是 404）。**不含** `targets_applied_weight_kg`（內部用）。
+         */
+        BodyProfileResponse: {
+            sex: components["schemas"]["Sex"] | null;
+            /** Birth Year */
+            birth_year: number | null;
+            /** Height Cm */
+            height_cm: string | null;
+            activity_level: components["schemas"]["ActivityLevel"] | null;
+            goal: components["schemas"]["Goal"] | null;
+            /** Rate Kg Per Week */
+            rate_kg_per_week: string | null;
+            /** Target Weight Kg */
+            target_weight_kg: string | null;
+        };
         /** Body_upload_meal_photo_api_meals__meal_id__photo_post */
         Body_upload_meal_photo_api_meals__meal_id__photo_post: {
             /** File */
@@ -2107,6 +2197,11 @@ export interface components {
              */
             since: string;
         };
+        /**
+         * Goal
+         * @enum {string}
+         */
+        Goal: "lose" | "maintain" | "gain";
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -2708,6 +2803,11 @@ export interface components {
          */
         RevisionStatus: "pending" | "approved" | "rejected";
         /**
+         * Sex
+         * @enum {string}
+         */
+        Sex: "male" | "female";
+        /**
          * SocialMealResponse
          * @description 一餐與它上面的讚、留言。`meal` 是好友看的那個白名單——主人看自己的餐也是
          *     （沒有餐費與備註；要看那些去編輯畫面）。
@@ -2722,6 +2822,62 @@ export interface components {
             comments: components["schemas"]["CommentResponse"][];
             /** Comments Truncated */
             comments_truncated: boolean;
+        };
+        /**
+         * SuggestionMissing
+         * @description 缺什麼（D11 的固定順序）：前端照順序列出、決定連到身體資料還是記錄體重。
+         */
+        SuggestionMissing: {
+            /**
+             * Ready
+             * @constant
+             */
+            ready: false;
+            /** Missing */
+            missing: ("sex" | "birth_year" | "height_cm" | "activity_level" | "goal" | "rate_kg_per_week" | "weight")[];
+        };
+        /**
+         * SuggestionReady
+         * @description 建議目標（D10：跟 `SuggestionMissing` 是普通聯集，不加 discriminator——加了
+         *     openapi-typescript 會產生 `ready: "True"`）。
+         */
+        SuggestionReady: {
+            /**
+             * Ready
+             * @constant
+             */
+            ready: true;
+            /** Kcal */
+            kcal: string;
+            /** Protein G */
+            protein_g: string;
+            /** Fat G */
+            fat_g: string;
+            /** Carb G */
+            carb_g: string;
+            /** Bmr */
+            bmr: string;
+            /** Tdee */
+            tdee: string;
+            /** Adjustment Kcal */
+            adjustment_kcal: string;
+            /** Floor Applied */
+            floor_applied: boolean;
+            /** Floor Kcal */
+            floor_kcal: string;
+            /** Weight Kg */
+            weight_kg: string;
+            /**
+             * Based On Date
+             * Format: date
+             */
+            based_on_date: string;
+            /** Applied Weight Kg */
+            applied_weight_kg: string | null;
+            /** Weight Change Kg */
+            weight_change_kg: string | null;
+            /** Resuggest */
+            resuggest: boolean;
         };
         /** SupplementCreateRequest */
         SupplementCreateRequest: {
@@ -3461,6 +3617,79 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_body_profile_api_me_body_profile_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BodyProfileResponse"];
+                };
+            };
+        };
+    };
+    save_body_profile_api_me_body_profile_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BodyProfileRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BodyProfileResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_target_suggestion_api_me_target_suggestion_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuggestionReady"] | components["schemas"]["SuggestionMissing"];
                 };
             };
         };
