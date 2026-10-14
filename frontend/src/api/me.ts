@@ -32,3 +32,21 @@ export async function updateDisplayName(displayName: string): Promise<Me> {
 	if (updated === null) throw new Error("修改名稱的回應沒有 body");
 	return updated;
 }
+
+/** 舊快取的 `/api/me` 沒有這個欄位：預設是開（跟後端的 server_default 一樣，運動規格 D14）。 */
+export function exerciseAddsToBudgetOf(me: Me): boolean {
+	const maybeOld: Partial<Pick<Me, "exercise_adds_to_budget">> = me;
+	return maybeOld.exercise_adds_to_budget ?? true;
+}
+
+/** 「運動消耗加回今天的熱量額度」（運動規格 §7.6）。**只送這一個鍵**——同 `updateDisplayName`
+ *  的理由：順手送別的欄位會蓋掉另一台裝置剛改的值。 */
+export async function updateExerciseAddsToBudget(value: boolean): Promise<Me> {
+	const updated = await apiFetch<Me>("/api/me", {
+		method: "PATCH",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ exercise_adds_to_budget: value }),
+	});
+	if (updated === null) throw new Error("修改設定的回應沒有 body");
+	return updated;
+}

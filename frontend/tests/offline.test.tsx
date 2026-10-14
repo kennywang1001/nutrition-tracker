@@ -795,6 +795,55 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 		);
 	});
 
+	it("運動的估算預覽不會被寫進 localStorage；今天的運動會", async () => {
+		// 同 food-search 那條的做法：先讓兩個 query 真的進到 client，再證明 persist 跑過一輪。
+		// 這裡的「跑過一輪」用同一條裡的 `exercisesToday`（自己的資料，D23 要離線看得到）——
+		// 它在、估算不在，排除才有意義；用 queryKeys 產生的 key 做深比對。
+		mockApi({
+			"/api/stats/daily": () => json(STATS_WITH_TARGET),
+			"/api/supplements/today": () => json([]),
+			"/api/meals": () => json([]),
+		});
+		const client = newTestClient();
+		render(wrap(client, <Today />));
+		await screen.findByText(/1800/);
+
+		const estimateKey = queryKeys.exerciseEstimate(
+			"running",
+			"30",
+			"2026-10-14T04:00:00.000Z",
+		);
+		client.setQueryData(estimateKey, {
+			ready: true,
+			kcal: "343",
+			met: "9.8",
+			weight_kg: "70.00",
+			weight_date: "2026-10-14",
+		});
+		client.setQueryData(queryKeys.exercisesToday, {
+			date: "2026-10-14",
+			total_kcal: "0.00",
+			entries: [],
+		});
+		const estimateKeyJson = JSON.stringify(estimateKey);
+		const todayKeyJson = JSON.stringify(queryKeys.exercisesToday);
+
+		await waitFor(
+			() => {
+				const raw = localStorage.getItem(OFFLINE_CACHE_STORAGE_KEY);
+				expect(raw).not.toBeNull();
+				const persisted = (
+					JSON.parse(raw ?? "{}").clientState.queries as {
+						queryKey: unknown[];
+					}[]
+				).map((query) => JSON.stringify(query.queryKey));
+				expect(persisted).toContain(todayKeyJson);
+				expect(persisted).not.toContain(estimateKeyJson);
+			},
+			{ timeout: 3000 },
+		);
+	});
+
 	it("好友的資料與照片都不會被寫進 localStorage", async () => {
 		// 對方可以解除好友、可以把一餐改成「只有我看得到」——那之後這台裝置
 		// 不該還能離線翻出舊的好友資料。跟 food-search 那條同一個做法：先讓

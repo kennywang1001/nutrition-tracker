@@ -86,6 +86,8 @@ const NOT_PERSISTED: ReadonlySet<unknown> = new Set([
 	"friend-photo",
 	"food-search",
 	"supplement-search",
+	// 運動的估算預覽：分鐘每打一個數字就是一組新 key，同 `food-search` 的理由（運動規格 D23）。
+	"exercise-estimate",
 	// 管理員的清單，全部在 `["admin", …]` 底下（見 `api/queries.ts`）：所有帳號（每個人的
 	// email 與名字）、邀請清單、待審提案。別人的個資不該以明文留在這台裝置的 localStorage
 	// 裡；而這三個畫面本來就只在線上有用（產生連結、撤銷、審核都要打後端，兩份清單還是

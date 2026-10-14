@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { isZero, type Numeric } from "../lib/decimal";
 import { apiFetch } from "./client";
 import { queryKeys } from "./queries";
 import type { components } from "./schema";
@@ -47,4 +48,35 @@ export function useFreshDailyStats() {
 		queryFn: fetchDailyStats,
 		refetchOnMount: "always",
 	});
+}
+
+/** 離線快取或舊的測試資料可能是加這三個欄位之前存的（`undefined`，不是 `null`；handover §7）。
+ *  型別說它們一定在，所以讀的時候先換成「可能沒有」的型別，逼自己處理。 */
+type MaybeOldDailyStats = Omit<
+	DailyStats,
+	"exercise_kcal" | "exercise_adds_to_budget" | "kcal_budget"
+> &
+	Partial<
+		Pick<
+			DailyStats,
+			"exercise_kcal" | "exercise_adds_to_budget" | "kcal_budget"
+		>
+	>;
+
+/** 熱量的分母（運動規格 D15）。`kcal_budget` 是 null 時目標的熱量一定也是 null（沒有熱量目標
+ *  就沒有額度），所以「沒有這個欄位就退回目標」在新舊兩種回應都對。 */
+export function kcalBudgetOf(stats: DailyStats): Numeric | null {
+	const maybeOld: MaybeOldDailyStats = stats;
+	return maybeOld.kcal_budget ?? stats.target?.kcal ?? null;
+}
+
+/** 「含運動 +N」的 N：設定開著、有額度、今天的運動不是 0 才有；其他情況 `null`（不顯示）。
+ *  舊回應沒有設定的值——當成沒有（額度也退回了目標，寫「含運動」會跟分母對不上）。 */
+export function exerciseInBudgetOf(stats: DailyStats): Numeric | null {
+	const maybeOld: MaybeOldDailyStats = stats;
+	const kcal = maybeOld.exercise_kcal;
+	if (maybeOld.exercise_adds_to_budget !== true) return null;
+	if (maybeOld.kcal_budget == null || kcal === undefined || isZero(kcal))
+		return null;
+	return kcal;
 }

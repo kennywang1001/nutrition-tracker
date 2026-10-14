@@ -126,6 +126,9 @@ function TimelineItem({ row }: { row: TimelineRow }) {
 		);
 	}
 
+	// 運動列在下一個 commit 畫（運動計畫 Task 7）；這時還沒有人把運動傳進時間線。
+	if (row.kind === "exercise") return null;
+
 	const { expense } = row;
 	return (
 		<li className={styles.item} data-testid="timeline-row">

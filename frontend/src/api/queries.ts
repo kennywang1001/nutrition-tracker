@@ -78,6 +78,19 @@ export const queryKeys = {
 	targetSuggestion: ["body", "suggestion"] as const,
 	weights: ["body", "weights"] as const,
 	bodyAll: ["body"] as const,
+	/** 運動（運動規格 §7.1）：紀錄全部在 `"exercises"` 底下——新增、修改、刪除之後失效
+	 *  `exercisesAll` 一次打到今天的清單與正在編輯的那一筆。**進離線快取**（自己的資料，D23）。
+	 *  刪掉一筆之後先 `removeQueries(exercise(id))` 再失效——理由同 `meal(id)`。 */
+	exercisesAll: ["exercises"] as const,
+	exercisesToday: ["exercises", "today"] as const,
+	exercise: (exerciseId: number) => ["exercises", exerciseId] as const,
+	/** 活動清單是固定的：**刻意不掛在 `"exercises"` 底下**，記一筆運動不該連帶重抓清單
+	 *  （規格 §7.1 原本寫 `["exercises","activities"]`）。 */
+	exerciseActivities: ["exercise-activities"] as const,
+	/** 預覽的估算：每打一個數字一組 key，**不進離線快取**（`persist.ts` 的 `NOT_PERSISTED`，
+	 *  同 `food-search` 的理由）。`performedAt` 是 ISO 時刻。 */
+	exerciseEstimate: (activity: string, minutes: string, performedAt: string) =>
+		["exercise-estimate", activity, minutes, performedAt] as const,
 	/** 單一食物。**刻意是 `portions` 與 `foodRevisions` 的前綴。**
 	 *
 	 *  審核通過之後，那個食物的目前數值、份量、編輯歷史都該重取 ——

@@ -125,6 +125,17 @@ export function perServingToPer100(
 	}
 }
 
+/** 是不是 0（`"0.00"`、`"0"`、`"-0"` 都是）。給「含運動 +N」決定要不要顯示。 */
+export function isZero(value: Numeric): boolean {
+	return new Decimal(value).isZero();
+}
+
+/** 已經過 `checkRangeInput(…, { places: 0 })` 的整數字串 → number（分鐘要送 JSON 的整數）。
+ *  沒檢查過的值不要傳進來：`"1e3"` 會變成 1000。 */
+export function toWholeNumber(value: string): number {
+	return new Decimal(value.trim()).toNumber();
+}
+
 export function sumMacros(values: readonly Numeric[]): Numeric {
 	return values
 		.reduce((total, value) => total.plus(value), new Decimal(0))

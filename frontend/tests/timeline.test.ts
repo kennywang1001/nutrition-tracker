@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type { Exercise } from "../src/api/exercises";
 import type { Expense } from "../src/api/expenses";
 import type { Meal } from "../src/api/meals";
 import { buildTimeline } from "../src/lib/timeline";
+import { RUN } from "./helpers/exercise-routes";
 
 function meal(id: number, eatenAt: string): Meal {
 	return {
@@ -100,5 +102,54 @@ describe("buildTimeline", () => {
 		expect(rows.find((row) => row.kind === "expense")).toMatchObject({
 			key: "expense-2",
 		});
+	});
+});
+
+/** `created_at` 刻意跟 `performed_at` 反著排：補記早上的運動時，記下的時間比較晚。 */
+function exercise(
+	id: number,
+	performedAt: string,
+	createdAt: string,
+): Exercise {
+	return { ...RUN, id, performed_at: performedAt, created_at: createdAt };
+}
+
+describe("buildTimeline 的運動列", () => {
+	it("餐、支出、運動依時間由新到舊交錯（用運動的時間，不是記下的時間）", () => {
+		const rows = buildTimeline(
+			[meal(11, "2026-12-15T03:00:00+00:00")],
+			[expense(1, "2026-12-15T05:00:00+00:00")],
+			[
+				exercise(7, "2026-12-15T04:00:00+00:00", "2026-12-15T01:00:00+00:00"),
+				exercise(8, "2026-12-15T01:30:00+00:00", "2026-12-15T09:00:00+00:00"),
+			],
+		);
+
+		expect(rows.map((row) => row.key)).toEqual([
+			"expense-1",
+			"exercise-7",
+			"meal-11",
+			"exercise-8",
+		]);
+		expect(rows[1]).toMatchObject({
+			kind: "exercise",
+			time: "2026-12-15T04:00:00+00:00",
+		});
+	});
+
+	it("運動的 key 不跟同 id 的餐撞", () => {
+		const rows = buildTimeline(
+			[meal(7, "2026-12-15T03:00:00+00:00")],
+			[],
+			[exercise(7, "2026-12-15T04:00:00+00:00", "2026-12-15T04:00:00+00:00")],
+		);
+
+		expect(rows.map((row) => row.key)).toEqual(["exercise-7", "meal-7"]);
+	});
+
+	it("不傳第三個參數照舊（沒有運動列）", () => {
+		const rows = buildTimeline([meal(11, "2026-12-15T03:00:00+00:00")], []);
+
+		expect(rows.map((row) => row.kind)).toEqual(["meal"]);
 	});
 });

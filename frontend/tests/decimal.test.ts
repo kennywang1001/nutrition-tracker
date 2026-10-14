@@ -8,11 +8,13 @@ import {
 	formatMoney,
 	isPlainPositiveDecimal,
 	isPositiveAmount,
+	isZero,
 	paddedExtent,
 	perServingToPer100,
 	positionIn,
 	ratioOf,
 	sumMacros,
+	toWholeNumber,
 } from "../src/lib/decimal";
 
 describe("formatMacro", () => {
@@ -279,5 +281,27 @@ describe("checkRangeInput", () => {
 		expect(
 			checkRangeInput("1990", { min: "1900", max: "2100", places: 0 }),
 		).toBeNull();
+	});
+});
+
+describe("isZero", () => {
+	it.each([
+		["0.00", true],
+		["0", true],
+		["-0", true],
+		["343.00", false],
+		["0.01", false],
+	] as const)("%j → %j", (value, zero) => {
+		expect(isZero(value)).toBe(zero);
+	});
+});
+
+describe("toWholeNumber", () => {
+	it.each([
+		["30", 30],
+		[" 600 ", 600],
+		["1", 1],
+	] as const)("%j → %j", (value, number) => {
+		expect(toWholeNumber(value)).toBe(number);
 	});
 });
