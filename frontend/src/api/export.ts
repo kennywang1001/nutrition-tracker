@@ -1,12 +1,14 @@
 import { fetchDownload } from "./client";
 
-/** 可以匯出的四種資料（報表月份與匯出規格 §3；體重是身體資料規格 D18）。`kind` 就是端點的檔名：
+/** 可以匯出的五種資料（報表月份與匯出規格 §3；體重是身體資料規格 D18；運動是運動規格 D28）。
+ *  `kind` 就是端點的檔名：
  *  `GET /api/export/{kind}.csv`。 */
 export const EXPORT_KINDS = [
 	{ kind: "meals", label: "餐點" },
 	{ kind: "expenses", label: "花費" },
 	{ kind: "supplements", label: "補劑" },
 	{ kind: "weights", label: "體重" },
+	{ kind: "exercises", label: "運動" },
 ] as const;
 
 export type ExportKind = (typeof EXPORT_KINDS)[number]["kind"];

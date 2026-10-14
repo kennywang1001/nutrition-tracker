@@ -5,6 +5,7 @@ import { formatMacro } from "../lib/decimal";
 import { TARGET_FIELDS } from "../lib/targets";
 import { signedKg } from "../lib/weights";
 import { Card } from "./Card";
+import { ExerciseBudgetSwitch } from "./ExerciseBudgetSwitch";
 import styles from "./TargetsCard.module.css";
 import ui from "./ui.module.css";
 
@@ -63,6 +64,9 @@ export function TargetsCard() {
 			<Link to="/me/targets" aria-label="修改每日目標" className={styles.link}>
 				修改
 			</Link>
+			{/* 卡片底部（運動規格 D25）：它改的是熱量的分母。放在「修改」後面、隔一條線——
+			    「修改」是改上面那四個數字，開關是另一件事。 */}
+			<ExerciseBudgetSwitch />
 		</Card>
 	);
 }

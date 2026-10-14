@@ -531,7 +531,7 @@ describe("我的：匯出資料", () => {
 			within(card)
 				.getAllByRole("button")
 				.map((button) => button.textContent),
-		).toEqual(["餐點", "花費", "補劑", "體重"]);
+		).toEqual(["餐點", "花費", "補劑", "體重", "運動"]);
 		const logout = screen.getByRole("button", { name: "登出" });
 		expect(
 			card.compareDocumentPosition(logout) & Node.DOCUMENT_POSITION_FOLLOWING,

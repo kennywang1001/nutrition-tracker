@@ -28,10 +28,10 @@ function card() {
 	return within(screen.getByTestId("export-card"));
 }
 
-/** 四顆按鈕現在的文字與能不能按。
+/** 每一顆按鈕現在的文字與能不能按。
  *
  *  「不能按」是 `aria-disabled`，**不是原生的 `disabled`**：原生的會讓按下去的那顆把焦點
- *  弄丟（下載中四顆一起停用，包括正在焦點上的那一顆）。所以這裡順便確認沒有任何一顆是
+ *  弄丟（下載中每一顆一起停用，包括正在焦點上的那一顆）。所以這裡順便確認沒有任何一顆是
  *  原生 disabled；「按了沒有反應」由「下載中再按」那一條守。 */
 function buttons(): Array<[string, boolean]> {
 	return card()
@@ -67,7 +67,7 @@ beforeEach(() => {
 });
 
 describe("匯出資料", () => {
-	it("四顆按鈕在名叫「匯出資料」的一組裡", () => {
+	it("五顆按鈕在名叫「匯出資料」的一組裡", () => {
 		render(<ExportCard />);
 
 		const group = screen.getByRole("group", { name: "匯出資料" });
@@ -75,7 +75,7 @@ describe("匯出資料", () => {
 			within(group)
 				.getAllByRole("button")
 				.map((button) => button.textContent),
-		).toEqual(["餐點", "花費", "補劑", "體重"]);
+		).toEqual(["餐點", "花費", "補劑", "體重", "運動"]);
 	});
 
 	it.each([
@@ -83,6 +83,7 @@ describe("匯出資料", () => {
 		["花費", "/api/export/expenses.csv", "expenses-2026-10-09.csv"],
 		["補劑", "/api/export/supplements.csv", "supplements-2026-10-09.csv"],
 		["體重", "/api/export/weights.csv", "weights-2026-10-09.csv"],
+		["運動", "/api/export/exercises.csv", "exercises-2026-10-09.csv"],
 	])(
 		"按「%s」：帶著登入的票打 %s，把內容與後端給的檔名交去存檔",
 		async (label, path, filename) => {
@@ -170,7 +171,7 @@ describe("匯出資料", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("下載中：按的那顆寫「下載中…」，四顆都不能按；回來之後恢復", async () => {
+	it("下載中：按的那顆寫「下載中…」，每一顆都不能按；回來之後恢復", async () => {
 		let respond: (response: Response) => void = () => {};
 		mockApi([
 			{
@@ -191,6 +192,7 @@ describe("匯出資料", () => {
 			["下載中…", false],
 			["補劑", false],
 			["體重", false],
+			["運動", false],
 		]);
 		// 按下去的那顆沒有被原生停用，焦點還在它上面（鍵盤、螢幕閱讀器的人還在原地）。
 		expect(document.activeElement).toBe(
@@ -206,6 +208,7 @@ describe("匯出資料", () => {
 				["花費", true],
 				["補劑", true],
 				["體重", true],
+				["運動", true],
 			]),
 		);
 		expect(saveBlobMock).toHaveBeenCalledTimes(1);
