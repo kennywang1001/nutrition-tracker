@@ -197,6 +197,16 @@ async def test_list_with_a_range(client, db_session, seen_timezones):
         ("from=2024-08-05&to=2026-10-14", 422, "RANGE_TOO_LONG"),
         ("from=2024-08-06&to=2026-10-14", 200, None),
         ("from=2026-13-01", 422, "VALIDATION_ERROR"),
+        # 審查 M1：`to` 太早，`from` 的預設（to − 799 天）會算到公元 1 年之前——OverflowError、500。
+        # 1900-01-01 之前的日期一律 INVALID_RANGE。
+        ("to=0001-01-01", 422, "INVALID_RANGE"),
+        ("from=0001-01-01", 422, "INVALID_RANGE"),
+        ("from=0001-01-01&to=0001-01-02", 422, "INVALID_RANGE"),
+        ("to=1899-12-31", 422, "INVALID_RANGE"),
+        ("from=1899-12-31&to=1900-01-10", 422, "INVALID_RANGE"),
+        # 下限本身可以（`from` 的預設會早於它：夾在下限，不算錯）。
+        ("from=1900-01-01&to=1900-01-10", 200, None),
+        ("to=1900-01-01", 200, None),
     ],
 )
 async def test_list_range_errors(client, db_session, seen_timezones, query, status, code):

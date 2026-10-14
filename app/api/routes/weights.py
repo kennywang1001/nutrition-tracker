@@ -23,6 +23,9 @@ router = APIRouter(prefix="/weights", tags=["weights"])
 # D13：可以補記兩年內的日子。D14：清單一次最多 800 天（比兩年多一點，剛記的都在裡面）。
 MAX_BACKFILL_DAYS = 730
 MAX_LIST_DAYS = 800
+# 清單查得到的最早日期（審查 M1）。沒有它，`to=0001-01-01` 算 `from` 的預設時會跑到公元 1 年
+# 之前——OverflowError、500。真的紀錄不會早於「今天 − 730 天」，這只是衛生下限。
+EARLIEST_LIST_DATE = date(1900, 1, 1)
 
 
 async def upsert_weight(
@@ -88,11 +91,19 @@ async def list_weights(
     db: AsyncSession = Depends(get_db),
 ) -> WeightListResponse:
     """一段日期的體重，由舊到新，兩端都含（D14）。`to` 省略＝使用者的今天；`from` 省略＝
-    `to` 往回 799 天（共 800 天）。"""
+    `to` 往回 799 天（共 800 天），但不早於 1900-01-01。明確給的 `from`／`to` 早於
+    1900-01-01 是 `422 INVALID_RANGE`。"""
     user_id = user.id
     today = today_in_timezone(user.timezone)
+    for given in (date_from, date_to):
+        if given is not None and given < EARLIEST_LIST_DATE:
+            raise UnprocessableEntityError(
+                "INVALID_RANGE", f"日期不能早於 {EARLIEST_LIST_DATE.isoformat()}"
+            )
     end = date_to if date_to is not None else today
-    start = date_from if date_from is not None else end - timedelta(days=MAX_LIST_DAYS - 1)
+    # `end` 已經 ≥ 1900-01-01，往回 799 天不會超出 date 的範圍；預設的 `from` 夾在下限。
+    default_start = max(EARLIEST_LIST_DATE, end - timedelta(days=MAX_LIST_DAYS - 1))
+    start = date_from if date_from is not None else default_start
     if end < start:
         raise UnprocessableEntityError("INVALID_RANGE", "結束日期不能早於開始日期")
     span = (end - start).days + 1

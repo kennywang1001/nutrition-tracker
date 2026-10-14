@@ -378,7 +378,8 @@ export interface paths {
         /**
          * List Weights
          * @description 一段日期的體重，由舊到新，兩端都含（D14）。`to` 省略＝使用者的今天；`from` 省略＝
-         *     `to` 往回 799 天（共 800 天）。
+         *     `to` 往回 799 天（共 800 天），但不早於 1900-01-01。明確給的 `from`／`to` 早於
+         *     1900-01-01 是 `422 INVALID_RANGE`。
          */
         get: operations["list_weights_api_weights_get"];
         put?: never;
