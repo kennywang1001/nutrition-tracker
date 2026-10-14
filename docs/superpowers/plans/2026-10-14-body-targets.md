@@ -967,3 +967,642 @@ git add app/body_targets.py tests/test_body_targets.py
 ```
 
 訊息（`$S/body-t2-msg.txt`）：`feat(body): 建議目標的公式——Mifflin-St Jeor、下限、三大營養素（純函式）`。
+
+---
+
+## Task 3：後端——身體資料端點與 `GET /api/me/target-suggestion`
+
+**Files:**
+- Create: `app/schemas/body.py`、`app/body_data.py`、`app/api/routes/body.py`、`tests/test_body_profile.py`、`tests/test_target_suggestion.py`
+- Modify: `app/main.py`、`frontend/src/api/schema.d.ts`
+
+- [ ] **Step 1：schema。** `app/schemas/body.py`（這個 task 先寫身體資料與建議；體重與套用的形狀在 Task 4、5 加進同一個檔案）：
+
+```python
+"""身體資料、建議目標、體重的請求與回應（身體資料規格 §5）。健康資料：這些形狀只出現在
+身體資料的端點，好友與社群的回應不准引用（`tests/test_body_privacy.py`）。"""
+
+from datetime import date
+from decimal import Decimal
+from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
+
+from app.body_targets import MissingInput
+from app.models.body import ActivityLevel, Goal, Sex
+
+RATES = (Decimal("0.25"), Decimal("0.5"))
+
+
+class BodyProfileRequest(BaseModel):
+    """`PUT /api/me/body-profile`：**七個鍵都必填、值可以 null**（D5，同 `TargetTodayRequest`）。
+
+    出生年這裡只擋衛生範圍（同資料庫的 CHECK）；「今年 − 100 到今年 − 13」要知道使用者的
+    今天，在端點擋（D4）。"""
+
+    sex: Sex | None
+    birth_year: int | None = Field(ge=1900, le=2100)
+    height_cm: Decimal | None = Field(ge=100, le=250, max_digits=4, decimal_places=1)
+    activity_level: ActivityLevel | None
+    goal: Goal | None
+    rate_kg_per_week: Decimal | None = Field(max_digits=3, decimal_places=2)
+    target_weight_kg: Decimal | None = Field(ge=25, le=350, max_digits=5, decimal_places=2)
+
+    @field_validator("rate_kg_per_week")
+    @classmethod
+    def _rate_is_one_of_two(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and value not in RATES:
+            raise ValueError("速度只能是每週 0.25 或 0.5 公斤")
+        return value
+
+
+class BodyProfileResponse(BaseModel):
+    """沒有那一列＝七個都是 null（不是 404）。**不含** `targets_applied_weight_kg`（內部用）。"""
+
+    sex: Sex | None
+    birth_year: int | None
+    height_cm: Decimal | None
+    activity_level: ActivityLevel | None
+    goal: Goal | None
+    rate_kg_per_week: Decimal | None
+    target_weight_kg: Decimal | None
+
+
+class SuggestionReady(BaseModel):
+    """建議目標（D10：跟 `SuggestionMissing` 是普通聯集，不加 discriminator——加了
+    openapi-typescript 會產生 `ready: "True"`）。"""
+
+    ready: Literal[True]
+    kcal: Decimal
+    protein_g: Decimal
+    fat_g: Decimal
+    carb_g: Decimal
+    bmr: Decimal
+    tdee: Decimal
+    adjustment_kcal: Decimal
+    floor_applied: bool
+    floor_kcal: Decimal
+    weight_kg: Decimal
+    based_on_date: date
+    applied_weight_kg: Decimal | None
+    weight_change_kg: Decimal | None
+    resuggest: bool
+
+
+class SuggestionMissing(BaseModel):
+    ready: Literal[False]
+    missing: list[MissingInput]
+```
+
+> 必填但可為 null 的寫法：`sex: Sex | None`（沒有預設值）在 Pydantic v2 是必填；有 `Field(...)` 而沒有 `default=` 的也是（同 `TargetTodayRequest`）。
+
+- [ ] **Step 2：讀資料的小函式。** `app/body_data.py`：
+
+```python
+"""身體資料端點共用的讀寫（身體資料規格 §5）。只用呼叫端給的 user_id——沒有「讀別人的」這條路。"""
+
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.body_targets import BodyInputs
+from app.models.body import UserProfile, WeightEntry
+
+
+async def load_profile(db: AsyncSession, user_id: int) -> UserProfile | None:
+    return await db.scalar(select(UserProfile).where(UserProfile.user_id == user_id))
+
+
+async def latest_weight(db: AsyncSession, user_id: int) -> WeightEntry | None:
+    """**日期**最新的一筆（不是最後寫的那一筆：補記上週的不會變成「目前體重」）。"""
+    return await db.scalar(
+        select(WeightEntry)
+        .where(WeightEntry.user_id == user_id)
+        .order_by(WeightEntry.date.desc())
+        .limit(1)
+    )
+
+
+def inputs_from(profile: UserProfile | None, latest: WeightEntry | None) -> BodyInputs:
+    return BodyInputs(
+        sex=profile.sex if profile else None,
+        birth_year=profile.birth_year if profile else None,
+        height_cm=profile.height_cm if profile else None,
+        activity_level=profile.activity_level if profile else None,
+        goal=profile.goal if profile else None,
+        rate_kg_per_week=profile.rate_kg_per_week if profile else None,
+        weight_kg=latest.weight_kg if latest else None,
+    )
+
+
+async def clear_applied_weight(db: AsyncSession, user_id: int) -> None:
+    """手動存目標時呼叫（D16）。不 commit：跟目標在同一個交易。沒有那一列就什麼都不做。"""
+    await db.execute(
+        update(UserProfile)
+        .where(UserProfile.user_id == user_id)
+        .values(targets_applied_weight_kg=None)
+    )
+```
+
+- [ ] **Step 3：先寫測試。** `tests/test_body_profile.py`（`auth()` 同 `test_targets_today.py`；`today` 夾具 monkeypatch `app.api.routes.body.today_in_timezone`，固定 `date(2026, 10, 14)` 並記下時區）。`FULL` 是一組完整的請求：
+
+```python
+FULL = {
+    "sex": "female",
+    "birth_year": 1990,
+    "height_cm": "162.5",
+    "activity_level": "light",
+    "goal": "lose",
+    "rate_kg_per_week": "0.25",
+    "target_weight_kg": "55",
+}
+```
+
+測試清單（每條一兩個斷言；寫法照既有的端點測試）：
+
+1. `test_an_empty_profile_is_all_nulls_not_404`：沒有列 → 200、七個鍵都是 `None`、**沒有** `targets_applied_weight_kg` 這個鍵。
+2. `test_put_saves_the_whole_profile_and_get_reads_it_back`：PUT `FULL` → 200，回應等於 `FULL`（數字比 `Decimal`）；再 GET 一樣；資料庫裡只有一列。
+3. `test_a_second_put_replaces_every_field`：先 PUT `FULL`，再 PUT 一組全部不同（含 `target_weight_kg: None`）→ 資料庫那一列是第二組（`target_weight_kg` 是 null），`created_at` 不變。
+4. `test_put_does_not_touch_the_applied_weight`：`create_profile(..., targets_applied_weight_kg=80)` 之後 PUT `FULL` → 資料庫裡仍然是 80（`set_` 只放七個欄位）。
+5. `test_every_key_is_required`（parametrize 七個鍵）：拿掉一個 → 422。
+6. `test_out_of_range_values_are_422`（parametrize）：`height_cm` 99.9／250.1／`"170.25"`（兩位小數）、`target_weight_kg` 24.99／350.01、`rate_kg_per_week` `"0.3"`、`sex` `"other"`、`activity_level` `"extreme"`、`goal` `"bulk"` → 422；邊界 100、250、25、350、`"0.50"` → 200。
+7. `test_birth_year_is_judged_by_the_users_today`（parametrize `(1926, 200)`、`(1925, 422)`、`(2013, 200)`、`(2014, 422)`）：使用者時區設 `America/New_York`；422 的 `error.code` 是 `BIRTH_YEAR_OUT_OF_RANGE`、訊息含「1926」與「2013」；`seen_timezones == ["America/New_York"]`。
+8. `test_maintain_keeps_whatever_rate_was_sent`：`goal: "maintain"`、`rate_kg_per_week: "0.5"` → 存 0.5（D3：不清掉，切回減重還在）。
+9. `test_someone_elses_profile_is_untouched`：A PUT `FULL`；B GET 是全 null；B PUT 另一組之後 A 的那一列沒變（**先**證明 A 讀得到自己的）。
+10. `test_it_needs_a_login`：GET、PUT 不帶 token → 401。
+
+`tests/test_target_suggestion.py`（這個 task 只寫 GET；`today` 同上 monkeypatch `app.api.routes.body.today_in_timezone`，固定 2026-10-14）：
+
+1. `test_the_worked_example`：`create_profile(user=…)`（預設值）＋ `create_weight(day=2026-10-10, weight_kg=80)` → 回應等於
+
+   ```python
+   {
+       "ready": True, "kcal": "2110", "protein_g": "144", "fat_g": "59", "carb_g": "251",
+       "bmr": "1719", "tdee": "2664", "adjustment_kcal": "-550", "floor_applied": False,
+       "floor_kcal": "1500", "weight_kg": "80.00", "based_on_date": "2026-10-10",
+       "applied_weight_kg": None, "weight_change_kg": None, "resuggest": False,
+   }
+   ```
+
+   （數字欄位用 `Decimal(body[k]) == Decimal(v)` 比，不比字串的小數位數。）
+2. `test_the_latest_weight_is_by_date_not_by_insertion`：先建 10/10 的 80，再建 10/01 的 90 → `weight_kg` 是 80、`based_on_date` 是 10/10。
+3. `test_nothing_set_lists_everything_missing`：沒有列、沒有體重 → `{"ready": False, "missing": [七個]}`（順序同 Task 2）。
+4. `test_a_profile_without_a_weight_is_missing_only_the_weight`。
+5. `test_resuggest_threshold`（parametrize `(applied, latest, change, resuggest)`：`("80", "79.01", "-0.99", False)`、`("80", "79", "-1.00", True)`、`("80", "81", "1.00", True)`、`(None, "81", None, False)`）。
+6. `test_someone_elses_weight_does_not_count`：A 有完整的資料與體重（先證明 A 是 ready）；B 有完整的資料、沒有體重 → B 是 `missing: ["weight"]`。
+7. `test_it_uses_the_users_timezone`：時區 `America/New_York` → 夾具記到它。
+
+- [ ] **Step 4：跑，看它紅。** `pytest -q -W error tests/test_body_profile.py tests/test_target_suggestion.py` → Expected：FAIL（404：路由還不存在）。
+
+- [ ] **Step 5：路由。** `app/api/routes/body.py`：
+
+```python
+"""身體資料與建議目標（身體資料規格 §5.1、§5.2）。只讀寫自己的：路徑上沒有使用者 id。
+
+健康資料：這個模組不 import logging（`tests/test_body_privacy.py`）。"""
+
+from decimal import Decimal
+
+from fastapi import APIRouter, Depends
+from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.deps import get_current_user
+from app.body_data import inputs_from, latest_weight, load_profile
+from app.body_targets import RESUGGEST_THRESHOLD_KG, suggest
+from app.days import today_in_timezone
+from app.db import get_db
+from app.errors import UnprocessableEntityError
+from app.models.body import UserProfile
+from app.models.user import User
+from app.schemas.body import (
+    BodyProfileRequest,
+    BodyProfileResponse,
+    SuggestionMissing,
+    SuggestionReady,
+)
+
+router = APIRouter(tags=["body"])
+
+# D4：出生年在「使用者的今年 − 100」到「今年 − 13」。
+MAX_AGE = 100
+MIN_AGE = 13
+PROFILE_FIELDS = (
+    "sex",
+    "birth_year",
+    "height_cm",
+    "activity_level",
+    "goal",
+    "rate_kg_per_week",
+    "target_weight_kg",
+)
+
+
+def _profile_response(profile: UserProfile | None) -> BodyProfileResponse:
+    if profile is None:
+        return BodyProfileResponse(**dict.fromkeys(PROFILE_FIELDS))
+    return BodyProfileResponse(**{field: getattr(profile, field) for field in PROFILE_FIELDS})
+
+
+@router.get("/me/body-profile", response_model=BodyProfileResponse)
+async def read_body_profile(
+    user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+) -> BodyProfileResponse:
+    """自己的身體資料。還沒填過＝七個都是 null（200，不是 404）。"""
+    return _profile_response(await load_profile(db, user.id))
+
+
+@router.put("/me/body-profile", response_model=BodyProfileResponse)
+async def save_body_profile(
+    payload: BodyProfileRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BodyProfileResponse:
+    """整組取代自己的身體資料（D5）。`INSERT … ON CONFLICT DO UPDATE`：兩台裝置同時第一次存
+    不會撞主鍵變 500。套用時的體重不在這裡改（`set_` 只有七個欄位）。"""
+    user_id = user.id
+    today = today_in_timezone(user.timezone)
+    if payload.birth_year is not None:
+        earliest, latest = today.year - MAX_AGE, today.year - MIN_AGE
+        if not earliest <= payload.birth_year <= latest:
+            raise UnprocessableEntityError(
+                "BIRTH_YEAR_OUT_OF_RANGE", f"出生年要在 {earliest} 到 {latest} 之間"
+            )
+
+    values = payload.model_dump()
+    statement = (
+        pg_insert(UserProfile)
+        .values(user_id=user_id, **values)
+        .on_conflict_do_update(
+            index_elements=[UserProfile.user_id],
+            # ON CONFLICT 不走 ORM 的 onupdate：updated_at 自己寫。
+            set_={**values, "updated_at": func.now()},
+        )
+        .returning(*(getattr(UserProfile, field) for field in PROFILE_FIELDS))
+    )
+    row = (await db.execute(statement)).one()
+    await db.commit()
+    return BodyProfileResponse(**row._asdict())
+
+
+@router.get("/me/target-suggestion", response_model=SuggestionReady | SuggestionMissing)
+async def read_target_suggestion(
+    user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+) -> SuggestionReady | SuggestionMissing:
+    """依身體資料與**日期最新**的體重算建議目標（規格 §3）；缺什麼就回缺什麼（D11）。
+
+    `resuggest`：最新體重跟套用建議時的體重差 ≥ 1 公斤（D17）。從沒套用過、或之後手動改過
+    目標（D16）時 `applied_weight_kg` 是 null，不提示。"""
+    user_id = user.id
+    today = today_in_timezone(user.timezone)
+    profile = await load_profile(db, user_id)
+    latest = await latest_weight(db, user_id)
+    result = suggest(inputs_from(profile, latest), today)
+    if isinstance(result, list):
+        return SuggestionMissing(ready=False, missing=result)
+    assert latest is not None  # suggest 只有在有體重時才回建議
+
+    applied = profile.targets_applied_weight_kg if profile is not None else None
+    change: Decimal | None = None if applied is None else latest.weight_kg - applied
+    return SuggestionReady(
+        ready=True,
+        kcal=result.kcal,
+        protein_g=result.protein_g,
+        fat_g=result.fat_g,
+        carb_g=result.carb_g,
+        bmr=result.bmr,
+        tdee=result.tdee,
+        adjustment_kcal=result.adjustment_kcal,
+        floor_applied=result.floor_applied,
+        floor_kcal=result.floor_kcal,
+        weight_kg=latest.weight_kg,
+        based_on_date=latest.date,
+        applied_weight_kg=applied,
+        weight_change_kg=change,
+        resuggest=change is not None and abs(change) >= RESUGGEST_THRESHOLD_KG,
+    )
+```
+
+`app/main.py`：`from app.api.routes import body`（照字母順序加進既有的 import 清單），`app.include_router(body.router, prefix="/api")` 放在 `me.router` 那一行後面。
+
+> `.returning(...)` 回來的 `sex`、`activity_level`、`goal` 是 enum 成員（欄位型別是 `Enum`）。如果 asyncpg 回的是字串而 Pydantic 照樣收（StrEnum），不用處理。
+
+- [ ] **Step 6：跑。** 同 Step 4 → Expected：PASS（`test_body_profile.py` 約 30 條含 parametrize、`test_target_suggestion.py` 10 條）。
+
+- [ ] **Step 7：突變**（`routes/body.py`、`body_data.py` 是新檔案，先備份）：
+  1. `save_body_profile` 拿掉出生年的檢查 → 第 7 條的 `1925`、`2014` 紅。
+  2. `MIN_AGE` 的比較寫成 `<`（`earliest <= birth_year < latest`）→ `2013` 那一格紅。
+  3. `set_` 改成 `{**values}`（拿掉 `updated_at`）→ **存活**（`now()` 在共用交易裡不變，開工前必讀第 4 點）。記下來，不補測試。
+  4. `on_conflict_do_update` 整段拿掉 → 第 3 條紅（第二次 PUT 撞主鍵：500 或 IntegrityError）。
+  5. `latest_weight` 的 `.desc()` 拿掉 → `test_the_latest_weight_is_by_date_not_by_insertion` 紅。
+  6. `abs(change) >= …` 改成 `change >= …` → `resuggest` 的 `-1.00` 那一格紅。
+  7. `today_in_timezone(user.timezone)` 改成 `today_in_timezone("Asia/Taipei")` → 時區那兩條紅。
+
+  改回、`touch`、刪 pyc，`diff` 備份、`git diff` 乾淨。
+
+- [ ] **Step 8：重新產生 `schema.d.ts`**（執行環境那一段），`cd frontend && npm run -s typecheck` → 綠。
+
+- [ ] **Step 9：檢查與 commit。** `ruff check .`、`mypy app` 通過：
+
+```bash
+git add app/schemas/body.py app/body_data.py app/api/routes/body.py app/main.py tests/test_body_profile.py tests/test_target_suggestion.py frontend/src/api/schema.d.ts
+```
+
+訊息（`$S/body-t3-msg.txt`）：`feat(body): 身體資料的讀寫與建議目標（GET /api/me/body-profile、PUT、/api/me/target-suggestion）`。
+
+---
+
+## Task 4：後端——體重的三個端點與 `weights.csv`
+
+**Files:**
+- Create: `app/api/routes/weights.py`、`tests/test_weights.py`、`tests/test_weights_concurrency.py`
+- Modify: `app/schemas/body.py`、`app/main.py`、`app/export.py`、`app/api/routes/export.py`、`tests/test_export.py`、`frontend/src/api/schema.d.ts`
+
+- [ ] **Step 1：schema。** `app/schemas/body.py` 加：
+
+```python
+class WeightRequest(BaseModel):
+    weight_kg: Decimal = Field(ge=25, le=350, max_digits=5, decimal_places=2)
+
+
+class WeightEntryResponse(BaseModel):
+    date: date
+    weight_kg: Decimal
+
+
+class WeightListResponse(BaseModel):
+    """`today` 是使用者時區的今天（D14）：前端拿它當表單的預設日期與圖表的右端，不自己算。"""
+
+    today: date
+    entries: list[WeightEntryResponse]
+```
+
+> `WeightEntryResponse` 的欄位叫 `date`、型別也是 `date`：Pydantic 的類別本體裡 `date: date` 會讓之後的註解看到欄位而不是型別。這個類別只有這一個 `date` 註解，而且在 `weight_kg` 前面——沒有問題；**不要在它後面再加用到 `date` 型別的欄位**。
+
+- [ ] **Step 2：先寫測試。** `tests/test_weights.py`。夾具 `today` monkeypatch `app.api.routes.weights.today_in_timezone`：固定 `TODAY = date(2026, 10, 14)`、記下時區。使用者時區設 `America/New_York`。
+
+1. `test_put_creates_then_corrects_the_same_day`：PUT `/api/weights/2026-10-14` `{"weight_kg": "80.4"}` → 200 `{"date": "2026-10-14", "weight_kg": "80.40"}`；再 PUT `"79.9"` → 200；資料庫裡那一天只有一列、值是 79.90、`created_at` 跟第一次一樣。
+2. `test_the_date_boundaries_follow_the_users_today`（parametrize：`TODAY` → 200、`TODAY + 1 天` → 422 `WEIGHT_DATE_IN_FUTURE`、`TODAY − 730 天` → 200、`TODAY − 731 天` → 422 `WEIGHT_DATE_TOO_OLD`）；`seen_timezones` 都是 `America/New_York`。
+3. `test_bad_weights_are_422`（parametrize `"24.99"`、`"350.01"`、`"80.123"`、`"abc"`、缺 `weight_kg`）；`"25"`、`"350"` → 200。
+4. `test_a_date_that_is_not_a_date_is_422`：`/api/weights/2026-13-01`、`/api/weights/yesterday`。
+5. `test_list_defaults_to_the_last_800_days_oldest_first`：建 `TODAY`、`TODAY − 799`、`TODAY − 800`、`TODAY − 3` 四筆 → `GET /api/weights` 回 `today == "2026-10-14"`、entries 是 `TODAY − 799`、`TODAY − 3`、`TODAY` 三筆（由舊到新，800 天前那筆不在）。
+6. `test_list_with_a_range`：`?from=2026-10-01&to=2026-10-10` 只回範圍內（兩端都含）；只給 `from` → `to` 是今天；只給 `to` → `from` 是 `to − 799`。
+7. `test_list_range_errors`：`from > to` → 422 `INVALID_RANGE`；801 天 → 422 `RANGE_TOO_LONG`；800 天 → 200。
+8. `test_delete`：刪一筆 → 204、再 GET 沒有它；再刪一次 → 404 `WEIGHT_NOT_FOUND`。
+9. `test_someone_elses_weights`：A 記一筆（**先**證明 A 的 GET 有它）；B 的 GET 是空的；B 刪同一天 → 404，A 的那筆還在；B PUT 同一天 → 200 但 A 的值沒變。
+10. `test_it_needs_a_login`：三個端點不帶 token → 401。
+
+- [ ] **Step 3：並行的 upsert。** `tests/test_weights_concurrency.py`：照抄 `tests/test_invites_concurrency.py` 的 `independent_sessions` 夾具與 `_wait_until_someone_else_is_lock_waiting`（或從那裡 import——那兩個是模組層級的名字），直接呼叫 `routes/weights.py` 的 `upsert_weight`（Step 5）：
+
+```python
+async def test_two_concurrent_upserts_of_the_same_day_both_succeed(independent_sessions):
+    """兩個同時到的 PUT（兩台裝置）：第二個卡在第一個的列鎖上，第一個 commit 之後走
+    DO UPDATE——兩個都成功、只有一列、值是後到的。換成「先查再 INSERT」的寫法，第二個會
+    撞主鍵（handover §6 第 14 種：共用 session 的端點測試看不到這件事）。"""
+    user = User(
+        email=f"weight-race-{uuid.uuid4().hex}@example.com",
+        password_hash="not-a-real-hash",
+        display_name="race",
+    )
+    async with independent_sessions() as setup:
+        setup.add(user)
+        await setup.commit()
+    day = date(2026, 10, 14)
+    try:
+        async with independent_sessions() as first, independent_sessions() as second:
+            await upsert_weight(first, user.id, day, Decimal("80"))
+            first_pid = await first.scalar(select(func.pg_backend_pid()))
+            racing = asyncio.create_task(upsert_weight(second, user.id, day, Decimal("81")))
+            async with asyncio.timeout(5.0):
+                await _wait_until_someone_else_is_lock_waiting(first_pid)
+            await first.commit()
+            await racing
+            await second.commit()
+        async with independent_sessions() as check:
+            rows = (
+                await check.execute(
+                    select(WeightEntry.weight_kg).where(WeightEntry.user_id == user.id)
+                )
+            ).scalars().all()
+        assert rows == [Decimal("81.00")]
+    finally:
+        async with independent_sessions() as cleanup:
+            await cleanup.execute(delete(User).where(User.id == user.id))
+            await cleanup.commit()
+```
+
+> `_wait_until_someone_else_is_lock_waiting` 的簽名以那個檔案的現況為準；它等的是 `pg_stat_activity` 裡別的連線在等鎖。
+
+- [ ] **Step 4：跑，看它紅。** → Expected：FAIL（路由、`upsert_weight` 不存在）。
+
+- [ ] **Step 5：路由。** `app/api/routes/weights.py`：
+
+```python
+"""體重紀錄（身體資料規格 §5.3）。一人一天一筆，日期是使用者時區的日曆日；只讀寫自己的。
+
+健康資料：這個模組不 import logging（`tests/test_body_privacy.py`）。"""
+
+from datetime import date, timedelta
+from decimal import Decimal
+
+from fastapi import APIRouter, Depends, Query, Response, status
+from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.deps import get_current_user
+from app.days import today_in_timezone
+from app.db import get_db
+from app.errors import NotFoundError, UnprocessableEntityError
+from app.models.body import WeightEntry
+from app.models.user import User
+from app.schemas.body import WeightEntryResponse, WeightListResponse, WeightRequest
+
+router = APIRouter(prefix="/weights", tags=["weights"])
+
+# D13：可以補記兩年內的日子。D14：清單一次最多 800 天（比兩年多一點，剛記的都在裡面）。
+MAX_BACKFILL_DAYS = 730
+MAX_LIST_DAYS = 800
+
+
+async def upsert_weight(
+    db: AsyncSession, user_id: int, day: date, weight_kg: Decimal
+) -> WeightEntryResponse:
+    """新增或更正那一天（D13）。不 commit。`ON CONFLICT DO UPDATE` 由資料庫決定誰先誰後：
+    同一天兩個同時到的請求，後到的等先到的 commit 再更新，兩個都成功（並行測試守著）。"""
+    statement = (
+        pg_insert(WeightEntry)
+        .values(user_id=user_id, date=day, weight_kg=weight_kg)
+        .on_conflict_do_update(
+            index_elements=[WeightEntry.user_id, WeightEntry.date],
+            set_={"weight_kg": weight_kg, "updated_at": func.now()},
+        )
+        .returning(WeightEntry.date, WeightEntry.weight_kg)
+    )
+    row = (await db.execute(statement)).one()
+    return WeightEntryResponse(date=row.date, weight_kg=row.weight_kg)
+
+
+@router.put("/{day}", response_model=WeightEntryResponse)
+async def put_weight(
+    day: date,
+    payload: WeightRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> WeightEntryResponse:
+    """記（或更正）某一天的體重。日期不能是使用者的明天以後，也不能早於兩年前。"""
+    user_id = user.id
+    today = today_in_timezone(user.timezone)
+    if day > today:
+        raise UnprocessableEntityError("WEIGHT_DATE_IN_FUTURE", "不能記未來的體重")
+    if day < today - timedelta(days=MAX_BACKFILL_DAYS):
+        raise UnprocessableEntityError("WEIGHT_DATE_TOO_OLD", "只能補記兩年內的體重")
+    saved = await upsert_weight(db, user_id, day, payload.weight_kg)
+    await db.commit()
+    return saved
+
+
+@router.delete("/{day}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_weight(
+    day: date,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    deleted = await db.scalar(
+        delete(WeightEntry)
+        .where(WeightEntry.user_id == user.id, WeightEntry.date == day)
+        .returning(WeightEntry.date)
+    )
+    if deleted is None:
+        raise NotFoundError("WEIGHT_NOT_FOUND", "那一天沒有體重紀錄")
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("", response_model=WeightListResponse)
+async def list_weights(
+    date_from: date | None = Query(default=None, alias="from"),
+    date_to: date | None = Query(default=None, alias="to"),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> WeightListResponse:
+    """一段日期的體重，由舊到新，兩端都含（D14）。`to` 省略＝使用者的今天；`from` 省略＝
+    `to` 往回 799 天（共 800 天）。"""
+    user_id = user.id
+    today = today_in_timezone(user.timezone)
+    end = date_to if date_to is not None else today
+    start = date_from if date_from is not None else end - timedelta(days=MAX_LIST_DAYS - 1)
+    if end < start:
+        raise UnprocessableEntityError("INVALID_RANGE", "結束日期不能早於開始日期")
+    span = (end - start).days + 1
+    if span > MAX_LIST_DAYS:
+        raise UnprocessableEntityError(
+            "RANGE_TOO_LONG", f"期間最多 {MAX_LIST_DAYS} 天，這次是 {span} 天"
+        )
+    rows = (
+        await db.execute(
+            select(WeightEntry.date, WeightEntry.weight_kg)
+            .where(
+                WeightEntry.user_id == user_id,
+                WeightEntry.date >= start,
+                WeightEntry.date <= end,
+            )
+            .order_by(WeightEntry.date)
+        )
+    ).all()
+    return WeightListResponse(
+        today=today,
+        entries=[WeightEntryResponse(date=row.date, weight_kg=row.weight_kg) for row in rows],
+    )
+```
+
+`app/main.py`：import `weights`，`app.include_router(weights.router, prefix="/api")`。
+
+- [ ] **Step 6：`weights.csv`。** `app/export.py`：
+
+```python
+WEIGHT_COLUMNS = ("日期", "體重(kg)")
+
+
+async def weight_csv(db: AsyncSession, *, user_id: int) -> AsyncIterator[bytes]:
+    """體重：一天一列，由舊到新。日期就是記的時候選的那一天（日曆日），不用換時區。
+    主鍵是 (user_id, date)，所以游標只要日期。"""
+    yield encode_header(WEIGHT_COLUMNS)
+    after: date | None = None
+    while True:
+        query = (
+            select(WeightEntry.date, WeightEntry.weight_kg)
+            .where(WeightEntry.user_id == user_id)
+            .order_by(WeightEntry.date)
+            .limit(EXPORT_CHUNK_ROWS)
+        )
+        if after is not None:
+            query = query.where(WeightEntry.date > after)
+        rows = (await db.execute(query)).all()
+        if not rows:
+            return
+        yield encode_rows([(row.date.isoformat(), row.weight_kg) for row in rows])
+        after = rows[-1].date
+```
+
+（`from datetime import date, datetime`、`from app.models.body import WeightEntry`。）`app/api/routes/export.py` 照 `export_supplements` 加：
+
+```python
+@router.get("/weights.csv", response_class=StreamingResponse, responses=_CSV_RESPONSES)
+async def export_weights(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    """自己全部的體重：一天一列，由舊到新。"""
+    return await _csv_response(db, weight_csv(db, user_id=user.id), name="weights", user=user)
+```
+
+> 先確認既有的三個匯出端點掛的依賴（`export_slot`、限速）——照它們的寫法掛，四個共用同一個額度（規格 D18）。`>` 改成 `>=` 會變成無限迴圈（handover §7）：突變時加 `timeout`。
+
+`tests/test_export.py`：`WEIGHTS = "/api/export/weights.csv"`、`WEIGHT_HEADER = ["日期", "體重(kg)"]`；兩個既有的 parametrize（檔名與標題、要登入）各加一組；新增：
+
+```python
+async def test_weights_come_oldest_first_one_row_per_day(client, db_session, monkeypatch):
+    """跨兩塊（chunk 調成 2）：三天、順序、值，而且沒有別人的。"""
+    monkeypatch.setattr("app.export.EXPORT_CHUNK_ROWS", 2)
+    user = await create_user(db_session)
+    other = await create_user(db_session)
+    for day, kg in [(date(2026, 10, 3), "70.5"), (date(2026, 10, 1), "71"), (date(2026, 10, 2), "70.8")]:
+        await create_weight(db_session, user=user, day=day, weight_kg=kg)
+    await create_weight(db_session, user=other, day=date(2026, 10, 1), weight_kg="99")
+
+    response = await client.get(WEIGHTS, headers=auth(user.id))
+
+    rows = list(csv.reader(io.StringIO(response.content.decode("utf-8-sig"))))
+    assert rows == [
+        WEIGHT_HEADER,
+        ["2026-10-01", "71.00"],
+        ["2026-10-02", "70.80"],
+        ["2026-10-03", "70.50"],
+    ]
+```
+
+（`EXPORT_CHUNK_ROWS` 的 monkeypatch 寫法以 `test_export.py` 現況為準；`auth()` 也是。）
+
+- [ ] **Step 7：跑。** `pytest -q -W error tests/test_weights.py tests/test_weights_concurrency.py tests/test_export.py` → Expected：PASS。
+
+- [ ] **Step 8：突變**（新檔案先備份；`weight_csv` 的突變用 `timeout 300`）：
+  1. `if day > today` 改成 `>=` → 第 2 條的 `TODAY` 紅。
+  2. `MAX_BACKFILL_DAYS` 的比較改成 `<=` → `TODAY − 730` 紅。
+  3. `upsert_weight` 換成「`db.add(WeightEntry(...))` + flush」→ 第 1 條紅（第二次 PUT 撞主鍵）、並行那條紅。
+  4. 只換並行那一種寫法：先 `select` 有沒有，沒有就 `insert … ON CONFLICT DO NOTHING`、有就 `update` → **端點測試全綠、只有並行那條紅**（這就是它存在的理由）。
+  5. `list_weights` 的 `end - timedelta(days=MAX_LIST_DAYS - 1)` 改成 `MAX_LIST_DAYS` → 第 5 條紅（800 天前那筆跑進來）。
+  6. `delete_weight` 的 `WeightEntry.user_id == user.id` 拿掉 → 第 9 條紅。
+  7. `weight_csv` 的 `.where(WeightEntry.user_id == user_id)` 拿掉 → 匯出那條紅（多一列 99）。
+
+  改回、`touch`、刪 pyc、`diff` 備份、`git diff` 乾淨。
+
+- [ ] **Step 9：重新產生 `schema.d.ts`**、`npm run -s typecheck` 綠。
+
+- [ ] **Step 10：commit。** `ruff check .`、`mypy app`：
+
+```bash
+git add app/schemas/body.py app/api/routes/weights.py app/main.py app/export.py app/api/routes/export.py tests/test_weights.py tests/test_weights_concurrency.py tests/test_export.py frontend/src/api/schema.d.ts
+```
+
+訊息（`$S/body-t4-msg.txt`）：`feat(body): 體重紀錄的三個端點與 weights.csv 匯出`。
