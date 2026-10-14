@@ -18,7 +18,11 @@ import {
 	setTokens,
 } from "../src/auth/store";
 import { Me } from "../src/screens/Me";
-import { bodyRoutes, EMPTY_PROFILE } from "./helpers/body-routes";
+import {
+	bodyRoutes,
+	EMPTY_PROFILE,
+	READY_SUGGESTION,
+} from "./helpers/body-routes";
 import { json, mockApi, type Route } from "./helpers/mock-api";
 
 function me(role: "user" | "admin") {
@@ -390,6 +394,69 @@ describe("我的：帳號卡片", () => {
 	});
 });
 
+describe("我的：每日目標卡片的重算提示（身體資料規格 §6.6）", () => {
+	function renderWith(suggestion: unknown) {
+		mockApi([
+			...bodyRoutes({ suggestion }),
+			statsRoute(),
+			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
+		]);
+		render(wrap(<Me />));
+		return screen.getByTestId("targets-card");
+	}
+
+	it("resuggest：「體重變了 -1.5 公斤，要重算建議目標嗎？」，連到 /me/targets", async () => {
+		const card = renderWith({
+			...READY_SUGGESTION,
+			applied_weight_kg: "80.00",
+			weight_change_kg: "-1.50",
+			resuggest: true,
+		});
+
+		expect(
+			await within(card).findByText("體重變了 -1.5 公斤，要重算建議目標嗎？"),
+		).toBeInTheDocument();
+		expect(
+			within(card).getByRole("link", { name: "重算建議目標" }),
+		).toHaveAttribute("href", "/me/targets");
+	});
+
+	it("變重了寫 +", async () => {
+		const card = renderWith({
+			...READY_SUGGESTION,
+			applied_weight_kg: "80.00",
+			weight_change_kg: "1.00",
+			resuggest: true,
+		});
+		expect(
+			await within(card).findByText("體重變了 +1 公斤，要重算建議目標嗎？"),
+		).toBeInTheDocument();
+	});
+
+	it("resuggest 是 false、或建議還沒準備好：沒有提示", async () => {
+		const card = renderWith({
+			...READY_SUGGESTION,
+			applied_weight_kg: "80.00",
+			weight_change_kg: "-0.50",
+			resuggest: false,
+		});
+		// 先等卡片的目標載入完（第 41 種）。
+		await within(card).findByText("1800 kcal");
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(within(card).queryByText(/體重變了/)).not.toBeInTheDocument();
+		expect(
+			within(card).queryByRole("link", { name: "重算建議目標" }),
+		).not.toBeInTheDocument();
+		cleanup();
+		vi.restoreAllMocks();
+
+		const second = renderWith({ ready: false, missing: ["weight"] });
+		await within(second).findByText("1800 kcal");
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(within(second).queryByText(/體重變了/)).not.toBeInTheDocument();
+	});
+});
+
 describe("我的：每日目標卡片", () => {
 	it("顯示四個值，沒設的寫「未設定」，連到 /me/targets", async () => {
 		mockApi([
@@ -464,7 +531,7 @@ describe("我的：匯出資料", () => {
 			within(card)
 				.getAllByRole("button")
 				.map((button) => button.textContent),
-		).toEqual(["餐點", "花費", "補劑"]);
+		).toEqual(["餐點", "花費", "補劑", "體重"]);
 		const logout = screen.getByRole("button", { name: "登出" });
 		expect(
 			card.compareDocumentPosition(logout) & Node.DOCUMENT_POSITION_FOLLOWING,

@@ -1,0 +1,52 @@
+/* 建議目標（身體資料規格 §6.5）。在 /me/targets 的 .screen 底下是一張卡片；這裡只排內容。 */
+.section {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+
+.list {
+	margin: 0;
+}
+
+/* 一列一項，標籤靠左、數值靠右（同每日目標卡片）。 */
+.row {
+	display: flex;
+	justify-content: space-between;
+	gap: var(--space-2);
+	padding: var(--space-1) 0;
+}
+
+.row dd {
+	margin: 0;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+.how {
+	font-size: 14px;
+	color: var(--color-text-muted);
+}
+
+.disclaimer {
+	font-size: 12px;
+	color: var(--color-text-muted);
+}
+
+.links {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+}
+
+/* 連結也是點擊目標：至少 44px 高。 */
+.link {
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+	font-weight: 600;
+}
+
+.error {
+	color: var(--color-danger);
+}

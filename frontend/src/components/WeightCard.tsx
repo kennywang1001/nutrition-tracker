@@ -2,20 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { useWeights } from "../api/body";
 import { formatCivilDate } from "../lib/civil-date";
-import { formatMacro, isPositiveAmount } from "../lib/decimal";
-import { weekChange } from "../lib/weights";
+import { formatMacro } from "../lib/decimal";
+import { signedKg, weekChange } from "../lib/weights";
 import { Card } from "./Card";
 import ui from "./ui.module.css";
 import styles from "./WeightCard.module.css";
 import { WeightForm } from "./WeightForm";
-
-/** 「+0.5」「-1」「0」：變重了加 +（跟負號對稱，一眼看出方向）。負號照 `formatMacro` 的 "-"，
- *  跟每日目標卡片的重算提示一致。 */
-export function signedKg(change: string): string {
-	return isPositiveAmount(change)
-		? `+${formatMacro(change)}`
-		: formatMacro(change);
-}
 
 /** 「我的」的體重（身體資料規格 §6.2）：最新一筆、跟 7 天前比、行內記錄、看全部。
  *  「今天」用 `GET /api/weights` 回的 `today`——前端不算今天，讀不到就不給記錄的按鈕。 */

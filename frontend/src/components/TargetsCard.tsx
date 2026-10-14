@@ -1,7 +1,9 @@
 import { Link } from "react-router";
+import { useTargetSuggestion } from "../api/body";
 import { useDailyStats } from "../api/stats";
 import { formatMacro } from "../lib/decimal";
 import { TARGET_FIELDS } from "../lib/targets";
+import { signedKg } from "../lib/weights";
 import { Card } from "./Card";
 import styles from "./TargetsCard.module.css";
 import ui from "./ui.module.css";
@@ -13,6 +15,14 @@ export function TargetsCard() {
 	const stats = useDailyStats();
 	// `target` 整個是 null＝今天沒有任何目標；某一格是 null＝那一格沒設。兩種都寫「未設定」。
 	const target = stats.data?.target ?? null;
+	// 重算提示（身體資料規格 §6.6）：判斷在後端（`resuggest`），這裡只顯示。只對「目前的目標
+	// 來自建議」有意義——手動存目標時後端清掉套用時的體重，`resuggest` 就是 false（D16）。
+	// 離線快取裡的舊回應可能少了欄位：用 `?? null` 收。
+	const suggestion = useTargetSuggestion().data;
+	const change =
+		suggestion?.ready && suggestion.resuggest
+			? (suggestion.weight_change_kg ?? null)
+			: null;
 
 	return (
 		<Card testId="targets-card">
@@ -37,6 +47,16 @@ export function TargetsCard() {
 						);
 					})}
 				</dl>
+			)}
+			{change !== null && (
+				<div className={styles.prompt}>
+					<p className={styles.text}>
+						體重變了 {signedKg(change)} 公斤，要重算建議目標嗎？
+					</p>
+					<Link to="/me/targets" className={styles.link}>
+						重算建議目標
+					</Link>
+				</div>
 			)}
 			{/* 看得到的字只有「修改」：卡片標題已經說了改什麼；可及名稱補完整，螢幕閱讀器
 			    在連結清單裡才分得出是哪一個「修改」。 */}

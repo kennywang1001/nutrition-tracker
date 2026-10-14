@@ -4,7 +4,7 @@ import {
 	QueryClientProvider,
 } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +17,7 @@ import { useDailyStats } from "../src/api/stats";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { Targets } from "../src/screens/Targets";
+import { bodyRoutes, READY_SUGGESTION } from "./helpers/body-routes";
 import { json, mockApi } from "./helpers/mock-api";
 
 const ZERO = { kcal: "0", protein_g: "0", fat_g: "0", carb_g: "0" };
@@ -74,6 +75,11 @@ function renderScreen() {
 	return client;
 }
 
+/** 「自己設定」那一區：建議目標也可能還在「載入中…」，斷言要指名是哪一區的。 */
+function manualSection() {
+	return screen.getByRole("region", { name: "自己設定" });
+}
+
 function putBodies(spy: ReturnType<typeof mockApi>): unknown[] {
 	return spy.mock.calls
 		.filter(([, init]) => init?.method === "PUT")
@@ -102,8 +108,45 @@ beforeEach(() => {
 });
 
 describe("/me/targets", () => {
+	it("建議目標在手動表單上面；手動表單的標題是「自己設定」（D23）", async () => {
+		mockApi([...bodyRoutes({ suggestion: READY_SUGGESTION }), statsRoute()]);
+		renderScreen();
+
+		const manual = await screen.findByRole("heading", { name: "自己設定" });
+		const suggestion = await screen.findByRole("heading", {
+			name: "建議目標",
+		});
+		const kcal = await screen.findByLabelText("熱量（kcal）");
+		expect(
+			suggestion.compareDocumentPosition(manual) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		expect(
+			manual.compareDocumentPosition(kcal) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		expect(
+			await screen.findByRole("button", { name: "套用建議目標" }),
+		).toBeInTheDocument();
+	});
+
+	it("建議讀不到：手動表單照常", async () => {
+		mockApi([
+			{
+				method: "GET",
+				path: "/api/me/target-suggestion",
+				handler: () => new Response("boom", { status: 500 }),
+			},
+			...bodyRoutes(),
+			statsRoute(),
+		]);
+		renderScreen();
+
+		expect(await screen.findByText("無法載入建議目標")).toBeInTheDocument();
+		expect(await screen.findByLabelText("熱量（kcal）")).toHaveValue("1800");
+	});
+
 	it("預填今天生效的目標，沒設的空白", async () => {
-		mockApi([statsRoute()]);
+		mockApi([...bodyRoutes(), statsRoute()]);
 		renderScreen();
 
 		expect(await screen.findByLabelText("熱量（kcal）")).toHaveValue("1800");
@@ -117,7 +160,11 @@ describe("/me/targets", () => {
 	});
 
 	it("送出的 body：四個鍵都在，空白是 null", async () => {
-		const spy = mockApi([statsRoute(), putRoute(() => json(SAVED))]);
+		const spy = mockApi([
+			...bodyRoutes(),
+			statsRoute(),
+			putRoute(() => json(SAVED)),
+		]);
 		renderScreen();
 
 		await userEvent.clear(await screen.findByLabelText("蛋白質（g）"));
@@ -134,7 +181,11 @@ describe("/me/targets", () => {
 	});
 
 	it("全部清空也能存（今天起沒有目標）：四個 null", async () => {
-		const spy = mockApi([statsRoute(), putRoute(() => json(SAVED))]);
+		const spy = mockApi([
+			...bodyRoutes(),
+			statsRoute(),
+			putRoute(() => json(SAVED)),
+		]);
 		renderScreen();
 
 		await userEvent.clear(await screen.findByLabelText("熱量（kcal）"));
@@ -151,7 +202,11 @@ describe("/me/targets", () => {
 	});
 
 	it("存好之後失效今天的統計與所有期間的趨勢，回到 /me", async () => {
-		const spy = mockApi([statsRoute(), putRoute(() => json(SAVED))]);
+		const spy = mockApi([
+			...bodyRoutes(),
+			statsRoute(),
+			putRoute(() => json(SAVED)),
+		]);
 		const client = renderScreen();
 		// 趨勢不在這一頁掛著：沒人觀察的 query 失效之後不會重抓，`isInvalidated` 留著，看得到。
 		// key 用 queryKeys 產生，不寫死字面值（第 23 種）。
@@ -179,6 +234,7 @@ describe("/me/targets", () => {
 		// PUT 掛著不回：守衛壞掉時請求送出去了、但畫面不會導走，紅的是「沒有 PUT」那一行，
 		// 不是「找不到 alert」（紅燈要紅在被測的性質上，第 12 種）。
 		const spy = mockApi([
+			...bodyRoutes(),
 			statsRoute(),
 			putRoute(() => new Promise<Response>(() => {})),
 		]);
@@ -196,6 +252,7 @@ describe("/me/targets", () => {
 
 	it("讀不到目前的目標：不顯示表單（空白表單存下去等於清掉目標）", async () => {
 		mockApi([
+			...bodyRoutes(),
 			statsRoute(
 				{ error: { code: "INTERNAL_ERROR", message: "壞了", details: {} } },
 				500,
@@ -244,6 +301,7 @@ describe("/me/targets", () => {
 	it("快取裡是舊的目標：等重抓回來才顯示表單，預填的是新的值", async () => {
 		let respond: (response: Response) => void = () => undefined;
 		const spy = mockApi([
+			...bodyRoutes(),
 			{
 				method: "GET",
 				path: "/api/stats/daily",
@@ -257,7 +315,7 @@ describe("/me/targets", () => {
 
 		// 重抓還在路上：不能已經拿快取的值畫出表單。
 		await waitFor(() => expect(statsGets(spy)).toBe(1));
-		expect(screen.getByText("載入中…")).toBeInTheDocument();
+		expect(within(manualSection()).getByText("載入中…")).toBeInTheDocument();
 		expect(screen.queryByLabelText("熱量（kcal）")).not.toBeInTheDocument();
 
 		respond(json(STATS));
@@ -270,6 +328,7 @@ describe("/me/targets", () => {
 
 	it("快取裡有舊的目標、重抓失敗：顯示「無法載入目前的目標」，不顯示帶著舊值的表單", async () => {
 		mockApi([
+			...bodyRoutes(),
 			statsRoute(
 				{ error: { code: "INTERNAL_ERROR", message: "壞了", details: {} } },
 				500,
@@ -285,7 +344,7 @@ describe("/me/targets", () => {
 	});
 
 	it("離線（重抓被暫停、不會自己結束）：顯示讀不到，不是一直「載入中」", async () => {
-		const spy = mockApi([statsRoute()]);
+		const spy = mockApi([...bodyRoutes(), statsRoute()]);
 		onlineManager.setOnline(false);
 		try {
 			renderScreenWithCache();
@@ -301,6 +360,7 @@ describe("/me/targets", () => {
 	it("表單出來之後的背景重抓（失敗或帶回別的值）不動使用者正在打的字", async () => {
 		let stats: () => Response = () => json(STATS);
 		mockApi([
+			...bodyRoutes(),
 			{ method: "GET", path: "/api/stats/daily", handler: () => stats() },
 		]);
 		const client = renderScreen();
@@ -330,6 +390,7 @@ describe("/me/targets", () => {
 
 	it("409：顯示後端的訊息，留在這一頁", async () => {
 		mockApi([
+			...bodyRoutes(),
 			statsRoute(),
 			putRoute(() =>
 				errorResponse(
@@ -351,6 +412,7 @@ describe("/me/targets", () => {
 
 	it("422：顯示欄位訊息", async () => {
 		mockApi([
+			...bodyRoutes(),
 			statsRoute(),
 			putRoute(() =>
 				json(
@@ -384,6 +446,7 @@ describe("/me/targets", () => {
 
 	it("其他錯誤：「儲存失敗，請再試一次」", async () => {
 		mockApi([
+			...bodyRoutes(),
 			statsRoute(),
 			putRoute(() => new Response("boom", { status: 500 })),
 		]);
@@ -446,7 +509,7 @@ describe("/me/targets：整頁重新載入，離線快取裡有舊的目標", ()
 
 	/** 第一階段：線上讀到舊的目標，等它真的寫進 localStorage（節流寫入，約 1 秒）。 */
 	async function persistOldTarget() {
-		mockApi([statsRoute(OLD)]);
+		mockApi([...bodyRoutes(), statsRoute(OLD)]);
 		const first = render(wrap(newClient(), "/"));
 		await screen.findByText("上一次載入：1500.00");
 		await waitFor(
@@ -464,6 +527,7 @@ describe("/me/targets：整頁重新載入，離線快取裡有舊的目標", ()
 		await persistOldTarget();
 		let respond: (response: Response) => void = () => undefined;
 		const spy = mockApi([
+			...bodyRoutes(),
 			{
 				method: "GET",
 				path: "/api/stats/daily",
@@ -481,7 +545,7 @@ describe("/me/targets：整頁重新載入，離線快取裡有舊的目標", ()
 		await act(() => settle());
 		expect(screen.queryByLabelText("熱量（kcal）")).not.toBeInTheDocument();
 		expect(screen.queryByDisplayValue("1500")).not.toBeInTheDocument();
-		expect(screen.getByText("載入中…")).toBeInTheDocument();
+		expect(within(manualSection()).getByText("載入中…")).toBeInTheDocument();
 
 		respond(json(STATS));
 
@@ -509,7 +573,7 @@ describe("/me/targets：整頁重新載入，離線快取裡有舊的目標", ()
 
 	it("瀏覽器知道自己離線（重抓被暫停）：也是「無法載入目前的目標」，沒有表單", async () => {
 		await persistOldTarget();
-		const spy = mockApi([statsRoute()]);
+		const spy = mockApi([...bodyRoutes(), statsRoute()]);
 		onlineManager.setOnline(false);
 		try {
 			render(wrap(newClient(), "/me/targets"));

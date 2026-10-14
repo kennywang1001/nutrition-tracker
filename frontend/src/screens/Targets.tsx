@@ -3,12 +3,13 @@ import {
 	useMutation,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useId, useState } from "react";
 import { useNavigate } from "react-router";
 import { ApiError, describeFieldErrors } from "../api/errors";
 import { queryKeys } from "../api/queries";
 import { type DailyStats, useFreshDailyStats } from "../api/stats";
 import { setTargetFromToday, type TargetToday } from "../api/targets";
+import { TargetSuggestion } from "../components/TargetSuggestion";
 import ui from "../components/ui.module.css";
 import {
 	checkTargetInput,
@@ -49,11 +50,24 @@ function problemText(
  *  等還原做完才建立 observer，它記下的就是還原之後的狀態，之後只有真的抓回來的才算數。 */
 export function Targets() {
 	const restoring = useIsRestoring();
+	const manualTitleId = useId();
 
 	return (
 		<section className={ui.screen}>
 			<h1>每日目標</h1>
-			{restoring ? <p>載入中…</p> : <TargetsLoader />}
+			{restoring ? (
+				<p>載入中…</p>
+			) : (
+				<>
+					{/* 建議在手動表單上面（身體資料規格 D23）。它讀的是一般的快取，不用「掛載後才算」：
+					    套用時後端重算、跟畫面上的數字不一樣就 409，舊的快取最多換來一次 409。 */}
+					<TargetSuggestion />
+					<section aria-labelledby={manualTitleId}>
+						<h2 id={manualTitleId}>自己設定</h2>
+						<TargetsLoader />
+					</section>
+				</>
+			)}
 		</section>
 	);
 }

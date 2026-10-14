@@ -53,3 +53,22 @@ export function bodyRoutes(
 		},
 	];
 }
+
+/** 規格 §3.2 那一組（男、36 歲、175 cm、80 kg、中度、減重每週 0.5）。 */
+export const READY_SUGGESTION = {
+	ready: true,
+	kcal: "2110",
+	protein_g: "144",
+	fat_g: "59",
+	carb_g: "251",
+	bmr: "1719",
+	tdee: "2664",
+	adjustment_kcal: "-550",
+	floor_applied: false,
+	floor_kcal: "1500",
+	weight_kg: "80.00",
+	based_on_date: "2026-10-10",
+	applied_weight_kg: null,
+	weight_change_kg: null,
+	resuggest: false,
+};

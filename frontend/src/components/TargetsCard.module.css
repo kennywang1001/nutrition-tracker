@@ -30,3 +30,11 @@
 	min-height: 44px;
 	font-weight: 600;
 }
+
+/* 重算提示（身體資料規格 §6.6）：淡色底，跟上面的四個數字分得開。 */
+.prompt {
+	margin-top: var(--space-2);
+	padding: var(--space-2) var(--space-3);
+	border-radius: var(--radius-card);
+	background: var(--color-accent-soft);
+}

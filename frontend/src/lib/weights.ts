@@ -1,5 +1,11 @@
 import { formatCivilDate, shiftDays } from "./civil-date";
-import { averageOf, differenceOf, type Numeric } from "./decimal";
+import {
+	averageOf,
+	differenceOf,
+	formatMacro,
+	isPositiveAmount,
+	type Numeric,
+} from "./decimal";
 
 /** 體重的純函式（身體資料規格 §6.2、§6.4）。數字運算全部經過 `lib/decimal.ts`，
  *  日期加減全部經過 `lib/civil-date.ts`——這個檔案只決定「哪幾筆」。 */
@@ -84,4 +90,12 @@ export function dateLabel(date: string, today: string): string {
 	return date.slice(0, 4) === today.slice(0, 4)
 		? short
 		: `${date.slice(0, 4)}/${short}`;
+}
+
+/** 體重的變化：「+0.5」「-1」「0」。變重了加 +（跟負號對稱，一眼看出方向）；負號照 `formatMacro`
+ *  的 "-"。「比 7 天前」與每日目標卡片的重算提示共用。 */
+export function signedKg(change: Numeric): string {
+	return isPositiveAmount(change)
+		? `+${formatMacro(change)}`
+		: formatMacro(change);
 }
