@@ -3,10 +3,16 @@ import { Link, useSearchParams } from "react-router";
 import { apiFetch } from "../api/client";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
-import { useDailyStats } from "../api/stats";
+import {
+	type DailyStats,
+	exerciseInBudgetOf,
+	kcalBudgetOf,
+	useDailyStats,
+} from "../api/stats";
 import { Card } from "../components/Card";
 import { MacroBar } from "../components/MacroBar";
 import macro from "../components/MacroBar.module.css";
+import { TodayExercises } from "../components/TodayExercises";
 import ui from "../components/ui.module.css";
 import { formatTime } from "../lib/dates";
 import { formatMacro } from "../lib/decimal";
@@ -35,6 +41,12 @@ async function checkInSupplement(item: TodaySupplementItem): Promise<void> {
 
 async function cancelIntake(intakeId: number): Promise<void> {
 	await apiFetch(`/api/supplement-intakes/${intakeId}`, { method: "DELETE" });
+}
+
+/** 熱量那一列的「含運動 +343」；設定關、沒有運動、舊的離線快取都是 `undefined`（不畫）。 */
+function budgetNote(stats: DailyStats): string | undefined {
+	const added = exerciseInBudgetOf(stats);
+	return added === null ? undefined : `含運動 +${formatMacro(added)}`;
 }
 
 function supplementKey(item: TodaySupplementItem): string {
@@ -193,11 +205,13 @@ export function Today() {
 									// （「有目標，但這一項沒設」）。MacroBar 自己處理那一列的
 									// 「未設定」，其他列照常顯示比例——不在這裡把兩層混在一起判斷。
 									<Card>
+										{/* 熱量的分母是今天的額度（運動規格 D15）；其他三列照舊是目標（D12）。 */}
 										<MacroBar
 											field="kcal"
 											label="熱量"
 											actual={stats.actual.kcal}
-											target={stats.target.kcal}
+											target={kcalBudgetOf(stats)}
+											note={budgetNote(stats)}
 										/>
 										<MacroBar
 											field="protein_g"
@@ -269,6 +283,11 @@ export function Today() {
 									))}
 								</ul>
 							</Card>
+						</div>
+						{/* 運動在補劑後面（運動規格 D26）：DOM 順序 營養素 → 餐點 → 補劑 → 運動；
+						    電腦版在左欄補劑下面。只在「我的」這一邊——運動不給好友看，也不抓。 */}
+						<div className={styles.exercises}>
+							<TodayExercises />
 						</div>
 					</div>
 				</>

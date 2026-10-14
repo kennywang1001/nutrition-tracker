@@ -1,15 +1,22 @@
+import { Dumbbell } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
+import { useTodayExercises } from "../api/exercises";
 import {
 	CATEGORY_LABELS,
 	useExpenseSummary,
 	useExpensesByDate,
 } from "../api/expenses";
 import { MEAL_TYPE_LABELS, useTodayMeals } from "../api/meals";
-import { useDailyStats } from "../api/stats";
+import { exerciseInBudgetOf, kcalBudgetOf, useDailyStats } from "../api/stats";
 import { Card } from "../components/Card";
-import { CategoryIcon, MealTypeIcon } from "../components/IconBadge";
+import {
+	CategoryIcon,
+	EXERCISE_COLOR,
+	IconBadge,
+	MealTypeIcon,
+} from "../components/IconBadge";
 import layout from "../components/layout.module.css";
 import { RatioProgress } from "../components/RatioProgress";
 import ui from "../components/ui.module.css";
@@ -73,10 +80,12 @@ function TodayKcalCard() {
 		);
 	}
 
-	// 兩層 null（沿用 MacroBar 的語意）：`target` 整個是 null＝今天沒有目標；
-	// `target.kcal` 是 null＝有目標但熱量沒設。兩種都只顯示數字、不畫進度條。
-	const target = stats.target?.kcal ?? null;
-	const ratio = ratioOf(stats.actual.kcal, target);
+	// 分母是今天的熱量額度（運動規格 D15：目標＋運動，設定關掉時就是目標）。兩層 null
+	// （沿用 MacroBar 的語意）：`target` 整個是 null＝今天沒有目標；`target.kcal` 是 null＝
+	// 有目標但熱量沒設——兩種額度都是 null，只顯示數字、不畫進度條。
+	const budget = kcalBudgetOf(stats);
+	const added = exerciseInBudgetOf(stats);
+	const ratio = ratioOf(stats.actual.kcal, budget);
 
 	return (
 		<Card testId="today-kcal">
@@ -84,9 +93,13 @@ function TodayKcalCard() {
 			<p className={styles.total}>
 				{formatMacro(stats.actual.kcal)}
 				<span className={styles.unit}>
-					{target === null ? " kcal" : ` / ${formatMacro(target)} kcal`}
+					{budget === null ? " kcal" : ` / ${formatMacro(budget)} kcal`}
 				</span>
 			</p>
+			{/* 分母比目標大的時候說出來為什麼，不然看起來像目標被改了。 */}
+			{added !== null && (
+				<p className={styles.budgetNote}>含運動 +{formatMacro(added)}</p>
+			)}
 			<RatioProgress
 				ratio={ratio}
 				label="熱量進度"
@@ -126,8 +139,28 @@ function TimelineItem({ row }: { row: TimelineRow }) {
 		);
 	}
 
-	// 運動列在下一個 commit 畫（運動計畫 Task 7）；這時還沒有人把運動傳進時間線。
-	if (row.kind === "exercise") return null;
+	// 運動列也是連到編輯畫面的連結（運動規格 §7.4）。消耗寫成負的：它從額度裡「還」回來，
+	// 跟餐點列的熱量方向相反（D27：ASCII 減號，同全 app 的正負號）。
+	if (row.kind === "exercise") {
+		const { exercise } = row;
+		return (
+			<li className={styles.item} data-testid="timeline-row">
+				<Link
+					to={`/exercises/${exercise.id}/edit`}
+					className={`${styles.row} ${styles.rowLink}`}
+				>
+					<IconBadge icon={Dumbbell} color={EXERCISE_COLOR} />
+					<span className={styles.title}>
+						{exercise.label}・{exercise.minutes} 分鐘
+					</span>
+					<span className={styles.time}>{formatTime(row.time)}</span>
+					<span className={styles.value}>
+						-{formatMacro(exercise.kcal)} kcal
+					</span>
+				</Link>
+			</li>
+		);
+	}
 
 	const { expense } = row;
 	return (
@@ -155,6 +188,7 @@ function TodayTimeline() {
 	const mealsQuery = useTodayMeals();
 	const today = statsQuery.data?.date ?? null;
 	const expensesQuery = useExpensesByDate(today);
+	const exercisesQuery = useTodayExercises();
 
 	// 資料優先於錯誤：只有「失敗而且沒有任何資料」才算壞掉。
 	const stats = statsQuery.data;
@@ -163,14 +197,25 @@ function TodayTimeline() {
 	const mealsFailed = mealsQuery.isError && mealsQuery.data === undefined;
 	const expensesFailed =
 		expensesQuery.isError && expensesQuery.data === undefined;
+	// 運動跟餐點一樣：清單抓不到就不能說「今天還沒有紀錄」。
+	const exercisesFailed =
+		exercisesQuery.isError && exercisesQuery.data === undefined;
 
 	let body: ReactNode;
-	if (statsUnusable || mealsFailed || expensesFailed) {
+	if (statsUnusable || mealsFailed || expensesFailed || exercisesFailed) {
 		body = <p>無法載入今天的紀錄</p>;
-	} else if (mealsQuery.isPending || expensesQuery.isPending) {
+	} else if (
+		mealsQuery.isPending ||
+		expensesQuery.isPending ||
+		exercisesQuery.isPending
+	) {
 		body = <p>載入中…</p>;
 	} else {
-		const rows = buildTimeline(mealsQuery.data ?? [], expensesQuery.data ?? []);
+		const rows = buildTimeline(
+			mealsQuery.data ?? [],
+			expensesQuery.data ?? [],
+			exercisesQuery.data?.entries ?? [],
+		);
 		body =
 			rows.length === 0 ? (
 				<p>今天還沒有紀錄</p>
@@ -204,10 +249,15 @@ function OfflineBanner() {
 	const summaryQuery = useExpenseSummary(null);
 	const mealsQuery = useTodayMeals();
 	const expensesQuery = useExpensesByDate(statsQuery.data?.date ?? null);
+	const exercisesQuery = useTodayExercises();
 
-	const stale = [statsQuery, summaryQuery, mealsQuery, expensesQuery].filter(
-		(query) => query.isError && query.data !== undefined,
-	);
+	const stale = [
+		statsQuery,
+		summaryQuery,
+		mealsQuery,
+		expensesQuery,
+		exercisesQuery,
+	].filter((query) => query.isError && query.data !== undefined);
 	if (stale.length === 0) {
 		return null;
 	}

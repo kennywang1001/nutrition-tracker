@@ -116,3 +116,10 @@
 	font-size: 12px;
 	color: var(--color-text-muted);
 }
+
+/* 「含運動 +343」：大數字下面一行小字，說明分母為什麼比目標大（運動規格 §7.4）。 */
+.budgetNote {
+	margin: var(--space-1) 0 0;
+	font-size: 12px;
+	color: var(--color-text-muted);
+}

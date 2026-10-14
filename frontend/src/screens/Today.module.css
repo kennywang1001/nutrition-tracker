@@ -80,17 +80,18 @@
 	font-weight: 600;
 }
 
-/* 電腦版的兩欄（電腦版版面規格 §4）：左＝營養素＋補劑、右＝餐點（跨兩列）。
-   DOM 順序是 營養素、餐點、補劑——手機版照這個順序往下排，不受影響。
-   第二列是 1fr 不是 auto：餐點比左欄高時，多出來的高度全部給第二列，補劑
-   才會緊貼在營養素下面；兩列都 auto 的話會平分，營養素與補劑中間空一截。 */
+/* 電腦版的兩欄（電腦版版面規格 §4）：左＝營養素＋補劑＋運動、右＝餐點（跨三列）。
+   DOM 順序是 營養素、餐點、補劑、運動——手機版照這個順序往下排，不受影響。
+   最後一列是 1fr 不是 auto：餐點比左欄高時，多出來的高度全部給最後一列，補劑
+   與運動才會一個緊貼一個；都 auto 的話會平分，卡片中間空一截。 */
 :global(.app-desktop) .columns {
 	display: grid;
 	grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
-	grid-template-rows: auto 1fr;
+	grid-template-rows: auto auto 1fr;
 	grid-template-areas:
 		"macros meals"
-		"supplements meals";
+		"supplements meals"
+		"exercises meals";
 	gap: var(--space-4) var(--space-6);
 	align-items: start;
 }
@@ -105,6 +106,12 @@
 
 :global(.app-desktop) .supplements {
 	grid-area: supplements;
+}
+
+/* 運動在左欄補劑下面（運動規格 D26）。多出來的高度改由這第三列吸收（它是 1fr）：
+   補劑仍然緊貼營養素、運動緊貼補劑。 */
+:global(.app-desktop) .exercises {
+	grid-area: exercises;
 }
 
 /* 兩欄的第一個標題／卡片貼齊上緣（同 components/layout.module.css）。 */

@@ -55,3 +55,11 @@
 	display: block;
 	margin-top: var(--space-1);
 }
+
+/* 數字那一行下面的小字（熱量的「含運動 +343」，運動規格 §7.5）：靠右，跟數字對齊。 */
+.note {
+	margin: 0;
+	font-size: 12px;
+	text-align: right;
+	color: var(--color-text-muted);
+}

@@ -7,6 +7,7 @@ import { queryKeys } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { Overview } from "../src/screens/Overview";
+import { NO_EXERCISE, RUN } from "./helpers/exercise-routes";
 import { json, mockApi, type Route } from "./helpers/mock-api";
 
 function newClient() {
@@ -131,6 +132,8 @@ function mockOverview(
 		"/api/expenses/summary": () => json(SUMMARY),
 		"/api/expenses": () => json([LUNCH_COST, METRO]),
 		"/api/meals": () => json([LUNCH]),
+		// 運動（運動規格 §7.4）：跟 `/api/expenses` 互不包含，順序不影響。
+		"/api/exercises": () => json(NO_EXERCISE),
 		...overrides,
 	};
 	return mockApi(
@@ -332,6 +335,8 @@ describe("總覽", () => {
 		seed(queryKeys.expenseSummary(null), SUMMARY);
 		seed(queryKeys.meals, [LUNCH]);
 		seed(queryKeys.expensesByDate("2026-12-15"), [LUNCH_COST, METRO]);
+		// 運動清單也在快取裡（運動規格 D23）。沒有的話它是「失敗而且沒有資料」，時間線說無法載入。
+		seed(queryKeys.exercisesToday, NO_EXERCISE);
 		vi.spyOn(globalThis, "fetch").mockRejectedValue(
 			new TypeError("network request failed"),
 		);
@@ -382,5 +387,115 @@ describe("總覽", () => {
 		// 先等時間線畫出來（第 41 種），再斷言沒有。
 		expect(await screen.findAllByTestId("timeline-row")).toHaveLength(2);
 		expect(screen.queryByText(/只在飲食頁出現的描述/)).not.toBeInTheDocument();
+	});
+});
+
+/** 新的回應：目標 2000、今天運動 343、設定開 → 額度 2343（運動規格 D15）。 */
+const STATS_WITH_EXERCISE = {
+	...STATS,
+	exercise_kcal: "343.00",
+	exercise_adds_to_budget: true,
+	kcal_budget: "2343.00",
+};
+
+/** 午餐（04:30Z）與捷運（01:00Z）中間的一筆跑步。 */
+const MORNING_RUN = { ...RUN, performed_at: "2026-12-15T03:00:00+00:00" };
+
+describe("總覽：運動（運動規格 §7.4）", () => {
+	it("今天熱量的分母是額度，下面寫「含運動 +343」；進度條用額度算", async () => {
+		mockOverview({ "/api/stats/daily": () => json(STATS_WITH_EXERCISE) });
+
+		render(wrap(<Overview />));
+
+		const kcal = screen.getByTestId("today-kcal");
+		expect(await within(kcal).findByText("/ 2343 kcal")).toBeInTheDocument();
+		expect(within(kcal).getByText("含運動 +343")).toBeInTheDocument();
+		const bar = within(kcal).getByRole("progressbar", { name: "熱量進度" });
+		expect((bar as HTMLProgressElement).value).toBeCloseTo(1240 / 2343, 5);
+	});
+
+	it("設定關掉：分母是目標，沒有「含運動」", async () => {
+		mockOverview({
+			"/api/stats/daily": () =>
+				json({
+					...STATS_WITH_EXERCISE,
+					exercise_adds_to_budget: false,
+					kcal_budget: "2000.00",
+				}),
+		});
+
+		render(wrap(<Overview />));
+
+		const kcal = screen.getByTestId("today-kcal");
+		expect(await within(kcal).findByText("/ 2000 kcal")).toBeInTheDocument();
+		expect(kcal).not.toHaveTextContent("含運動");
+	});
+
+	it("舊回應（沒有三個欄位，離線快取裡的）：跟以前一樣 / 2000，沒有「含運動」", async () => {
+		mockOverview();
+
+		render(wrap(<Overview />));
+
+		const kcal = screen.getByTestId("today-kcal");
+		expect(await within(kcal).findByText("/ 2000 kcal")).toBeInTheDocument();
+		expect(kcal).not.toHaveTextContent("含運動");
+	});
+
+	it("時間線有運動列：名稱・分鐘、-343 kcal，連到編輯畫面，跟餐與支出依時間排", async () => {
+		mockOverview({
+			"/api/exercises": () =>
+				json({
+					date: "2026-12-15",
+					total_kcal: "343.00",
+					entries: [MORNING_RUN],
+				}),
+		});
+
+		render(wrap(<Overview />));
+
+		const rows = await screen.findAllByTestId("timeline-row");
+		expect(rows).toHaveLength(3);
+		expect(rows[0]).toHaveTextContent("午餐・滷肉飯");
+		expect(rows[1]).toHaveTextContent("跑步（約 10 km/h）・30 分鐘");
+		expect(rows[1]).toHaveTextContent("-343 kcal");
+		expect(rows[2]).toHaveTextContent("捷運");
+		const [, exerciseRow] = rows;
+		if (exerciseRow === undefined) throw new Error("應該有運動列");
+		expect(within(exerciseRow).getByRole("link")).toHaveAttribute(
+			"href",
+			"/exercises/31/edit",
+		);
+	});
+
+	it("運動清單失敗（沒有快取）：時間線說無法載入，不會說今天沒有紀錄", async () => {
+		mockOverview({ "/api/exercises": serverError });
+
+		render(wrap(<Overview />));
+
+		const timeline = screen.getByRole("region", { name: "今天" });
+		expect(
+			await within(timeline).findByText("無法載入今天的紀錄"),
+		).toBeInTheDocument();
+		expect(
+			within(timeline).queryByText("今天還沒有紀錄"),
+		).not.toBeInTheDocument();
+	});
+
+	it("只有運動重抓失敗、手上有資料：離線提示也出現", async () => {
+		const client = newClient();
+		client.setQueryData(queryKeys.exercisesToday, {
+			date: "2026-12-15",
+			total_kcal: "343.00",
+			entries: [MORNING_RUN],
+		});
+		mockOverview({ "/api/exercises": serverError });
+
+		render(wrap(<Overview />, client));
+
+		expect(await screen.findByTestId("offline-banner")).toHaveTextContent(
+			"離線資料，最後更新於",
+		);
+		// 手上的那一筆照樣在時間線上。
+		expect(await screen.findAllByTestId("timeline-row")).toHaveLength(3);
 	});
 });

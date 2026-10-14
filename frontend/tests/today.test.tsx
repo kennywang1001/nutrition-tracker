@@ -8,7 +8,8 @@ import { queryKeys } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { Today } from "../src/screens/Today";
-import { json, mockApiByPath as mockApi } from "./helpers/mock-api";
+import { NO_EXERCISE } from "./helpers/exercise-routes";
+import { json, mockApiByPath } from "./helpers/mock-api";
 import { percentText } from "./helpers/percent";
 
 // 需要 MemoryRouter：P3-C Task 2 在「今日補劑」區塊加了一個連到
@@ -23,6 +24,15 @@ function wrap(children: ReactNode) {
 			<MemoryRouter>{children}</MemoryRouter>
 		</QueryClientProvider>
 	);
+}
+
+/** 飲食頁多打 `GET /api/exercises`（運動規格 §7.5）：沒寫的測試給「今天沒有運動」；
+ *  要別的回應就在 `routes` 裡蓋掉同一個鍵。 */
+function mockApi(routes: Record<string, () => Response>) {
+	return mockApiByPath({
+		"/api/exercises": () => json(NO_EXERCISE),
+		...routes,
+	});
 }
 
 const STATS_WITH_TARGET = {
@@ -381,5 +391,98 @@ describe("飲食頁的電腦版兩欄（電腦版版面規格 §4）", () => {
 			screen.getByRole("heading", { name: "今日補劑" }),
 			supplement,
 		);
+	});
+});
+
+describe("飲食頁：運動（運動規格 §7.5）", () => {
+	const WITH_EXERCISE = {
+		...STATS_WITH_TARGET,
+		exercise_kcal: "343.00",
+		exercise_adds_to_budget: true,
+		kcal_budget: "2343.00",
+	};
+
+	it("熱量那一列的分母是額度、寫「含運動 +343」；蛋白質的分母不變（D12）", async () => {
+		mockApi({
+			"/api/stats/daily": () => json(WITH_EXERCISE),
+			"/api/supplements/today": () => json([]),
+		});
+
+		render(wrap(<Today />));
+
+		const kcal = await screen.findByTestId("macro-kcal");
+		expect(kcal).toHaveTextContent("1800 / 2343");
+		expect(within(kcal).getByText("含運動 +343")).toBeInTheDocument();
+		const protein = screen.getByTestId("macro-protein_g");
+		expect(protein).toHaveTextContent("90.5 / 150");
+		expect(protein).not.toHaveTextContent("含運動");
+	});
+
+	it("設定關掉：分母是目標，沒有「含運動」", async () => {
+		mockApi({
+			"/api/stats/daily": () =>
+				json({
+					...WITH_EXERCISE,
+					exercise_adds_to_budget: false,
+					kcal_budget: "2000.00",
+				}),
+			"/api/supplements/today": () => json([]),
+		});
+
+		render(wrap(<Today />));
+
+		const kcal = await screen.findByTestId("macro-kcal");
+		expect(kcal).toHaveTextContent("1800 / 2000");
+		expect(kcal).not.toHaveTextContent("含運動");
+	});
+
+	it("「今日運動」卡片在補劑後面（DOM 順序：營養素 → 餐點 → 補劑 → 運動）", async () => {
+		mockApi({
+			"/api/stats/daily": () => json(STATS_WITH_TARGET),
+			"/api/supplements/today": () => json([]),
+		});
+
+		render(wrap(<Today />));
+
+		const exercise = await screen.findByRole("heading", { name: "今日運動" });
+		expectOrder(
+			await screen.findByTestId("macro-kcal"),
+			screen.getByRole("heading", { name: "今日餐點" }),
+			screen.getByRole("heading", { name: "今日補劑" }),
+			exercise,
+		);
+		expect(await screen.findByText("今天還沒有運動")).toBeInTheDocument();
+	});
+
+	it("切到好友：沒有「今日運動」，也不打 /api/exercises（運動是自己的）", async () => {
+		const fetchMock = mockApi({
+			"/api/stats/daily": () => json(STATS_WITH_TARGET),
+			"/api/supplements/today": () => json([]),
+			"/api/friends/feed": () => json({ meals: [], next_cursor: null }),
+			"/api/friends": () => json([]),
+		});
+		const client = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+
+		render(
+			<QueryClientProvider client={client}>
+				<MemoryRouter initialEntries={["/diet?view=friends"]}>
+					<Today />
+				</MemoryRouter>
+			</QueryClientProvider>,
+		);
+
+		expect(
+			await screen.findByText("還沒有好友。到「我的」→「好友」用好友碼加朋友"),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByRole("heading", { name: "今日運動" }),
+		).not.toBeInTheDocument();
+		expect(
+			fetchMock.mock.calls.some(([input]) =>
+				String(input).includes("/api/exercises"),
+			),
+		).toBe(false);
 	});
 });

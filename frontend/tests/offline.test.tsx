@@ -14,11 +14,21 @@ import { clearTokens, setTokens } from "../src/auth/store";
 import { formatTime } from "../src/lib/dates";
 import { Expenses } from "../src/screens/Expenses";
 import { Today } from "../src/screens/Today";
+import { NO_EXERCISE } from "./helpers/exercise-routes";
 import {
 	json,
-	mockApiByPath as mockApi,
+	mockApiByPath,
 	mockApi as mockApiRoutes,
 } from "./helpers/mock-api";
+
+/** 飲食頁多打 `GET /api/exercises`（運動規格 §7.5）：沒寫的測試給「今天沒有運動」。
+ *  `/api/exercises` 跟其他路徑互不包含，放哪裡都不會搶走別的請求。 */
+function mockApi(routes: Record<string, () => Response>) {
+	return mockApiByPath({
+		"/api/exercises": () => json(NO_EXERCISE),
+		...routes,
+	});
+}
 
 // wrap 從 today.test.tsx 改寫——這裡額外接一個 QueryClient 參數（今日總覽的
 // 離線行為只有在「兩個不同的 QueryClient 透過同一份 localStorage 交接」時
@@ -471,6 +481,7 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 			},
 			{ path: "/api/supplements/today", handler: () => json([]) },
 			{ path: "/api/meals", handler: () => json([]) },
+			{ path: "/api/exercises", handler: () => json(NO_EXERCISE) },
 		]);
 		const clientB = newTestClient();
 		render(wrap(clientB, <Today />));

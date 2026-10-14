@@ -12,6 +12,8 @@ type Props = {
 	 *  （規格 §5.7 的第二層 null）—— 跟「整天沒有目標」是不同的畫面狀態，
 	 *  由呼叫端（`Today.tsx`）決定要不要整個顯示成「尚未設定目標」。 */
 	target: Numeric | null;
+	/** 數字下面一行小字（熱量的「含運動 +343」，運動規格 §7.5）。沒有就不畫。 */
+	note?: string;
 };
 
 /** 一列營養素：實際攝取 vs 目標、加上比例。
@@ -20,7 +22,7 @@ type Props = {
  *  `Number(actual) / Number(target)` 之類的算術。百分比顯示用
  *  `Number.prototype.toLocaleString` 的 `style: "percent"`，不是自己
  *  `* 100`：轉換邏輯留給內建的 Intl，不是手寫的算術。 */
-export function MacroBar({ field, label, actual, target }: Props) {
+export function MacroBar({ field, label, actual, target, note }: Props) {
 	const ratio = ratioOf(actual, target);
 
 	// 上一行：名稱在左、數字在右；下面一條進度條（同總覽「今天熱量」卡片）。
@@ -52,6 +54,7 @@ export function MacroBar({ field, label, actual, target }: Props) {
 					)}
 				</span>
 			</div>
+			{note !== undefined && <p className={styles.note}>{note}</p>}
 			{/* 沒有比例（這一項沒設目標，或目標是 0）就不畫條、超過目標畫滿：
 			    都在 RatioProgress 裡，跟總覽的 TodayKcalCard 同一個元件。 */}
 			<RatioProgress
