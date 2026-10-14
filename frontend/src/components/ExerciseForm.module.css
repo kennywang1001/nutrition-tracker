@@ -50,3 +50,10 @@
 	flex-direction: column;
 	gap: var(--space-1);
 }
+
+/* 「手動輸入熱量」鎖住的時候（沒有體重）看起來是停用的；它是 aria-disabled，
+   不是原生 disabled（焦點可能正在它身上），所以長相要自己給。 */
+.manual input[aria-disabled="true"] {
+	opacity: 0.4;
+	cursor: not-allowed;
+}

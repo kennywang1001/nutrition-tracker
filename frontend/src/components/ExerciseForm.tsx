@@ -189,7 +189,7 @@ export function ExerciseForm({
 			/>
 
 			{!isOther && (
-				<label>
+				<label className={styles.manual}>
 					{/* 「沒有體重」是預覽回來才知道的：它可能在這個勾選框正有焦點時鎖住（剛取消勾選、
 					    預覽說沒有體重）。原生 disabled 會把焦點弄丟，所以用 aria-disabled＋onChange 擋。 */}
 					<input

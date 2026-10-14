@@ -8,16 +8,18 @@
 	color: var(--color-text-muted);
 }
 
-/* 三顆按鈕一列、等寬；外觀與 44px 來自 ui.secondary。 */
+/* 等寬的按鈕；外觀與 44px 來自 ui.secondary。每顆至少 5rem：五顆（運動規格 D28）在手機
+   寬度一列放不下「下載中…」，排成 3＋2；電腦版的「我的」夠寬，五顆一列。格子的寬度不看
+   字，按下去變成「下載中…」時不會重排。 */
 .actions {
-	display: flex;
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(5rem, 1fr));
 	gap: var(--space-2);
 	margin: var(--space-3) 0 var(--space-2);
 }
 
 .actions button {
-	flex: 1;
-	/* 「下載中…」比「餐點」寬：不換行，也不把另外兩顆擠小。 */
+	/* 「下載中…」比「餐點」寬：不換行，也不把格子撐寬。 */
 	min-width: 0;
 	padding: 0 var(--space-2);
 	white-space: nowrap;
