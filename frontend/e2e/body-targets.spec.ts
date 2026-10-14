@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 import { loginAs, newAccount } from "./new-account.ts";
 import { expectTouchTargets } from "./touch-targets.ts";
 
@@ -83,8 +83,14 @@ async function applySuggestion(page: Page) {
 	).toBeVisible();
 }
 
-/** iOS 在 < 16px 的欄位上會自動放大（handover「mobile-form-zoom」）。 */
-async function expectInputsAtLeast16px(page: Page, where: string) {
+/** iOS 在 < 16px 的欄位上會自動放大（handover「mobile-form-zoom」）。
+ *  `ready` 是表單畫出來之後才有的欄位：標題先出來、資料還在載入時，數到的是 0 個。 */
+async function expectInputsAtLeast16px(
+	page: Page,
+	ready: Locator,
+	where: string,
+) {
+	await expect(ready).toBeVisible();
 	const controls = page.locator("main input, main select");
 	const count = await controls.count();
 	expect(count, `${where}：要有輸入框`).toBeGreaterThan(0);
@@ -125,7 +131,11 @@ test("缺資料時說還差什麼；填身體資料、記體重、套用建議�
 	await expect(
 		page.getByRole("heading", { name: "身體資料", exact: true, level: 1 }),
 	).toBeVisible();
-	await expectInputsAtLeast16px(page, "身體資料");
+	await expectInputsAtLeast16px(
+		page,
+		page.getByLabel("出生年", { exact: true }),
+		"身體資料",
+	);
 	await page
 		.getByRole("group", { name: "性別", exact: true })
 		.getByLabel("男", { exact: true })
@@ -286,7 +296,11 @@ test("體重頁：記幾天、切期間、改一筆、刪一筆；卡片跟 7 �
 	await expect(
 		page.getByRole("heading", { name: "體重", exact: true, level: 1 }),
 	).toBeVisible();
-	await expectInputsAtLeast16px(page, "體重");
+	await expectInputsAtLeast16px(
+		page,
+		page.getByTestId("weight-form").getByLabel("日期", { exact: true }),
+		"體重",
+	);
 
 	const list = page.getByRole("list", { name: "體重紀錄", exact: true });
 	const rows = list.getByRole("listitem");
