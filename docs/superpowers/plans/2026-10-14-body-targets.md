@@ -1913,3 +1913,495 @@ git add app/api/routes/targets.py app/api/routes/body.py app/schemas/body.py tes
 ```
 
 訊息（`$S/body-t5-msg.txt`）：`feat(body): 套用建議目標（同一個交易記下體重）；手動存目標清掉套用體重；健康資料的掃描測試`。
+
+---
+
+## Task 6：前端——API 層、query 鍵、數字與日期工具
+
+**Files:**
+- Create: `frontend/src/api/body.ts`、`frontend/src/lib/body.ts`、`frontend/src/lib/weights.ts`、`frontend/tests/helpers/body-routes.ts`、`frontend/tests/weights-lib.test.ts`、`frontend/tests/body-api.test.tsx`
+- Modify: `frontend/src/api/queries.ts`、`frontend/src/lib/decimal.ts`、`frontend/src/lib/civil-date.ts`、`frontend/tests/decimal.test.ts`、`frontend/tests/civil-date.test.ts`
+
+- [ ] **Step 1：先寫測試。**
+
+`tests/decimal.test.ts` 加：
+
+```ts
+describe("differenceOf", () => {
+	it("字串進字串出，正負號都留著", () => {
+		expect(differenceOf("78.50", "80.00")).toBe("-1.5");
+		expect(differenceOf("80.1", "80")).toBe("0.1");
+		expect(differenceOf("80", "80.00")).toBe("0");
+	});
+});
+
+describe("paddedExtent", () => {
+	it("最小值往下、最大值往上各留 pad，再取整", () => {
+		expect(paddedExtent(["72.4", "70.2", "71"], "1")).toEqual({ lo: "69", hi: "74" });
+	});
+	it("全部一樣也有範圍", () => {
+		expect(paddedExtent(["70"], "1")).toEqual({ lo: "69", hi: "71" });
+	});
+	it("空陣列是 null", () => {
+		expect(paddedExtent([], "1")).toBeNull();
+	});
+});
+
+describe("positionIn", () => {
+	it("lo 是 0、hi 是 1、中間照比例", () => {
+		expect(positionIn("69", "69", "74")).toBe(0);
+		expect(positionIn("74", "69", "74")).toBe(1);
+		expect(positionIn("71.5", "69", "74")).toBe(0.5);
+	});
+	it("範圍是 0 時回 0.5，不除以零", () => {
+		expect(positionIn("70", "70", "70")).toBe(0.5);
+	});
+});
+
+describe("checkRangeInput", () => {
+	const weight = { min: "25", max: "350", places: 2 } as const;
+	it.each([
+		["", "empty"],
+		["abc", "not-decimal"],
+		["1e2", "not-decimal"],
+		["-70", "not-decimal"],
+		["70.123", "too-precise"],
+		["24.99", "out-of-range"],
+		["350.01", "out-of-range"],
+		["25", null],
+		[" 350 ", null],
+		["72.4", null],
+	] as const)("%j → %j", (raw, problem) => {
+		expect(checkRangeInput(raw, weight)).toBe(problem);
+	});
+	it("places 0 只收整數", () => {
+		expect(checkRangeInput("1990.5", { min: "1900", max: "2100", places: 0 })).toBe("too-precise");
+		expect(checkRangeInput("1990", { min: "1900", max: "2100", places: 0 })).toBeNull();
+	});
+});
+```
+
+`tests/civil-date.test.ts` 加：
+
+```ts
+describe("daysBetween", () => {
+	it.each([
+		["2026-10-14", "2026-10-14", 0],
+		["2026-10-01", "2026-10-14", 13],
+		["2026-10-14", "2026-10-01", -13],
+		["2026-12-31", "2027-01-01", 1],
+		["2028-02-28", "2028-03-01", 2], // 閏年
+		["2026-03-28", "2026-03-30", 2], // 跨日光節約（UTC 沒有）
+	] as const)("%s → %s = %d", (from, to, days) => {
+		expect(daysBetween(from, to)).toBe(days);
+	});
+});
+```
+
+`tests/weights-lib.test.ts`（新）：
+
+```ts
+import { describe, expect, it } from "vitest";
+import { entriesInSpan, movingAverage, recentAverage, weekChange } from "../src/lib/weights";
+
+const e = (date: string, weight_kg: string) => ({ date, weight_kg });
+
+describe("movingAverage（7 個日曆天，不是 7 筆）", () => {
+	it("每一筆是 [這天 − 6, 這天] 之間所有紀錄的平均", () => {
+		const entries = [e("2026-10-01", "80"), e("2026-10-03", "79"), e("2026-10-07", "78"), e("2026-10-08", "77")];
+		expect(movingAverage(entries)).toEqual([
+			e("2026-10-01", "80"),
+			e("2026-10-03", "79.5"),
+			e("2026-10-07", "79"), // 10/01–10/07：80、79、78
+			e("2026-10-08", "78"), // 10/02–10/08：79、78、77（10/01 掉出去了）
+		]);
+	});
+	it("沒記的日子不當 0", () => {
+		expect(movingAverage([e("2026-10-01", "80"), e("2026-10-20", "70")])).toEqual([
+			e("2026-10-01", "80"),
+			e("2026-10-20", "70"),
+		]);
+	});
+});
+
+describe("weekChange", () => {
+	it("最新一筆跟「日期 ≤ 最新 − 7 天」的最新一筆比", () => {
+		const entries = [e("2026-10-01", "81"), e("2026-10-06", "80.5"), e("2026-10-07", "80"), e("2026-10-14", "79")];
+		expect(weekChange(entries)).toEqual({ latest: e("2026-10-14", "79"), since: e("2026-10-07", "80"), change: "-1" });
+	});
+	it("七天以前沒有紀錄就是 null；沒有紀錄也是 null", () => {
+		expect(weekChange([e("2026-10-10", "80"), e("2026-10-14", "79")])).toBeNull();
+		expect(weekChange([])).toBeNull();
+	});
+});
+
+describe("entriesInSpan", () => {
+	const all = [e("2026-07-01", "82"), e("2026-09-20", "81"), e("2026-10-14", "79")];
+	it("30 天是 [今天 − 29, 今天]", () => {
+		expect(entriesInSpan(all, "2026-10-14", 30)).toEqual({ start: "2026-09-15", entries: all.slice(1) });
+	});
+	it("全部從第一筆開始；沒有紀錄時從今天開始", () => {
+		expect(entriesInSpan(all, "2026-10-14", "all")).toEqual({ start: "2026-07-01", entries: all });
+		expect(entriesInSpan([], "2026-10-14", "all")).toEqual({ start: "2026-10-14", entries: [] });
+	});
+});
+
+describe("recentAverage", () => {
+	it("[今天 − 6, 今天] 的平均；沒有就是 null", () => {
+		expect(recentAverage([e("2026-10-07", "80"), e("2026-10-08", "79"), e("2026-10-14", "78")], "2026-10-14")).toBe("78.5");
+		expect(recentAverage([e("2026-10-01", "80")], "2026-10-14")).toBeNull();
+	});
+});
+```
+
+`tests/body-api.test.tsx`（新）：`saveWeight` 送 `PUT /api/weights/2026-10-14`、body `{"weight_kg":"72.4"}`；`deleteWeight` 送 `DELETE`；`applySuggestion` 送 `POST /api/me/target-suggestion/apply` 帶四個數字；`useTargetSuggestion` 在 `ready: false` 時回傳的物件有 `missing`（型別收窄靠 `if (data.ready)`——這條是給 typecheck 看的）。用 `mockApi` 的 spy 看 `method`、`url`、`body`。
+
+- [ ] **Step 2：跑，看它紅。** `npx vitest run tests/decimal.test.ts tests/civil-date.test.ts tests/weights-lib.test.ts tests/body-api.test.tsx` → Expected：FAIL（函式不存在）。
+
+- [ ] **Step 3：`lib/decimal.ts`** 加（**decimal.js 只准在這個檔案**）：
+
+```ts
+/** a − b（體重的變化）。字串進字串出，`toString()` 會去掉尾數的 0（"-1.50" → "-1.5"）。 */
+export function differenceOf(a: Numeric, b: Numeric): Numeric {
+	return new Decimal(a).minus(b).toString();
+}
+
+/** 圖表的 y 軸範圍：最小值減 `pad` 往下取整、最大值加 `pad` 往上取整。空陣列回 `null`。
+ *  所有值一樣時上下仍各有 `pad`，範圍不會是 0。 */
+export function paddedExtent(
+	values: readonly Numeric[],
+	pad: Numeric,
+): { lo: Numeric; hi: Numeric } | null {
+	if (values.length === 0) return null;
+	const decimals = values.map((value) => new Decimal(value));
+	return {
+		lo: Decimal.min(...decimals).minus(pad).floor().toString(),
+		hi: Decimal.max(...decimals).plus(pad).ceil().toString(),
+	};
+}
+
+/** `value` 在 [lo, hi] 裡的位置：lo → 0、hi → 1（給 SVG 座標用，所以回 number）。
+ *  範圍是 0 時回 0.5——不除以零，畫在正中間。 */
+export function positionIn(value: Numeric, lo: Numeric, hi: Numeric): number {
+	const span = new Decimal(hi).minus(lo);
+	if (span.isZero()) return 0.5;
+	return new Decimal(value).minus(lo).dividedBy(span).toNumber();
+}
+
+export type RangeInputProblem = "empty" | "not-decimal" | "too-precise" | "out-of-range";
+
+/** 有範圍、有小數位數限制的一格（體重、身高、出生年；身體資料規格 §5）。`null`＝沒問題。
+ *  寫法限制同 `checkTargetInput`（不收 `1e3`、`+5`、`-1`）；空白是 `"empty"`，要不要接受
+ *  由呼叫端決定（身體資料的欄位可以留空，體重不行）。不丟例外。 */
+export function checkRangeInput(
+	value: string,
+	rule: { min: Numeric; max: Numeric; places: number },
+): RangeInputProblem | null {
+	const v = value.trim();
+	if (v === "") return "empty";
+	if (!PLAIN_DECIMAL.test(v)) return "not-decimal";
+	const dot = v.indexOf(".");
+	const places = dot === -1 ? 0 : v.length - dot - 1;
+	if (places > rule.places) return "too-precise";
+	const number = new Decimal(v);
+	if (number.lessThan(rule.min) || number.greaterThan(rule.max)) return "out-of-range";
+	return null;
+}
+```
+
+> `"4."` 的小數位數是 0（`length - dot - 1`），`places: 0` 時算合法——後端收 `4.`？Pydantic 的 `Decimal` 收 `"1990."`，但 `birth_year` 是 `int`，`"1990."` 會 422。出生年的輸入另外要求「只有數字」：`BodyProfile` 用 `/^\d{4}$/` 先比（Task 7）。
+
+- [ ] **Step 4：`lib/civil-date.ts`** 加（不准用本地時間的 accessor；同 `shiftDays` 用 `slice` 取三段）：
+
+```ts
+const DAY_MS = 86_400_000;
+
+function utcMidnight(isoDate: string): number {
+	if (!ISO_DATE.test(isoDate)) {
+		throw new Error(`只接受 YYYY-MM-DD，收到：${JSON.stringify(isoDate)}`);
+	}
+	return Date.UTC(
+		Number(isoDate.slice(0, 4)),
+		Number(isoDate.slice(5, 7)) - 1,
+		Number(isoDate.slice(8, 10)),
+	);
+}
+
+/** `to` 比 `from` 晚幾天（可以是負的）。兩個都是 UTC 午夜，相減一定是整天數。 */
+export function daysBetween(from: string, to: string): number {
+	return Math.round((utcMidnight(to) - utcMidnight(from)) / DAY_MS);
+}
+```
+
+- [ ] **Step 5：`lib/weights.ts`**（新）：
+
+```ts
+import { shiftDays } from "./civil-date";
+import { averageOf, differenceOf, type Numeric } from "./decimal";
+
+/** 一筆體重（`WeightEntryResponse` 的形狀；這裡不 import schema，讓純函式好測）。 */
+export type WeightPoint = { date: string; weight_kg: Numeric };
+
+export const MOVING_AVERAGE_DAYS = 7;
+
+/** 日期字串（YYYY-MM-DD）可以直接比大小：字典序就是時間序。 */
+function within(entry: WeightPoint, start: string, end: string): boolean {
+	return entry.date >= start && entry.date <= end;
+}
+
+/** 7 天移動平均（身體資料規格 §6.4）：**7 個日曆天，不是 7 筆**——每一筆的值是日期在
+ *  [這天 − 6, 這天] 之間所有紀錄的平均。沒記的日子不補、不當 0；只有自己一筆就是自己。
+ *  `entries` 由舊到新（後端的順序）。最多 800 筆，O(n²) 也只是幾十萬次比較。 */
+export function movingAverage(entries: readonly WeightPoint[]): WeightPoint[] {
+	return entries.map((entry) => {
+		const start = shiftDays(entry.date, -(MOVING_AVERAGE_DAYS - 1));
+		const window = entries.filter((other) => within(other, start, entry.date));
+		// 至少有自己，averageOf 不會是 null。
+		return { date: entry.date, weight_kg: averageOf(window.map((w) => w.weight_kg)) ?? entry.weight_kg };
+	});
+}
+
+/** 「跟 7 天前比」：最新一筆，跟日期 ≤ 最新 − 7 天的最新一筆比。沒有那一筆就是 null
+ *  （不拿 6 天前的湊）。 */
+export function weekChange(
+	entries: readonly WeightPoint[],
+): { latest: WeightPoint; since: WeightPoint; change: Numeric } | null {
+	const latest = entries.at(-1);
+	if (latest === undefined) return null;
+	const cutoff = shiftDays(latest.date, -7);
+	const since = entries.filter((entry) => entry.date <= cutoff).at(-1);
+	if (since === undefined) return null;
+	return { latest, since, change: differenceOf(latest.weight_kg, since.weight_kg) };
+}
+
+export type WeightSpan = 30 | 90 | "all";
+
+/** 圖表要畫的那一段與它的起點。30／90 天是 [今天 − (天數 − 1), 今天]；「全部」從第一筆開始
+ *  （沒有紀錄就從今天）。`today` 是後端給的（`GET /api/weights` 的 `today`）。 */
+export function entriesInSpan(
+	entries: readonly WeightPoint[],
+	today: string,
+	span: WeightSpan,
+): { start: string; entries: WeightPoint[] } {
+	if (span === "all") return { start: entries[0]?.date ?? today, entries: [...entries] };
+	const start = shiftDays(today, -(span - 1));
+	return { start, entries: entries.filter((entry) => within(entry, start, today)) };
+}
+
+/** 「最近 7 天平均」：[今天 − 6, 今天] 的紀錄的平均；沒有就是 null。 */
+export function recentAverage(entries: readonly WeightPoint[], today: string): Numeric | null {
+	const start = shiftDays(today, -(MOVING_AVERAGE_DAYS - 1));
+	return averageOf(entries.filter((entry) => within(entry, start, today)).map((w) => w.weight_kg));
+}
+```
+
+- [ ] **Step 6：`lib/body.ts`**（新，標籤只有這一份）：
+
+```ts
+import type { components } from "../api/schema";
+
+type Sex = components["schemas"]["Sex"];
+type ActivityLevel = components["schemas"]["ActivityLevel"];
+type Goal = components["schemas"]["Goal"];
+type Missing = components["schemas"]["SuggestionMissing"]["missing"][number];
+
+export const SEX_OPTIONS: readonly { value: Sex; label: string }[] = [
+	{ value: "male", label: "男" },
+	{ value: "female", label: "女" },
+];
+
+/** 五級活動量（身體資料規格 決定 1 的表）：係數在後端（`app/body_targets.py`），這裡只有字。 */
+export const ACTIVITY_OPTIONS: readonly { value: ActivityLevel; label: string; hint: string }[] = [
+	{ value: "sedentary", label: "久坐", hint: "幾乎不運動" },
+	{ value: "light", label: "輕度", hint: "每週運動 1–3 天" },
+	{ value: "moderate", label: "中度", hint: "每週運動 3–5 天" },
+	{ value: "active", label: "高度", hint: "每週運動 6–7 天" },
+	{ value: "very_active", label: "非常高", hint: "體力工作或一天兩練" },
+];
+
+export const GOAL_OPTIONS: readonly { value: Goal; label: string }[] = [
+	{ value: "lose", label: "減重" },
+	{ value: "maintain", label: "維持" },
+	{ value: "gain", label: "增重" },
+];
+
+/** 速度的值是後端 `Decimal` 正規化之前的寫法；比對前用 `formatMacro` 把 "0.50" 變成 "0.5"。 */
+export const RATE_OPTIONS = [
+	{ value: "0.25", label: "每週 0.25 公斤" },
+	{ value: "0.5", label: "每週 0.5 公斤" },
+] as const;
+
+export const MISSING_LABELS: Record<Missing, string> = {
+	sex: "性別",
+	birth_year: "出生年",
+	height_cm: "身高",
+	activity_level: "活動量",
+	goal: "目標",
+	rate_kg_per_week: "速度",
+	weight: "體重",
+};
+
+/** 規格 D26 的原文。 */
+export const SUGGESTION_DISCLAIMER =
+	"依公式估算，僅供參考，不是醫療建議；懷孕、哺乳、慢性病或未滿 18 歲請諮詢專業人員。";
+```
+
+> `components["schemas"]["Sex"]` 等名字以重新產生的 `schema.d.ts` 為準（FastAPI 用 enum 的類別名當 schema 名）；對不上就照實際的改。
+
+- [ ] **Step 7：query 鍵與 API 層。** `api/queries.ts` 加（放在 `me` 附近，註解說明命名空間）：
+
+```ts
+	/** 身體資料、建議、體重（身體資料規格 §6.1）：全部在 `"body"` 底下——記一筆體重、改身體資料
+	 *  都可能改變建議，失效 `bodyAll` 一次打到三個。**進離線快取**（D19：自己的資料，離線看得到
+	 *  自己的體重是功能），所以不加進 `persist.ts` 的 `NOT_PERSISTED`。 */
+	bodyProfile: ["body", "profile"] as const,
+	targetSuggestion: ["body", "suggestion"] as const,
+	weights: ["body", "weights"] as const,
+	bodyAll: ["body"] as const,
+```
+
+`api/body.ts`（新）：
+
+```ts
+import { type QueryClient, useQuery } from "@tanstack/react-query";
+import { apiFetch } from "./client";
+import { queryKeys } from "./queries";
+import type { components } from "./schema";
+
+export type BodyProfile = components["schemas"]["BodyProfileResponse"];
+export type BodyProfileInput = components["schemas"]["BodyProfileRequest"];
+export type SuggestionReady = components["schemas"]["SuggestionReady"];
+export type TargetSuggestion = SuggestionReady | components["schemas"]["SuggestionMissing"];
+export type WeightList = components["schemas"]["WeightListResponse"];
+export type WeightEntry = components["schemas"]["WeightEntryResponse"];
+type Target = components["schemas"]["TargetResponse"];
+
+function required<T>(value: T | null, what: string): T {
+	if (value === null) throw new Error(`${what}的回應沒有 body`);
+	return value;
+}
+
+const fetchProfile = async () =>
+	required(await apiFetch<BodyProfile>("/api/me/body-profile"), "身體資料");
+
+export function useBodyProfile() {
+	return useQuery({ queryKey: queryKeys.bodyProfile, queryFn: fetchProfile });
+}
+
+/** 掛載時一定重抓——給 `/me/body` 的表單預填用（D27，同 `useFreshDailyStats` 的兩條規矩：
+ *  `isFetchedAfterMount && isSuccess` 才算、離線快取還原完才掛）。 */
+export function useFreshBodyProfile() {
+	return useQuery({
+		queryKey: queryKeys.bodyProfile,
+		queryFn: fetchProfile,
+		refetchOnMount: "always",
+	});
+}
+
+export async function saveBodyProfile(body: BodyProfileInput): Promise<BodyProfile> {
+	return required(
+		await apiFetch<BodyProfile>("/api/me/body-profile", {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(body),
+		}),
+		"身體資料",
+	);
+}
+
+export function useTargetSuggestion() {
+	return useQuery({
+		queryKey: queryKeys.targetSuggestion,
+		queryFn: async () =>
+			required(await apiFetch<TargetSuggestion>("/api/me/target-suggestion"), "建議目標"),
+	});
+}
+
+/** 送畫面上看到的四個數字（D15）：後端重算，不一樣就 409 `SUGGESTION_CHANGED`。 */
+export async function applySuggestion(
+	shown: Pick<SuggestionReady, "kcal" | "protein_g" | "fat_g" | "carb_g">,
+): Promise<Target> {
+	return required(
+		await apiFetch<Target>("/api/me/target-suggestion/apply", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(shown),
+		}),
+		"套用建議目標",
+	);
+}
+
+/** 最近 800 天（後端的預設）。回應裡的 `today` 是使用者的今天——表單與圖表都用它。 */
+export function useWeights() {
+	return useQuery({
+		queryKey: queryKeys.weights,
+		queryFn: async () => required(await apiFetch<WeightList>("/api/weights"), "體重"),
+	});
+}
+
+export async function saveWeight(date: string, weightKg: string): Promise<WeightEntry> {
+	return required(
+		await apiFetch<WeightEntry>(`/api/weights/${date}`, {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ weight_kg: weightKg }),
+		}),
+		"體重",
+	);
+}
+
+export async function deleteWeight(date: string): Promise<void> {
+	await apiFetch<null>(`/api/weights/${date}`, { method: "DELETE" });
+}
+
+/** 體重或身體資料變了：體重清單、建議（含重算提示）一起重抓。 */
+export function invalidateBody(client: QueryClient): Promise<void> {
+	return client.invalidateQueries({ queryKey: queryKeys.bodyAll });
+}
+```
+
+> `apiFetch` 的簽名（第二個參數、204 回 `null`）以 `api/client.ts` 現況為準；`api/targets.ts` 是照抄的對象。
+
+- [ ] **Step 8：測試用的路由。** `tests/helpers/body-routes.ts`（新）：
+
+```ts
+import { json, type Route } from "./mock-api";
+
+export const EMPTY_PROFILE = {
+	sex: null, birth_year: null, height_cm: null, activity_level: null,
+	goal: null, rate_kg_per_week: null, target_weight_kg: null,
+};
+export const NOT_READY = { ready: false, missing: ["sex", "birth_year", "height_cm", "activity_level", "goal", "rate_kg_per_week", "weight"] };
+export const NO_WEIGHTS = { today: "2019-07-04", entries: [] };
+
+/** 會畫出「我的」的新卡片或建議區塊的測試，**放在路由清單最前面**：`/api/me` 的路由用
+ *  `url.includes` 比對，會吃掉 `/api/me/body-profile` 與 `/api/me/target-suggestion`。 */
+export function bodyRoutes(
+	overrides: { profile?: unknown; suggestion?: unknown; weights?: unknown } = {},
+): Route[] {
+	return [
+		{ method: "GET", path: "/api/me/target-suggestion", handler: () => json(overrides.suggestion ?? NOT_READY) },
+		{ method: "GET", path: "/api/me/body-profile", handler: () => json(overrides.profile ?? EMPTY_PROFILE) },
+		{ method: "GET", path: "/api/weights", handler: () => json(overrides.weights ?? NO_WEIGHTS) },
+	];
+}
+```
+
+（`Route` 如果沒有 export，就在 `mock-api.ts` 補 `export`。）
+
+- [ ] **Step 9：跑。** 同 Step 2 → Expected：PASS。再跑 `npx vitest run tests/decimal-containment.test.ts tests/civil-date.test.ts`（掃描：decimal.js 只在 `lib/decimal.ts`、civil-date 沒有本地 accessor）→ PASS。
+
+- [ ] **Step 10：突變**：
+  1. `movingAverage` 的 `-(MOVING_AVERAGE_DAYS - 1)` 改成 `-MOVING_AVERAGE_DAYS` → 第一條紅（10/08 那筆把 10/01 算進來）。
+  2. `weekChange` 的 `<= cutoff` 改成 `< cutoff` → 第一條紅（10/07 剛好 7 天前）。
+  3. `paddedExtent` 的 `.floor()` 拿掉 → `lo: "69.2"`，紅。
+  4. `positionIn` 拿掉 `isZero` 那一行 → 「範圍是 0」那條紅（NaN）。
+  5. `daysBetween` 的 `Math.round` 改成 `Math.floor` → **存活**（UTC 午夜相減永遠整除）。記下來，不補。
+
+- [ ] **Step 11：檢查與 commit。** `npm run -s lint`、`npm run -s test`（grep `FAIL`／`Unhandled`）；然後單獨跑 typecheck 並串 commit：
+
+```bash
+cd frontend && npm run -s typecheck && cd .. && git add frontend/src/api/body.ts frontend/src/api/queries.ts frontend/src/lib/body.ts frontend/src/lib/weights.ts frontend/src/lib/decimal.ts frontend/src/lib/civil-date.ts frontend/tests/helpers/body-routes.ts frontend/tests/helpers/mock-api.ts frontend/tests/weights-lib.test.ts frontend/tests/body-api.test.tsx frontend/tests/decimal.test.ts frontend/tests/civil-date.test.ts && git commit -F "$S/body-t6-msg.txt"
+```
+
+訊息：`feat(frontend): 身體資料與體重的 API 層、移動平均與圖表用的數字工具`。
