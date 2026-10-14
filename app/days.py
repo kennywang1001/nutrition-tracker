@@ -21,6 +21,12 @@ def today_in_timezone(tz_name: str) -> date:
     return datetime.now(UTC).astimezone(ZoneInfo(tz_name)).date()
 
 
+def utc_now() -> datetime:
+    """現在（UTC）。跟 `today_in_timezone` 同一個理由抽成函式：測試沒辦法 monkeypatch
+    `datetime.now()`，只能替換這個薄函式（運動規格 D18 的「不能是未來」）。"""
+    return datetime.now(UTC)
+
+
 def month_bounds(year: int, month: int, tz_name: str) -> tuple[datetime, datetime]:
     """回傳該使用者當地某一個月的 UTC 起訖，半開區間 [start, end)。
 

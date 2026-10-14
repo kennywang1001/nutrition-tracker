@@ -390,6 +390,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/exercise/activities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Activities
+         * @description 固定的活動清單（D2）。前端不另外寫一份。
+         */
+        get: operations["list_activities_api_exercise_activities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/exercise/estimate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Preview Estimate
+         * @description 存之前先看估算（D11）。`performed_at` 省略＝現在；用那一天（使用者時區）或之前最新的體重。
+         */
+        get: operations["preview_estimate_api_exercise_estimate_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/foods": {
         parameters: {
             query?: never;
@@ -1763,10 +1803,23 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * ActivityCode
+         * @enum {string}
+         */
+        ActivityCode: "walking" | "brisk_walking" | "jogging" | "running" | "cycling" | "spinning" | "swimming" | "weight_training" | "weight_training_vigorous" | "yoga" | "pilates" | "hiit" | "hiking" | "stair_climbing" | "basketball" | "badminton" | "table_tennis" | "jump_rope" | "other";
+        /**
          * ActivityLevel
          * @enum {string}
          */
         ActivityLevel: "sedentary" | "light" | "moderate" | "active" | "very_active";
+        /** ActivityResponse */
+        ActivityResponse: {
+            code: components["schemas"]["ActivityCode"];
+            /** Label */
+            label: string;
+            /** Met */
+            met: string | null;
+        };
         /**
          * AdminUserItem
          * @description `GET /api/admin/users` 的一列（規格 §3.3）。白名單：沒有時區、好友碼、建立時間。
@@ -2062,6 +2115,45 @@ export interface components {
             label: string;
             /** Grams */
             grams: number | string;
+        };
+        /**
+         * EstimateMissing
+         * @description 運動那一天以前沒有任何體重：表單改成手動輸入（D8）。
+         */
+        EstimateMissing: {
+            /**
+             * Ready
+             * @constant
+             */
+            ready: false;
+            /**
+             * Missing
+             * @constant
+             */
+            missing: "weight";
+        };
+        /**
+         * EstimateReady
+         * @description 預覽（D11：跟 `EstimateMissing` 是普通聯集，不加 discriminator——同身體資料 D10）。
+         *     `weight_kg`、`weight_date` 是估算用的那一筆體重：運動那一天（使用者時區）或之前最新的。
+         */
+        EstimateReady: {
+            /**
+             * Ready
+             * @constant
+             */
+            ready: true;
+            /** Kcal */
+            kcal: string;
+            /** Met */
+            met: string;
+            /** Weight Kg */
+            weight_kg: string;
+            /**
+             * Weight Date
+             * Format: date
+             */
+            weight_date: string;
         };
         /**
          * ExpenseCategory
@@ -3943,6 +4035,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WeightListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_activities_api_exercise_activities_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityResponse"][];
+                };
+            };
+        };
+    };
+    preview_estimate_api_exercise_estimate_get: {
+        parameters: {
+            query: {
+                activity: components["schemas"]["ActivityCode"];
+                minutes: number;
+                performed_at?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EstimateReady"] | components["schemas"]["EstimateMissing"];
                 };
             };
             /** @description Validation Error */

@@ -1,5 +1,7 @@
 """身體資料端點共用的讀寫（身體資料規格 §5）。只用呼叫端給的 user_id——沒有「讀別人的」這條路。"""
 
+from datetime import date
+
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +26,18 @@ async def latest_weight(db: AsyncSession, user_id: int) -> WeightEntry | None:
         .limit(1)
     )
     return latest
+
+
+async def weight_as_of(db: AsyncSession, user_id: int, day: date) -> WeightEntry | None:
+    """`day`（含）以前**日期**最新的一筆（運動規格 D7）：補記上個月的運動用上個月的體重，
+    之後才記的不算。"""
+    entry: WeightEntry | None = await db.scalar(
+        select(WeightEntry)
+        .where(WeightEntry.user_id == user_id, WeightEntry.date <= day)
+        .order_by(WeightEntry.date.desc())
+        .limit(1)
+    )
+    return entry
 
 
 def inputs_from(profile: UserProfile | None, latest: WeightEntry | None) -> BodyInputs:
