@@ -1158,7 +1158,7 @@ FULL = {
 ```python
 """身體資料與建議目標（身體資料規格 §5.1、§5.2）。只讀寫自己的：路徑上沒有使用者 id。
 
-健康資料：這個模組不 import logging（`tests/test_body_privacy.py`）。"""
+健康資料：這個模組不寫 log（`tests/test_body_privacy.py` 掃這個檔案，連註解都不能出現那幾個字）。"""
 
 from decimal import Decimal
 
@@ -1400,7 +1400,7 @@ async def test_two_concurrent_upserts_of_the_same_day_both_succeed(independent_s
 ```python
 """體重紀錄（身體資料規格 §5.3）。一人一天一筆，日期是使用者時區的日曆日；只讀寫自己的。
 
-健康資料：這個模組不 import logging（`tests/test_body_privacy.py`）。"""
+健康資料：這個模組不寫 log（`tests/test_body_privacy.py` 掃這個檔案，連註解都不能出現那幾個字）。"""
 
 from datetime import date, timedelta
 from decimal import Decimal
@@ -1606,3 +1606,310 @@ git add app/schemas/body.py app/api/routes/weights.py app/main.py app/export.py 
 ```
 
 訊息（`$S/body-t4-msg.txt`）：`feat(body): 體重紀錄的三個端點與 weights.csv 匯出`。
+
+---
+
+## Task 5：後端——套用建議、手動存目標清掉套用體重、隱私掃描
+
+**Files:**
+- Create: `tests/test_body_privacy.py`
+- Modify: `app/api/routes/targets.py`、`app/api/routes/body.py`、`app/schemas/body.py`、`tests/test_target_suggestion.py`、`tests/test_targets_today.py`、`frontend/src/api/schema.d.ts`
+
+- [ ] **Step 1：抽出寫入函式（純重構，先跑既有測試）。** `app/api/routes/targets.py`：把 `set_target_from_today` 的本體搬進一個**不 commit** 的函式，留在這個模組裡（既有測試 monkeypatch 的是 `app.api.routes.targets.today_in_timezone` 與 `…._new_period_end`，搬到別的模組它們就失效了）：
+
+```python
+@dataclass(frozen=True)
+class TargetValues:
+    kcal: Decimal | None
+    protein_g: Decimal | None
+    fat_g: Decimal | None
+    carb_g: Decimal | None
+
+
+async def write_target_from_today(
+    db: AsyncSession, user_id: int, today: date, values: TargetValues
+) -> UserTarget:
+    """從 `today` 起目標是這四個值（帳號設定規格 §3.1 的三種狀態）。**不 commit**：呼叫端在
+    同一個交易裡還有別的要寫（手動存目標要清掉套用體重、套用建議要記下體重）。
+
+    撞上 EXCLUDE → 整筆 rollback（連呼叫端在這之前寫的）、`409 TARGET_CONFLICT`。"""
+    current = await db.scalar(
+        select(UserTarget).where(
+            UserTarget.user_id == user_id,
+            UserTarget.effective_from <= today,
+            or_(UserTarget.effective_to.is_(None), UserTarget.effective_to > today),
+        )
+    )
+    if current is not None and current.effective_from == today:
+        current.kcal, current.protein_g = values.kcal, values.protein_g
+        current.fat_g, current.carb_g = values.fat_g, values.carb_g
+        await db.flush()
+        return current
+
+    new_effective_to = await _new_period_end(db, user_id, today, current)
+    label = current.label if current is not None else None
+    if current is not None:
+        current.effective_to = today
+        await db.flush()  # 1. 先關舊的——順序不能換，見 update_target
+
+    new_target = UserTarget(
+        user_id=user_id,
+        kcal=values.kcal,
+        protein_g=values.protein_g,
+        fat_g=values.fat_g,
+        carb_g=values.carb_g,
+        label=label,
+        effective_from=today,
+        effective_to=new_effective_to,
+    )
+    db.add(new_target)
+    try:
+        await db.flush()  # 2. 再開新的
+    except IntegrityError as exc:
+        await db.rollback()
+        raise ConflictError(
+            "TARGET_CONFLICT", "目標剛被另一台裝置改過，請重新整理再試"
+        ) from exc
+    return new_target
+```
+
+`set_target_from_today` 變成（docstring 保留原本的三種狀態說明，多一句 D16）：
+
+```python
+    user_id = user.id
+    today = today_in_timezone(user.timezone)
+    target = await write_target_from_today(
+        db, user_id, today, TargetValues(**payload.model_dump())
+    )
+    # 身體資料規格 D16：手動設的目標不是「建議」，之後體重變了不提示重算。
+    await clear_applied_weight(db, user_id)
+    await db.commit()
+    await db.refresh(target)
+    return _to_response(target)
+```
+
+（`from dataclasses import dataclass`、`from decimal import Decimal`、`from app.body_data import clear_applied_weight`。）
+
+跑既有的：`pytest -q -W error tests/test_targets_today.py tests/test_targets.py` → Expected：PASS（重構不改行為）。
+
+- [ ] **Step 2：先寫測試。** `tests/test_targets_today.py` 加一條：
+
+```python
+async def test_saving_by_hand_forgets_the_applied_weight(client, db_session, seen_timezones):
+    """身體資料規格 D16：手打的目標不是建議，之後不提示重算。別人的不受影響。"""
+    user, other = await create_user(db_session), await create_user(db_session)
+    await create_profile(db_session, user=user, targets_applied_weight_kg=80)
+    await create_profile(db_session, user=other, targets_applied_weight_kg=70)
+    user_id, other_id = user.id, other.id
+
+    response = await client.put("/api/targets/today", headers=auth(user_id), json=BODY)
+
+    assert response.status_code == 200
+    applied = dict(
+        (await db_session.execute(
+            select(UserProfile.user_id, UserProfile.targets_applied_weight_kg).where(
+                UserProfile.user_id.in_([user_id, other_id])
+            )
+        )).tuples().all()
+    )
+    assert applied == {user_id: None, other_id: Decimal("70.00")}
+```
+
+`app/schemas/body.py` 加套用的請求：
+
+```python
+class ApplySuggestionRequest(BaseModel):
+    """畫面上看到的四個數字（D15）。**不會被存**——存的是後端重算的；這四個只用來確認
+    「看到的就是要存的」，不一樣就 409。"""
+
+    kcal: Decimal = Field(ge=0, max_digits=8, decimal_places=2)
+    protein_g: Decimal = Field(ge=0, max_digits=8, decimal_places=2)
+    fat_g: Decimal = Field(ge=0, max_digits=8, decimal_places=2)
+    carb_g: Decimal = Field(ge=0, max_digits=8, decimal_places=2)
+```
+
+`tests/test_target_suggestion.py` 加（`APPLY = "/api/me/target-suggestion/apply"`；`SHOWN = {"kcal": "2110", "protein_g": "144", "fat_g": "59", "carb_g": "251"}`，配預設的 `create_profile` 與 80 kg；**套用要另外 monkeypatch `app.api.routes.targets.today_in_timezone`？不用**——套用把 body 模組算的 `today` 傳進 `write_target_from_today`，那個函式不自己算今天。用 Task 3 的 `today` 夾具就好）：
+
+1. `test_apply_saves_the_suggestion_from_today_and_remembers_the_weight`：200；回應是 `TargetResponse`（`effective_from == "2026-10-14"`、四個數字）；資料庫的 `user_targets` 今天起是那四個值；`targets_applied_weight_kg == 80`；之後 GET 建議是 `applied_weight_kg: "80.00"`、`resuggest: False`。
+2. `test_apply_closes_the_previous_target`：`create_target(effective_from=2026-10-01, kcal=1800)` → 套用之後舊的那筆 `effective_to == 2026-10-14`、值沒變（沿用帳號設定的規則，只驗一次接得上）。
+3. `test_numbers_that_differ_from_the_suggestion_are_409_and_write_nothing`（parametrize 四個欄位各差 1）：`409 SUGGESTION_CHANGED`；`user_targets` 沒有列、`targets_applied_weight_kg` 仍是 null。
+4. `test_trailing_zeros_are_the_same_number`：`{"kcal": "2110.00", …}` → 200（比的是 `Decimal`，不是字串）。
+5. `test_an_incomplete_profile_is_422_with_what_is_missing`：沒有體重 → `422 PROFILE_INCOMPLETE`、`details.missing == ["weight"]`、什麼都沒寫。
+6. `test_a_zero_carb_suggestion_is_saved_as_unset`：規格 §3.3 的 E（女、1926、100 cm、150 kg、久坐、減 0.5）送 `{"kcal": "1210", "protein_g": "270", "fat_g": "34", "carb_g": "0"}` → 200、`carb_g is None`（D9）。
+7. `test_a_target_clash_is_409_and_the_weight_is_not_remembered`：monkeypatch `app.api.routes.targets._new_period_end` 回 None 並先建一筆未來的目標（照 `test_targets_today.py` 的 `test_a_clash_is_409_and_writes_nothing`）→ `409 TARGET_CONFLICT`、`targets_applied_weight_kg` 仍是 null。
+8. `test_after_the_weight_moves_a_kilo_the_suggestion_says_so`：套用（80）→ 記 2026-10-14 的 78.5（直接 `create_weight`）→ GET 建議：`weight_change_kg == -1.5`、`resuggest is True`。
+9. `test_apply_needs_a_login`。
+
+`tests/test_body_privacy.py`（新）：
+
+```python
+"""身體資料是健康資料（身體資料規格 §7）：不進任何好友或社群的回應、只有身體資料的模組
+碰得到那兩張表、那幾個模組不寫 log。掃的是型別與原始碼——端點測試只看得到「這一次的回應
+沒有」，看不到「某天有人把它加進白名單」。"""
+
+import re
+from pathlib import Path
+
+from pydantic import BaseModel
+
+import app.schemas.friend as friend_schemas
+import app.schemas.social as social_schemas
+
+APP = Path(__file__).resolve().parent.parent / "app"
+HEALTH_WORDS = ("weight", "height", "birth", "sex", "activity", "goal", "profile")
+
+
+def _models_reachable_from(module) -> set[type[BaseModel]]:
+    """模組裡每個 BaseModel，連同欄位型別裡巢狀的（list[X]、X | None）。"""
+    seen: set[type[BaseModel]] = set()
+    stack = [
+        value
+        for value in vars(module).values()
+        if isinstance(value, type) and issubclass(value, BaseModel) and value is not BaseModel
+    ]
+    while stack:
+        model = stack.pop()
+        if model in seen:
+            continue
+        seen.add(model)
+        for field in model.model_fields.values():
+            for inner in _types_in(field.annotation):
+                if isinstance(inner, type) and issubclass(inner, BaseModel):
+                    stack.append(inner)
+    return seen
+
+
+def _types_in(annotation) -> list:
+    args = getattr(annotation, "__args__", None)
+    if not args:
+        return [annotation]
+    return [inner for arg in args for inner in _types_in(arg)]
+
+
+def test_no_friend_or_social_response_has_a_health_field():
+    models = _models_reachable_from(friend_schemas) | _models_reachable_from(social_schemas)
+    assert len(models) >= 20  # 掃到東西了：寫計畫時兩個模組頂層就有 22 個模型（含 import 進來的）
+    offenders = sorted(
+        f"{model.__name__}.{name}"
+        for model in models
+        for name in model.model_fields
+        if any(word in name.lower() for word in HEALTH_WORDS)
+    )
+    assert offenders == []
+
+
+BODY_MODULES = {
+    APP / "models" / "body.py",
+    APP / "models" / "__init__.py",
+    APP / "body_targets.py",
+    APP / "body_data.py",
+    APP / "schemas" / "body.py",
+    APP / "api" / "routes" / "body.py",
+    APP / "api" / "routes" / "weights.py",
+    APP / "export.py",
+}
+
+
+def test_only_the_body_modules_touch_the_health_tables():
+    """`routes/targets.py` 只准呼叫 `clear_applied_weight`，不准自己碰那張表。"""
+    words = re.compile(r"\bUserProfile\b|\bWeightEntry\b|\buser_profiles\b|\bweight_entries\b")
+    offenders = sorted(
+        str(path.relative_to(APP))
+        for path in APP.rglob("*.py")
+        if path not in BODY_MODULES and words.search(path.read_text(encoding="utf-8"))
+    )
+    assert offenders == []
+
+
+def test_the_body_modules_do_not_log():
+    """`export.py` 例外：它不在這個集合裡要掃的範圍（它本來就沒有 logger；如果之後有，
+    也只會記匯出的事件）。"""
+    log_words = re.compile(r"\blogging\b|\blogger\b|\bprint\(")
+    offenders = sorted(
+        str(path.relative_to(APP))
+        for path in BODY_MODULES - {APP / "export.py", APP / "models" / "__init__.py"}
+        if log_words.search(path.read_text(encoding="utf-8"))
+    )
+    assert offenders == []
+```
+
+> 第一條的 `>= 20` 是防空轉（handover §6 第 5 種）：模組路徑打錯時，掃描對空集合永遠是綠的。寫計畫時量過：兩個模組頂層的 BaseModel 共 22 個，欄位名沒有一個含那七個字（`comment` 的 `body` 不算）。
+
+- [ ] **Step 3：跑，看它紅。** `pytest -q -W error tests/test_target_suggestion.py tests/test_targets_today.py tests/test_body_privacy.py` → Expected：套用的幾條 FAIL（404）、`test_saving_by_hand_forgets_the_applied_weight` FAIL；掃描三條 PASS（現在就該是綠的——它們守的是以後）。
+
+- [ ] **Step 4：套用的端點。** `app/api/routes/body.py` 加：
+
+```python
+@router.post("/me/target-suggestion/apply", response_model=TargetResponse)
+async def apply_target_suggestion(
+    payload: ApplySuggestionRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TargetResponse:
+    """把建議存成今天起的目標（D15）。一個交易：重算 → 跟畫面上看到的比 → 寫目標 →
+    記下這次用的體重。
+
+    存的是**重算的**數字，不是請求裡的；請求的四個數字只用來確認使用者按下去的時候看到的
+    就是會存的——另一個分頁剛記了體重、或畫面是離線快取裡的舊建議，就 409，什麼都不寫。"""
+    user_id = user.id
+    today = today_in_timezone(user.timezone)
+    profile = await load_profile(db, user_id)
+    latest = await latest_weight(db, user_id)
+    result = suggest(inputs_from(profile, latest), today)
+    if isinstance(result, list):
+        raise UnprocessableEntityError(
+            "PROFILE_INCOMPLETE", "身體資料或體重還沒填完", {"missing": result}
+        )
+    assert latest is not None
+    shown = (payload.kcal, payload.protein_g, payload.fat_g, payload.carb_g)
+    if shown != (result.kcal, result.protein_g, result.fat_g, result.carb_g):
+        raise ConflictError("SUGGESTION_CHANGED", "建議目標剛剛變了，請看過新的數字再套用")
+
+    weight_used = latest.weight_kg
+    target = await write_target_from_today(
+        db,
+        user_id,
+        today,
+        TargetValues(
+            kcal=result.kcal,
+            protein_g=result.protein_g,
+            fat_g=result.fat_g,
+            # D9：碳水被擠到 0 時存「未設定」——0 的目標算不出比例。
+            carb_g=None if result.carb_g == 0 else result.carb_g,
+        ),
+    )
+    await db.execute(
+        update(UserProfile)
+        .where(UserProfile.user_id == user_id)
+        .values(targets_applied_weight_kg=weight_used)
+    )
+    await db.commit()
+    await db.refresh(target)
+    return target_response(target)
+```
+
+`routes/targets.py` 的 `_to_response` 改名 `target_response`（公開，三處呼叫跟著改）；`body.py` import `TargetValues`、`target_response`、`write_target_from_today`（前例：`supplement_intakes.py` 從 `supplement_plans` import），以及 `ConflictError`、`update`、`ApplySuggestionRequest`、`TargetResponse`。
+
+- [ ] **Step 5：跑。** 同 Step 3 → Expected：PASS。再跑 `tests/test_targets.py`（`_to_response` 改名）。
+
+- [ ] **Step 6：突變**：
+  1. `set_target_from_today` 拿掉 `clear_applied_weight` → `test_saving_by_hand_forgets_the_applied_weight` 紅。
+  2. `clear_applied_weight` 的 `.where(...)` 拿掉 → 同一條紅（別人的 70 被清掉）。
+  3. 套用的 `shown != …` 整段拿掉 → 第 3 條紅。
+  4. 比對改成比字串（`str(payload.kcal) != str(result.kcal)`）→ 第 4 條紅。
+  5. `carb_g=None if … else …` 改成 `carb_g=result.carb_g` → 第 6 條紅。
+  6. `update(UserProfile)…` 移到 `write_target_from_today` **之前**、而且在它前面加一個 `await db.commit()` → 第 7 條紅（409 了，體重卻記住了）。
+  7. `write_target_from_today` 的原地改那一支把 `await db.flush()` 換成 `await db.commit()` → **存活**（共用 session 的 commit 只到 savepoint）。記下來；這個函式的 docstring 寫「不 commit」，審查時看。
+  8. 掃描：在 `app/schemas/friend.py` 的 `FriendMeal` 暫時加 `weight_kg: Decimal | None = None` → 第一條掃描紅；在 `app/api/routes/friends.py` 暫時加一行註解 `# WeightEntry` → 第二條紅；在 `routes/weights.py` 加 `import logging` → 第三條紅。
+
+  改回、`touch`、刪 pyc、`git diff` 確認 `friend.py`、`friends.py` 沒有留下任何改動。
+
+- [ ] **Step 7：重新產生 `schema.d.ts`**、`npm run -s typecheck` 綠。**跑整套後端**（約 4 分鐘）→ 全綠，記下條數。
+
+- [ ] **Step 8：commit。**
+
+```bash
+git add app/api/routes/targets.py app/api/routes/body.py app/schemas/body.py tests/test_target_suggestion.py tests/test_targets_today.py tests/test_body_privacy.py frontend/src/api/schema.d.ts
+```
+
+訊息（`$S/body-t5-msg.txt`）：`feat(body): 套用建議目標（同一個交易記下體重）；手動存目標清掉套用體重；健康資料的掃描測試`。
