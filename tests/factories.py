@@ -550,14 +550,17 @@ async def create_exercise(
     kcal_source: KcalSource = KcalSource.ESTIMATED,
     note: str | None = None,
 ) -> ExerciseEntry:
-    """直接寫一筆運動——不經過端點的估算與檢查。預設是規格 §4.1 那一筆（跑步 30 分鐘、343 kcal）。"""
+    """直接寫一筆運動——不經過端點的估算與檢查。預設是規格 §4.1 那一筆（跑步 30 分鐘、343 kcal）。
+
+    熱量先量化成兩位小數：資料庫的 `Numeric(7,2)` 存的是 343.00，而共用 session 的 identity map
+    會把這個物件原樣還給端點（handover §6 第 49 種）——不量化的話端點讀到的是 "343"。"""
     entry = ExerciseEntry(
         user_id=user.id,
         performed_at=performed_at,
         activity=activity,
         name=name,
         minutes=minutes,
-        kcal=Decimal(str(kcal)),
+        kcal=Decimal(str(kcal)).quantize(Decimal("0.01")),
         kcal_source=kcal_source,
         note=note,
     )

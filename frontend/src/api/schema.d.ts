@@ -430,6 +430,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/exercises": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Exercises
+         * @description 某一天（使用者時區）的運動，由舊到新。省略 `date`＝使用者的今天（D19）。
+         */
+        get: operations["list_exercises_api_exercises_get"];
+        put?: never;
+        /**
+         * Create Exercise
+         * @description 記一筆運動。`kcal` 省略＝用那一天或之前最新的體重估算（D7、D10）；帶了＝手動。
+         */
+        post: operations["create_exercise_api_exercises_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/exercises/{exercise_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Exercise
+         * @description 一筆（編輯畫面的預填）。別人的是 404。
+         */
+        get: operations["read_exercise_api_exercises__exercise_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Exercise
+         * @description 刪掉自己的一筆。別人的是 404。
+         */
+        delete: operations["delete_exercise_api_exercises__exercise_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Exercise
+         * @description 部分更新。估算的那一筆改了活動、分鐘或時間就重估；只改備註不重估（D22）。
+         *     `kcal` 帶數字＝手動、帶 null＝改回估算。
+         */
+        patch: operations["update_exercise_api_exercises__exercise_id__patch"];
+        trace?: never;
+    };
     "/api/foods": {
         parameters: {
             query?: never;
@@ -2156,6 +2209,94 @@ export interface components {
             weight_date: string;
         };
         /**
+         * ExerciseCreateRequest
+         * @description `POST /api/exercises`。`kcal` 省略＝讓後端估算（D10）。
+         */
+        ExerciseCreateRequest: {
+            activity: components["schemas"]["ActivityCode"];
+            /** Name */
+            name?: string | null;
+            /** Minutes */
+            minutes: number;
+            /**
+             * Performed At
+             * Format: date-time
+             */
+            performed_at: string;
+            /** Kcal */
+            kcal?: number | string | null;
+            /** Note */
+            note?: string | null;
+        };
+        /**
+         * ExerciseListResponse
+         * @description 某一天（使用者時區）的運動，依時間由舊到新（D19）。`date` 是後端算的那一天——
+         *     前端不用自己算「今天」。
+         */
+        ExerciseListResponse: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /** Total Kcal */
+            total_kcal: string;
+            /** Entries */
+            entries: components["schemas"]["ExerciseResponse"][];
+        };
+        /** ExerciseResponse */
+        ExerciseResponse: {
+            /** Id */
+            id: number;
+            /**
+             * Performed At
+             * Format: date-time
+             */
+            performed_at: string;
+            activity: components["schemas"]["ActivityCode"];
+            /** Label */
+            label: string;
+            /** Name */
+            name: string | null;
+            /** Minutes */
+            minutes: number;
+            /** Kcal */
+            kcal: string;
+            kcal_source: components["schemas"]["KcalSource"];
+            /** Note */
+            note: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * ExerciseUpdateRequest
+         * @description `PATCH /api/exercises/{id}`。不帶＝不動；`kcal: null`＝改回估算（D10）；`name`／`note`
+         *     的 null＝清掉。`activity`、`minutes`、`performed_at` 是 NOT NULL，顯式 null 在這裡擋
+         *     （同 `MealUpdateRequest`）。合併之後的規則（「其他」要名稱與熱量）在端點判斷——
+         *     那要看資料庫裡原本是什麼。
+         */
+        ExerciseUpdateRequest: {
+            activity?: components["schemas"]["ActivityCode"] | null;
+            /** Name */
+            name?: string | null;
+            /** Minutes */
+            minutes?: number | null;
+            /** Performed At */
+            performed_at?: string | null;
+            /** Kcal */
+            kcal?: number | string | null;
+            /** Note */
+            note?: string | null;
+        };
+        /**
          * ExpenseCategory
          * @description 寫死的分類清單（規格 §3.2）。
          *
@@ -2465,6 +2606,11 @@ export interface components {
             /** Email */
             email: string;
         };
+        /**
+         * KcalSource
+         * @enum {string}
+         */
+        KcalSource: "estimated" | "manual";
         /**
          * LibraryFoodMatch
          * @description 食物庫裡跟這一樣**名稱完全相同**的食物（看得到的、有生效版本的；AI 多樣估算規格 D4、D5）。
@@ -4088,6 +4234,165 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EstimateReady"] | components["schemas"]["EstimateMissing"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_exercises_api_exercises_get: {
+        parameters: {
+            query?: {
+                date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExerciseListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_exercise_api_exercises_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExerciseCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExerciseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_exercise_api_exercises__exercise_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                exercise_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExerciseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_exercise_api_exercises__exercise_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                exercise_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_exercise_api_exercises__exercise_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                exercise_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExerciseUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExerciseResponse"];
                 };
             };
             /** @description Validation Error */
