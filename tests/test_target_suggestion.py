@@ -8,7 +8,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, event, select
 
 from app.models.body import ActivityLevel, Goal, Sex, UserProfile
 from app.models.target import UserTarget
@@ -389,3 +389,67 @@ async def test_after_the_weight_moves_a_kilo_the_suggestion_says_so(
 
 async def test_apply_needs_a_login(client):
     assert (await client.post(APPLY, json=SHOWN)).status_code == 401
+
+
+async def test_the_target_deleted_right_after_the_commit_is_not_a_500(
+    client, db_session, seen_timezones, monkeypatch
+):
+    """審查 M6：端點以前在 commit **之後** `db.refresh(target)`。commit 一放掉交易，別的請求
+    就可以把這筆目標改掉或刪掉（另一台裝置剛好也在存目標）；那個 refresh 讀不到列就是 500——
+    而目標其實存好了。這裡把空檔做成確定會發生的：commit 一回來就刪掉。回應是 commit 之前
+    組好的，所以照樣是 200 與剛存的數字。"""
+    user = await _ready_user(db_session)
+    user_id = user.id
+    real_commit = db_session.commit
+
+    async def commit_then_the_target_is_gone() -> None:
+        await real_commit()
+        await db_session.execute(delete(UserTarget).where(UserTarget.user_id == user_id))
+        await real_commit()
+
+    monkeypatch.setattr(db_session, "commit", commit_then_the_target_is_gone)
+
+    response = await client.post(APPLY, headers=auth(user_id), json=SHOWN)
+
+    assert response.status_code == 200
+    body = response.json()
+    # commit 之前讀回來的：資料庫的 numeric(…, 2)，不是請求或 Decimal(2110) 的寫法。
+    assert (body["kcal"], body["protein_g"], body["fat_g"], body["carb_g"]) == (
+        "2110.00",
+        "144.00",
+        "59.00",
+        "251.00",
+    )
+    assert (body["effective_from"], body["effective_to"]) == ("2026-10-14", None)
+    assert isinstance(body["id"], int)
+    # 空檔裡真的刪掉了——不然上面的 200 什麼都沒證明。
+    assert await _targets(db_session, user_id) == []
+
+
+async def test_apply_reads_nothing_back_after_the_commit(
+    client, db_session, db_connection, seen_timezones
+):
+    """上一條的結構版：commit 之後這個請求一句 SQL 都不送。"""
+    user = await _ready_user(db_session)
+    user_id = user.id
+    statements: list[tuple[bool, str]] = []
+    committed = False
+
+    def on_commit(session) -> None:
+        nonlocal committed
+        committed = True
+
+    def record(conn, cursor, statement, parameters, context, executemany) -> None:
+        statements.append((committed, " ".join(statement.split())))
+
+    event.listen(db_session.sync_session, "after_commit", on_commit)
+    event.listen(db_connection.sync_connection, "before_cursor_execute", record)
+    try:
+        response = await client.post(APPLY, headers=auth(user_id), json=SHOWN)
+    finally:
+        event.remove(db_connection.sync_connection, "before_cursor_execute", record)
+        event.remove(db_session.sync_session, "after_commit", on_commit)
+
+    assert response.status_code == 200
+    assert committed  # 真的有 commit（不然「之後」是空的沒有意義）
+    assert [sql for after, sql in statements if after] == []

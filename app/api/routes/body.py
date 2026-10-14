@@ -174,6 +174,10 @@ async def apply_target_suggestion(
         .where(UserProfile.user_id == user_id)
         .values(targets_applied_weight_kg=weight_used)
     )
-    await db.commit()
+    # 回應在 commit **之前**組好（審查 M6）：commit 一放掉交易，另一台裝置就可能改掉或刪掉
+    # 這筆目標，之後再 refresh 讀不到列就是 500——而目標其實存好了。refresh 讀回資料庫的
+    # numeric 寫法（2110.00），跟 `PUT /api/targets/today` 的回應一樣。
     await db.refresh(target)
-    return target_response(target)
+    response = target_response(target)
+    await db.commit()
+    return response
