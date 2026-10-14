@@ -18,8 +18,10 @@ test("管理員產生邀請連結，朋友用它開帳號；同一個連結不�
 	await page.getByRole("button", { name: "產生邀請連結" }).click();
 	const link = await page.getByLabel("邀請連結", { exact: true }).inputValue();
 	expect(link).toContain("/join#");
+	// 不量「所有帳號」清單每一列的那一顆（同 account-settings.spec.ts）：那只是在量 dev 資料庫
+	// 累積了多少 e2e 帳號——上千個時這一步超過 30 秒。那一顆的高度由 account-settings 量一列。
 	await expectTouchTargets(
-		page.locator("main button:visible"),
+		page.locator('main button:visible:not([aria-label^="產生重設密碼連結："])'),
 		"我的：邀請朋友",
 	);
 
