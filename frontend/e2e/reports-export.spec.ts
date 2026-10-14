@@ -150,7 +150,7 @@ test("匯出花費：下載的 CSV 檔名帶日期、開頭有 BOM、內容有�
 		),
 	);
 	expect(lines[2]).toBe("");
-	// 四顆按鈕都恢復可以按；下載中它們是 aria-disabled 而不是原生停用，所以按下去的
+	// 五顆按鈕都恢復可以按；下載中它們是 aria-disabled 而不是原生停用，所以按下去的
 	// 那一顆從頭到尾沒有把焦點弄丟。
 	const expensesButton = card.getByRole("button", {
 		name: "花費",
@@ -158,9 +158,27 @@ test("匯出花費：下載的 CSV 檔名帶日期、開頭有 BOM、內容有�
 	});
 	await expect(expensesButton).toBeEnabled();
 	await expect(expensesButton).toBeFocused();
-	for (const name of ["餐點", "補劑", "體重"]) {
+	for (const name of ["餐點", "補劑", "體重", "運動"]) {
 		await expect(card.getByRole("button", { name, exact: true })).toBeEnabled();
 	}
+	await expect(card.getByRole("button")).toHaveCount(5);
+
+	// 運動（運動規格 §6）：新帳號沒有運動，只有標題列。
+	const downloadingExercises = page.waitForEvent("download");
+	await card.getByRole("button", { name: "運動", exact: true }).click();
+	const exercises = await downloadingExercises;
+	expect(exercises.suggestedFilename()).toMatch(
+		/^exercises-\d{4}-\d{2}-\d{2}\.csv$/,
+	);
+	await expect(card.getByRole("status")).toHaveText(
+		`已下載 ${exercises.suggestedFilename()}`,
+	);
+	const exerciseBytes = await readFile(await exercises.path());
+	expect([...exerciseBytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+	expect(exerciseBytes.subarray(3).toString("utf8").split("\r\n")).toEqual([
+		"日期,時間,活動,分鐘,熱量(kcal),熱量來源,備註",
+		"",
+	]);
 });
 
 /** 用座標點一個元素的正中央。`locator.click()` 會等到元素「點得到」為止——要測的正是
