@@ -1,4 +1,6 @@
+from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import func, or_, select
@@ -7,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.api.params import ResourceId
+from app.body_data import clear_applied_weight
 from app.days import today_in_timezone
 from app.db import get_db
 from app.errors import ConflictError, NotFoundError, UnprocessableEntityError
@@ -22,7 +25,7 @@ from app.schemas.target import (
 router = APIRouter(prefix="/targets", tags=["targets"])
 
 
-def _to_response(target: UserTarget) -> TargetResponse:
+def target_response(target: UserTarget) -> TargetResponse:
     return TargetResponse(
         id=target.id,
         kcal=target.kcal,
@@ -62,7 +65,7 @@ async def create_target(
         raise ConflictError("TARGET_OVERLAPS", "這段期間已經有重疊的目標") from exc
 
     await db.refresh(target)
-    return _to_response(target)
+    return target_response(target)
 
 
 @router.get("", response_model=list[TargetResponse] | TargetResponse | None)
@@ -91,7 +94,7 @@ async def list_or_get_target(
                 .order_by(UserTarget.effective_from.desc(), UserTarget.id.desc())
             )
         ).all()
-        return [_to_response(t) for t in targets]
+        return [target_response(t) for t in targets]
 
     target = await db.scalar(
         select(UserTarget).where(
@@ -100,7 +103,7 @@ async def list_or_get_target(
             or_(UserTarget.effective_to.is_(None), UserTarget.effective_to > date),
         )
     )
-    return _to_response(target) if target is not None else None
+    return target_response(target) if target is not None else None
 
 
 async def _new_period_end(
@@ -119,6 +122,65 @@ async def _new_period_end(
         )
     )
     return next_start
+
+
+@dataclass(frozen=True)
+class TargetValues:
+    kcal: Decimal | None
+    protein_g: Decimal | None
+    fat_g: Decimal | None
+    carb_g: Decimal | None
+
+
+async def write_target_from_today(
+    db: AsyncSession, user_id: int, today: date, values: TargetValues
+) -> UserTarget:
+    """從 `today` 起目標是這四個值（帳號設定規格 §3.1 的三種狀態，見 `set_target_from_today`）。
+
+    **不 commit**：呼叫端在同一個交易裡還有別的要寫（手動存目標要清掉套用體重、套用建議要
+    記下體重，身體資料規格 D15、D16）。留在這個模組裡：既有測試 monkeypatch 的
+    `_new_period_end` 要在這裡被呼叫才會生效；「今天」由呼叫端算好傳進來。
+
+    撞上 EXCLUDE → 整筆 rollback（連呼叫端在這之前寫的）、`409 TARGET_CONFLICT`。"""
+    current = await db.scalar(
+        select(UserTarget).where(
+            UserTarget.user_id == user_id,
+            UserTarget.effective_from <= today,
+            or_(UserTarget.effective_to.is_(None), UserTarget.effective_to > today),
+        )
+    )
+    if current is not None and current.effective_from == today:
+        current.kcal, current.protein_g = values.kcal, values.protein_g
+        current.fat_g, current.carb_g = values.fat_g, values.carb_g
+        await db.flush()
+        return current
+
+    new_effective_to = await _new_period_end(db, user_id, today, current)
+    label = current.label if current is not None else None
+    if current is not None:
+        current.effective_to = today
+        await db.flush()  # 1. 先關舊的——順序不能換，見 update_target
+
+    new_target = UserTarget(
+        user_id=user_id,
+        kcal=values.kcal,
+        protein_g=values.protein_g,
+        fat_g=values.fat_g,
+        carb_g=values.carb_g,
+        label=label,
+        effective_from=today,
+        effective_to=new_effective_to,
+    )
+    db.add(new_target)
+    try:
+        await db.flush()  # 2. 再開新的
+    except IntegrityError as exc:
+        # rollback 連上面的關閉一起復原：不會留下「舊的關了、新的沒開」。
+        await db.rollback()
+        raise ConflictError(
+            "TARGET_CONFLICT", "目標剛被另一台裝置改過，請重新整理再試"
+        ) from exc
+    return new_target
 
 
 @router.put("/today", response_model=TargetResponse)
@@ -140,54 +202,17 @@ async def set_target_from_today(
     並行不加鎖：資料庫的 EXCLUDE 保證不重疊，輸的一方整筆 rollback、409，重存一次就會走
     「原地改」（規格決定 5）。
     """
+    user_id = user.id
     today = today_in_timezone(user.timezone)
-
-    current = await db.scalar(
-        select(UserTarget).where(
-            UserTarget.user_id == user.id,
-            UserTarget.effective_from <= today,
-            or_(UserTarget.effective_to.is_(None), UserTarget.effective_to > today),
-        )
+    target = await write_target_from_today(
+        db, user_id, today, TargetValues(**payload.model_dump())
     )
-
-    if current is not None and current.effective_from == today:
-        current.kcal = payload.kcal
-        current.protein_g = payload.protein_g
-        current.fat_g = payload.fat_g
-        current.carb_g = payload.carb_g
-        await db.commit()
-        await db.refresh(current)
-        return _to_response(current)
-
-    new_effective_to = await _new_period_end(db, user.id, today, current)
-    label = current.label if current is not None else None
-    if current is not None:
-        current.effective_to = today
-        await db.flush()  # 1. 先關舊的——順序不能換，見 update_target
-
-    new_target = UserTarget(
-        user_id=user.id,
-        kcal=payload.kcal,
-        protein_g=payload.protein_g,
-        fat_g=payload.fat_g,
-        carb_g=payload.carb_g,
-        label=label,
-        effective_from=today,
-        effective_to=new_effective_to,
-    )
-    db.add(new_target)
-    try:
-        await db.flush()  # 2. 再開新的
-    except IntegrityError as exc:
-        # rollback 連上面的關閉一起復原：不會留下「舊的關了、新的沒開」。
-        await db.rollback()
-        raise ConflictError(
-            "TARGET_CONFLICT", "目標剛被另一台裝置改過，請重新整理再試"
-        ) from exc
-
+    # 身體資料規格 D16：手動設的目標不是「建議」，之後體重變了不提示重算。
+    # 同一個交易：目標寫不進去（409）就連這一步也一起 rollback。
+    await clear_applied_weight(db, user_id)
     await db.commit()
-    await db.refresh(new_target)
-    return _to_response(new_target)
+    await db.refresh(target)
+    return target_response(target)
 
 
 async def _load_owned_target(db: AsyncSession, target_id: int, user: User) -> UserTarget:
@@ -274,4 +299,4 @@ async def update_target(
 
     await db.commit()
     await db.refresh(new_target)
-    return _to_response(new_target)
+    return target_response(new_target)

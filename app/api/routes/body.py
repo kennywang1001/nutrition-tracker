@@ -5,24 +5,27 @@
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func
+from sqlalchemy import func, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.routes.targets import TargetValues, target_response, write_target_from_today
 from app.body_data import inputs_from, latest_weight, load_profile
 from app.body_targets import RESUGGEST_THRESHOLD_KG, suggest
 from app.days import today_in_timezone
 from app.db import get_db
-from app.errors import UnprocessableEntityError
+from app.errors import ConflictError, UnprocessableEntityError
 from app.models.body import UserProfile
 from app.models.user import User
 from app.schemas.body import (
+    ApplySuggestionRequest,
     BodyProfileRequest,
     BodyProfileResponse,
     SuggestionMissing,
     SuggestionReady,
 )
+from app.schemas.target import TargetResponse
 
 router = APIRouter(tags=["body"])
 
@@ -123,3 +126,54 @@ async def read_target_suggestion(
         weight_change_kg=change,
         resuggest=change is not None and abs(change) >= RESUGGEST_THRESHOLD_KG,
     )
+
+
+@router.post("/me/target-suggestion/apply", response_model=TargetResponse)
+async def apply_target_suggestion(
+    payload: ApplySuggestionRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TargetResponse:
+    """把建議存成今天起的目標（D15）。一個交易：重算 → 跟畫面上看到的比 → 寫目標 →
+    記下這次用的體重。
+
+    存的是**重算的**數字，不是請求裡的；請求的四個數字只用來確認使用者按下去的時候看到的
+    就是會存的——另一個分頁剛記了體重、或畫面是離線快取裡的舊建議，就 409，什麼都不寫。"""
+    user_id = user.id
+    today = today_in_timezone(user.timezone)
+    profile = await load_profile(db, user_id)
+    latest = await latest_weight(db, user_id)
+    result = suggest(inputs_from(profile, latest), today)
+    if isinstance(result, list):
+        raise UnprocessableEntityError(
+            "PROFILE_INCOMPLETE", "身體資料或體重還沒填完", {"missing": result}
+        )
+    assert latest is not None  # suggest 只有在有體重時才回建議
+    # 比 Decimal 的值（2110.00 == 2110），不是字串。
+    shown = (payload.kcal, payload.protein_g, payload.fat_g, payload.carb_g)
+    if shown != (result.kcal, result.protein_g, result.fat_g, result.carb_g):
+        raise ConflictError("SUGGESTION_CHANGED", "建議目標剛剛變了，請看過新的數字再套用")
+
+    weight_used = latest.weight_kg
+    target = await write_target_from_today(
+        db,
+        user_id,
+        today,
+        TargetValues(
+            kcal=result.kcal,
+            protein_g=result.protein_g,
+            fat_g=result.fat_g,
+            # D9：碳水被擠到 0 時存「未設定」——0 的目標算不出比例。
+            carb_g=None if result.carb_g == 0 else result.carb_g,
+        ),
+    )
+    # 目標寫進去之後才記體重：撞期（409）時 write_target_from_today 已經整筆 rollback，
+    # 走不到這裡，體重就不會被記成「套用過」。
+    await db.execute(
+        update(UserProfile)
+        .where(UserProfile.user_id == user_id)
+        .values(targets_applied_weight_kg=weight_used)
+    )
+    await db.commit()
+    await db.refresh(target)
+    return target_response(target)

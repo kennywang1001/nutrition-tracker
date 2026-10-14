@@ -320,6 +320,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/me/target-suggestion/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply Target Suggestion
+         * @description 把建議存成今天起的目標（D15）。一個交易：重算 → 跟畫面上看到的比 → 寫目標 →
+         *     記下這次用的體重。
+         *
+         *     存的是**重算的**數字，不是請求裡的；請求的四個數字只用來確認使用者按下去的時候看到的
+         *     就是會存的——另一個分頁剛記了體重、或畫面是離線快取裡的舊建議，就 409，什麼都不寫。
+         */
+        post: operations["apply_target_suggestion_api_me_target_suggestion_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/weights/{day}": {
         parameters: {
             query?: never;
@@ -1858,6 +1882,21 @@ export interface components {
             serving_fat_g: string;
             /** Serving Carb G */
             serving_carb_g: string;
+        };
+        /**
+         * ApplySuggestionRequest
+         * @description 畫面上看到的四個數字（D15）。**不會被存**——存的是後端重算的；這四個只用來確認
+         *     「看到的就是要存的」，不一樣就 409。
+         */
+        ApplySuggestionRequest: {
+            /** Kcal */
+            kcal: number | string;
+            /** Protein G */
+            protein_g: number | string;
+            /** Fat G */
+            fat_g: number | string;
+            /** Carb G */
+            carb_g: number | string;
         };
         /**
          * BaseUnit
@@ -3783,6 +3822,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SuggestionReady"] | components["schemas"]["SuggestionMissing"];
+                };
+            };
+        };
+    };
+    apply_target_suggestion_api_me_target_suggestion_apply_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApplySuggestionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TargetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

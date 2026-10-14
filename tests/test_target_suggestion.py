@@ -8,12 +8,18 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
 
+from app.models.body import ActivityLevel, Goal, Sex, UserProfile
+from app.models.target import UserTarget
 from app.security.tokens import create_access_token
-from tests.factories import create_profile, create_user, create_weight
+from tests.factories import create_profile, create_target, create_user, create_weight
 
 TODAY = date(2026, 10, 14)
 SUGGESTION = "/api/me/target-suggestion"
+APPLY = "/api/me/target-suggestion/apply"
+# 預設的 create_profile 配 80 kg：畫面上看到的四個數字（規格 §3.2）。
+SHOWN = {"kcal": "2110", "protein_g": "144", "fat_g": "59", "carb_g": "251"}
 ALL_MISSING = [
     "sex",
     "birth_year",
@@ -199,3 +205,187 @@ async def test_age_comes_from_the_users_today(client, db_session, monkeypatch):
 
 async def test_suggestion_needs_a_login(client):
     assert (await client.get(SUGGESTION)).status_code == 401
+
+
+# ── 套用（D15） ──────────────────────────────────────────────────────────────
+
+
+async def _ready_user(db_session):
+    user = await _user(db_session)
+    await create_profile(db_session, user=user)
+    await create_weight(db_session, user=user, day=date(2026, 10, 10), weight_kg=80)
+    return user
+
+
+async def _targets(db_session, user_id: int) -> list[tuple]:
+    rows = await db_session.execute(
+        select(
+            UserTarget.effective_from,
+            UserTarget.effective_to,
+            UserTarget.kcal,
+            UserTarget.protein_g,
+            UserTarget.fat_g,
+            UserTarget.carb_g,
+        )
+        .where(UserTarget.user_id == user_id)
+        .order_by(UserTarget.effective_from)
+    )
+    return [tuple(row) for row in rows]
+
+
+async def _applied(db_session, user_id: int):
+    return await db_session.scalar(
+        select(UserProfile.targets_applied_weight_kg).where(UserProfile.user_id == user_id)
+    )
+
+
+async def test_apply_saves_the_suggestion_from_today_and_remembers_the_weight(
+    client, db_session, seen_timezones
+):
+    user = await _ready_user(db_session)
+    user_id = user.id
+
+    response = await client.post(APPLY, headers=auth(user_id), json=SHOWN)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["effective_from"], body["effective_to"]) == ("2026-10-14", None)
+    assert {key: Decimal(body[key]) for key in SHOWN} == {
+        key: Decimal(value) for key, value in SHOWN.items()
+    }
+    assert seen_timezones == ["America/New_York"]
+    await db_session.rollback()  # 第 11 種：真的 commit 了
+    assert await _targets(db_session, user_id) == [
+        (TODAY, None, Decimal(2110), Decimal(144), Decimal(59), Decimal(251))
+    ]
+    assert await _applied(db_session, user_id) == Decimal("80.00")
+    after = (await client.get(SUGGESTION, headers=auth(user_id))).json()
+    assert Decimal(after["applied_weight_kg"]) == Decimal(80)
+    assert after["resuggest"] is False
+
+
+async def test_apply_closes_the_previous_target(client, db_session, seen_timezones):
+    """沿用帳號設定的規則（只驗一次接得上）：舊的那筆關在今天、數值不變。"""
+    user = await _ready_user(db_session)
+    await create_target(db_session, user=user, kcal=1800, effective_from=date(2026, 10, 1))
+    user_id = user.id
+
+    response = await client.post(APPLY, headers=auth(user_id), json=SHOWN)
+
+    assert response.status_code == 200
+    await db_session.rollback()
+    rows = await _targets(db_session, user_id)
+    assert rows[0] == (date(2026, 10, 1), TODAY, Decimal(1800), None, None, None)
+    assert rows[1][:3] == (TODAY, None, Decimal(2110))
+
+
+@pytest.mark.parametrize("field", list(SHOWN))
+async def test_numbers_that_differ_from_the_suggestion_are_409_and_write_nothing(
+    client, db_session, seen_timezones, field
+):
+    user = await _ready_user(db_session)
+    user_id = user.id
+    shown = {**SHOWN, field: str(Decimal(SHOWN[field]) + 1)}
+
+    response = await client.post(APPLY, headers=auth(user_id), json=shown)
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "SUGGESTION_CHANGED"
+    await db_session.rollback()
+    assert await _targets(db_session, user_id) == []
+    assert await _applied(db_session, user_id) is None
+
+
+async def test_trailing_zeros_are_the_same_number(client, db_session, seen_timezones):
+    """比的是 Decimal，不是字串：2110.00 就是 2110。"""
+    user = await _ready_user(db_session)
+    shown = {"kcal": "2110.00", "protein_g": "144.0", "fat_g": "59", "carb_g": "251.00"}
+
+    response = await client.post(APPLY, headers=auth(user.id), json=shown)
+
+    assert response.status_code == 200
+
+
+async def test_an_incomplete_profile_is_422_with_what_is_missing(
+    client, db_session, seen_timezones
+):
+    user = await _user(db_session)
+    await create_profile(db_session, user=user)
+    user_id = user.id
+
+    response = await client.post(APPLY, headers=auth(user_id), json=SHOWN)
+
+    assert response.status_code == 422
+    error = response.json()["error"]
+    assert error["code"] == "PROFILE_INCOMPLETE"
+    assert error["details"]["missing"] == ["weight"]
+    await db_session.rollback()
+    assert await _targets(db_session, user_id) == []
+    assert await _applied(db_session, user_id) is None
+
+
+async def test_a_zero_carb_suggestion_is_saved_as_unset(client, db_session, seen_timezones):
+    """D9：規格 §3.3 的 E——碳水被擠到 0，存「未設定」（0 的目標算不出比例）。"""
+    user = await _user(db_session)
+    await create_profile(
+        db_session,
+        user=user,
+        sex=Sex.FEMALE,
+        birth_year=1926,
+        height_cm=100,
+        activity_level=ActivityLevel.SEDENTARY,
+        goal=Goal.LOSE,
+        rate_kg_per_week="0.5",
+    )
+    await create_weight(db_session, user=user, day=date(2026, 10, 10), weight_kg=150)
+    user_id = user.id
+    shown = {"kcal": "1210", "protein_g": "270", "fat_g": "34", "carb_g": "0"}
+
+    response = await client.post(APPLY, headers=auth(user_id), json=shown)
+
+    assert response.status_code == 200
+    assert response.json()["carb_g"] is None
+    await db_session.rollback()
+    assert await _targets(db_session, user_id) == [
+        (TODAY, None, Decimal(1210), Decimal(270), Decimal(34), None)
+    ]
+
+
+async def test_a_target_clash_is_409_and_the_weight_is_not_remembered(
+    client, db_session, seen_timezones, monkeypatch
+):
+    """並行時才會撞期（同 `test_targets_today.py` 的接縫）：目標沒寫進去，套用時的體重也不記。"""
+    user = await _ready_user(db_session)
+    await create_target(db_session, user=user, kcal=2500, effective_from=date(2026, 11, 1))
+    user_id = user.id
+
+    async def never_ends(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("app.api.routes.targets._new_period_end", never_ends)
+
+    response = await client.post(APPLY, headers=auth(user_id), json=SHOWN)
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "TARGET_CONFLICT"
+    await db_session.rollback()
+    assert await _applied(db_session, user_id) is None
+    assert [row[0] for row in await _targets(db_session, user_id)] == [date(2026, 11, 1)]
+
+
+async def test_after_the_weight_moves_a_kilo_the_suggestion_says_so(
+    client, db_session, seen_timezones
+):
+    user = await _ready_user(db_session)
+    user_id = user.id
+    assert (await client.post(APPLY, headers=auth(user_id), json=SHOWN)).status_code == 200
+
+    await create_weight(db_session, user=user, day=TODAY, weight_kg="78.5")
+    body = (await client.get(SUGGESTION, headers=auth(user_id))).json()
+
+    assert Decimal(body["weight_change_kg"]) == Decimal("-1.5")
+    assert body["resuggest"] is True
+
+
+async def test_apply_needs_a_login(client):
+    assert (await client.post(APPLY, json=SHOWN)).status_code == 401

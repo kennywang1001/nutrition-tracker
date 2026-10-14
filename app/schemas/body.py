@@ -76,6 +76,16 @@ class SuggestionMissing(BaseModel):
     missing: list[MissingInput]
 
 
+class ApplySuggestionRequest(BaseModel):
+    """畫面上看到的四個數字（D15）。**不會被存**——存的是後端重算的；這四個只用來確認
+    「看到的就是要存的」，不一樣就 409。"""
+
+    kcal: Decimal = Field(ge=0, max_digits=8, decimal_places=2)
+    protein_g: Decimal = Field(ge=0, max_digits=8, decimal_places=2)
+    fat_g: Decimal = Field(ge=0, max_digits=8, decimal_places=2)
+    carb_g: Decimal = Field(ge=0, max_digits=8, decimal_places=2)
+
+
 class WeightRequest(BaseModel):
     weight_kg: Decimal = Field(ge=25, le=350, max_digits=5, decimal_places=2)
 
