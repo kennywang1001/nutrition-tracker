@@ -192,9 +192,20 @@ test.describe("手機尺寸", () => {
 			.getByLabel("重設密碼連結", { exact: true })
 			.inputValue();
 		expect(link).toContain("/reset-password#");
+		// 帳號清單裡每一列的按鈕長得一樣，量全部只是在量 dev 資料庫累積了多少 e2e 帳號
+		// （上千個時這一步就超過 30 秒）。量清單以外的按鈕，加上這個人那一列的一顆。
 		await expectTouchTargets(
-			page.locator("main button:visible"),
-			"我的：所有帳號",
+			page.locator(
+				'main button:visible:not([aria-label^="產生重設密碼連結："])',
+			),
+			"我的：清單以外的按鈕",
+		);
+		await expectTouchTargets(
+			page.getByRole("button", {
+				name: `產生重設密碼連結：${account.name}（${account.email}）`,
+				exact: true,
+			}),
+			"我的：所有帳號的一列",
 		);
 
 		// 朋友：一個完全沒登入過的瀏覽器（新的 context——同一頁只換 hash 不會重新載入 app）。
