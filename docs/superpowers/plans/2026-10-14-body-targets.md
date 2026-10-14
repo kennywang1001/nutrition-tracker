@@ -2497,7 +2497,7 @@ function toRequest(values: Values): { body: BodyProfileInput } | { errors: strin
 - 錯誤 `<ul role="alert">`；「儲存」是 submit，送出中 `disabled`（跟 `/me/targets` 一樣是表單的送出鈕，焦點留在原處沒關係——成功就導頁）。
 - 送出：`useMutation({ mutationFn: saveBodyProfile, onSuccess: () => invalidateBody(queryClient) })`；`save.mutate(body, { onSuccess: () => navigate("/me"), onError })`——422 用 `describeFieldErrors`（`BIRTH_YEAR_OUT_OF_RANGE` 沒有 `errors` 陣列，會退回 `error.message`），其他「儲存失敗，請再試一次」。
 
-- [ ] **Step 4：卡片。** `components/BodyProfileCard.tsx`：`useBodyProfile()`；標題 `h2`「身體資料」（`ui.sectionTitle`）；載入中／讀不到同 `TargetsCard` 的寫法；摘要：
+- [ ] **Step 4：卡片。** `components/BodyProfileCard.tsx`：`<Card testId="body-profile-card">`（e2e 用）；`useBodyProfile()`；標題 `h2`「身體資料」（`ui.sectionTitle`）；載入中／讀不到同 `TargetsCard` 的寫法；摘要：
 
 ```ts
 function summary(profile: BodyProfile): string | null {
@@ -2679,9 +2679,9 @@ export function WeightChart({ entries, average, start, end, targetKg }: Props) {
 }
 ```
 
-- [ ] **Step 5：表單。** `components/WeightForm.tsx`：props `{ today: string; onDone: () => void; cancelRef? }`。體重（`inputMode="decimal"`、`autoComplete="off"`）、日期（`type="date"`、`min={shiftDays(today, -730)}`、`max={today}`、預設 `today`）、「儲存」「取消」。送出前 `checkRangeInput(weight, { min: "25", max: "350", places: 2 })`；`useMutation({ mutationFn: ({ date, weight }) => saveWeight(date, weight), onSuccess: () => invalidateBody(queryClient) })`、`mutate(vars, { onSuccess: onDone })`。日期在範圍外（使用者手打）交給後端的 422 訊息（`WEIGHT_DATE_IN_FUTURE`／`TOO_OLD`，`caught.message`）。「儲存」送出中 `aria-disabled`（焦點在它身上，D：會變成不能按的按鈕用 `aria-disabled`），用 ref 擋重複送出（同 `ExportCard`）。
+- [ ] **Step 5：表單。** `components/WeightForm.tsx`：props `{ today: string; onDone: () => void; cancelRef? }`。標籤「體重（公斤）」（`inputMode="decimal"`、`autoComplete="off"`）、標籤「日期」（`type="date"`、`min={shiftDays(today, -730)}`、`max={today}`、預設 `today`）、「儲存」「取消」。送出前 `checkRangeInput(weight, { min: "25", max: "350", places: 2 })`；`useMutation({ mutationFn: ({ date, weight }) => saveWeight(date, weight), onSuccess: () => invalidateBody(queryClient) })`、`mutate(vars, { onSuccess: onDone })`。日期在範圍外（使用者手打）交給後端的 422 訊息（`WEIGHT_DATE_IN_FUTURE`／`TOO_OLD`，`caught.message`）。「儲存」送出中 `aria-disabled`（焦點在它身上，D：會變成不能按的按鈕用 `aria-disabled`），用 ref 擋重複送出（同 `ExportCard`）。
 
-- [ ] **Step 6：卡片。** `components/WeightCard.tsx`：`useWeights()`；標題「體重」；有紀錄：`<p>{formatMacro(latest.weight_kg)} 公斤・{formatCivilDate(latest.date)}</p>`，`weekChange` 不是 null 時 `<p>比 7 天前 {signed(change)} 公斤</p>`（`signed`：開頭不是 `-` 而且不是 `0` 就加 `+`；負號顯示成 `−`？**不換**，照 `formatMacro` 的 `-`，跟重算提示一致）；沒有紀錄：「還沒有體重紀錄」。按鈕「記錄體重」（`ui.secondary`）切換 `WeightForm`（打開時按鈕卸載、表單收起時焦點回到按鈕——`useConfirmFocus` 的同一個模式，或一個 `ref` + effect）。連結「看全部」到 `/weight`。`Me.tsx`：`<BodyProfileCard />` 後面加 `<WeightCard />`。
+- [ ] **Step 6：卡片。** `components/WeightCard.tsx`：`<Card testId="weight-card">`（e2e 用）；`useWeights()`；標題「體重」；有紀錄：`<p>{formatMacro(latest.weight_kg)} 公斤・{formatCivilDate(latest.date)}</p>`，`weekChange` 不是 null 時 `<p>比 7 天前 {signed(change)} 公斤</p>`（`signed`：開頭不是 `-` 而且不是 `0` 就加 `+`；負號顯示成 `−`？**不換**，照 `formatMacro` 的 `-`，跟重算提示一致）；沒有紀錄：「還沒有體重紀錄」。按鈕「記錄體重」（`ui.secondary`）切換 `WeightForm`（打開時按鈕卸載、表單收起時焦點回到按鈕——`useConfirmFocus` 的同一個模式，或一個 `ref` + effect）。連結「看全部」到 `/weight`。`Me.tsx`：`<BodyProfileCard />` 後面加 `<WeightCard />`。
 
 - [ ] **Step 7：`/weight`。** `screens/Weight.tsx`（`ui.screen`，h1「體重」）：
 
@@ -2714,3 +2714,284 @@ const SPANS = [
   7. 把 `role="img"` 從 `<circle>` 拿掉 → 圖表第 1 條紅。
 
 - [ ] **Step 10：commit。** `npm run -s lint`；typecheck 單獨跑、`&&` 串 commit；`git add` 列出這個 task 的每一個檔案（`Trend.tsx`、`Trend.module.css`、`Segmented.module.css`、`index.css`、新的元件、畫面、測試、`Me.tsx`、`App.tsx`）。訊息（`$S/body-t8-msg.txt`）：`feat(frontend): 體重卡片、/weight 的圖表（7 天移動平均、目標線）與清單`。
+
+---
+
+## Task 9：前端——建議目標區塊、每日目標卡片的提示、匯出多一顆
+
+**Files:**
+- Create: `frontend/src/components/TargetSuggestion.tsx`、`TargetSuggestion.module.css`、`frontend/tests/target-suggestion.test.tsx`
+- Modify: `frontend/src/screens/Targets.tsx`、`frontend/src/components/TargetsCard.tsx`、`TargetsCard.module.css`、`frontend/src/api/export.ts`、`frontend/tests/{targets,me,export-card}.test.tsx`
+
+- [ ] **Step 1：先寫測試。** `tests/target-suggestion.test.tsx`（`READY` 是 Task 3 那一組 2110／144／59／251、`bmr: "1719"`、`tdee: "2664"`、`adjustment_kcal: "-550"`、`weight_kg: "80.00"`、`based_on_date: "2026-10-10"`）：
+
+1. 「四個數字與說明」：「熱量 2110 kcal」「蛋白質 144 g」「脂肪 59 g」「碳水 251 g」；說明「基礎代謝 1719 kcal，乘上活動量是每日消耗 2664 kcal；減重每週 0.5 公斤 −550 kcal」——**調整的文字來自 `adjustment_kcal` 的正負與 `useBodyProfile` 的速度**；`adjustment_kcal: "0"` 時寫「維持體重，不加不減」；「依 10/10 的體重 80 公斤」；免責聲明全文（`SUGGESTION_DISCLAIMER`）。
+2. 「下限」：`floor_applied: true`、`floor_kcal: "1200"` → 多一行「已調到最低建議熱量 1200 kcal」；`false` → 沒有。
+3. 「套用」：按「套用建議目標」→ `POST …/apply` 的 body 是四個數字（字串原樣）→ 導到 `/me`；`dailyStats`、`rangeStatsAll`、`bodyAll` 都被失效。
+4. 「409 建議變了」：回 `409 SUGGESTION_CHANGED` → `role="alert"`「建議目標剛剛變了，請看過新的數字再套用」、建議被失效（重抓）、沒有導頁；按鈕在送出中是 `aria-disabled="true"`、焦點還在它身上。
+5. 「其他 409」：`TARGET_CONFLICT` → 顯示後端的訊息。
+6. 「缺資料」：`{ready: false, missing: ["sex", "goal", "weight"]}` → 「還差：性別、目標、體重」；連結「填寫身體資料」（`/me/body`）與「記錄體重」（`/weight`）；只缺 `weight` → 只有「記錄體重」；沒有「套用建議目標」。免責聲明在兩種狀態都在。
+7. 「讀不到」：500 → 「無法載入建議目標」；手動表單照常（在 `targets.test.tsx` 驗）。
+
+`tests/targets.test.tsx`：每個 `mockApi([...])` 最前面加 `...bodyRoutes()`；加一條「建議在手動表單上面、手動表單有標題『自己設定』」（DOM 順序：`compareDocumentPosition`）。
+
+`tests/me.test.tsx` 加「每日目標卡片的重算提示」：`bodyRoutes({ suggestion: { ...READY, applied_weight_kg: "80.00", weight_change_kg: "-1.50", resuggest: true } })` → 卡片裡「體重變了 -1.5 公斤，要重算建議目標嗎？」與連結「重算建議目標」（`/me/targets`）；`resuggest: false` → 沒有；`ready: false` → 沒有。
+
+`tests/export-card.test.tsx`：把「三顆」改成「四顆」、名稱多一個「體重」、`GET /api/export/weights.csv`（既有測試裡寫死三顆的地方都改）。
+
+- [ ] **Step 2：跑，看它紅。**
+
+- [ ] **Step 3：`components/TargetSuggestion.tsx`**：
+
+```tsx
+export function TargetSuggestion() {
+	const suggestion = useTargetSuggestion();
+	const titleId = useId();
+	return (
+		<section aria-labelledby={titleId} data-testid="suggestion">
+			<h2 id={titleId}>建議目標</h2>
+			{suggestion.isPending ? (
+				<p>載入中…</p>
+			) : suggestion.data == null ? (
+				<p>無法載入建議目標</p>
+			) : suggestion.data.ready ? (
+				<Ready suggestion={suggestion.data} />
+			) : (
+				<Missing missing={suggestion.data.missing} />
+			)}
+			<p className={styles.disclaimer}>{SUGGESTION_DISCLAIMER}</p>
+		</section>
+	);
+}
+
+function Ready({ suggestion }: { suggestion: SuggestionReady }) {
+	const queryClient = useQueryClient();
+	const navigate = useNavigate();
+	const profile = useBodyProfile().data;
+	const [error, setError] = useState<string | null>(null);
+	const apply = useMutation({
+		mutationFn: applySuggestion,
+		// 放在 hook 層：導頁之後照樣跑（同 /me/targets 的手動儲存）。
+		onSuccess: () => {
+			void queryClient.invalidateQueries({ queryKey: queryKeys.dailyStats });
+			void queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatsAll });
+			void invalidateBody(queryClient);
+		},
+	});
+
+	function handleApply() {
+		if (apply.isPending) return;
+		setError(null);
+		const { kcal, protein_g, fat_g, carb_g } = suggestion;
+		apply.mutate(
+			{ kcal, protein_g, fat_g, carb_g },
+			{
+				onSuccess: () => navigate("/me"),
+				onError: (caught: unknown) => {
+					if (caught instanceof ApiError && caught.code === "SUGGESTION_CHANGED") {
+						void queryClient.invalidateQueries({ queryKey: queryKeys.targetSuggestion });
+						setError("建議目標剛剛變了，請看過新的數字再套用");
+					} else if (caught instanceof ApiError && caught.status === 409) {
+						setError(caught.message);
+					} else {
+						setError("套用失敗，請再試一次");
+					}
+				},
+			},
+		);
+	}
+	// …四個數字（`TARGET_FIELDS` 的標籤與單位＋`formatMacro`，`data-testid="suggestion-kcal"` 放在熱量的數字上給 e2e）、
+	// 說明（`adjustmentText(suggestion, profile)`）、下限的那一行、「依 M/D 的體重 N 公斤」、
+	// <button type="button" className={ui.secondary 以外的主要按鈕樣式} aria-disabled={apply.isPending} onClick={handleApply}>套用建議目標</button>、
+	// error 的 <p role="alert">。
+}
+```
+
+`adjustmentText`：`adjustment_kcal` 是 `"0"`（用 `differenceOf(x, "0") === "0"` 或直接比 `formatMacro(x) === "0"`）→「維持體重，不加不減」；負 →「減重每週 {formatMacro(rate)} 公斤 {formatMacro(adjustment)} kcal」；正 →「增重每週 … +{…} kcal」。速度讀不到（`profile` 還沒回來）就省略「每週 … 公斤」那段，只寫「減重 −550 kcal」。
+
+`Missing`：`還差：${missing.map((m) => MISSING_LABELS[m]).join("、")}`；`missing` 裡有 `weight` 以外的 → 連結「填寫身體資料」；有 `weight` → 連結「記錄體重」到 `/weight`。
+
+> 「套用」是一顆會在焦點上變成不能按的按鈕：用 `aria-disabled`、不用原生 `disabled`（開工前的規則；`ExportCard` 的說明）。它不是 submit，`.screen button` 的通用樣式是次要按鈕；要主要按鈕的外觀就在 `TargetSuggestion.module.css` 寫一個 class（只用 `index.css` 的變數，照 `ui.module.css` 的 `button[type="submit"]` 那條抄顏色）。
+
+- [ ] **Step 4：接上。**
+  - `screens/Targets.tsx`：還原完之後畫 `<TargetSuggestion />`，接著 `<h2>自己設定</h2>` 與原本的 `<TargetsLoader />`（D23）。`Targets` 的 docstring 加一句：建議區塊讀的是一般的快取（不用「掛載後才算」）——套用由後端重算、不一樣就 409，舊的快取最多換來一次 409。
+  - `components/TargetsCard.tsx`：`useTargetSuggestion()`；`data?.ready && data.resuggest && data.weight_change_kg !== null` 時在「修改」連結前面加
+    `<p className={styles.prompt}>體重變了 {formatMacro(change)} 公斤，要重算建議目標嗎？</p>` 與 `<Link to="/me/targets">重算建議目標</Link>`。`TargetsCard.module.css` 加 `.prompt`（`--color-accent-soft` 底、`--radius-card`、`--space-2` 內距）。
+  - `api/export.ts`：`EXPORT_KINDS` 加 `{ kind: "weights", label: "體重" }`，檔頭的「三種」改「四種」；`ExportCard.tsx` 的註解裡的「三顆」跟著改。
+
+- [ ] **Step 5：跑。** 這幾個測試檔 → PASS；整套 → 綠。
+
+- [ ] **Step 6：突變**：
+  1. 套用送出的 `kcal` 改成 `String(Number(kcal) + 1)` → 第 3 條紅。（改成 `formatMacro(kcal)` 對 `"2110"` 沒差，會存活——不是有效的突變點。）
+  2. `SUGGESTION_CHANGED` 分支拿掉 `invalidateQueries` → 第 4 條紅。
+  3. `onSuccess: () => navigate("/me")` 搬進 `useMutation` 的 `onSuccess` → **測試存活**（handover §7：元件卸載之後仍會跑——測試裡不會卸載）。記下來，維持寫在 `mutate` 的 callback。
+  4. 卡片的條件拿掉 `data.resuggest &&` → 「`resuggest: false` 沒有提示」紅。
+  5. `Missing` 的「記錄體重」連結條件反過來 → 第 6 條紅。
+
+- [ ] **Step 7：commit。** lint、typecheck（單獨、`&&`）；`git add` 列出每個檔案。訊息（`$S/body-t9-msg.txt`）：`feat(frontend): 建議目標區塊（套用、缺什麼、免責聲明）、每日目標卡片的重算提示、匯出體重`。
+
+---
+
+## Task 10：e2e
+
+**Files:**
+- Create: `frontend/e2e/body-targets.spec.ts`
+
+- [ ] **Step 1：準備 dev。**
+
+```bash
+docker compose up -d --build api
+docker compose exec -T api python -m alembic upgrade head
+docker compose exec -T api python -m alembic current
+```
+
+Expected：`0019 (head)`。
+
+- [ ] **Step 2：spec。** `e2e/body-targets.spec.ts`（固定手機尺寸；一條測試一個新帳號；登入之後只點擊）：
+
+```ts
+import { expect, type Page, test } from "@playwright/test";
+import { loginAs, newAccount } from "./new-account.ts";
+import { expectTouchTargets } from "./touch-targets.ts";
+
+test.use({ viewport: { width: 390, height: 844 } });
+
+async function openMe(page: Page) {
+	await page.getByRole("link", { name: "我的", exact: true }).click();
+	await expect(page.getByRole("heading", { name: "我的", exact: true })).toBeVisible();
+}
+
+async function recordWeightOnMe(page: Page, kg: string) {
+	const card = page.getByTestId("weight-card");
+	await card.getByRole("button", { name: "記錄體重", exact: true }).click();
+	await card.getByLabel("體重（公斤）", { exact: true }).fill(kg);
+	await card.getByRole("button", { name: "儲存", exact: true }).click();
+	await expect(card.getByRole("button", { name: "記錄體重", exact: true })).toBeVisible();
+}
+
+/** iOS 在 < 16px 的欄位上會自動放大（handover「mobile-form-zoom」）。 */
+async function expectInputsAtLeast16px(page: Page, where: string) {
+	const controls = page.locator("main input, main select");
+	const count = await controls.count();
+	expect(count, `${where}：要有輸入框`).toBeGreaterThan(0);
+	for (let i = 0; i < count; i++) {
+		const px = await controls.nth(i).evaluate((node) => Number.parseFloat(getComputedStyle(node).fontSize));
+		expect(px, `${where} 第 ${i} 個欄位`).toBeGreaterThanOrEqual(16);
+	}
+}
+
+test("填身體資料、記體重、套用建議、總覽的分母跟著變，體重變了就提示重算", async ({ page, request }) => {
+	const account = await newAccount(request, "body");
+	await loginAs(page, account);
+	await openMe(page);
+
+	await page.getByRole("link", { name: "修改身體資料", exact: true }).click();
+	await expect(page.getByRole("heading", { name: "身體資料", exact: true })).toBeVisible();
+	await expectInputsAtLeast16px(page, "身體資料");
+	await page.getByRole("group", { name: "性別", exact: true }).getByLabel("男", { exact: true }).check();
+	await page.getByLabel("出生年", { exact: true }).fill("1990");
+	await page.getByLabel("身高（cm）", { exact: true }).fill("175");
+	await page.getByLabel("活動量", { exact: true }).selectOption("moderate");
+	await page.getByRole("group", { name: "目標", exact: true }).getByLabel("減重", { exact: true }).check();
+	await page.getByRole("group", { name: "速度", exact: true }).getByLabel("每週 0.5 公斤", { exact: true }).check();
+	await expectTouchTargets(page.locator("main button:visible, main label:has(input[type=radio])"), "身體資料");
+	await page.getByRole("button", { name: "儲存", exact: true }).click();
+	await expect(page.getByRole("heading", { name: "我的", exact: true })).toBeVisible();
+	await expect(page.getByTestId("body-profile-card")).toContainText("175 cm");
+
+	await recordWeightOnMe(page, "80");
+	await page.getByRole("link", { name: "修改每日目標", exact: true }).click();
+	const suggestion = page.getByTestId("suggestion");
+	await expect(suggestion.getByRole("button", { name: "套用建議目標", exact: true })).toBeVisible();
+	const kcal = (await suggestion.getByTestId("suggestion-kcal").textContent())?.trim();
+	expect(kcal).toMatch(/^\d+$/);
+	await suggestion.getByRole("button", { name: "套用建議目標", exact: true }).click();
+	await expect(page.getByRole("heading", { name: "我的", exact: true })).toBeVisible();
+
+	await page.getByRole("link", { name: "總覽", exact: true }).click();
+	await expect(page.getByRole("heading", { name: "總覽", exact: true })).toBeVisible();
+	await expect(page.getByTestId("today-kcal")).toContainText(`/ ${kcal} kcal`);
+
+	await openMe(page);
+	await expect(page.getByTestId("targets-card")).not.toContainText("體重變了");
+	await recordWeightOnMe(page, "78.5"); // 同一天：更正，最新體重是 78.5
+	await expect(page.getByTestId("targets-card")).toContainText("體重變了 -1.5 公斤，要重算建議目標嗎？");
+});
+
+test("體重頁：兩筆、改一筆、刪一筆", async ({ page, request }) => {
+	const account = await newAccount(request, "weight");
+	await loginAs(page, account);
+	await openMe(page);
+	await recordWeightOnMe(page, "80");
+	await page.getByTestId("weight-card").getByRole("link", { name: "看全部", exact: true }).click();
+	await expect(page.getByRole("heading", { name: "體重", exact: true })).toBeVisible();
+	await expectInputsAtLeast16px(page, "體重");
+
+	// 兩天前（日期欄的預設是後端給的今天；測試自己用 UTC 往回推兩天）。
+	const dateInput = page.getByLabel("日期", { exact: true });
+	const today = await dateInput.inputValue();
+	const [y, m, d] = today.split("-").map(Number);
+	const twoDaysAgo = new Date(Date.UTC(y ?? 0, (m ?? 1) - 1, (d ?? 1) - 2)).toISOString().slice(0, 10);
+	await dateInput.fill(twoDaysAgo);
+	await page.getByLabel("體重（公斤）", { exact: true }).fill("81.2");
+	await page.getByRole("button", { name: "儲存", exact: true }).click();
+
+	const chart = page.getByTestId("weight-chart");
+	await expect(chart.getByRole("img")).toHaveCount(2);
+	const rows = page.getByRole("listitem");
+	await expect(rows).toHaveCount(2);
+
+	const older = `${Number(twoDaysAgo.slice(5, 7))}/${Number(twoDaysAgo.slice(8, 10))}`; // 同 formatCivilDate
+	await page.getByRole("button", { name: `修改 ${older}`, exact: true }).click();
+	await page.getByLabel(`${older} 的體重（公斤）`, { exact: true }).fill("81");
+	await page.getByRole("button", { name: "儲存", exact: true }).click();
+	await expect(page.getByText("81 公斤", { exact: false })).toBeVisible();
+
+	await page.getByRole("button", { name: `刪除 ${older}`, exact: true }).click();
+	await page.getByRole("alertdialog").getByRole("button", { name: "刪除", exact: true }).click();
+	await expect(rows).toHaveCount(1);
+	await expect(chart.getByRole("img")).toHaveCount(1);
+	await expectTouchTargets(page.locator("main button:visible"), "體重");
+});
+```
+
+> 細節以實作為準，**對齊的是名稱**：卡片的 testid（`weight-card`、`body-profile-card`、`targets-card`、`suggestion`、`suggestion-kcal`）、標籤（「體重（公斤）」「日期」）、按鈕（「修改 M/D」）要跟 Task 7–9 寫的一致。清單用 `getByRole("listitem")` 之前確認 `/weight` 上沒有別的 `<li>`（handover §7：巢狀清單）；有就用清單的 `aria-label` 先縮小範圍。
+> 「儲存」在 `/weight` 上可能同時有兩顆（記錄的表單、修改中的那一列）：修改時用那一列裡的按鈕（`page.getByRole("listitem").filter({ has: 輸入框 })`）。
+
+- [ ] **Step 3：跑。** `cd frontend && npx playwright test e2e/body-targets.spec.ts` → 2 passed。再跑**整套** `npx playwright test` 兩次 → 都是全綠（基準 50 + 2）。
+
+- [ ] **Step 4：突變**（改前端、重跑這個 spec；前端是 vite dev server 的話改了就生效，否則照 `playwright.config.ts` 的 webServer 重啟）：
+  1. `TargetSuggestion` 套用成功不失效 `dailyStats` → 第一條的總覽分母紅（`staleTime` 60 秒內不重抓）。
+  2. `WeightForm` 成功不 `invalidateBody` → 第一條最後的提示紅。
+  3. 後端：`apply_target_suggestion` 不記 `targets_applied_weight_kg`（改 `app/` 之後 api 容器的 `--reload` 會接手；確認 `docker compose logs api` 有重新載入）→ 第一條最後紅。
+
+  每個改回之後 `git diff` 乾淨。
+
+- [ ] **Step 5：commit。** `cd frontend && npm run -s typecheck && cd .. && git add frontend/e2e/body-targets.spec.ts && git commit -F "$S/body-t10-msg.txt"`（handover §7：Playwright 不做型別檢查，typecheck 一定要跑）。訊息：`test(e2e): 身體資料、套用建議目標、重算提示、體重頁的修改與刪除`。
+
+---
+
+## Task 11：文件
+
+**Files:** `docs/handover.md`、`docs/deployment.md`、`docs/superpowers/specs/2026-10-14-body-targets-design.md`、這份計畫
+
+- [ ] **Step 1：量數字。** 後端整套（條數、時間）、前端 `npm run -s test`（**vitest 印出來的** `Test Files`／`Tests`）、e2e 條數與檔案數、端點數（`grep -c "@router\." app/api/routes/*.py` 加總，應該是 95）、資料表 21。
+- [ ] **Step 2：`docs/handover.md`。**
+  - §2 的表：端點、測試、資料表、Migration `0001`～`0019`，註明在 `feat/body-targets` 量的、日期。
+  - §2 的階段進度表加一列「身體資料與目標（含體重紀錄）」（規格、計畫的路徑）。
+  - §10 加一節「身體資料與目標」（照「按讚、留言、通知」那一節的格式）：機制摘要（公式在哪、D8 的下限順序、套用的交易與 409、手動存目標清掉套用體重、`GET /api/weights` 的 `today`、`["body"]` 進離線快取、`/me/body` 的預填規則）；新的東西在哪裡；已知限制（規格 §9 的七點，加上執行中發現的）。
+  - §6 或 §7：執行中長出來的新坑與「突變存活才發現」（Task 2、3、5、6、9 各自記下的存活突變），照既有的格式寫。
+- [ ] **Step 3：`docs/deployment.md`**：照 `0018` 那一段加 `0019_create_body_tables`——兩張新表、`deploy.sh` 會自己跑、**可以退版**（不在 `ROLLBACK_UNSAFE_REVISIONS`），退版後表與資料留著。
+- [ ] **Step 4：規格與計畫的狀態**：規格的「狀態」改成「已實作」並指向「執行中發現的差異」；計畫的「與規格的差異」補上執行中改過的地方。
+- [ ] **Step 5：commit。** 掃看不見的字元；`git add docs/handover.md docs/deployment.md docs/superpowers/specs/2026-10-14-body-targets-design.md docs/superpowers/plans/2026-10-14-body-targets.md`。訊息（`$S/body-t11-msg.txt`）：`docs: 身體資料與目標——handover、部署（migration 0019）、規格狀態`。
+
+---
+
+## 完成條件
+
+- [ ] 後端整套 `pytest -q -W error` 全綠；`ruff check .`、`mypy app` 乾淨；`alembic check` 沒有漂移；`0019` 可以 downgrade 再 upgrade。
+- [ ] 前端 `npm run -s test`（沒有 `FAIL`、`Unhandled`）、`typecheck`、`lint` 全綠；`schema.d.ts` 跟後端一致（重新產生一次，`git diff --exit-code frontend/src/api/schema.d.ts`）。
+- [ ] e2e 整套連跑兩次全綠。
+- [ ] 每個 task 的突變都做過、改回，`git status` 只剩 `lunch.jpg`。
+- [ ] 好友的任何一個端點都拿不到體重或身體資料（`test_body_privacy.py` 三條、Task 3–5 的跨使用者測試）。
+- [ ] handover、deployment、規格狀態更新；沒有 push。
