@@ -51,11 +51,13 @@ from tests.factories import (
     create_meal,
     create_supplement,
     create_user,
+    create_weight,
 )
 
 MEALS = "/api/export/meals.csv"
 EXPENSES = "/api/export/expenses.csv"
 SUPPLEMENTS = "/api/export/supplements.csv"
+WEIGHTS = "/api/export/weights.csv"
 
 # 標題列寫死在測試裡，不 import `app.export` 的常數——拿它自己比自己永遠是綠的（第 10 種）。
 MEAL_HEADER = [
@@ -66,6 +68,7 @@ EXPENSE_HEADER = ["日期", "時間", "分類", "金額", "備註", "是否餐�
 SUPPLEMENT_HEADER = [
     "日期", "時間", "補劑", "品牌", "份數", "熱量(kcal)", "蛋白質(g)", "脂肪(g)", "碳水(g)",
 ]  # fmt: skip
+WEIGHT_HEADER = ["日期", "體重(kg)"]
 
 BOM = b"\xef\xbb\xbf"
 
@@ -108,6 +111,7 @@ def seen_timezones(monkeypatch) -> list[str]:
         (MEALS, "meals-2019-07-04.csv", MEAL_HEADER),
         (EXPENSES, "expenses-2019-07-04.csv", EXPENSE_HEADER),
         (SUPPLEMENTS, "supplements-2019-07-04.csv", SUPPLEMENT_HEADER),
+        (WEIGHTS, "weights-2019-07-04.csv", WEIGHT_HEADER),
     ],
 )
 async def test_an_export_is_a_utf8_csv_attachment_named_after_the_users_today(
@@ -128,7 +132,7 @@ async def test_an_export_is_a_utf8_csv_attachment_named_after_the_users_today(
     assert response.content == BOM + (",".join(header) + "\r\n").encode()
 
 
-@pytest.mark.parametrize("path", [MEALS, EXPENSES, SUPPLEMENTS])
+@pytest.mark.parametrize("path", [MEALS, EXPENSES, SUPPLEMENTS, WEIGHTS])
 async def test_exports_require_authentication(client, path):
     response = await client.get(path)
 
@@ -137,7 +141,7 @@ async def test_exports_require_authentication(client, path):
 
 
 def test_openapi_says_the_exports_return_csv():
-    for path in (MEALS, EXPENSES, SUPPLEMENTS):
+    for path in (MEALS, EXPENSES, SUPPLEMENTS, WEIGHTS):
         ok = app.openapi()["paths"][path]["get"]["responses"]["200"]
         assert list(ok["content"]) == ["text/csv"]
 
@@ -340,6 +344,9 @@ async def test_each_export_only_contains_the_callers_own_rows(client, db_session
             db_session, created_by=user, owner=user, name=f"{name}的補劑"
         )
         await create_intake(db_session, user=user, supplement=pill)
+        # 體重沒有名字可以當記號：用兩個不同的值，同一天。
+        weight = "71.5" if name == "alice" else "99"
+        await create_weight(db_session, user=user, day=date(2026, 3, 10), weight_kg=weight)
         people[name] = user
 
     for path, marker in ((MEALS, "的便當"), (EXPENSES, "的花費"), (SUPPLEMENTS, "的補劑")):
@@ -348,9 +355,35 @@ async def test_each_export_only_contains_the_callers_own_rows(client, db_session
         assert "bob" not in text
         # 每一支都剛好一列資料：自己的那一列。
         assert len(_table(text.encode())) == 2
+    weights = (await client.get(WEIGHTS, headers=auth(people["alice"].id))).content
+    assert _table(weights) == [WEIGHT_HEADER, ["2026-03-10", "71.50"]]
     meals = (await client.get(MEALS, headers=auth(people["alice"].id))).content.decode()
     assert "alice的備註" in meals
     assert "photo" not in meals  # 照片路徑不匯出
+
+
+async def test_weights_come_oldest_first_one_row_per_day(client, db_session, monkeypatch):
+    """跨兩塊（chunk 調成 2）：三天、順序、值，而且沒有別人的。寫入的順序故意不是日期的順序。"""
+    monkeypatch.setattr("app.export.EXPORT_CHUNK_ROWS", 2)
+    user = await create_user(db_session)
+    other = await create_user(db_session)
+    for day, kg in [
+        (date(2026, 10, 3), "70.5"),
+        (date(2026, 10, 1), "71"),
+        (date(2026, 10, 2), "70.8"),
+    ]:
+        await create_weight(db_session, user=user, day=day, weight_kg=kg)
+    await create_weight(db_session, user=other, day=date(2026, 10, 1), weight_kg="99")
+
+    response = await client.get(WEIGHTS, headers=auth(user.id))
+
+    assert response.status_code == 200
+    assert _table(response.content) == [
+        WEIGHT_HEADER,
+        ["2026-10-01", "71.00"],
+        ["2026-10-02", "70.80"],
+        ["2026-10-03", "70.50"],
+    ]
 
 
 # ── 一塊一塊地讀、一塊一塊地吐 ─────────────────────────────────────────────────
@@ -454,7 +487,7 @@ async def test_meals_are_read_a_few_meals_at_a_time(db_session, monkeypatch, sel
 
 
 async def _some_of_each(db: AsyncSession, user: User, *, count: int = 1) -> None:
-    """三種資料各 `count` 筆，時間一筆一筆往後（餐點沒有項目：一餐一列）。"""
+    """四種資料各 `count` 筆，時間一筆一筆往後（餐點沒有項目：一餐一列；體重一天一筆）。"""
     start = datetime(2026, 3, 10, 4, 0, tzinfo=UTC)
     pill = await create_supplement(db, created_by=user, owner=user)
     for index in range(count):
@@ -462,13 +495,15 @@ async def _some_of_each(db: AsyncSession, user: User, *, count: int = 1) -> None
         await create_meal(db, user=user, eaten_at=moment)
         await create_expense(db, user=user, spent_at=moment)
         await create_intake(db, user=user, supplement=pill, taken_at=moment)
+        await create_weight(db, user=user, day=moment.date() + timedelta(days=index))
 
 
-# 三條匯出的路：網址，與 route 模組裡那支 generator 的名字（測試要把它包一層）。
+# 四條匯出的路：網址，與 route 模組裡那支 generator 的名字（測試要把它包一層）。
 EXPORT_PATHS = [
     pytest.param(MEALS, "meal_csv", id="meals"),
     pytest.param(EXPENSES, "expense_csv", id="expenses"),
     pytest.param(SUPPLEMENTS, "supplement_csv", id="supplements"),
+    pytest.param(WEIGHTS, "weight_csv", id="weights"),
 ]
 
 
@@ -476,8 +511,8 @@ EXPORT_PATHS = [
 async def test_the_database_session_stays_open_until_the_last_chunk(
     db_session, monkeypatch, path, generator
 ):
-    """`get_db` 的收尾要在串流**結束之後**——三個端點各自宣告自己的 `Depends(get_db)`，
-    所以三個都要守（只測花費的話，把餐點那一支改成 `scope="function"` 沒有人會發現）。
+    """`get_db` 的收尾要在串流**結束之後**——四個端點各自宣告自己的 `Depends(get_db)`，
+    所以四個都要守（只測花費的話，把餐點那一支改成 `scope="function"` 沒有人會發現）。
 
     FastAPI 0.118 之前、或把依賴改成 `scope="function"`，session 會在第一塊送出之前就被關掉
     ——而共用 session 的 `client` 夾具根本不關 session，看不到這件事（第 14 種）。
@@ -765,13 +800,13 @@ async def test_a_disconnect_in_the_middle_of_a_database_step_does_not_cost_the_c
 # ── 限速 ──────────────────────────────────────────────────────────────────────
 
 
-async def test_the_three_exports_share_one_budget_per_user(client, db_session):
+async def test_the_exports_share_one_budget_per_user(client, db_session):
     alice = await create_user(db_session)
     bob = await create_user(db_session)
-    paths = [MEALS, EXPENSES, SUPPLEMENTS]
+    paths = [MEALS, EXPENSES, SUPPLEMENTS, WEIGHTS]
 
     allowed = [
-        await client.get(paths[index % 3], headers=auth(alice.id))
+        await client.get(paths[index % len(paths)], headers=auth(alice.id))
         for index in range(EXPORT_LIMIT)
     ]
     # 第 7 次打的是 meals——alice 只打過它兩次。每個端點各算各的話，這一次會過。

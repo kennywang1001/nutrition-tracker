@@ -23,6 +23,7 @@ from app.api.routes import (
     supplement_plans,
     supplements,
     targets,
+    weights,
 )
 from app.errors import register_error_handlers
 
@@ -43,6 +44,7 @@ app.include_router(health.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
 app.include_router(me.router, prefix="/api")
 app.include_router(body.router, prefix="/api")
+app.include_router(weights.router, prefix="/api")
 app.include_router(foods.router, prefix="/api")
 app.include_router(friends.router, prefix="/api")
 app.include_router(social.router, prefix="/api")

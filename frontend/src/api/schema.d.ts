@@ -320,6 +320,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/weights/{day}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Weight
+         * @description 記（或更正）某一天的體重。日期不能是使用者的明天以後，也不能早於兩年前。
+         */
+        put: operations["put_weight_api_weights__day__put"];
+        post?: never;
+        /**
+         * Delete Weight
+         * @description 刪掉自己某一天的體重。別人的同一天也是 404（只看得到自己的，所以分不出「別人的」）。
+         */
+        delete: operations["delete_weight_api_weights__day__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/weights": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Weights
+         * @description 一段日期的體重，由舊到新，兩端都含（D14）。`to` 省略＝使用者的今天；`from` 省略＝
+         *     `to` 往回 799 天（共 800 天）。
+         */
+        get: operations["list_weights_api_weights_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/foods": {
         parameters: {
             query?: never;
@@ -1660,6 +1705,26 @@ export interface paths {
          * @description 自己全部的補劑打卡：一次一列，由舊到新。
          */
         get: operations["export_supplements_api_export_supplements_csv_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/export/weights.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Weights
+         * @description 自己全部的體重：一天一列，由舊到新。
+         */
+        get: operations["export_weights_api_export_weights_csv_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3237,6 +3302,34 @@ export interface components {
             /** Context */
             ctx?: Record<string, never>;
         };
+        /** WeightEntryResponse */
+        WeightEntryResponse: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /** Weight Kg */
+            weight_kg: string;
+        };
+        /**
+         * WeightListResponse
+         * @description `today` 是使用者時區的今天（D14）：前端拿它當表單的預設日期與圖表的右端，不自己算。
+         */
+        WeightListResponse: {
+            /**
+             * Today
+             * Format: date
+             */
+            today: string;
+            /** Entries */
+            entries: components["schemas"]["WeightEntryResponse"][];
+        };
+        /** WeightRequest */
+        WeightRequest: {
+            /** Weight Kg */
+            weight_kg: number | string;
+        };
     };
     responses: never;
     parameters: never;
@@ -3690,6 +3783,102 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SuggestionReady"] | components["schemas"]["SuggestionMissing"];
+                };
+            };
+        };
+    };
+    put_weight_api_weights__day__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                day: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WeightRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WeightEntryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_weight_api_weights__day__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                day: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_weights_api_weights_get: {
+        parameters: {
+            query?: {
+                from?: string | null;
+                to?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WeightListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -5887,6 +6076,26 @@ export interface operations {
         };
     };
     export_supplements_api_export_supplements_csv_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description CSV（UTF-8，開頭有 BOM） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+        };
+    };
+    export_weights_api_export_weights_csv_get: {
         parameters: {
             query?: never;
             header?: never;

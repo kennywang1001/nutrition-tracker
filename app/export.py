@@ -1,4 +1,4 @@
-"""匯出自己的資料（報表月份與匯出規格 §3）：三支 async generator，一塊一塊地讀、
+"""匯出自己的資料（報表月份與匯出規格 §3、身體資料規格 D18）：四支 async generator，一塊一塊地讀、
 一塊一塊地吐，交給 `StreamingResponse`。
 
 **記憶體不隨資料量長。** 每一塊是一次 keyset 查詢（`(時間, id) > 上一塊的最後一列`、
@@ -22,7 +22,7 @@
 
 from collections import defaultdict
 from collections.abc import AsyncIterator, Sequence
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import Row, select, tuple_
@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.csv_export import Cell, encode_header, encode_rows
 from app.meal_reads import item_join_query
+from app.models.body import WeightEntry
 from app.models.expense import Expense, ExpenseCategory
 from app.models.food import Food, FoodRevision
 from app.models.meal import Meal, MealItem, MealType
@@ -59,6 +60,7 @@ MEAL_COLUMNS = (
     "只有我看得到",
 )
 EXPENSE_COLUMNS = ("日期", "時間", "分類", "金額", "備註", "是否餐費")
+WEIGHT_COLUMNS = ("日期", "體重(kg)")
 SUPPLEMENT_COLUMNS = (
     "日期",
     "時間",
@@ -200,6 +202,27 @@ async def supplement_csv(
             )
         yield encode_rows(lines)
         after = (rows[-1].taken_at, rows[-1].id)
+
+
+async def weight_csv(db: AsyncSession, *, user_id: int) -> AsyncIterator[bytes]:
+    """體重：一天一列，由舊到新。日期就是記的時候選的那一天（日曆日），不用換時區。
+    主鍵是 (user_id, date)，同一個人的日期不會重複——游標只要日期，不用再帶 id。"""
+    yield encode_header(WEIGHT_COLUMNS)
+    after: date | None = None
+    while True:
+        query = (
+            select(WeightEntry.date, WeightEntry.weight_kg)
+            .where(WeightEntry.user_id == user_id)
+            .order_by(WeightEntry.date)
+            .limit(EXPORT_CHUNK_ROWS)
+        )
+        if after is not None:
+            query = query.where(WeightEntry.date > after)
+        rows = (await db.execute(query)).all()
+        if not rows:
+            return
+        yield encode_rows([(row.date.isoformat(), row.weight_kg) for row in rows])
+        after = rows[-1].date
 
 
 async def meal_csv(db: AsyncSession, *, user_id: int, tz_name: str) -> AsyncIterator[bytes]:

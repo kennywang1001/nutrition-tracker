@@ -74,3 +74,21 @@ class SuggestionMissing(BaseModel):
 
     ready: Literal[False]
     missing: list[MissingInput]
+
+
+class WeightRequest(BaseModel):
+    weight_kg: Decimal = Field(ge=25, le=350, max_digits=5, decimal_places=2)
+
+
+class WeightEntryResponse(BaseModel):
+    # 欄位叫 date、型別也是 date：類別本體裡這行之後的註解看到的是欄位不是型別——
+    # 所以這個類別不要在它後面再加用到 date 型別的欄位。
+    date: date
+    weight_kg: Decimal
+
+
+class WeightListResponse(BaseModel):
+    """`today` 是使用者時區的今天（D14）：前端拿它當表單的預設日期與圖表的右端，不自己算。"""
+
+    today: date
+    entries: list[WeightEntryResponse]
