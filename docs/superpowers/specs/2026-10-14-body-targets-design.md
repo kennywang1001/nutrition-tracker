@@ -274,6 +274,9 @@
   2. `UserProfile`、`WeightEntry`、`user_profiles`、`weight_entries` 這幾個字只准出現在身體資料的模組（模型、`body_targets.py`、
      `routes/body.py`、`routes/weights.py`、`routes/targets.py`、`export.py`、`routes/export.py`、`models/__init__.py`）。
   3. 這幾個模組裡沒有 `logger`／`logging`。
+  4. 好友與社群的模組（檔名帶 `friend`／`social`／`notification` 的）不准提到身體資料的模組（`body_data`、`body_targets`、
+     `schemas.body`、`models.body`、`routes.body`／`routes.weights`）或它們定義的函式與類別（`load_profile`、`latest_weight`、
+     `SuggestionReady`……）——第 2 條只認表名與模型名，`from app.body_data import latest_weight` 擋不到（審查 M3）。
 - **端點**：每個端點只用 token 的使用者；跨使用者測試：A 記的體重、資料，B 的 GET 看不到、B 的 DELETE 同一個日期是 404 而且 A 的那筆還在。
 - **離線快取**：`["body", …]` 進 localStorage（D19）。登出時整個 query 快取清掉（既有行為）。
 - **log**：後端不記數值；前端不 `console.log`。

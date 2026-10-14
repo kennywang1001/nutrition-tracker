@@ -2,6 +2,7 @@
 碰得到那兩張表、那幾個模組不寫 log。掃的是型別與原始碼——端點測試只看得到「這一次的回應
 沒有」，看不到「某天有人把它加進白名單」。"""
 
+import importlib
 import re
 from pathlib import Path
 
@@ -84,5 +85,56 @@ def test_the_body_modules_do_not_log():
         str(path.relative_to(APP))
         for path in BODY_MODULES - {APP / "export.py", APP / "models" / "__init__.py"}
         if log_words.search(path.read_text(encoding="utf-8"))
+    )
+    assert offenders == []
+
+
+# 好友與社群的模組：檔名帶 friend／social／notification 的都算（之後新增的也掃得到）。
+SOCIAL_MODULES = sorted(
+    path
+    for path in APP.rglob("*.py")
+    if any(word in path.name for word in ("friend", "social", "notification"))
+)
+# 間接的路（審查 M3）：上一條只認表名與模型名，好友的模組 `from app.body_data import
+# latest_weight` 一樣拿得到體重，那一條卻是綠的。這裡擋的是「碰到身體資料的模組」本身。
+BODY_MODULE_REFERENCES = (
+    r"\bbody_data\b",
+    r"\bbody_targets\b",
+    r"\bschemas\.body\b",
+    r"\bmodels\.body\b",
+    r"\broutes\.(?:body|weights)\b",
+    r"\bfrom\s+app(?:\.schemas|\.models|\.api\.routes)?\s+import\s[^\n]*\b(?:body|weights)\b",
+)
+
+
+def _names_defined_in(module_name: str) -> set[str]:
+    """模組自己定義的函式與類別（不含 import 進來的）。`round_half_up` 是通用的四捨五入，
+    不是身體資料；真的從 `app.body_targets` import 它，上面的模組名稱照樣擋得到。"""
+    module = importlib.import_module(module_name)
+    return {
+        name
+        for name, value in vars(module).items()
+        if not name.startswith("_") and getattr(value, "__module__", None) == module_name
+    } - {"round_half_up"}
+
+
+def test_the_friend_and_social_modules_do_not_reach_the_body_modules():
+    names = (
+        _names_defined_in("app.body_data")
+        | _names_defined_in("app.body_targets")
+        | _names_defined_in("app.schemas.body")
+    )
+    # 掃到東西了：寫這條的時候 body_data 有四個函式（load_profile、latest_weight……）。
+    assert {"load_profile", "latest_weight", "inputs_from", "clear_applied_weight"} <= names
+    assert {"suggest", "BodyInputs", "SuggestionReady", "WeightListResponse"} <= names
+    assert len(SOCIAL_MODULES) >= 10
+    words = re.compile(
+        "|".join((*BODY_MODULE_REFERENCES, *(rf"\b{re.escape(name)}\b" for name in names)))
+    )
+    offenders = sorted(
+        f"{path.relative_to(APP)}: {match.group(0)}"
+        for path in SOCIAL_MODULES
+        for match in [words.search(path.read_text(encoding="utf-8"))]
+        if match is not None
     )
     assert offenders == []
