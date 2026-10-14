@@ -5,8 +5,10 @@ from itertools import count
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.exercise import ActivityCode, KcalSource
 from app.invites import INVITE_LIFETIME, hash_invite_token, new_invite_token
 from app.models.body import ActivityLevel, Goal, Sex, UserProfile, WeightEntry
+from app.models.exercise import ExerciseEntry
 from app.models.expense import Expense, ExpenseCategory
 from app.models.food import BaseUnit, Food, FoodPortion, FoodRevision, RevisionStatus
 from app.models.friendship import Friendship, FriendshipStatus
@@ -531,6 +533,34 @@ async def create_weight(
 ) -> WeightEntry:
     """直接寫一筆體重——不經過端點的日期界線。"""
     entry = WeightEntry(user_id=user.id, date=day, weight_kg=Decimal(str(weight_kg)))
+    db_session.add(entry)
+    await db_session.commit()
+    return entry
+
+
+async def create_exercise(
+    db_session: AsyncSession,
+    *,
+    user: User,
+    performed_at: datetime,
+    activity: ActivityCode = ActivityCode.RUNNING,
+    name: str | None = None,
+    minutes: int = 30,
+    kcal: Decimal | int | str = 343,
+    kcal_source: KcalSource = KcalSource.ESTIMATED,
+    note: str | None = None,
+) -> ExerciseEntry:
+    """直接寫一筆運動——不經過端點的估算與檢查。預設是規格 §4.1 那一筆（跑步 30 分鐘、343 kcal）。"""
+    entry = ExerciseEntry(
+        user_id=user.id,
+        performed_at=performed_at,
+        activity=activity,
+        name=name,
+        minutes=minutes,
+        kcal=Decimal(str(kcal)),
+        kcal_source=kcal_source,
+        note=note,
+    )
     db_session.add(entry)
     await db_session.commit()
     return entry

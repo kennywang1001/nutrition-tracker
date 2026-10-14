@@ -1,6 +1,7 @@
 from app.models.ai_analysis import AiAnalysis, AnalysisKind
 from app.models.base import Base
 from app.models.body import ActivityLevel, Goal, Sex, UserProfile, WeightEntry
+from app.models.exercise import ExerciseEntry
 from app.models.expense import Expense, ExpenseCategory
 from app.models.food import BaseUnit, Food, FoodPortion, FoodRevision, RevisionStatus
 from app.models.friendship import Friendship, FriendshipStatus
@@ -19,6 +20,7 @@ __all__ = [
     "AnalysisKind",
     "Base",
     "BaseUnit",
+    "ExerciseEntry",
     "Expense",
     "ExpenseCategory",
     "Food",

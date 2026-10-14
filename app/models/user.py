@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, Identity, Text, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Enum, Identity, Text, func, true
 from sqlalchemy.dialects.postgresql import CITEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -35,6 +35,11 @@ class User(Base):
     # （計畫「與規格的差異」第 2 點：碰撞機率可忽略，不做重試）。
     friend_code: Mapped[str] = mapped_column(
         Text, unique=True, nullable=False, default=new_friend_code
+    )
+    # 運動消耗要不要加回當天的熱量額度（運動規格 D14、D15）。server_default 讓既有使用者
+    # 與直接下 SQL 的 INSERT 都是 true；default= 給 ORM 建立的物件在 flush 之前就有值。
+    exercise_adds_to_budget: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=true(), default=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
