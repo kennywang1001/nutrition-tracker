@@ -125,6 +125,72 @@ upgrade（`0019`）→ check 都乾淨。dev 資料庫沒有碰（Task 10 的 e2
 **環境**
 17. 突變小工具印 pytest 輸出時遇到 cp950 編不了的字元會整個停下（檔案有還原）：跑之前設 `PYTHONIOENCODING=utf-8`。
 
+### Task 6–9（前端，2026-10-14）
+
+**數字：** 前端 vitest 印出來的 `Test Files 154 → 166`、`Tests 2128 → 2306`（開工前量的跟 handover §2 一樣）；
+typecheck、lint 乾淨。commit：`8eb64f0`（Task 6）、`b9ab22c`（7）、`28c4901`（8）、`d875a9b`（9）、
+`2a7f5a4`（看截圖修的樣式）。
+
+**Task 6**
+18. `mock-api.ts` 的 `Route` 本來就有 export，不用改。`lib/body.ts` 另外 export `MissingField`、`Rate` 兩個型別
+    （表單與建議區塊要用）。`queries.ts` 的註解多寫一句「刻意不掛在 `["me"]` 底下」。
+19. `body-api.test.tsx` 比計畫多兩條：`useWeights` 不帶日期、`invalidateBody` 打到三個 `["body", …]` 而不碰 `["me"]`。
+    `civil-date.test.ts` 多一條「不是 YYYY-MM-DD 就丟例外」——它在函式還不存在時也是綠的（`TypeError` 也是例外，
+    第 12 種），只是順手補的守衛，不算「看過它紅」。
+20. 突變 5 條照計畫（`Math.round` → `Math.floor` 存活）；多做三條都紅：30 天起點少一天、`checkRangeInput` 的
+    `>` 改 `>=`、`invalidateBody` 只失效體重。
+
+**Task 7**
+21. **畫出「我的」的既有測試不只計畫列的那幾個**：`invite-friends.test.tsx` 也掛 `<Me />`，前面也加 `bodyRoutes()`；
+    `app.test.tsx` 的 `mockBackend` 是手寫的 `if` 串，在 `/api/me` 之前接住 `/api/me/body-profile`、
+    `/api/me/target-suggestion`、`/api/weights`（不接的話 `/api/me` 那一行把使用者物件當成身體資料回去）。
+22. 卡片的摘要一律 `?? null`（離線快取裡的舊回應少欄位時是 `undefined`，handover §7）——上一點的 `app.test`
+    之所以沒有炸，就是因為這個。
+23. `body-profile.test.tsx` 比計畫多兩條（空的身體資料、其他錯誤）。突變 4 條照計畫都紅；多做三條都紅
+    （速度一直顯示、存好不失效 `["body"]`、`layout.ts` 拿掉 `/me/body`）。
+24. 看截圖之後：性別、目標、速度的單選排成一列（`BodyProfile.module.css` 的 `.choices`），一個一行時表單長到要捲兩頁。
+
+**Task 8**
+25. **`WeightChart` 左邊留 `PLOT_LEFT = 22` 給刻度**：計畫的 x 從 `PAD_X` 開始，第一點會壓在 `x=0` 的「81」上。
+    測試的「左邊界」是 `PLOT_LEFT`、右邊界是 `VIEW_WIDTH − PAD_X`。另外多一條 `DATE_BAND`（起訖日期，終點是
+    今天時寫「今天」，所以多一個 `today` prop）與一條底線。刻度與日期有 `data-testid`（`weight-axis-hi/lo`、
+    `weight-date-start/end`）。
+26. **y 軸範圍也包含畫出來的平均**：平均可能用到範圍外更重的紀錄（9/12 的 80 讓 9/16 的平均是 79，比範圍內唯一的點
+    重），不包進來線會畫出圖外。多一條測試，突變「拿掉平均」紅。
+27. **計畫的突變 4（平均只用範圍內的紀錄）沒有存活**：計畫說的補測試（9/12、9/16）一開始就寫進去了，第一次跑就紅。
+28. **`dateLabel`（`lib/weights.ts`）**：跟今天不同年的日期寫「2025/10/10」。「全部」最多 800 天，同一個月/日可能有
+    兩筆，「修改 10/10」「刪除 10/10」的可及名稱要分得出來；圖上每個點的名稱也用它。
+29. `WeightForm` 的 props 是 `today`、`onSaved?`、`onCancel?`（有給才畫「取消」）、`focusOnMount?`（計畫是
+    `onDone`、`cancelRef`）；樣式寫在自己的 `WeightForm.module.css`（卡片不在 `.screen` 底下，同帳號卡片的行內表單）。
+    日期清空時「請選日期」；422 把 `describeFieldErrors` 用「；」接起來。
+30. **確認框的「刪除」用 `aria-disabled`＋ref**，不是 `ExpenseRow` 的原生 `disabled`：剛按下去焦點就在它身上
+    （brief 的規矩）。修改框打開時焦點到輸入框、存好或取消之後回到「修改 …」。
+31. `/weight` 多了：某一段期間沒有紀錄（但別段有）時「這段期間沒有體重紀錄」、不畫空的圖；沒有任何紀錄時連期間切換
+    都不畫；圖下面一行圖例（點＝每天的紀錄、線＝7 天平均）；清單包在 `<section>`（h2「紀錄」）、`ul aria-label="體重紀錄"`；
+    記錄的表單在 h2「記錄體重」底下。
+32. 體重卡片：表單打開時「記錄體重」與「看全部」那一列一起換成表單（收起來焦點回到「記錄體重」）；讀不到時
+    「無法載入體重」、不給記錄的按鈕（沒有 `today`）。「比 7 天前」變重了寫 `+`（`signedKg`），計畫是照 `formatMacro`。
+33. biome 的 `noAriaHiddenOnFocusable` 對 SVG `<polyline>` 也誤判（同 `<text>`），平均線多一條 `biome-ignore`。
+34. 突變 7 條照計畫都紅（含第 4 條，見 27）；多做三條都紅：y 軸不包平均、表單不擋重複送出、卡片收起來不還焦點。
+35. 看截圖之後：點加一圈卡片底色的細框（`index.css` 的 `.weight-point`），深色模式下點跟同色系的平均線分不太出來。
+
+**Task 9**
+36. `READY` 放在 `tests/helpers/body-routes.ts`（`READY_SUGGESTION`）：`me.test.tsx` 也要用，從另一個測試檔 import
+    會把那個檔案的 `describe` 一起註冊進來。
+37. **調整量的負號是 `formatMacro` 的 ASCII `-`**（「減重每週 0.5 公斤 -550 kcal」），增重寫 `+275`；計畫的測試文字是
+    U+2212 的「−」，但同一份計畫在重算提示說「不換」——兩處一致用 `-`。身體資料讀不到時省略速度：「減重 -550 kcal」。
+38. 重算提示用 `signedKg`：「體重變了 +1 公斤」（計畫是 `formatMacro`，正的不帶 `+`）。
+39. **`targets.test.tsx` 有兩條 `getByText("載入中…")` 變成找到兩個**（建議區塊也在載入）：改成在「自己設定」那一區
+    （`<section aria-labelledby>`，role 是 `region`）裡找。`me.test.tsx` 的「匯出資料」那條原本寫死三顆，改四顆。
+40. 「套用建議目標」用 `${ui.secondary} ${ui.primary}`（同帳號卡片的「儲存」），沒有另寫 CSS class。
+41. 突變 5 條照計畫（第 3 條「導頁搬進 hook 層」存活——工具要同時拿掉 `mutate` 的導頁，改成一次多處替換）；
+    多做三條都紅：不擋重複送出、套用後不失效趨勢、匯出拿掉體重。
+
+**視覺檢查**
+42. dev 資料庫 `alembic upgrade head` 到 `0019`；截圖用的新帳號 `shots.body.<時間戳>@example.com` 留在 dev 資料庫裡。
+43. 已知、沒有改：體重圖在電腦版跟趨勢圖一樣隨寬度等比放大（刻度字約兩倍大）；目標體重離目前體重很遠時 y 軸被拉開，
+    點擠在上面（規格的 y 軸要包含目標）。
+
 ---
 
 ## 檔案結構
