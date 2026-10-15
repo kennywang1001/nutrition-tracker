@@ -70,7 +70,7 @@ router state 交接 `LogMealRoute`）
 | D17 | 退路 | 掃描層**一開就有**「手動輸入條碼」與「從照片讀條碼」（檔案選擇，同一個偵測器讀那張圖） | 相機在 iOS 的已安裝 PWA、桌機、權限被拒時都可能不能用；檔案選擇到處都能用 |
 | D18 | 入口 | `FoodPicker`（記一餐、編輯這一餐的「加一項」）與食物庫，各一顆「掃條碼」；旁邊一行小字「查不到時，條碼可能會送到 Open Food Facts 查詢」 | 原始決定；「可能」是因為 `OFF_ENABLED` 可以關 |
 | D19 | 掃到之後 | 命中 → 跟從搜尋結果選一樣（記一餐：選好那個食物；食物庫：進詳情頁）。沒有生效版本的食物 → 「這個食物還沒有生效的營養素資料」，不能選（同 `FoodPicker`）。沒命中 → 掃描層關掉，原地一張卡片「找不到這個條碼（{code}）」＋（有預填時）「Open Food Facts 有：{名稱}」＋出處＋「用這個條碼建立食物」 | 不自動跳頁：記一餐裡已經填的東西會因為換頁消失，讓人自己決定 |
-| D20 | 交接到新增食物 | router state（不進網址）`{barcodeCode, barcodePrefill, returnTo}`；`NewFoodRoute` 讀一次、`replace` 清掉（同 `LogMealRoute`）。存好之後：有 `returnTo`（只認 `/meals/new` 與 `/meals/{id}/edit`）→ `navigate(returnTo, {state: {pickedFood}, replace: true})`；沒有 → 照舊到 `/foods/{id}` | 營養素配餐的交接是同一套機制；`returnTo` 白名單讓 history 裡壞掉的 state 不能把人導到奇怪的地方 |
+| D20 | 交接到新增食物 | router state（不進網址）`{barcodeCode, barcodePrefill, returnTo}`；`NewFoodRoute` 讀一次、`replace` 清掉（同 `LogMealRoute`）。有 `returnTo`（只認 `/meals/new` 與 `/meals/{id}/edit`）時，**去與回都用 `replace`**：記一餐（或編輯這一餐）那一筆 history 換成新增食物，存好再換回來（`navigate(returnTo, {state: {pickedFood}, replace: true})`）——history 裡不會多出兩個一樣的記一餐，編輯頁的「關閉」（`navigate(-1)`）照舊回到進來之前的那一頁。新增食物多一個「取消，回到記一餐」（或「回到這一餐」）連結（同樣 `replace`、不帶食物）。沒有 `returnTo`（食物庫）→ 一般的 push、存好照舊到 `/foods/{id}` | 營養素配餐的交接是同一套機制；`returnTo` 白名單讓 history 裡壞掉的 state 不能把人導到奇怪的地方 |
 | D21 | 回到記一餐 | `LogMealRoute` 多讀 `pickedFood` → `LogMeal` 的 `initialFood`（一開始就選好它）；`EditMeal` 讀 `pickedFood` → 「加一項」一開始就打開、選好它 | 「存好回到原本的地方、選好那個食物」。**記一餐在換頁之前填的東西會不見**（§12） |
 | D22 | 新增食物的條碼欄位 | 「條碼（選填）」文字欄位（`inputMode="numeric"`），送出前去分隔符號；422 照後端的訊息顯示；409 `BARCODE_EXISTS` 顯示「你已經有一個用這個條碼的食物了」 | |
 | D23 | OFF 的出處 | 畫面上出現 OFF 資料的地方（找不到的卡片、新增食物被預填時）一律一行「資料來源：Open Food Facts（ODbL）」連到 `https://world.openfoodfacts.org` | ODbL 要求標示出處（§6.4） |
@@ -558,6 +558,7 @@ FastAPI 的輸出 schema 把有預設值的欄位也列為必填（`RevisionResp
 1. 0 開頭的 8 位數字一律先試 UPC-E；數字系統 1 的 UPC-E 不支援（§3.3）。
 2. 一般使用者不能替公開食物加條碼（D5）；掃到公開食物沒有條碼的商品會走「沒命中」，建出來的是私人食物。
 3. 從記一餐跳到新增食物，**記一餐在跳之前填的東西會不見**（D21）；回來時只有掃的那個食物選好。編輯這一餐的已存項目不受影響（每一項是立刻存的）。
+   在新增食物按瀏覽器的「上一頁」會回到記一餐**之前**的那一頁（那一筆 history 被換掉了，D20）；要回記一餐用畫面上的「取消，回到記一餐」。
 4. ponyfill 的 wasm 不在 PWA 的預先快取裡：離線時沒有原生偵測器的裝置掃不了（D15、§7.1）。
 5. iOS 的相機行為沒有在實機驗證（§7.4）。
 6. 營養標示的照片跟其他 AI 照片一樣縮到長邊 1280：字很小的標示可能讀不清楚（`AI_LABEL_UNREADABLE`，算一次額度）。
