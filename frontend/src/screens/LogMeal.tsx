@@ -20,15 +20,18 @@ import {
 } from "../components/PortionQuantityFields";
 import ui from "../components/ui.module.css";
 import { isPlainPositiveDecimal } from "../lib/decimal";
+import type { HandoffItem } from "../lib/planner";
 import styles from "./LogMeal.module.css";
 
 type Food = components["schemas"]["FoodResponse"];
 type MealResponse = components["schemas"]["MealResponse"];
 type MealType = components["schemas"]["MealType"];
 
-/** AI 多樣估算加進來的一樣（AI 多樣估算規格 D19）。`quantity` 是直接輸入的量
- *  （g 或 ml），預設 AI 估的；`key` 只給 React 與欄位的 id 用——同一個食物可以出現兩次。 */
-type AiItem = { key: number; food: Food; quantity: string };
+/** 另外加進來的一樣（跟手選的那一樣並存，存的時候一起送）：AI 估的（`origin: "ai"`，AI 多樣估算
+ *  規格 D19）或從「今天還能吃什麼」帶進來的（`"planner"`，營養素配餐規格 D23）。
+ *  `portion` 不是 null 時 `quantity` 是「幾份」、送 `portion_id`；是 null 時是直接輸入的 g／ml
+ *  （AI 的一律是 null）。`key` 只給 React 與欄位的 id 用——同一個食物可以出現兩次。 */
+type ExtraItem = HandoffItem & { key: number; origin: "ai" | "planner" };
 
 /** 一個欄位現在的值，加上「AI 填進來的那個值」（沒有填過是 null）。
  *
@@ -48,13 +51,15 @@ const NO_PHOTO: WithOrigin<File | null> = { value: null, fromAi: null };
 type Props = {
 	/** `photoFailed`：這一餐存好了，但選的照片沒傳上去（規格 §5.4）。 */
 	onSaved: (result: { photoFailed: boolean }) => void;
+	/** 營養素配餐帶進來的項目（規格 D22）。只在掛載時讀。 */
+	initialItems?: readonly HandoffItem[];
 };
 
 /** 餐存好、照片沒傳上去時給總覽顯示的話。補傳走飲食頁 `MealList` 既有的上傳。 */
 export const PHOTO_UPLOAD_FAILED_NOTICE =
 	"這一餐已記錄，照片沒有傳上去，可以到飲食頁的那一餐補傳";
 
-export function LogMeal({ onSaved }: Props) {
+export function LogMeal({ onSaved, initialItems }: Props) {
 	const queryClient = useQueryClient();
 	const [selectedFood, setSelectedFood] = useState<Food | null>(null);
 	const portion = usePortionQuantity(selectedFood?.id ?? null);
@@ -65,9 +70,19 @@ export function LogMeal({ onSaved }: Props) {
 	// 這一餐吃了什麼的一句話（AI 多樣估算規格 D13）。好友看得到；跟「備註」是兩回事。
 	const [descriptionState, setDescriptionState] = useState(NO_DESCRIPTION);
 	const description = descriptionState.value;
-	// AI 估的項目。跟上面手選的那一樣（selectedFood）並存：存的時候兩邊都送。
-	const [aiItems, setAiItems] = useState<AiItem[]>([]);
-	const nextAiKeyRef = useRef(0);
+	// 另外加進來的項目（配餐帶進來的、AI 估的）。跟上面手選的那一樣（selectedFood）並存：
+	// 存的時候兩邊都送。配餐的只在掛載時放進來，所以一定排在 AI 的前面——畫面上兩個區塊的
+	// 順序（配餐的在前）就是送出的順序。
+	const [extraItems, setExtraItems] = useState<ExtraItem[]>(() =>
+		(initialItems ?? []).map((item, index) => ({
+			...item,
+			key: index,
+			origin: "planner" as const,
+		})),
+	);
+	const nextExtraKeyRef = useRef(initialItems?.length ?? 0);
+	const plannerItems = extraItems.filter((item) => item.origin === "planner");
+	const aiItems = extraItems.filter((item) => item.origin === "ai");
 	// 選填的照片（介面改版 §5.4）。選的當下就檢查大小，不要等到存檔才發現。
 	const [photoState, setPhotoState] = useState(NO_PHOTO);
 	const photo = photoState.value;
@@ -125,12 +140,14 @@ export function LogMeal({ onSaved }: Props) {
 	const [error, setError] = useState<string | null>(null);
 	const saveMeal = useMutation({
 		mutationFn: async () => {
-			// AI 的幾樣在前（估算的順序），手選的那一樣在後。
+			// 另外加進來的幾樣在前（配餐的、再來 AI 估的，各自照原本的順序），手選的那一樣在後。
 			const items = [
-				...aiItems.map((item) => ({
+				...extraItems.map((item) => ({
 					food_id: item.food.id,
-					// 直接輸入的量（g／ml）：不帶 portion_id。
 					quantity: item.quantity.trim(),
+					// 有份量的（配餐用預設份量配出來的）量是「幾份」：帶 portion_id，公克數由
+					// 伺服器換算並凍結（同手選那一樣）。沒有的是直接輸入的 g／ml。
+					...(item.portion !== null ? { portion_id: item.portion.id } : {}),
 				})),
 				...(selectedFood === null
 					? []
@@ -219,7 +236,7 @@ export function LogMeal({ onSaved }: Props) {
 			setCost("");
 			// 來歷也歸零：它是跟著這一餐的。
 			setDescriptionState(NO_DESCRIPTION);
-			setAiItems([]);
+			setExtraItems([]);
 			setPhotoState(NO_PHOTO);
 			setPhotoError(null);
 			setError(null);
@@ -256,18 +273,58 @@ export function LogMeal({ onSaved }: Props) {
 		},
 	});
 
-	function removeAiItem(key: number) {
-		setAiItems((current) => current.filter((other) => other.key !== key));
-		// 這是最後一樣 AI 的項目，而且沒有手選的食物：表單整個收起來。AI 填的描述與
-		// 照片跟著清掉（見 `WithOrigin`）。還有手選的食物時表單還在、它們看得到，
-		// 留給使用者自己決定。
-		const isLast = aiItems.every((item) => item.key === key);
-		if (!isLast || selectedFood !== null) return;
+	function removeExtraItem(key: number) {
+		// 直接用這一次 render 的 `extraItems` 算：按鈕在送出中是 disabled，兩次點擊不會疊在
+		// 同一個 render 上（每點一次就重畫一次）。
+		const left = extraItems.filter((other) => other.key !== key);
+		setExtraItems(left);
+		// **表單收起來時**才清 AI 填的描述與照片（見 `WithOrigin`）：以前「最後一樣 AI 的項目、
+		// 沒有手選」就是收起來的唯一情況，現在還有配餐的項目。還有別的項目、或有手選的食物時
+		// 表單還在、它們看得到，留給使用者自己決定。
+		if (left.length > 0 || selectedFood !== null) return;
 		setDescriptionState((current) =>
 			current.value === current.fromAi ? NO_DESCRIPTION : current,
 		);
 		setPhotoState((current) =>
 			current.value === current.fromAi ? NO_PHOTO : current,
+		);
+	}
+
+	/** 另外加進來的一列（「配餐的項目」與「AI 估的項目」共用）。有份量的標籤寫明一份是多少，
+	 *  輸入的是份數；沒有的寫單位，輸入的是 g／ml。 */
+	function renderExtraItem(item: ExtraItem) {
+		const inputId = `meal-extra-item-${item.key}`;
+		const label =
+			item.portion === null
+				? `${item.food.name}（${item.food.nutrition?.base_unit ?? "g"}）`
+				: `${item.food.name}（份，1 份＝${item.portion.label}）`;
+		return (
+			<li key={item.key}>
+				<label htmlFor={inputId}>{label}</label>
+				<input
+					id={inputId}
+					type="text"
+					inputMode="decimal"
+					value={item.quantity}
+					onChange={(event) => {
+						const quantity = event.target.value;
+						setExtraItems((current) =>
+							current.map((other) =>
+								other.key === item.key ? { ...other, quantity } : other,
+							),
+						);
+					}}
+				/>
+				<button
+					type="button"
+					className={ui.secondary}
+					aria-label={`移除 ${item.food.name}`}
+					disabled={saveMeal.isPending}
+					onClick={() => removeExtraItem(item.key)}
+				>
+					移除
+				</button>
+			</li>
 		);
 	}
 
@@ -289,12 +346,15 @@ export function LogMeal({ onSaved }: Props) {
 						}}
 						onItemsReady={(ready, source) => {
 							// key 在 updater 外面先取：updater 可能被 React 呼叫兩次。
+							// AI 的量一律是直接輸入的 g／ml（沒有份量）。
 							const added = ready.map((item) => ({
-								key: nextAiKeyRef.current++,
+								key: nextExtraKeyRef.current++,
 								food: item.food,
 								quantity: item.quantity,
+								portion: null,
+								origin: "ai" as const,
 							}));
-							setAiItems((current) => [...current, ...added]);
+							setExtraItems((current) => [...current, ...added]);
 							focusAiItemsRef.current = true;
 							// 估算用的照片當這一餐的照片、AI 的那句話當描述——**已經有就不
 							// 覆蓋**（規格 D20）。用 updater 看「現在」的值：面板建食物的期間
@@ -320,12 +380,12 @@ export function LogMeal({ onSaved }: Props) {
 				)}
 			/>
 
-			{(selectedFood !== null || aiItems.length > 0) && (
+			{(selectedFood !== null || extraItems.length > 0) && (
 				<form
 					className={styles.form}
 					onSubmit={(event) => {
 						event.preventDefault();
-						const bad = aiItems.find(
+						const bad = extraItems.find(
 							(item) => !isPlainPositiveDecimal(item.quantity),
 						);
 						if (bad !== undefined) {
@@ -335,49 +395,23 @@ export function LogMeal({ onSaved }: Props) {
 						saveMeal.mutate();
 					}}
 				>
+					{/* 配餐的在前：DOM 順序就是送出的順序。兩個標題分開，畫面不會把自己常吃的食物
+					    說成「AI 估的」（規格 D23）；`.aiItems` 的樣式兩個區塊共用。 */}
+					{plannerItems.length > 0 && (
+						<section
+							aria-labelledby="meal-planner-items"
+							className={styles.aiItems}
+						>
+							<h2 id="meal-planner-items">配餐的項目</h2>
+							<ul>{plannerItems.map(renderExtraItem)}</ul>
+						</section>
+					)}
 					{aiItems.length > 0 && (
 						<section aria-labelledby="meal-ai-items" className={styles.aiItems}>
 							<h2 id="meal-ai-items" ref={aiItemsHeadingRef} tabIndex={-1}>
 								AI 估的項目
 							</h2>
-							<ul>
-								{aiItems.map((item) => {
-									const inputId = `meal-ai-item-${item.key}`;
-									const unit = item.food.nutrition?.base_unit ?? "g";
-									return (
-										<li key={item.key}>
-											<label htmlFor={inputId}>
-												{`${item.food.name}（${unit}）`}
-											</label>
-											<input
-												id={inputId}
-												type="text"
-												inputMode="decimal"
-												value={item.quantity}
-												onChange={(event) => {
-													const quantity = event.target.value;
-													setAiItems((current) =>
-														current.map((other) =>
-															other.key === item.key
-																? { ...other, quantity }
-																: other,
-														),
-													);
-												}}
-											/>
-											<button
-												type="button"
-												className={ui.secondary}
-												aria-label={`移除 ${item.food.name}`}
-												disabled={saveMeal.isPending}
-												onClick={() => removeAiItem(item.key)}
-											>
-												移除
-											</button>
-										</li>
-									);
-								})}
-							</ul>
+							<ul>{aiItems.map(renderExtraItem)}</ul>
 						</section>
 					)}
 
@@ -389,9 +423,9 @@ export function LogMeal({ onSaved }: Props) {
 								<p ref={selectedRef} tabIndex={-1} className={styles.selected}>
 									已選擇：{selectedFood.name}
 								</p>
-								{/* 只有同時有 AI 的項目時才需要：不然不記這一樣＝整張表單收起來，
-								    而且沒有 AI 項目時畫面要跟以前一模一樣。 */}
-								{aiItems.length > 0 && (
+								{/* 只有同時有另外加進來的項目（AI 的、配餐的）時才需要：不然不記這一樣＝整張
+								    表單收起來，而且沒有那些項目時畫面要跟以前一模一樣。 */}
+								{extraItems.length > 0 && (
 									<button
 										type="button"
 										className={ui.secondary}

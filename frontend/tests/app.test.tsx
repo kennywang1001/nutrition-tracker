@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
@@ -11,6 +11,7 @@ import {
 	getRefreshToken,
 	setTokens,
 } from "../src/auth/store";
+import { itemsState } from "../src/lib/planner";
 import { PHOTO_UPLOAD_FAILED_NOTICE } from "../src/screens/LogMeal";
 import { setDesktop } from "../src/test/media";
 import { EMPTY_PROFILE, NO_WEIGHTS, NOT_READY } from "./helpers/body-routes";
@@ -353,6 +354,62 @@ describe("App", () => {
 			),
 		);
 		expect(window.location.pathname).toBe("/");
+	});
+
+	/** 記一餐打的：常吃、最近吃的清單（這兩條只要不炸就好）。 */
+	function foodLists(url: string) {
+		if (url.includes("/api/foods/frequent")) return jsonResponse([]);
+		if (url.includes("/api/foods/recent")) return jsonResponse([]);
+		return undefined;
+	}
+
+	/** BrowserRouter 的 history.state 是 `{ usr, key, idx }`：`usr` 才是 navigate 帶的 state。 */
+	function openWithState(path: string, state: unknown) {
+		window.history.replaceState({ usr: state, key: "test", idx: 0 }, "", path);
+	}
+
+	it("從「今天還能吃什麼」帶著那一組到記一餐：畫出「配餐的項目」，history 的 state 清掉（D22）", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockBackend(foodLists);
+		const combo = OK_SUGGESTIONS.combos[0];
+		if (combo === undefined) throw new Error("OK_SUGGESTIONS 至少要有一組");
+		openWithState("/meals/new", itemsState(combo));
+
+		render(<App />);
+
+		const section = await screen.findByRole("region", { name: "配餐的項目" });
+		expect(
+			screen.getByRole("heading", { level: 1, name: "記一餐" }),
+		).toBeInTheDocument();
+		expect(
+			within(section).getByLabelText("白飯（份，1 份＝1 碗）"),
+		).toHaveValue("1.5");
+		// 重新整理或按返回不會再帶一次：history 裡已經沒有那一份。
+		await waitFor(() => expect(window.history.state?.usr ?? null).toBeNull());
+		expect(window.location.pathname).toBe("/meals/new");
+		// 清掉 history 之後，畫面上帶進來的項目還在（讀一次、放進自己的 state）。
+		expect(
+			screen.getByRole("region", { name: "配餐的項目" }),
+		).toBeInTheDocument();
+	});
+
+	it("不相干的 router state（總覽的通知）：照常的記一餐，沒有「配餐的項目」", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockBackend(foodLists);
+		openWithState("/meals/new", { notice: "x" });
+
+		render(<App />);
+
+		expect(
+			await screen.findByRole("heading", { level: 1, name: "記一餐" }),
+		).toBeInTheDocument();
+		expect(await screen.findByLabelText("搜尋食物")).toBeInTheDocument();
+		expect(
+			screen.queryByRole("region", { name: "配餐的項目" }),
+		).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "記錄" }),
+		).not.toBeInTheDocument();
 	});
 });
 

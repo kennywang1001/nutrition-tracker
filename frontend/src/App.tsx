@@ -27,6 +27,7 @@ import { SideNav } from "./components/SideNav";
 import { TabBar } from "./components/TabBar";
 import { contentWidthFor } from "./lib/layout";
 import { readLinkToken } from "./lib/link-token";
+import { plannerHandoffFrom } from "./lib/planner";
 import { useIsDesktop } from "./lib/use-is-desktop";
 import { AddExpense } from "./screens/AddExpense";
 import { AdminRevisions } from "./screens/AdminRevisions";
@@ -62,11 +63,25 @@ import { Weight } from "./screens/Weight";
  *
  *  **導回 `/`，不是留在記一餐**：使用者記完要的是立刻看到「數字變了」——
  *  總覽的今天熱量與時間線。留在原地等於畫面上什麼都沒發生，使用者會以為
- *  沒記進去、再記一次。 */
+ *  沒記進去、再記一次。
+ *
+ *  營養素配餐（規格 D22）：從 `/planner` 或飲食頁的卡片來的 router state，讀一次、放進自己的
+ *  state，再用 `replace` 把 history 的 state 清掉——重新整理或返回不會再帶一次（同總覽的通知）。
+ *  `LogMeal` 只在掛載時讀 `initialItems`，所以清掉之後畫面上帶進來的項目還在。 */
 function LogMealRoute() {
 	const navigate = useNavigate();
+	const location = useLocation();
+	const [handoff] = useState(() => plannerHandoffFrom(location.state));
+	useEffect(() => {
+		if (location.state == null) return;
+		navigate(`${location.pathname}${location.search}`, {
+			replace: true,
+			state: null,
+		});
+	}, [location.state, location.pathname, location.search, navigate]);
 	return (
 		<LogMeal
+			initialItems={handoff?.kind === "items" ? handoff.items : undefined}
 			onSaved={({ photoFailed }) =>
 				navigate(
 					"/",
