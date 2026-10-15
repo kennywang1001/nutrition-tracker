@@ -1,6 +1,7 @@
 # 運動紀錄
 
-**狀態：** 已實作（2026-10-14，`feat/exercise`；實作跟這份規格不一樣的地方記在計畫的「執行中發現的差異」，摘要在計畫的「與規格的差異」）
+**狀態：** 已實作（2026-10-14，`feat/exercise`；實作跟這份規格不一樣的地方記在計畫的「執行中發現的差異」，摘要在計畫的「與規格的差異」）。
+實作後審查改了五處，見 §12「審查後的修正」；內文裡跟著改的地方標了「審查後」
 **日期：** 2026-10-14
 **分支：** `feat/exercise`
 **前置：** 身體資料與目標（`2026-10-14-body-targets-design.md`：`weight_entries`、`app/body_data.py`、隱私掃描）、
@@ -68,7 +69,7 @@
 | D19 | 清單 | `GET /api/exercises?date=`（省略＝使用者的今天）回 `{date, total_kcal, entries}`，依 `performed_at` 由舊到新 | 飲食頁的卡片要合計；`date` 讓前端不用自己算今天 |
 | D20 | 回應帶標籤 | `ExerciseResponse.label`：固定活動是中文標籤、「其他」是 `name` | 時間線與卡片不用另外抓活動清單 |
 | D21 | 回應在 commit 之前組好 | POST／PATCH：flush → refresh → 組回應 → commit，commit 之後不碰 ORM 物件 | 身體資料審查 M6 的教訓 |
-| D22 | 存的時候重估 | PATCH 時 `kcal_source` 是 `estimated`，而且這次帶了 `activity`／`minutes`／`performed_at` 任何一個，或 `kcal: null` → 重新估算；只改備註不重估 | 改了時間可能換一筆體重；只改備註不該讓熱量悄悄變 |
+| D22 | 存的時候重估 | PATCH 時 `kcal_source` 是 `estimated`，而且 `activity`／`minutes`／`performed_at` 任何一個**跟存好的值不一樣**（審查後：原本是「這次帶了這個鍵」）→ 重新估算；手動的一筆帶 `kcal: null` → 改回估算。只改備註、重送一樣的值、已經是估算的一筆帶 `kcal: null` 都**不**重估，留著存好的熱量 | 改了時間可能換一筆體重；只改備註不該讓熱量悄悄變（體重後來更正了也一樣，§10 第 8 點） |
 | D23 | 離線快取 | `["exercises", …]` 進離線快取（自己的資料）；`["exercise-estimate", …]` **不進**（每打一個數字一組 key，同 `food-search`） | 同身體資料 D19 |
 | D24 | 內容寬度 | `/exercises/new` 是 `form`（480）；`/exercises/:id/edit` 是預設 `narrow`（同 `/meals/:id/edit`） | `contentWidthFor` 只比完整路徑 |
 | D25 | 設定的位置 | 「我的」→「每日目標」卡片底部的開關（`role="switch"` 的 checkbox） | 它改的就是每日目標的熱量分母；放身體資料頁的話，沒填身體資料的人找不到 |
@@ -201,13 +202,14 @@ estimate_kcal(met, weight_kg, minutes) = round_half_up(met × weight_kg × minut
 | `GET /api/exercises?date=` | `{date, total_kcal, entries: [ExerciseResponse]}`（D19） | |
 | `POST /api/exercises` | body `{activity, name?, minutes, performed_at, kcal?, note?}` → 201 `ExerciseResponse` | `EXERCISE_NEEDS_WEIGHT`、`EXERCISE_ESTIMATE_TOO_HIGH`、`EXERCISE_IN_FUTURE`；`other` 沒有 `name` 或沒有 `kcal` 是 Pydantic 的 422 |
 | `GET /api/exercises/{id}` | `ExerciseResponse` | 404 |
-| `PATCH /api/exercises/{id}` | 部分更新；`activity`／`minutes`／`performed_at` 不收 null；`kcal: null`＝改回估算；`note: null`＝清掉 | 同 POST，加上合併之後 `other` 沒有名稱或要估算 → `422 EXERCISE_NEEDS_NAME`／`EXERCISE_NEEDS_KCAL` |
+| `PATCH /api/exercises/{id}` | 部分更新；`activity`／`minutes`／`performed_at` 不收 null；`kcal: null`＝手動的一筆改回估算（已經是估算的不因此重估，D22）；`note: null`＝清掉 | 同 POST，加上合併之後 `other` 沒有名稱或要估算 → `422 EXERCISE_NEEDS_NAME`／`EXERCISE_NEEDS_KCAL` |
 | `DELETE /api/exercises/{id}` | 204 | 404 |
 | `GET /api/export/exercises.csv` | D28 | 共用匯出的 429／409 |
 
 `ExerciseResponse`：`{id, performed_at, activity, label, name, minutes, kcal, kcal_source, note, created_at, updated_at}`。
 
-`performed_at` 是 `AwareDatetime`（naive 的 422，同餐點）。
+`performed_at` 是 `AwareDatetime`（naive 的 422，同餐點）；**早於 1900-01-01（UTC）也是 422 `VALIDATION_ERROR`**（審查後：
+`0001-01-01T00:00:00+14:00` 換到使用者時區會溢位、原本是 500）。新增、修改、估算的查詢參數共用 `app/schemas/exercise.py` 的 `PerformedAt`。
 
 **既有端點的改變：**
 
@@ -226,7 +228,7 @@ estimate_kcal(met, weight_kg, minutes) = round_half_up(met × weight_kg × minut
 |---|---|
 | `api/exercises.ts`（新） | `useActivities`、`useExerciseEstimate`、`useTodayExercises`、`useExercise`、`createExercise`、`updateExercise`、`deleteExercise`、`invalidateExercises` |
 | `api/queries.ts` | `exercisesAll: ["exercises"]`、`exercisesToday: ["exercises","today"]`、`exercise(id): ["exercises", id]`、`exerciseActivities: ["exercise-activities"]`（獨立命名空間：記一筆運動不該連帶重抓固定的清單）、`exerciseEstimate(...)`: `["exercise-estimate", activity, minutes, performedAt]` |
-| `api/persist.ts` | `NOT_PERSISTED` 加 `"exercise-estimate"` |
+| `api/persist.ts` | `NOT_PERSISTED` 加 `"exercise-estimate"`、`"exercise-activities"`（審查後：活動清單是 `staleTime: Infinity`，存進離線快取就永遠換不掉） |
 | `api/stats.ts` | `kcalBudgetOf(stats)`、`exerciseKcalOf(stats)`、`exerciseInBudgetOf(stats)`：離線快取的舊回應沒有新欄位（`undefined`）時退回目標／`"0"`／`false` |
 | `lib/timeline.ts` | 第三種列 `kind: "exercise"` |
 | `lib/layout.ts` | `/exercises/new` 是 `form` |
@@ -249,12 +251,16 @@ estimate_kcal(met, weight_kg, minutes) = round_half_up(met × weight_kg × minut
   送出前 `fromLocalDateTime`，未來的 → 「不能選未來的時間」（同 `EditMeal`）。
 - **備註**：選填 ≤ 200。
 - 錯誤列在 `role="alert"`；送出中「儲存」是 `aria-disabled`＋ref 擋重複送出。
-- 存好：失效 `["exercises"]`、`dailyStats`，導回總覽（`/`）。新增時伺服器回 `EXERCISE_NEEDS_WEIGHT`（另一個分頁剛刪了體重）→ 打開手動欄、顯示同一句提示。
+- 存好：失效 `["exercises"]`、`dailyStats`，導回總覽（`/`）。新增時伺服器回 `EXERCISE_NEEDS_WEIGHT`（另一個分頁剛刪了體重）→ 打開手動欄、顯示同一句提示，
+  清掉手上的預覽重問；之後的預覽回 `ready: true`（記了體重）就解鎖（審查後）。
 
 ### 7.3 編輯（`/exercises/:id/edit`）
 
 路徑參數照 `lib/resource-id.ts`。預填掛載時抓回來的那一筆（`useExercise`，`refetchOnMount: "always"`，同編輯餐點）。
-「手動輸入熱量」反映 `kcal_source`。儲存送完整的一組（`kcal: 手動 ? 值 : null`）。「刪除這筆運動」→ 畫面上的確認框
+「手動輸入熱量」反映 `kcal_source`。儲存**只送改了的欄位**（審查後，原本是完整的一組加 `kcal: null`）：跟預填的那一筆比
+（`lib/exercise.ts` 的 `exercisePatch`；時間比到分鐘）；熱量只在估算→手動、手動的數字改了（送數字）或手動→估算（送 `null`）時帶，
+估算的一筆改了活動、分鐘或時間不帶 `kcal`、由後端重估；什麼都沒改就不送、直接回總覽。估算的一筆活動、分鐘、時間都沒動時，
+熱量那一行是「目前 343 kcal（估算）」、不問預覽，**沒有體重也不強制手動**（只改備註存得了）；動了才回到預覽與「先記一次體重」。「刪除這筆運動」→ 畫面上的確認框
 （`role="alertdialog"`，同體重清單），確定後 `removeQueries(exercise(id))`、失效、導回總覽。
 
 ### 7.4 總覽
@@ -331,8 +337,11 @@ estimate_kcal(met, weight_kg, minutes) = round_half_up(met × weight_kg × minut
 3. 設定只看現在（D17）：關掉之後，過去每一天的額度也一起變回目標。
 4. 存的時候才估算：表單上看到的預覽，跟按下儲存那一刻算的可能不同（另一個分頁剛改了體重）；存好的回應是準的。
 5. 新增活動要一個 migration（D3 的 CHECK）。
-6. 運動紀錄沒有「多久以前」的下限（體重有兩年）；`performed_at` 只擋未來。
+6. 運動紀錄沒有實際的「多久以前」的下限（體重有兩年）：`performed_at` 擋未來，往前只擋 1900-01-01（UTC）以前（審查後，衛生下限）。
 7. 趨勢、報表、好友看到的熱量都不含運動（D13）。
+8. **估算的一筆存好之後不跟著體重變**（審查後寫明）：之後更正了那一天的體重，熱量仍是當初算的；只有活動、分鐘或時間改了、
+   或手動的一筆改回估算時才用當時的體重重算。編輯畫面上勾「手動輸入熱量」再取消、或把分鐘改一下再改回來都不算（值沒變、不送）；
+   要用新體重算得先存成手動、再打開改回估算——或直接手動輸入。
 
 ---
 
@@ -344,3 +353,26 @@ estimate_kcal(met, weight_kg, minutes) = round_half_up(met × weight_kg × minut
 - 前端：§7.1；`schema.d.ts` 每個後端 task 重新產生。
 - e2e：`e2e/exercise.spec.ts`。
 - 文件：`docs/handover.md`（§2 數字、功能章節、已知限制）、`docs/deployment.md`（`0020`）、這份規格的狀態。
+
+---
+
+## 12. 審查後的修正
+
+實作完成後的審查（2026-10-15）找到的問題與修法。每一條都先寫會紅的測試、修好、再把修法拿掉確認測試會紅（mutation check）。
+
+- **I1　編輯畫面每存一次估算的運動就重估一次，只改備註也一樣。** 編輯畫面送完整的一組加 `kcal: null`，後端看「帶了這個鍵」就重估：
+  那一天的體重從 70 更正成 72 之後只改個錯字，熱量就從 343 悄悄變 353；體重全刪了的話，打開估算的一筆會被強制改成手動、熱量欄是空的，
+  連備註都存不了。兩層一起修：
+  - 後端（D22）：活動、分鐘、時間**跟存好的值比**，真的變了才重估；`kcal: null` 只對手動的一筆表示「改回估算」。
+    測試：重送一樣的值（時間換一種時差寫法）不重估；估算的一筆帶 `kcal: null`、其他沒變不重估（沒有體重也是 200）。
+  - 前端（§7.3）：`EditExercise` 只送改了的欄位（`exercisePatch`），什麼都沒改不送；`ExerciseForm` 的 `stored`：估算的一筆活動、
+    分鐘、時間沒動時顯示「目前 N kcal（估算）」、不問預覽、沒有體重也不強制手動。e2e：更正體重之後只改備註，熱量不變。
+- **M1　太早的 `performed_at` 是 500。** `0001-01-01T00:00:00+14:00` 在 `local_day` 換時區時 `OverflowError`（估算、新增、修改都是）。
+  `PerformedAt`（`AwareDatetime`＋早於 1900-01-01 UTC 的 422）用在兩個請求 schema 與估算的查詢參數（§6）。
+- **M2　伺服器回 `EXERCISE_NEEDS_WEIGHT` 之後表單永遠是手動。** 那個旗標從來不清：在別的分頁記了體重回來也一樣鎖著。收到 422 時清掉手上的
+  預覽（那是刪體重之前問的、還說有體重）重問，之後的預覽回 `ready: true` 就解鎖（§7.2）。
+- **M3　活動清單永遠是第一次抓的那一份。** `staleTime: Infinity` 又進離線快取，沒有任何東西會換掉它；之後的 migration 新增或改名活動代碼，
+  用過的裝置看不到。`"exercise-activities"` 加進 `NOT_PERSISTED`（§7.1；一次載入裡仍然只抓一次）。離線打開表單時清單是 paused、
+  等不到：說「無法載入活動清單」，不是一直「載入中…」（離線本來就存不了）。
+- **M4　e2e 跨午夜可能紅（只改文件）。** `exercise.spec.ts` 記「今天」的體重與運動、比對預覽上的日期；跑到一半跨過午夜（台北）會對不上，
+  同其他記今天資料的 spec。寫進 handover 的已知限制。
