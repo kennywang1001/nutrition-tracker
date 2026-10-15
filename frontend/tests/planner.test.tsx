@@ -90,11 +90,14 @@ describe("/planner 今天還能吃什麼（營養素配餐規格 §7.3）", () =
 			"雞胸 175 g・192.5 kcal",
 			"白飯 1.5 份（1 碗）・540 kcal",
 		]);
+		// 合計拆成四段（各自不換行）：看整個段落的字。
 		expect(
-			within(first).getByText(
-				"合計 732.5 kcal・蛋白質 49.25 g・脂肪 4.13 g・碳水 120 g",
-			),
-		).toBeInTheDocument();
+			within(first)
+				.getByText(/^合計 /)
+				.closest("p"),
+		).toHaveTextContent(
+			/^合計 732\.5 kcal・蛋白質 49\.25 g・脂肪 4\.13 g・碳水 120 g$/,
+		);
 		expect(within(first).getByText("佔剩下的熱量 105%")).toBeInTheDocument();
 	});
 

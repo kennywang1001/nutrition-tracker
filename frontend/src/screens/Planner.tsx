@@ -20,9 +20,19 @@ function itemLine(item: PlannedItem): string {
 	return `${item.food.name} ${amount}・${formatMacro(item.nutrition.kcal)} kcal`;
 }
 
-function totalLine(combo: PlannedCombo): string {
+/** 合計的四段。每一段各自不換行（手機上「碳水 112.5」與「g」被拆到兩行很難讀）；分隔的「・」
+ *  接在前一段的尾巴——它不能當一行的開頭（換行規則），放在下一段的開頭就沒有地方可以換行了。 */
+function totalSegments(combo: PlannedCombo): string[] {
 	const t = combo.total;
-	return `合計 ${formatMacro(t.kcal)} kcal・蛋白質 ${formatMacro(t.protein_g)} g・脂肪 ${formatMacro(t.fat_g)} g・碳水 ${formatMacro(t.carb_g)} g`;
+	const segments = [
+		`合計 ${formatMacro(t.kcal)} kcal`,
+		`蛋白質 ${formatMacro(t.protein_g)} g`,
+		`脂肪 ${formatMacro(t.fat_g)} g`,
+		`碳水 ${formatMacro(t.carb_g)} g`,
+	];
+	return segments.map((segment, index) =>
+		index < segments.length - 1 ? `${segment}・` : segment,
+	);
 }
 
 const MACRO_ROWS = [
@@ -123,15 +133,22 @@ export function Planner() {
 																<li key={item.food.id}>{itemLine(item)}</li>
 															))}
 														</ul>
-														<p className={styles.total}>{totalLine(combo)}</p>
+														<p className={styles.total}>
+															{totalSegments(combo).map((segment) => (
+																<span key={segment} className={styles.segment}>
+																	{segment}
+																</span>
+															))}
+														</p>
 														{combo.fill.kcal !== null && (
 															<p className={styles.total}>
 																佔剩下的熱量 {percentOf(combo.fill.kcal)}
 															</p>
 														)}
+														{/* 次要按鈕（.screen 的通用樣式）：一頁三顆實心的大按鈕太重，
+														    而且這只是「帶過去」，真的記下來是記一餐的「記錄」。 */}
 														<button
 															type="button"
-															className={ui.primary}
 															aria-label={`把組合 ${n} 記成一餐`}
 															onClick={() =>
 																navigate("/meals/new", {

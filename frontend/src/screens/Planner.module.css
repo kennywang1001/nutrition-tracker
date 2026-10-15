@@ -57,7 +57,13 @@
 	font-variant-numeric: tabular-nums;
 }
 
+/* 每一段（「蛋白質 49.25 g・」）不在中間換行。 */
+.segment {
+	white-space: nowrap;
+}
+
 .combo button {
+	align-self: flex-start;
 	margin-top: var(--space-2);
 }
 
