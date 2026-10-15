@@ -41,7 +41,7 @@ test("AI 估算命中食物庫：「用這個」→ 記錄 → 飲食頁看到�
 
 	// 先建一個唯一名稱的食物（食物庫的比對是精確比對名稱）。
 	await page.getByRole("link", { name: "飲食" }).click();
-	await page.getByRole("link", { name: "食物庫" }).click();
+	await page.getByRole("link", { name: "食物庫", exact: true }).click();
 	await page.getByRole("link", { name: "新增食物" }).click();
 	await page.getByLabel("名稱", { exact: true }).fill(foodName);
 	await page.getByLabel("熱量（每 100 單位 kcal）").fill("100");

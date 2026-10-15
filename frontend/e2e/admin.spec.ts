@@ -106,7 +106,7 @@ test("送審編輯 → 管理員登入 → 佇列看到新舊並排 → 通過 �
 	const memberPage = await memberContext.newPage();
 	await login(memberPage, MEMBER);
 	await memberPage.getByRole("link", { name: "飲食" }).click();
-	await memberPage.getByRole("link", { name: "食物庫" }).click();
+	await memberPage.getByRole("link", { name: "食物庫", exact: true }).click();
 	// **等食物庫真的掛載完成再填搜尋框。** 記一餐畫面
 	// 跟食物庫用同一個可存取名稱「搜尋食物」（各自的 <label>）。
 	// 如果不等，`getByLabel("搜尋食物")` 在路由真正切換完成之前會抓到
@@ -117,7 +117,7 @@ test("送審編輯 → 管理員登入 → 佇列看到新舊並排 → 通過 �
 	// 一個同步點（跟 e2e/trend.spec.ts 那個「送出就立刻點下一個連結」的
 	// 坑是同一類問題）。
 	await expect(
-		memberPage.getByRole("heading", { name: "食物庫" }),
+		memberPage.getByRole("heading", { name: "食物庫", exact: true }),
 	).toBeVisible();
 	await memberPage.getByLabel("搜尋食物").fill(foodName);
 	await memberPage.getByRole("link", { name: foodName }).click();
@@ -153,13 +153,13 @@ test("送審編輯 → 管理員登入 → 佇列看到新舊並排 → 通過 �
 	await expect(row).not.toBeVisible();
 
 	await adminPage.getByRole("link", { name: "飲食" }).click();
-	await adminPage.getByRole("link", { name: "食物庫" }).click();
+	await adminPage.getByRole("link", { name: "食物庫", exact: true }).click();
 	// 這裡的前一頁是「審核」（AdminRevisions），沒有同名的「搜尋食物」
 	// 欄位可以搶——理論上不會撞到上面那個坑，但既然要等，就跟上面用
 	// 同一個習慣：明確等食物庫掛載完成，不要依賴「反正這裡沒有同名
 	// 元素」這個現在成立、以後不保證成立的前提。
 	await expect(
-		adminPage.getByRole("heading", { name: "食物庫" }),
+		adminPage.getByRole("heading", { name: "食物庫", exact: true }),
 	).toBeVisible();
 	await adminPage.getByLabel("搜尋食物").fill(foodName);
 	await expect(adminPage.getByText("250 kcal / 100g")).toBeVisible();
@@ -181,12 +181,12 @@ test("駁回 → 提案者在食物庫的編輯歷史看得到駁回理由", asy
 	const memberPage = await memberContext.newPage();
 	await login(memberPage, MEMBER);
 	await memberPage.getByRole("link", { name: "飲食" }).click();
-	await memberPage.getByRole("link", { name: "食物庫" }).click();
+	await memberPage.getByRole("link", { name: "食物庫", exact: true }).click();
 	// 同一個坑，見上面「送審編輯」測試裡第一次點「食物庫」之後的說明：
 	// 記一餐跟食物庫共用「搜尋食物」這個可存取名稱，不等食物庫的
 	// heading 出現就填搜尋框，會把字填進記一餐畫面正要被卸載的那個輸入框。
 	await expect(
-		memberPage.getByRole("heading", { name: "食物庫" }),
+		memberPage.getByRole("heading", { name: "食物庫", exact: true }),
 	).toBeVisible();
 	await memberPage.getByLabel("搜尋食物").fill(foodName);
 	await memberPage.getByRole("link", { name: foodName }).click();

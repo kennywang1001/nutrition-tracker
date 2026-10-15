@@ -24,7 +24,7 @@ test("記一餐（有金額）→ 從總覽進編輯 → 改數量 → 刪掉這
 
 	// 建一個私人食物（只用公克，不設份量）。
 	await page.getByRole("link", { name: "飲食" }).click();
-	await page.getByRole("link", { name: "食物庫" }).click();
+	await page.getByRole("link", { name: "食物庫", exact: true }).click();
 	await page.getByRole("link", { name: "新增食物" }).click();
 	await page.getByLabel("名稱", { exact: true }).fill(foodName);
 	await page.getByLabel("熱量（每 100 單位 kcal）").fill("100");

@@ -302,10 +302,10 @@ test("讓 AI 配一餐（只假造 suggest-meal，其餘是真的）：卡片 �
 
 	await loginAs(page, account);
 	await openDiet(page);
-	await expectTouchTargets(
-		plannerCard(page).getByRole("link"),
-		"飲食頁：今天還能吃什麼的卡片",
-	);
+	// 卡片等統計回來才畫：先等兩個連結都出現再量（`count()` 不會等）。
+	const cardLinks = plannerCard(page).getByRole("link");
+	await expect(cardLinks).toHaveText(["從食物庫配", "讓 AI 配一餐"]);
+	await expectTouchTargets(cardLinks, "飲食頁：今天還能吃什麼的卡片");
 
 	// 1. 卡片的「讓 AI 配一餐」→ 記一餐，表單已經打開、焦點在偏好。
 	await plannerCard(page)

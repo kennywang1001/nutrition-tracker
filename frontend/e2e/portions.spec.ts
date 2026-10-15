@@ -18,7 +18,7 @@ test("新增食物時設一份 → 記一餐自動選上那一份 → 記下的�
 
 	const foodName = `E2E 份量 ${Date.now()}`;
 	await page.getByRole("link", { name: "飲食" }).click();
-	await page.getByRole("link", { name: "食物庫" }).click();
+	await page.getByRole("link", { name: "食物庫", exact: true }).click();
 	await page.getByRole("link", { name: "新增食物" }).click();
 	await expect(page.getByRole("heading", { name: "新增食物" })).toBeVisible();
 

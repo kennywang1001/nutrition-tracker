@@ -26,7 +26,7 @@ test("建立食物 → 在記一餐搜尋得到 → 記一筆 → 飲食頁數�
 	const before = await page.getByTestId("macro-kcal").textContent();
 
 	const foodName = `E2E 契約食物 ${Date.now()}`;
-	await page.getByRole("link", { name: "食物庫" }).click();
+	await page.getByRole("link", { name: "食物庫", exact: true }).click();
 	await page.getByRole("link", { name: "新增食物" }).click();
 
 	// 新增食物多了「份量名稱」，getByLabel 預設是子字串比對——要 exact。
