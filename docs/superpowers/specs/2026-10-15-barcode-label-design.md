@@ -393,7 +393,7 @@ wasm 是獨立的資源，主程式那一塊的大小跟開工前比只多掃描
 回應 `LabelReadResponse`：
 
 ```json
-{"analysis_id": 31, "name": "海苔洋芋片", "base_unit": "g",
+{"analysis_id": 31, "name": "海苔洋芋片",
  "nutrition": {"base_unit": "g", "kcal": "514.29", "protein_g": "6.00", "fat_g": "28.00", "carb_g": "60.86"},
  "serving": {"amount": "35.00", "unit": "g"}, "servings_per_package": "4.00", "basis": "per_serving",
  "confidence": "0.80", "consistency": {"atwater_kcal": "519.44", "deviation": "5.15", "flagged": false},
