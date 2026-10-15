@@ -274,7 +274,7 @@ e2e 用的那一組（§9.3）：雞胸 110／23／1.5／0（沒有份量）、�
 - `AiMealPanel`：入口多「讓 AI 配一餐」；按了展開 `<form aria-label="讓 AI 配一餐">`：「偏好（選填）」（`maxLength` 100）、
   提示「例如：不吃牛、想吃便當、在便利商店」、「讓 AI 建議」、「取消」。`startSuggesting` 為真時一開始就展開、焦點在偏好欄位。
   結果區的 `aria-label` 是「AI 建議的一餐」（估算是「AI 估算結果」）；「今天還能用 N 次」、勾選、修改、加入全部同估算。
-  AI 沒設定時（`aiUnavailable`）跟拍照一起停用。錯誤訊息：`describeAnalyzeError` 多 `AI_NO_SUGGESTION`、`NO_KCAL_TARGET`、`DAY_ALREADY_FULL`（都顯示後端那句）。
+  AI 沒設定時（`aiUnavailable`）跟拍照一起停用（入口是 `aria-disabled`＋擋在 onClick，§12 的 M2）。錯誤訊息：`describeAnalyzeError` 多 `AI_NO_SUGGESTION`、`NO_KCAL_TARGET`、`DAY_ALREADY_FULL`（都顯示後端那句）。
 
 ---
 
@@ -359,3 +359,8 @@ e2e 用的那一組（§9.3）：雞胸 110／23／1.5／0（沒有份量）、�
    輪流，換個順序就停在另一個局部最好（30 個食物的例子，第 3 組從「兩樣」變成另一組三樣）。改成照**單樣的名次**輪流（`rank`，名次本身是
    「單樣分數、位置」，位置只在平手時有用）。§4.5 的八樣與 e2e 那一組的輸出不變；50 組種子 × 4 種剩下的 × 3 種打亂，600 次都一樣。
    測試 `test_the_order_of_the_candidates_does_not_change_the_answer`。
+3. **M2：送出中按「取消」，焦點不能掉到 body**。「取消」送出中也能按，按了焦點移到入口「讓 AI 配一餐」——但入口送出中是原生 `disabled`，
+   `focus()` 沒有作用，焦點掉到 `<body>`。改成 `aria-disabled`＋擋在 onClick（同面板裡「讓 AI 建議」「加入這 N 樣」：焦點可能在它身上的就不用原生停用）；
+   拍照照舊原生停用（焦點不會被送到它身上）。沒選「取消就中止請求」：請求已經算了一次 AI 額度，中止也收不回來，結果回來時照舊顯示。
+   樣子：`AiEstimatePanel.module.css` 的 `.aiButton[aria-disabled="true"]` 同 `:disabled`。測試在 `ai-meal-panel.test.tsx`（送出中「取消」→ 焦點在入口、
+   按入口不會打開表單；AI 沒設定時按入口也不會）。

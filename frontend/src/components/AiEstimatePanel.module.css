@@ -26,7 +26,9 @@
 	font-weight: 600;
 }
 
-.aiButton:disabled {
+/* aria-disabled：看起來一樣停用，但還收得到焦點（記一餐的「讓 AI 配一餐」，見 AiMealPanel.tsx）。 */
+.aiButton:disabled,
+.aiButton[aria-disabled="true"] {
 	opacity: 0.4;
 }
 

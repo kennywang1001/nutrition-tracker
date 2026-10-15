@@ -2495,7 +2495,7 @@ MET 一律用字串建 Decimal（`Decimal("9.8")`，不經 float）。值取自 
 | 飲食頁的卡片 | `components/PlannerCard.tsx`（`Today.tsx`，營養素卡片下面、電腦版在左欄） | **不顯示數字**（D26）：有熱量額度（`kcalBudgetOf`）→ 兩個連結「從食物庫配」「讓 AI 配一餐」；沒有 →「設定每日目標」。`stats` 還沒回來不畫 |
 | 交接 | `lib/planner.ts`（`plannerHandoffFrom`、`itemsState`、`SUGGEST_STATE`）、`App.tsx` 的 `LogMealRoute` | **router state**（不進網址）：`{plannerItems: [...]}`／`{plannerSuggest: true}`。`LogMealRoute` 讀一次、`replace` 清掉 history 的 state——**重新整理會失去帶進來的項目**（刻意）。形狀不對當作沒有 |
 | 記一餐 | `screens/LogMeal.tsx` | AI 的項目清單多 `portion`、`origin`；配餐的幾樣在另一個標題「配餐的項目」底下。有份量的那一列標籤「白飯（份，1 份＝1 碗）」、**送 `portion_id`＋份數**（公克數由伺服器換算並凍結）。移除最後一樣 AI 的項目時清描述與照片的規則只看 AI 的項目 |
-| AI 配一餐 | `components/AiMealPanel.tsx` | 第三種輸入（`kind: "suggest"`）：入口「讓 AI 配一餐」（`base.aiButton`，同「用 AI 估算」；`base.secondary` 的 44px 只在 `.actions` 底下才有）→ `<form aria-label="讓 AI 配一餐">`「偏好（選填）」「讓 AI 建議」「取消」。從卡片或 `/planner` 進來時一開始就展開、焦點在偏好。結果是同一個勾選清單（`region`「AI 建議的一餐」）、同一個「加入這 N 樣」 |
+| AI 配一餐 | `components/AiMealPanel.tsx` | 第三種輸入（`kind: "suggest"`）：入口「讓 AI 配一餐」（`base.aiButton`，同「用 AI 估算」；**`aria-disabled`＋擋在 onClick**，不是原生停用——送出中按「取消」焦點要回到它，審查 M2；`base.secondary` 的 44px 只在 `.actions` 底下才有）→ `<form aria-label="讓 AI 配一餐">`「偏好（選填）」「讓 AI 建議」「取消」。從卡片或 `/planner` 進來時一開始就展開、焦點在偏好。結果是同一個勾選清單（`region`「AI 建議的一餐」）、同一個「加入這 N 樣」 |
 
 **新的東西在哪裡：**
 

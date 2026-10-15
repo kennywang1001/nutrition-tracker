@@ -1342,7 +1342,7 @@ describe("AI 多樣估算面板：讓 AI 配一餐（營養素配餐規格 §5�
 			).toBeInTheDocument();
 			// 這不是「AI 沒設定」：拍照與配餐照樣能按。
 			expect(screen.getByLabelText("拍照估算")).toBeEnabled();
-			expect(suggestEntry()).toBeEnabled();
+			expect(suggestEntry()).toHaveAttribute("aria-disabled", "false");
 		},
 	);
 
@@ -1380,7 +1380,7 @@ describe("AI 多樣估算面板：讓 AI 配一餐（營養素配餐規格 §5�
 		);
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("AI 分析未設定");
-		expect(suggestEntry()).toBeDisabled();
+		expect(suggestEntry()).toHaveAttribute("aria-disabled", "true");
 		expect(screen.getByLabelText("拍照估算")).toBeDisabled();
 		expect(
 			screen.getByRole("button", { name: "用 AI 估算「雞腿便當」" }),
@@ -1391,7 +1391,7 @@ describe("AI 多樣估算面板：讓 AI 配一餐（營養素配餐規格 §5�
 		).toHaveAttribute("aria-disabled", "true");
 	});
 
-	it("AI 沒設定（文字估算回 503）：「讓 AI 配一餐」也停用", async () => {
+	it("AI 沒設定（文字估算回 503）：「讓 AI 配一餐」也停用，按了不會打開表單", async () => {
 		mockPanel({
 			estimate: () => apiError(503, "AI_NOT_CONFIGURED", "AI 分析未設定"),
 		});
@@ -1402,7 +1402,12 @@ describe("AI 多樣估算面板：讓 AI 配一餐（營養素配餐規格 §5�
 		);
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("AI 分析未設定");
-		expect(suggestEntry()).toBeDisabled();
+		expect(suggestEntry()).toHaveAttribute("aria-disabled", "true");
+		// aria-disabled 只是樣子：擋在 onClick。
+		await userEvent.click(suggestEntry());
+		expect(
+			screen.queryByRole("form", { name: "讓 AI 配一餐" }),
+		).not.toBeInTheDocument();
 	});
 
 	it("送出中：「讓 AI 建議」是 aria-disabled，再按不會多打一次；狀態列是「AI 配餐中…」", async () => {
@@ -1419,6 +1424,30 @@ describe("AI 多樣估算面板：讓 AI 配一餐（營養素配餐規格 §5�
 		// Enter 也是送出：同一道擋。
 		fireEvent.submit(form);
 		expect(calls(fetchMock, "POST", "/api/ai/suggest-meal")).toHaveLength(1);
+	});
+
+	it("送出中按「取消」：焦點回到入口（aria-disabled，收得到焦點），不是掉到 body；送出中按入口不會打開表單", async () => {
+		mockPanel({ suggest: () => new Promise(() => {}) });
+		renderPanel();
+		const form = await openSuggestForm();
+		await userEvent.click(
+			within(form).getByRole("button", { name: "讓 AI 建議" }),
+		);
+		expect(screen.getByRole("status")).toHaveTextContent("AI 配餐中…");
+
+		await userEvent.click(within(form).getByRole("button", { name: "取消" }));
+
+		expect(
+			screen.queryByRole("form", { name: "讓 AI 配一餐" }),
+		).not.toBeInTheDocument();
+		await waitFor(() => expect(suggestEntry()).toHaveFocus());
+		expect(suggestEntry()).toHaveAttribute("aria-disabled", "true");
+
+		await userEvent.click(suggestEntry());
+		expect(
+			screen.queryByRole("form", { name: "讓 AI 配一餐" }),
+		).not.toBeInTheDocument();
+		expect(suggestEntry()).toHaveAttribute("aria-expanded", "false");
 	});
 
 	it("配過一餐之後再用文字估算：結果的標籤換回「AI 估算結果」", async () => {

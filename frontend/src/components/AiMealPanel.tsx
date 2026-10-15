@@ -443,15 +443,16 @@ export function AiMealPanel({
 					onChange={handlePhoto}
 				/>
 				{/* 營養素配餐的模式 B（規格 D15）：在記一餐裡、用同一個勾選清單。外觀同「用 AI 估算」。
-				    原生 disabled（同拍照）：它停用的時候（估算中、AI 沒設定）焦點不會在它身上——
-				    按下它就是打開表單、焦點移到偏好欄位。 */}
+				    aria-disabled 而不是原生 disabled（跟拍照不一樣）：送出中按表單的「取消」，焦點要
+				    回到這裡——原生停用的按鈕收不到焦點，會掉到 body（審查 M2）。擋在 onClick。 */}
 				<button
 					ref={suggestButtonRef}
 					type="button"
 					className={base.aiButton}
 					aria-expanded={suggesting}
-					disabled={busy || aiUnavailable}
+					aria-disabled={busy || aiUnavailable}
 					onClick={() => {
+						if (busy || aiUnavailable) return;
 						const next = !suggesting;
 						setSuggesting(next);
 						if (next) focusNextRef.current = "preference";
