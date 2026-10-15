@@ -6,18 +6,22 @@ import {
 	useLibrarySuggestions,
 } from "../api/planner";
 import ui from "../components/ui.module.css";
-import { formatMacro, percentOf } from "../lib/decimal";
+import { formatMacro, percentOf, roundForDisplay } from "../lib/decimal";
 import { itemsState, SUGGEST_STATE } from "../lib/planner";
 import styles from "./Planner.module.css";
 
+/** 熱量顯示到整數、克到小數一位（half-up，只是顯示；後端給兩位，「236.25 kcal」太瑣碎）。 */
+const kcalText = (value: string) => `${roundForDisplay(value, 0)} kcal`;
+const gramsText = (value: string) => `${roundForDisplay(value, 1)} g`;
+
 /** 一樣的那一行（規格 §7.3）。數字都是後端給的，這裡不做任何運算：有份量的寫「幾份（份量名）」，
- *  沒有的寫 g／ml（看食物的單位）。 */
+ *  沒有的寫 g／ml（看食物的單位）。量原樣（`formatMacro`）——它就是記一餐輸入框裡會出現的值。 */
 function itemLine(item: PlannedItem): string {
 	const amount =
 		item.portion === null
 			? `${formatMacro(item.quantity)} ${item.food.nutrition?.base_unit ?? "g"}`
 			: `${formatMacro(item.quantity)} 份（${item.portion.label}）`;
-	return `${item.food.name} ${amount}・${formatMacro(item.nutrition.kcal)} kcal`;
+	return `${item.food.name} ${amount}・${kcalText(item.nutrition.kcal)}`;
 }
 
 /** 合計的四段。每一段各自不換行（手機上「碳水 112.5」與「g」被拆到兩行很難讀）；分隔的「・」
@@ -25,10 +29,10 @@ function itemLine(item: PlannedItem): string {
 function totalSegments(combo: PlannedCombo): string[] {
 	const t = combo.total;
 	const segments = [
-		`合計 ${formatMacro(t.kcal)} kcal`,
-		`蛋白質 ${formatMacro(t.protein_g)} g`,
-		`脂肪 ${formatMacro(t.fat_g)} g`,
-		`碳水 ${formatMacro(t.carb_g)} g`,
+		`合計 ${kcalText(t.kcal)}`,
+		`蛋白質 ${gramsText(t.protein_g)}`,
+		`脂肪 ${gramsText(t.fat_g)}`,
+		`碳水 ${gramsText(t.carb_g)}`,
 	];
 	return segments.map((segment, index) =>
 		index < segments.length - 1 ? `${segment}・` : segment,
@@ -53,7 +57,7 @@ function Remaining({
 			<dl className={ui.stats}>
 				<div className={ui.stat}>
 					<dt>熱量</dt>
-					<dd>{formatMacro(remaining.kcal)} kcal</dd>
+					<dd>{kcalText(remaining.kcal)}</dd>
 				</div>
 				{MACRO_ROWS.map(({ field, label }) => {
 					const value = remaining[field];
@@ -61,7 +65,7 @@ function Remaining({
 					return (
 						<div key={field} className={ui.stat}>
 							<dt>{label}</dt>
-							<dd>{formatMacro(value)} g</dd>
+							<dd>{gramsText(value)}</dd>
 						</div>
 					);
 				})}

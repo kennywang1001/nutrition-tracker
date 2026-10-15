@@ -14,6 +14,7 @@ import {
 	perServingToPer100,
 	positionIn,
 	ratioOf,
+	roundForDisplay,
 	sumMacros,
 	toWholeNumber,
 } from "../src/lib/decimal";
@@ -317,5 +318,24 @@ describe("percentOf（後端算好的比例 → 百分比；營養素配餐規�
 		["2", "200%"],
 	] as const)("%j → %j", (ratio, text) => {
 		expect(percentOf(ratio)).toBe(text);
+	});
+});
+
+describe("roundForDisplay（只給畫面看的四捨五入；營養素配餐 /planner）", () => {
+	it.each([
+		// half-up，不是 half-even：192.5 → 193（half-even 會是 192）、49.25 → 49.3（half-even 會是 49.2）。
+		["192.50", 0, "193"],
+		["732.50", 0, "733"],
+		["236.25", 0, "236"],
+		["824.25", 0, "824"],
+		["540.00", 0, "540"],
+		["49.25", 1, "49.3"],
+		["60.98", 1, "61"],
+		["4.13", 1, "4.1"],
+		["120.00", 1, "120"],
+		["0.04", 1, "0"],
+		["12", 1, "12"],
+	] as const)("%j 到 %i 位 → %j", (value, places, text) => {
+		expect(roundForDisplay(value, places)).toBe(text);
 	});
 });

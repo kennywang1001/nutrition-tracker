@@ -172,6 +172,15 @@ export function percentOf(ratio: Numeric): string {
 	return `${new Decimal(ratio).times(100).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toString()}%`;
 }
 
+/** 只給畫面看的四捨五入（half-up）到 `places` 位，尾數的 0 不寫（`"120.00"` → `"120"`）。
+ *  給 `/planner` 用：熱量到整數、克到小數一位（後端的 `scale()` 給兩位，「236.25 kcal」「蛋白質 60.98 g」太瑣碎）。
+ *  **只用在顯示**——交給記一餐的量、送回後端的值都不經過這裡。 */
+export function roundForDisplay(value: Numeric, places: 0 | 1): string {
+	return new Decimal(value)
+		.toDecimalPlaces(places, Decimal.ROUND_HALF_UP)
+		.toString();
+}
+
 /** 一組數值的平均。**空陣列回 `null`，不是 `"0"`**——沒有資料就沒有平均，
  *  「平均 0」讀起來是「每天都吃了 0」（跟 `ratioOf` 的 null 同一個道理）。
  *

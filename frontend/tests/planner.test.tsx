@@ -68,6 +68,27 @@ describe("/planner 今天還能吃什麼（營養素配餐規格 §7.3）", () =
 		expect(values).toEqual(["700 kcal", "50 g"]);
 	});
 
+	it("「還能吃」有小數時：熱量到整數、克到小數一位（half-up）", async () => {
+		mockApi(
+			plannerRoutes({
+				...OK_SUGGESTIONS,
+				remaining: {
+					kcal: "412.50",
+					protein_g: "12.25",
+					fat_g: "3.00",
+					carb_g: "60.98",
+				},
+			}),
+		);
+		renderPlanner();
+
+		const remaining = await screen.findByRole("region", { name: "還能吃" });
+		const values = within(remaining)
+			.getAllByRole("definition")
+			.map((value) => value.textContent);
+		expect(values).toEqual(["413 kcal", "12.3 g", "3 g", "61 g"]);
+	});
+
 	it("每一組一張：組合 N、每一樣一行、合計、佔剩下的熱量", async () => {
 		mockApi(plannerRoutes());
 		renderPlanner();
@@ -87,7 +108,8 @@ describe("/planner 今天還能吃什麼（營養素配餐規格 §7.3）", () =
 			.getAllByRole("listitem")
 			.map((item) => item.textContent);
 		expect(lines).toEqual([
-			"雞胸 175 g・192.5 kcal",
+			// 熱量顯示到整數（half-up：192.5 → 193）；量是交給記一餐的值，原樣。
+			"雞胸 175 g・193 kcal",
 			"白飯 1.5 份（1 碗）・540 kcal",
 		]);
 		// 合計拆成四段（各自不換行）：看整個段落的字。
@@ -96,7 +118,8 @@ describe("/planner 今天還能吃什麼（營養素配餐規格 §7.3）", () =
 				.getByText(/^合計 /)
 				.closest("p"),
 		).toHaveTextContent(
-			/^合計 732\.5 kcal・蛋白質 49\.25 g・脂肪 4\.13 g・碳水 120 g$/,
+			// 熱量到整數、克到小數一位（half-up：49.25 → 49.3），尾數的 0 不寫。
+			/^合計 733 kcal・蛋白質 49\.3 g・脂肪 4\.1 g・碳水 120 g$/,
 		);
 		expect(within(first).getByText("佔剩下的熱量 105%")).toBeInTheDocument();
 	});
