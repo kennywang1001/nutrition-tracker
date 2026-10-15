@@ -12,6 +12,81 @@
 
 ---
 
+## 執行中發現的差異
+
+### Task 1–6（後端，2026-10-15）
+
+基準線：後端 1757、前端 `Test Files 178`／`Tests 2574`，跟 handover 一致。做完 Task 6：後端 **1851**、
+`ruff`、`mypy app` 乾淨；端點 **105**（`app.openapi()` 數的）；`schema.d.ts` 在 Task 1、3、6 重新產生，前端 typecheck 綠。
+
+**Task 1**（`15cf613`）：照計畫。5 條新測試；`/stats/daily` 改用 `_target_and_ratio`、查詢仍是 4 次。
+突變 4 個全紅：`effective_to >=`（`test_the_target_is_the_one_in_effect_that_day`）、`adds_exercise` 寫死 `True`
+（`test_with_the_setting_off…` 與 `test_stats_daily.py` 的設定關那條）、`target_on` 拿掉 `user_id`
+（`test_another_users_data_is_not_counted`）、ratio 的熱量分母用 `kcal_budget`（`test_daily_stats_adds_the_days_exercise_to_the_kcal_budget`）。
+
+**Task 2**（`7b9e9fd`）：`app/planner.py` 跟 `$S/plan_planner_draft.py` 一字不差。
+- 計畫說「PASS（20 條）」，列出來的測試其實是 **19 條**；補了一條（見下）之後是 20。
+- 突變 1–3、6–10 照計畫紅。**第 4 條（拿掉「最多共用一樣」）存活**、第 5 條（拿掉「最多出現在兩組」）反而紅
+  （`test_the_eight_foods_dinner`、`test_combos_share…`）——跟計畫的預想相反：八樣的例子裡，第二條規則擋得住第一條要擋的那一組。
+  補了 `test_a_combo_one_item_short_of_a_picked_one_is_skipped`（只看熱量 850、每 100 g 130／40／40：A+B+C 各 400 g＝840 最好，
+  A+B＝680 排第二但跟第一組共用兩樣——只有第一條擋得住），用 2 萬組隨機資料比對原版與突變版找出來的最小例子。之後第 4 條紅、第 5 條照樣紅。
+- 第 11 條（`DESCENT_ROUNDS` 2 → 0）**存活**，照計畫的預期：三樣的品質只在規格 §4.5 的大例子看得出來，沒有寫成測試。
+- 時間（這台機器，30 個都沒有份量、各跑 30 次）：650 kcal 平均 4.1／最慢 4.8 ms；1200 kcal 8.7／11.4 ms；
+  **2500 kcal 16.3／20.8 ms**（規格寫 17 ms）。30 次的輸出全部相同。
+
+**Task 3**（`db60846`）：
+- **候選的合併改了（D12）**：規格字面的「常吃前 30＋最近吃前 30，常吃的在前、去重，取前 30」**永遠等於常吃的前 30**——兩個查詢來自
+  同一批食物，記過 30 個以上時常吃的已經滿 30，不到 30 個時常吃的已經是全部。最近吃的一個都進不來，第二個查詢是白做；而且次數都是 1 時
+  常吃的用 `Food.id` 排，記過很多食物之後新記的食物永遠不是候選。改成 **常吃的前 20（`FREQUENT_SLOTS`）→ 最近吃的 → 剩下的常吃的**，
+  去重、取 30；查詢次數不變。規格 D12 跟著改了一句。
+- `test_the_default_portion_prefers_my_own`、`test_frequent_foods_come_first…` 直接測 `load_candidates`（不經過端點）：四種份量的情形
+  各一個食物，不受解題器挑哪三組影響。
+- 候選測試多一個食物：**別人吃過的全域食物**。計畫寫的「別人的私人食物」被可見性條件（`owner_id IS NULL OR = 我`）擋住，
+  拿掉 `Meal.user_id == user.id` 的突變對它不會紅；全域的才分得出來。
+- 先紅的是 import（測試檔直接 import `app.planner_data`），不是 404。
+- 查詢次數實測 **7**（3 個與 5 個候選都是）：auth 不算（使用者已經在 session 的 identity map 裡）。
+- 突變 12 個全紅：計畫的 1–8（1 是 500：`None.kcal`；6 是 `DivisionByZero` 的 500，紅在 `test_what_was_eaten_today…` 補的
+  「蛋白質剩 0 → `fill.protein_g` 是 null」）、隱私掃描加 `import logging`，以及多做的 `FREQUENT_SLOTS` 20 → 30、
+  「今天」用 UTC、運動設定寫死 `True`。
+
+**Task 4**（`d7ecc0d`）：照計畫。測試資料庫來回：`VARCHAR(7)`＋三個值 → `downgrade -1`（`VARCHAR(5)`、兩個值；插的 `suggest`
+那一列變 `text`、列數 2 不變）→ `upgrade head` → `check` 乾淨、`current` 是 `0021`。dev 資料庫沒動。
+- **退版安全的理由比規格寫的窄**：舊的 `Enum` **載入** `'suggest'` 會丟 `LookupError`（實測），只是舊程式從來不載入別人的 `kind`
+  （額度只數列數、`refresh` 的是自己剛寫的 `text`／`image`）。所以不進 `ROLLBACK_UNSAFE_REVISIONS`；理由寫進模型與 migration 的註解。
+- 突變 4 個：拿掉 `alter_column`、`String(7)` → `6`（只改 migration）→ 每一條在 setup 就 ERROR（`alembic check` 的 `modify_type`）；
+  migration 的 CHECK 少 `'suggest'`（模型照舊）、模型與 migration 一起少 → 只有兩條新測試紅。
+
+**Task 5**（`41ae4e5`）：
+- **`suggestion_request` 不收 `app.planner.Remaining`，收 `estimator.py` 裡的唯讀 Protocol `SuggestionBudget`**（`Remaining` 結構上符合）。
+  照計畫 import `Remaining` 時整套紅了一條：`test_the_friend_and_social_modules_cannot_reach_the_planner_modules_indirectly`——
+  `app.ai.estimator` 經過 `app.api.deps` 被每一個路由 import（好友與社群的也是），它 import 配餐的模組，好友的模組就「走得到」配餐。
+- 提示詞與 `suggestion_request` 照計畫原文；Protocol 的實作照計畫。
+- 突變 10 個全紅：計畫的 1–6（1、2、3 兩家各做一次；gemini 另外做「用單樣的 schema」），以及「不考慮的營養素也列」。
+
+**Task 6**（`564e180`）：
+- **回應在 commit 之前組好**（身體資料審查 M6）：`flush` 拿 `analysis.id`、比對食物庫、組回應、`commit`。計畫寫「照 `analyze_meal` 的順序」
+  （commit → refresh → 組回應）；這裡照執行環境的規矩。`analyze_meal` 沒動。
+- `user.id`、`user.timezone` 在開頭讀成區域變數。
+- 測試多一條 `test_the_budget_includes_todays_exercise`（計畫突變 4、5 要的那一條）；「AI 沒設定也一樣 422」拆成
+  `test_no_kcal_target_is_422_even_when_ai_is_not_configured`，`test_a_full_day_is_422_and_free` 也看一次。
+  `_rows()` 會 rollback，之後 `user` 過期——兩條測試的 headers 要在開頭先組好（不然 `MissingGreenlet`）。
+- 偏好的換行與零寬空白在測試裡用 `chr()` 組，原始碼不放看不見的字。
+- 突變 11 個全紅：計畫的 1–7（2 拆成成功／失敗兩列）、端點寫一行 log（隱私掃描）、拿掉 `is_full` 的 422、
+  `input_hash` 不含偏好。
+
+**給 Task 7–12 的事實**（照實作）：
+
+- `GET /api/planner/library-suggestions` → 200 `LibrarySuggestionsResponse`：`{date, status, remaining, combos}`；
+  `status` ∈ `ok`／`no_target`／`full`／`no_candidates`／`no_fit`；`remaining` 只有 `no_target` 是 null，其餘
+  `{kcal, protein_g, fat_g, carb_g}`（字串，三大營養素可為 null）；`combos` 只有 `ok` 有東西，每組
+  `{items: [{food: FoodResponse, portion: {id, label, grams} | null, quantity, quantity_g, nutrition}], total, fill}`。
+  `quantity` 是字串（`"175"`、`"1.5"`、`"2"`——不補小數位）；`fill` 四欄可為 null。未登入 401。
+- `POST /api/ai/suggest-meal`，body `{preference?: string | null}`（清理前 ≤ 100 字，超過 `422 VALIDATION_ERROR`）→ 200
+  `AnalyzeMealResponse`。錯誤：`422 NO_KCAL_TARGET`（「先設定每日熱量目標，才知道今天還能吃多少」）、`422 DAY_ALREADY_FULL`
+  （「今天的熱量差不多用完了，沒有可以配的」）、`503 AI_NOT_CONFIGURED`／`AI_MISCONFIGURED`、`429 AI_DAILY_LIMIT`、
+  `502 AI_UPSTREAM_ERROR`／`AI_BAD_RESPONSE`／`AI_NO_SUGGESTION`（「AI 這次配不出合適的一餐，換個偏好再試（這一次也算在今天的次數裡）」）。
+  兩種 422 在 503 之前。
+
 ## 執行環境
 
 - 分支 `feat/meal-planner`（已建立，**不要 push**）。`S=C:/Users/user/AppData/Local/Temp/claude/f--wallet/e7b60c93-fbd5-4a61-9c85-74550ff7244b/scratchpad`。
