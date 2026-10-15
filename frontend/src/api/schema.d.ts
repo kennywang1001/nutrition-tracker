@@ -1688,6 +1688,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/ai/suggest-meal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Suggest Meal
+         * @description 依今天剩下的額度（與選填的偏好）請 AI 建議一餐（營養素配餐規格 §5）。
+         *
+         *     回應同 `/analyze-meal`：一句描述＋1～8 樣，每一樣比對食物庫。算一次額度（跟兩個估算端點
+         *     共用）、寫一列 `kind = 'suggest'`。沒有熱量目標（`422 NO_KCAL_TARGET`）或剩不到 50 kcal
+         *     （`422 DAY_ALREADY_FULL`）時不呼叫 AI、不算額度。偏好不寫 log。
+         */
+        post: operations["suggest_meal_api_ai_suggest_meal_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/expenses": {
         parameters: {
             query?: never;
@@ -3290,6 +3314,11 @@ export interface components {
             comments: components["schemas"]["CommentResponse"][];
             /** Comments Truncated */
             comments_truncated: boolean;
+        };
+        /** SuggestMealRequest */
+        SuggestMealRequest: {
+            /** Preference */
+            preference?: string | null;
         };
         /**
          * SuggestionMissing
@@ -6523,6 +6552,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["AnalyzeTextRequest"] | components["schemas"]["AnalyzeImageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzeMealResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    suggest_meal_api_ai_suggest_meal_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SuggestMealRequest"];
             };
         };
         responses: {

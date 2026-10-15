@@ -16,6 +16,10 @@
 `/analyze-meal`（AI 多樣估算規格 §3.1）是同一個流程的多樣版：①～③ 用的是同一批函式
 （食物庫短路、額度、記錄與錯誤分類），差別只有呼叫的是 estimator 的 `estimate_meal_*`、
 回的是一句描述＋每一樣各一份估算，而且每一樣再各自比對一次食物庫。**一次呼叫只寫一列**。
+
+`/suggest-meal`（營養素配餐規格 §5）：輸入不是一餐，是「今天剩下的額度＋偏好」。②③⑤ 同
+`/analyze-meal`（額度共用、記成 `kind = 'suggest'`、回同一個形狀），前面多一道：沒有熱量目標
+或剩不到 50 kcal 時先 422（不建 AI 實作、不算額度）。沒有①：建議不是查得到的東西。
 """
 
 import base64
@@ -39,10 +43,12 @@ from app.ai.estimator import (
     EstimatorUpstreamError,
     RawEstimate,
     RawMealEstimate,
+    suggestion_request,
 )
 from app.api.deps import EstimatorFactory, get_current_user, get_estimator_factory
 from app.api.routes.meals import MAX_PHOTO_BYTES
 from app.config import settings
+from app.day_budget import load_day_budget
 from app.days import day_bounds, today_in_timezone
 from app.db import get_db
 from app.errors import (
@@ -55,6 +61,8 @@ from app.errors import (
 from app.models.ai_analysis import AiAnalysis, AnalysisKind
 from app.models.food import BaseUnit, Food, FoodRevision
 from app.models.user import User
+from app.planner import is_full
+from app.planner_data import remaining_of
 from app.schemas.ai import (
     AnalyzedMealItem,
     AnalyzedNutrition,
@@ -64,6 +72,7 @@ from app.schemas.ai import (
     AnalyzeTextRequest,
     ConsistencyResult,
     LibraryFoodMatch,
+    SuggestMealRequest,
 )
 from app.storage.photos import MAX_IMAGE_PIXELS
 
@@ -258,7 +267,8 @@ async def _call_estimator_or_record_failure[T](
                 "AI_UPSTREAM_ERROR", "AI 服務暫時無法使用，請稍後再試"
             ) from exc
         if isinstance(exc, BadGatewayError):
-            # 連上了、也回了，但回的東西沒過把關（AI_BAD_RESPONSE／AI_NO_FOOD_FOUND）。
+            # 連上了、也回了，但回的東西沒過把關（AI_BAD_RESPONSE／AI_NO_FOOD_FOUND／
+            # AI_NO_SUGGESTION）。
             # 使用者只看得到一句「看不懂」；這一行是管理員唯一查得到「哪裡不對」的地方。
             logger.warning(
                 "AI 的回覆沒有通過檢查（model=%s）：%s %s",
@@ -567,3 +577,69 @@ async def analyze_meal(
         items=items,
         remaining_today=_remaining(used_today + 1),
     )
+
+
+@router.post("/suggest-meal", response_model=AnalyzeMealResponse)
+async def suggest_meal(
+    payload: SuggestMealRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    make_estimator: EstimatorFactory = Depends(get_estimator_factory),
+) -> AnalyzeMealResponse:
+    """依今天剩下的額度（與選填的偏好）請 AI 建議一餐（營養素配餐規格 §5）。
+
+    回應同 `/analyze-meal`：一句描述＋1～8 樣，每一樣比對食物庫。算一次額度（跟兩個估算端點
+    共用）、寫一列 `kind = 'suggest'`。沒有熱量目標（`422 NO_KCAL_TARGET`）或剩不到 50 kcal
+    （`422 DAY_ALREADY_FULL`）時不呼叫 AI、不算額度。偏好不寫 log。
+    """
+    user_id, tz_name = user.id, user.timezone
+    budget = await load_day_budget(
+        db,
+        user_id=user_id,
+        tz_name=tz_name,
+        adds_exercise=user.exercise_adds_to_budget,
+        day=today_in_timezone(tz_name),
+    )
+    remaining = remaining_of(budget)
+    # 這兩種是使用者自己能處理的狀態：在「AI 沒設定」與額度之前（規格 D17）。
+    if remaining is None:
+        raise UnprocessableEntityError(
+            "NO_KCAL_TARGET", "先設定每日熱量目標，才知道今天還能吃多少"
+        )
+    if is_full(remaining):
+        raise UnprocessableEntityError("DAY_ALREADY_FULL", "今天的熱量差不多用完了，沒有可以配的")
+
+    # 順序同 /analyze-meal：先建實作（沒設定 → 503），再看額度。
+    estimator = make_estimator()
+    used_today = await _assert_quota_available(db, user)
+    request = suggestion_request(remaining, payload.preference)
+    # 整段使用者訊息的雜湊（規格 D21）：偏好本身不存、不寫 log。
+    input_hash = hashlib.sha256(request.encode()).hexdigest()
+    raw = await _call_estimator_or_record_failure(
+        db,
+        user_id=user_id,
+        kind=AnalysisKind.SUGGEST,
+        input_hash=input_hash,
+        model=estimator.model,
+        call=lambda: estimator.suggest_meal(request),
+    )
+
+    analysis = AiAnalysis(
+        user_id=user_id,
+        kind=AnalysisKind.SUGGEST,
+        model=estimator.model,
+        input_hash=input_hash,
+        succeeded=True,
+    )
+    db.add(analysis)
+    # 回應在 commit **之前**組好（身體資料審查 M6）：flush 拿到 id，比對食物庫的查詢也在
+    # 同一個交易裡；commit 之後不碰 ORM 物件、不送 SQL。
+    await db.flush()
+    response = AnalyzeMealResponse(
+        analysis_id=analysis.id,
+        description=raw.description,
+        items=[await _to_meal_item(db, user, item) for item in raw.items],
+        remaining_today=_remaining(used_today + 1),
+    )
+    await db.commit()
+    return response

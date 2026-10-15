@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.food import BaseUnit
+from app.schemas.validators import OptionalSingleLine
 
 
 class AnalyzeTextRequest(BaseModel):
@@ -16,6 +17,12 @@ class AnalyzeTextRequest(BaseModel):
 class AnalyzeImageRequest(BaseModel):
     kind: Literal["image"] = "image"
     image_base64: str = Field(min_length=1)
+
+
+class SuggestMealRequest(BaseModel):
+    # 偏好（營養素配餐規格 D21）：例如「不吃牛、想吃便當、在便利商店」。`single_line` 清成一行，
+    # 清完是空的＝沒有偏好。100 是清理**之前**的長度（同 meals.description 的 500）。不寫 log。
+    preference: OptionalSingleLine = Field(default=None, max_length=100)
 
 
 # `kind` 是判別欄位。兩個入口（規格 §1.2 使用者原話：「兩個」）在 schema

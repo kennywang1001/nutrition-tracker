@@ -1,8 +1,10 @@
 """營養素配餐只給本人（規格 §8）：讀資料、算剩下的、解題的模組不寫 log；好友與社群的模組
 （直接或間接）碰不到它們。掃的是原始碼——端點測試只看得到「這一次的回應沒有」。"""
 
+import inspect
 import re
 
+from app.api.routes.ai import suggest_meal
 from tests.privacy_helpers import (
     APP,
     SOCIAL_MODULES,
@@ -74,3 +76,13 @@ def test_the_friend_and_social_modules_cannot_reach_the_planner_modules_indirect
     reachable = app_import_closure(roots, stop_at={"app.models"})
     assert {"app.meal_reads", "app.models.meal", "app.models.user"} <= reachable
     assert sorted(reachable & set(PLANNER_MODULE_NAMES)) == []
+
+
+def test_the_suggest_meal_endpoint_does_not_log():
+    """偏好是使用者打的字（規格 D21）：端點本身不寫 log。共用的記錄函式只記錯誤碼與
+    回覆的位置（tests/test_ai_suggest_meal.py 斷言偏好不在 log 裡）。"""
+    source = inspect.getsource(suggest_meal)
+    assert "suggestion_request" in source  # 掃到的是那個端點
+    assert "logger" not in source
+    assert "logging" not in source
+    assert "print(" not in source
