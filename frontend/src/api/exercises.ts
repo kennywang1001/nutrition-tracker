@@ -29,7 +29,9 @@ function required<T>(value: T | null, what: string): T {
 	return value;
 }
 
-/** 活動清單（D2：唯一的事實來源在後端）。固定的清單，掛載一次就不再重抓。 */
+/** 活動清單（D2：唯一的事實來源在後端）。一次載入裡是固定的，抓一次就不再重抓；
+ *  **不進離線快取**（`persist.ts` 的 `NOT_PERSISTED`，審查 M3）：下一次載入一定重抓，
+ *  後端新增或改名的活動代碼才會出現。 */
 export function useActivities() {
 	return useQuery({
 		queryKey: queryKeys.exerciseActivities,

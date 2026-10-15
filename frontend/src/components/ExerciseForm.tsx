@@ -180,10 +180,14 @@ export function ExerciseForm({ initial, save, onSaved, stored }: Props) {
 					</option>
 				))}
 			</select>
-			{activities.isPending && <p className={styles.hint}>載入中…</p>}
-			{activities.isError && activities.data === undefined && (
-				<p className={styles.error}>無法載入活動清單</p>
+			{/* 清單不進離線快取（審查 M3）：離線打開時查詢是 paused、永遠等不到，說無法載入。 */}
+			{activities.isPending && activities.fetchStatus !== "paused" && (
+				<p className={styles.hint}>載入中…</p>
 			)}
+			{(activities.isError || activities.fetchStatus === "paused") &&
+				activities.data === undefined && (
+					<p className={styles.error}>無法載入活動清單</p>
+				)}
 
 			{isOther && (
 				<>

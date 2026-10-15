@@ -88,6 +88,10 @@ const NOT_PERSISTED: ReadonlySet<unknown> = new Set([
 	"supplement-search",
 	// 運動的估算預覽：分鐘每打一個數字就是一組新 key，同 `food-search` 的理由（運動規格 D23）。
 	"exercise-estimate",
+	// 運動的活動清單：一次載入裡 `staleTime: Infinity`（`api/exercises.ts`），存進來的話就沒有
+	// 任何東西會換掉它——之後的 migration 新增或改名活動代碼，這台裝置永遠是舊的清單（審查 M3）。
+	// 清單很小、每次載入抓一次；離線時表單本來就存不了。
+	"exercise-activities",
 	// 管理員的清單，全部在 `["admin", …]` 底下（見 `api/queries.ts`）：所有帳號（每個人的
 	// email 與名字）、邀請清單、待審提案。別人的個資不該以明文留在這台裝置的 localStorage
 	// 裡；而這三個畫面本來就只在線上有用（產生連結、撤銷、審核都要打後端，兩份清單還是

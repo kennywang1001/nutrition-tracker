@@ -806,10 +806,12 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 		);
 	});
 
-	it("運動的估算預覽不會被寫進 localStorage；今天的運動會", async () => {
-		// 同 food-search 那條的做法：先讓兩個 query 真的進到 client，再證明 persist 跑過一輪。
+	it("運動的估算預覽與活動清單不會被寫進 localStorage；今天的運動會", async () => {
+		// 同 food-search 那條的做法：先讓這幾個 query 真的進到 client，再證明 persist 跑過一輪。
 		// 這裡的「跑過一輪」用同一條裡的 `exercisesToday`（自己的資料，D23 要離線看得到）——
-		// 它在、估算不在，排除才有意義；用 queryKeys 產生的 key 做深比對。
+		// 它在、估算與活動清單不在，排除才有意義；用 queryKeys 產生的 key 做深比對。
+		// 活動清單（審查 M3）：一次載入裡 `staleTime: Infinity` 不重抓，存進離線快取的話之後
+		// 新增或改名的活動代碼永遠不會出現。
 		mockApi({
 			"/api/stats/daily": () => json(STATS_WITH_TARGET),
 			"/api/supplements/today": () => json([]),
@@ -836,8 +838,12 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 			total_kcal: "0.00",
 			entries: [],
 		});
+		client.setQueryData(queryKeys.exerciseActivities, [
+			{ code: "running", label: "跑步（約 10 km/h）", met: "9.8" },
+		]);
 		const estimateKeyJson = JSON.stringify(estimateKey);
 		const todayKeyJson = JSON.stringify(queryKeys.exercisesToday);
+		const activitiesKeyJson = JSON.stringify(queryKeys.exerciseActivities);
 
 		await waitFor(
 			() => {
@@ -850,6 +856,7 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 				).map((query) => JSON.stringify(query.queryKey));
 				expect(persisted).toContain(todayKeyJson);
 				expect(persisted).not.toContain(estimateKeyJson);
+				expect(persisted).not.toContain(activitiesKeyJson);
 			},
 			{ timeout: 3000 },
 		);

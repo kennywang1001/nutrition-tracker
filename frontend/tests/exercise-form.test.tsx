@@ -1,4 +1,8 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+	onlineManager,
+	QueryClient,
+	QueryClientProvider,
+} from "@tanstack/react-query";
 import {
 	act,
 	fireEvent,
@@ -530,5 +534,25 @@ describe("記運動：表單", () => {
 		renderForm();
 
 		expect(await screen.findByText("無法載入活動清單")).toBeInTheDocument();
+	});
+
+	it("離線打開（活動清單不進離線快取，審查 M3）：說無法載入，不是一直「載入中」", async () => {
+		const fetchMock = mockApi(routes());
+		onlineManager.setOnline(false);
+		try {
+			renderForm();
+
+			expect(await screen.findByText("無法載入活動清單")).toBeInTheDocument();
+			expect(screen.queryByText("載入中…")).not.toBeInTheDocument();
+			expect(screen.getByLabelText("活動")).toBeDisabled();
+			expect(calls(fetchMock, "GET", "/api/exercise/activities")).toHaveLength(
+				0,
+			);
+		} finally {
+			onlineManager.setOnline(true);
+		}
+		// 連上之後自己抓回來。
+		await waitFor(() => expect(screen.getByLabelText("活動")).toBeEnabled());
+		expect(screen.queryByText("無法載入活動清單")).not.toBeInTheDocument();
 	});
 });
