@@ -72,6 +72,7 @@
 4. **pydantic-settings 的 bool**：`OFF_ENABLED=""` → `ValidationError`（啟動失敗）；`"false"`、`"0"`、`"no"` → False；`"true"`、`"1"` → True。所以 compose 一定要寫預設值（`${OFF_ENABLED:-true}`），跟 `AI_DAILY_LIMIT` 同一個坑。
 5. **掃描的函式庫**（`$S/bc-vite/`：Vite 8.3.0、TypeScript 6.0.3，跟 `frontend/` 同版本）：`barcode-detector@3.2.2`（MIT，依賴 `zxing-wasm@3.1.3` 釘死）＋`zxing-wasm@3.1.3`（MIT）。Task 8 的 `lib/barcode-detector.ts`、`lib/barcode-ponyfill.ts`、`lib/use-barcode-scanner.ts` 全文在那裡 `tsc`（同 `tsconfig.app.json` 的嚴格選項）乾淨、`vite build` 輸出：`barcode-ponyfill-*.js` **43.40 KB（gzip 14.94 KB）**、`zxing_reader-*.wasm` **1,093.28 KB（gzip 463.82 KB）**、入口那一塊 2.45 KB。輸出的 JS 參照的是雜湊過的 `zxing_reader-<hash>.wasm`（套件內建的 jsDelivr 字串還在，但被 `locateFile` 蓋掉）。三個檔案也用 `frontend/` 的 Biome 設定格式化過、`biome check` 乾淨。
 6. `httpx` 0.28.1 已經在 `requirements-lock.txt`（anthropic、google-genai 的依賴）；`pyproject.toml` 只在 dev 列了它。
+7. **FastAPI 的路徑參數收 `Annotated[Barcode, Path()]`**（`Barcode` 自己是 `Annotated[str, Field(max_length=32), AfterValidator(...)]`）：用一個小 app 試過（`$S/bc-path-probe.py`）——`/x/1234-5678` → 200、值是正規化之後的；不合格 → 422、`msg` 是「Value error, 條碼要是 8、12 或 13 位數字」。body 的 `barcode: Barcode | None`（沒有預設值）：`null` 收、`{}` 是 422（Task 3 的 `test_patch_requires_the_barcode_key`）。
 
 ## 檔案結構
 
@@ -3135,3 +3136,231 @@ git add frontend/package.json frontend/package-lock.json frontend/src/test/setup
 訊息：`feat(frontend): 掃描層——原生 BarcodeDetector 或延遲載入的 ponyfill（wasm 自己服務）、手動輸入、從照片讀`
 
 ---
+## Task 9：前端——掃條碼的入口、命中／沒命中、交接到新增食物與回來
+
+**Files:**
+- Create: `frontend/src/components/BarcodeScanEntry.{tsx,module.css}`、`frontend/src/lib/new-food-handoff.ts`、`frontend/tests/{barcode-scan-entry.test.tsx,new-food-handoff.test.ts,log-meal-barcode.test.tsx}`
+- Modify: `frontend/src/components/FoodPicker.tsx`、`src/screens/FoodLibrary.tsx`、`src/screens/LogMeal.tsx`、`src/screens/EditMeal.tsx`、`src/screens/EditMealItems.tsx`、`src/App.tsx`（`LogMealRoute`、新的 `NewFoodRoute`）、`src/lib/planner.ts`（`isFood` 改成 export）、`tests/{food-picker,food-library,edit-meal,app}.test.tsx`
+
+- [ ] **Step 1：交接的純函式。** `src/lib/new-food-handoff.ts`（規格 D20、D21）：
+
+```ts
+import type { BarcodePrefill } from "../api/barcode";
+import type { Food } from "../api/foods";
+import { isFood } from "./planner";
+
+/** 新增食物存好之後可以回去的地方（白名單；history 裡壞掉或舊版本的 state 不能把人導到別處）。 */
+const RETURN_TO = /^\/meals\/(new|[1-9]\d{0,15}\/edit)$/;
+
+export type NewFoodHandoff = {
+	barcode: string | null;
+	prefill: BarcodePrefill | null;
+	returnTo: string | null;
+};
+
+/** 「用這個條碼建立食物」帶給 `/foods/new` 的 router state。 */
+export function newFoodState(
+	code: string,
+	prefill: BarcodePrefill | null,
+	returnTo: string | null,
+) {
+	return { barcodeCode: code, barcodePrefill: prefill, returnTo };
+}
+
+export function returnToFrom(value: unknown): string | null {
+	return typeof value === "string" && RETURN_TO.test(value) ? value : null;
+}
+
+function isPrefill(value: unknown): value is BarcodePrefill {
+	if (typeof value !== "object" || value === null) return false;
+	const p = value as Record<string, unknown>;
+	const per100 = p.per100 as Record<string, unknown> | null | undefined;
+	return (
+		(p.base_unit === "g" || p.base_unit === "ml") &&
+		(p.name === null || typeof p.name === "string") &&
+		typeof per100 === "object" &&
+		per100 !== null &&
+		["kcal", "protein_g", "fat_g", "carb_g"].every(
+			(key) => typeof per100[key] === "string",
+		)
+	);
+}
+
+/** `/foods/new` 收到的 state → 交接。條碼不是 8／13 位數字就整個不要；預填形狀不對只丟預填。 */
+export function newFoodHandoffFrom(state: unknown): NewFoodHandoff | null {
+	if (typeof state !== "object" || state === null) return null;
+	const s = state as Record<string, unknown>;
+	if (typeof s.barcodeCode !== "string" || !/^(\d{8}|\d{13})$/.test(s.barcodeCode)) {
+		return null;
+	}
+	return {
+		barcode: s.barcodeCode,
+		prefill: isPrefill(s.barcodePrefill) ? s.barcodePrefill : null,
+		returnTo: returnToFrom(s.returnTo),
+	};
+}
+
+/** 新增食物存好、回到記一餐（或編輯這一餐）時帶回來的那個食物。 */
+export function pickedFoodFrom(state: unknown): Food | null {
+	if (typeof state !== "object" || state === null) return null;
+	const picked = (state as Record<string, unknown>).pickedFood;
+	return isFood(picked) ? picked : null;
+}
+```
+
+`tests/new-food-handoff.test.ts`：`returnToFrom`（`/meals/new`、`/meals/12/edit` 收；`/meals/0/edit`、`/meals/new/`、`/foods/1`、`https://x/meals/new`、`//evil/meals/new`、數字 → null）；`newFoodHandoffFrom`（正常；條碼 12 位或非字串 → null；預填缺 `per100` 或數字不是字串 → `prefill: null` 但條碼留著；`returnTo` 不在白名單 → null；經過 `structuredClone` 還讀得出來）；`pickedFoodFrom`。
+
+- [ ] **Step 2：`components/BarcodeScanEntry.tsx`。** Props：
+
+```ts
+type Props = {
+	/** 命中。`requireNutrition` 時沒有生效版本的食物不會走到這裡（畫面說明它不能選）。 */
+	onFood: (food: Food) => void;
+	/** 沒命中時的「用這個條碼建立食物」；不給就只說找不到。 */
+	onCreate?: (code: string, prefill: BarcodePrefill | null) => void;
+	requireNutrition?: boolean;
+};
+```
+
+- 入口：`<button type="button" className={styles.scan}>`＋`ScanBarcode` 圖示（`lucide-react`，`aria-hidden`）＋「掃條碼」；下一行 `<p className={styles.note}>查不到時，條碼可能會送到 Open Food Facts 查詢</p>`（規格 D18）。
+- 按下 → 畫 `BarcodeScanner`；`onCode` → 關掉、狀態「查詢中…」（`role="status"`）→ `lookupBarcode(code)`：
+  - `food` 不是 null：`requireNutrition && food.nutrition === null` →「{名稱}：這個食物還沒有生效的營養素資料」（同 `FoodPicker` 的那一句）；否則 `onFood(food)`、清掉狀態。
+  - `food` 是 null：`<section aria-label="找不到這個條碼">`：「找不到這個條碼（{code}）」；有 `prefill` →「Open Food Facts 有這個商品：{prefill.name ?? "（沒有名稱）"}」＋`<OffAttribution />`；有 `onCreate` →「用這個條碼建立食物」（`onClick={() => onCreate(code, prefill)}`）。
+  - 失敗 → `describeBarcodeError`，`role="alert"`。
+- 掃描層關掉（取消、掃到）之後焦點回到「掃條碼」（`ref`）。
+- 同一個檔案 export `OffAttribution`：`<p className={styles.attribution}>資料來源：<a href="https://world.openfoodfacts.org" target="_blank" rel="noreferrer">Open Food Facts</a>（ODbL）</p>`（規格 D23；新增食物也用它）。
+- CSS：`.scan` 同 `base.aiButton` 的高度（`min-height: 44px`、虛線框、`var(--color-text-muted)`）；`.note`、`.attribution` 13px `var(--color-text-muted)`。
+
+`tests/barcode-scan-entry.test.tsx`（真的 `BarcodeScanner`：jsdom 沒有 `mediaDevices` → 「找不到可以用的相機」；走「手動輸入條碼」；`mockApi` 回 `/api/foods/by-barcode/…`）：命中 → `onFood(makeFood(...))`；命中但 `nutrition: null`＋`requireNutrition` → 那一句、`onFood` 0 次；沒命中＋預填 → 卡片三行、出處連結的 `href`、按鈕 → `onCreate("4710088432094", prefill)`；沒命中、沒預填 → 沒有 OFF 那兩行；沒給 `onCreate` → 沒有按鈕；422 → 「條碼的檢查碼不對，請再確認一次」；429 → 後端的訊息；取消 → 焦點在「掃條碼」；提醒那一行在。
+
+- [ ] **Step 3：掛上去。**
+  - `FoodPicker`：新 prop `onCreateFromBarcode?: (code: string, prefill: BarcodePrefill | null) => void`；搜尋框那一塊的正下方（`renderBelowSearch` 之前）`<BarcodeScanEntry onFood={onSelect} onCreate={onCreateFromBarcode} requireNutrition />`。`tests/food-picker.test.tsx` 加一條：掃到（手動輸入）→ `onSelect` 收到那個食物。
+  - `FoodLibrary`：「新增食物」連結旁 `<BarcodeScanEntry onFood={(food) => navigate(`/foods/${food.id}`)} onCreate={(code, prefill) => navigate("/foods/new", { state: newFoodState(code, prefill, null) })} />`（食物庫：沒有生效版本的也能看詳情，不帶 `requireNutrition`；一般的 push）。`tests/food-library.test.tsx` 加：命中 → 到 `/foods/7`；沒命中 →「用這個條碼建立食物」→ `/foods/new`、state 是 `{barcodeCode, barcodePrefill, returnTo: null}`（`MemoryRouter`＋一個把 `useLocation().state` 印出來的路由）。
+  - `LogMeal`：新 prop `initialFood?: Food`（只在掛載時讀：`useState<Food | null>(initialFood ?? null)`，焦點移到「已選擇」那一行，同 AI 交回食物時的 `focusSelectedRef`）；`FoodPicker` 傳 `onCreateFromBarcode={(code, prefill) => navigate("/foods/new", { replace: true, state: newFoodState(code, prefill, "/meals/new") })}`（`useNavigate`；**`replace`**，規格 D20）。
+  - `App.tsx` 的 `LogMealRoute`：`const [picked] = useState(() => pickedFoodFrom(location.state))`、`initialFood={picked ?? undefined}`（既有的「清掉 history 的 state」那個 effect 照舊）。新的 `NewFoodRoute`：同一套「讀一次、`replace` 清掉」，`newFoodHandoffFrom(location.state)` 交給 `<NewFood handoff={…} />`；`/foods/new` 的路由改用它（`NewFood` 的 `handoff` prop 在 Task 10 才用；這個 task 先加成選填的 prop、不讀）。
+  - `EditMeal`：同 `LogMealRoute` 讀 `pickedFoodFrom(location.state)` 一次、清掉 state（`navigate(pathname, { replace: true, state: null })`），交給 `<EditMealItems meal={meal} initialFood={picked} />`；`EditMealItems` 的 `useState<Editor>(initialFood ? { kind: "add" } : null)`，`AddItem` 收 `initialFood`（`useState<Food | null>(initialFood ?? null)`）與 `FoodPicker` 的 `onCreateFromBarcode`（`returnTo` 是 `/meals/${mealId}/edit`，`replace`）。
+  - `lib/planner.ts`：`isFood` 加 `export`（不改內容）。
+
+`tests/log-meal-barcode.test.tsx`：`initialFood` → 「已選擇：洋芋片」、焦點在那一行；掃（手動）沒命中 →「用這個條碼建立食物」→ `navigate` 到 `/foods/new`、`replace`、state 的 `returnTo` 是 `/meals/new`（用 `MemoryRouter initialEntries={["/x", "/meals/new"]}` 看 history 長度沒有變多）。`tests/app.test.tsx` 加一條：`history.replaceState({ usr: { pickedFood: food }, key: "k", idx: 0 }, "", "/meals/new")` → 已選好、`window.history.state?.usr` 清掉（照營養素配餐那一條的寫法）。`tests/edit-meal.test.tsx` 加：帶 `pickedFood` 進來 →「加一項」已打開、已選好。
+
+- [ ] **Step 4：突變**（型別過得去）：`RETURN_TO` 拿掉 `$` → `/meals/new/` 那格紅；`newFoodHandoffFrom` 預填不合格時整個回 null → 那格紅；`BarcodeScanEntry` 不看 `requireNutrition` → 那格紅；`LogMeal` 的導頁不帶 `replace` → history 那格紅；`LogMealRoute` 不傳 `initialFood` → `app.test` 那格紅；`EditMealItems` 的初始 editor 寫死 null → `edit-meal` 那格紅。
+
+- [ ] **Step 5：檢查、commit。** `npm run -s test`、`npm run -s typecheck`、`npm run -s lint`；`grep -rn "掃條碼" frontend/src` 只有新的這幾處（開工前必讀第 9 點）。
+
+```bash
+git add frontend/src/components/BarcodeScanEntry.tsx frontend/src/components/BarcodeScanEntry.module.css \
+  frontend/src/lib/new-food-handoff.ts frontend/src/lib/planner.ts frontend/src/components/FoodPicker.tsx \
+  frontend/src/screens/FoodLibrary.tsx frontend/src/screens/LogMeal.tsx frontend/src/screens/EditMeal.tsx \
+  frontend/src/screens/EditMealItems.tsx frontend/src/App.tsx frontend/tests/barcode-scan-entry.test.tsx \
+  frontend/tests/new-food-handoff.test.ts frontend/tests/log-meal-barcode.test.tsx \
+  frontend/tests/food-picker.test.tsx frontend/tests/food-library.test.tsx frontend/tests/edit-meal.test.tsx \
+  frontend/tests/app.test.tsx
+```
+
+訊息：`feat(frontend): 掃條碼的入口（記一餐、加一項、食物庫）、沒命中帶到新增食物再回來`
+
+---
+
+## Task 10：前端——新增食物的條碼、OFF 預填、拍營養標示；食物詳情改條碼
+
+**Files:**
+- Modify: `frontend/src/screens/NewFood.tsx`、`src/screens/FoodDetail.tsx`、`tests/new-food.test.tsx`、`tests/food-detail.test.tsx`
+- Create: `frontend/tests/new-food-barcode.test.tsx`
+
+- [ ] **Step 1：寫會紅的測試。** `tests/new-food-barcode.test.tsx`（`<NewFood handoff={…} />` 包在 `MemoryRouter` 裡，`mockApi`）：
+
+| 測試 | 斷言 |
+|---|---|
+| OFF 預填 | 名稱、品牌、單位（ml）、四個數字（「42.00」…）、份量名稱「份」、每份重量「330.00」、條碼「5449000000996」都填好；「已從 Open Food Facts 帶入，請對照包裝確認」＋出處連結；營養標示是「每 100」 |
+| 只有條碼 | 條碼填好、其餘空；「找不到這個條碼的資料。拍營養標示讓 AI 讀數字，或自己填。」 |
+| 條碼送出 | 打 `4710088-432094` → `POST /api/foods` 的 body 有 `"barcode":"4710088432094"`；空的 → body 沒有 `barcode` |
+| 條碼不像條碼 | 打 `123` →「條碼要是 8、12 或 13 位數字」、沒有送出 |
+| 409 `BARCODE_EXISTS` | 顯示後端那一句 |
+| 422 條碼 | `details.errors` 的 `loc` 有 `barcode` →「條碼的檢查碼不對，請再確認一次」（`describeBarcodeError`），不是「barcode：Value error, …」 |
+| 回去 | `returnTo: "/meals/new"` → 存好導到 `/meals/new`、`replace`、state `{pickedFood: 建好的食物}`；沒有 `returnTo` → `/foods/{id}`（既有） |
+| 取消 | `returnTo` 有 →「取消，回到記一餐」（`/meals/5/edit` 時「取消，回到這一餐」）→ `replace` 回去、不帶食物；沒有 `returnTo` → 沒有這顆 |
+| 拍營養標示 | `userEvent.upload(getByLabelText("拍營養標示"), jpeg)` → `POST /api/ai/read-label` → 名稱（原本空）、單位、四個數字（「514.29」…）、份「35.00」填好；「AI 讀的數字，請對照包裝確認」「本包裝含 4 份」「今天還能用 17 次」；**條碼欄位不變**；名稱已經打了字 → 不覆蓋 |
+| 一致性被標記 | `consistency.flagged: true` → 「熱量跟三大營養素算起來對不太上，請特別確認」 |
+| 讀不出來 | 502 `AI_LABEL_UNREADABLE` → 後端那一句；表單沒動 |
+| 讀的時候 | 「AI 讀取中…」、檔案選擇停用 |
+| AI 面板存好的食物也回去 | 有 `returnTo` 時 `AiEstimatePanel` 的 `onFoodReady` 也走同一個「存好」 |
+
+`tests/food-detail.test.tsx` 加：有條碼顯示標準形式、沒有 →「沒有條碼」；自己的私人食物有表單；公開食物＋一般使用者沒有表單（只顯示）；公開＋管理員有；「儲存條碼」→ `PATCH /api/foods/{id}` body `{"barcode":"96385074"}`、畫面更新；「移除條碼」→ body `{"barcode":null}`；409 → 後端那一句；離線快取的舊食物（**沒有 `barcode` 這個 key**）→「沒有條碼」、輸入框是空的（不是 "undefined"）。
+
+Run: `cd frontend && npx vitest run tests/new-food-barcode.test.tsx tests/food-detail.test.tsx` → Expected：FAIL。
+
+- [ ] **Step 2：`NewFood`。**
+  - Props `handoff?: NewFoodHandoff | null`（只在掛載時讀）。初始值：`barcode` ← `handoff?.barcode ?? ""`；有 `prefill`：名稱 ← `prefill.name ?? ""`、品牌 ← `prefill.brand ?? ""`、單位、`values` ← `prefill.per100` 的四個字串、`serving`（`unit === base_unit` 才有，後端已經擋過）→ 份量名稱「份」、每份重量 `serving.amount`。
+  - 名稱上面：有預填 →「已從 Open Food Facts 帶入，請對照包裝確認」＋`<OffAttribution />`；只有條碼 → 那一句提示（放在「用 AI 填」區塊上面）。
+  - 品牌下面：「條碼（選填）」`<input id="food-barcode" inputMode="numeric" autoComplete="off">`（16px）。`validate()`：有字但 `cleanBarcodeInput` 是 null →「條碼要是 8、12 或 13 位數字」。送出：有字就帶 `barcode: cleanBarcodeInput(barcode)`。`onError`：`BARCODE_EXISTS` → `setConflictError(caught.message)`；`VALIDATION_ERROR` 而且 `details.errors` 有 `loc` 含 `"barcode"` 的 → `setClientError(describeBarcodeError(caught))`；其餘照舊。
+  - 存好：抽成 `finish(food: Food)`——`handoff?.returnTo` → `navigate(returnTo, { replace: true, state: { pickedFood: food } })`；否則 `navigate(`/foods/${food.id}`)`。`createFood` 的 `onSuccess` 與 `AiEstimatePanel` 的 `onFoodReady` 都用它。
+  - 有 `returnTo` 時表單最後多「取消，回到記一餐」／「取消，回到這一餐」（`ui.secondary`，`navigate(returnTo, { replace: true })`）。
+  - 「用 AI 填」區塊：既有的描述與 `AiEstimatePanel` 下面加 `PhotoPickerButton`（`id="label-photo"`、`label="拍營養標示"`、`accept="image/*"`、`capture="environment"`、`variant="accent"`、`disabled={readLabelMutation.isPending}`）。`useMutation({ mutationFn: readLabel })`，**`mutate(file, { onSuccess: apply })`**（元件卸載之後不跑，handover §7）。`apply(result)`：名稱是空的才填 `result.name ?? ""`；`setBaseUnit(result.nutrition.base_unit)`；`setValues` 四個字串；`setBasisChoice("per100")`；`result.serving` → 份量名稱「份」、每份重量 `result.serving.amount`；記下 `result`（顯示用）。條碼、品牌不動。
+  - 讀完的提示（`role="status"`）：「AI 讀的數字，請對照包裝確認」＋（`servings_per_package`）「本包裝含 {formatMacro(n)} 份」＋「今天還能用 {remaining_today} 次」＋（`consistency.flagged`）「熱量跟三大營養素算起來對不太上，請特別確認」。讀的時候「AI 讀取中…」。錯誤 `describeAnalyzeError`（`role="alert"`）。照片 input 的 value 清掉。
+
+- [ ] **Step 3：`FoodDetail`。** 「目前生效的營養素」之後一節 `<section><h2>條碼</h2>`，內容是 `<BarcodeSection key={food.id} food={food} canEdit={!food.is_global || isAdmin} />`（`isAdmin` 同 `NewFood`：`useMe().data?.role === "admin"`）：
+  - 顯示：`food.barcode ? food.barcode : "沒有條碼"`（真值判斷——離線快取的舊食物沒有這個 key）。
+  - `canEdit`：`<form aria-label="修改條碼">`、`<label htmlFor="food-barcode-edit">條碼</label>`、輸入框（`useState(food.barcode ?? "")`、16px、`inputMode="numeric"`）、「儲存條碼」（submit；`cleanBarcodeInput` 是 null →「條碼要是 8、12 或 13 位數字」）、有條碼時「移除條碼」。`useMutation({ mutationFn: ({ id, barcode }) => updateFoodBarcode(id, barcode) })`，`mutate(…, { onSuccess: (updated) => { queryClient.setQueryData(queryKeys.food(id), updated); queryClient.invalidateQueries({ queryKey: queryKeys.foodSearchAll }); } })`；錯誤 `describeBarcodeError`。
+
+Run Step 1 的指令 → PASS；`tests/new-food.test.tsx`、`tests/new-food-ai.test.tsx` 既有的照樣綠（沒有 `handoff` 的行為不變）。
+
+- [ ] **Step 4：突變**（型別過得去）：預填不填份量 → 那格紅；`apply` 一律覆蓋名稱 → 「不覆蓋」那格紅；`apply` 清掉條碼 → 那格紅；`finish` 不帶 `replace` → 回去那格紅；`AiEstimatePanel` 的 `onFoodReady` 照舊導詳情頁 → 那格紅；`FoodDetail` 顯示 `food.barcode ?? "沒有條碼"` 改成 `String(food.barcode)` → 舊快取那格紅；`canEdit` 寫成 `!food.is_global` → 管理員那格紅。
+
+- [ ] **Step 5：檢查、commit。** `npm run -s test`、`npm run -s typecheck`、`npm run -s lint`。畫面檢查：`npm run dev`＋dev 後端（Task 11 的 Step 1 先升級 dev 資料庫），手機與電腦寬度、深色模式各看一次新增食物（預填、提示、讀完的提示）、掃描層（電腦的 Chrome 沒有相機時的說明）、食物詳情的條碼；截圖看排列（44px 量不出排列，handover §7）。
+
+```bash
+git add frontend/src/screens/NewFood.tsx frontend/src/screens/FoodDetail.tsx \
+  frontend/tests/new-food-barcode.test.tsx frontend/tests/food-detail.test.tsx
+```
+
+訊息：`feat(frontend): 新增食物的條碼欄位、Open Food Facts 預填與拍營養標示；食物詳情改條碼`
+
+---
+
+## Task 11：e2e
+
+**Files:**
+- Create: `frontend/e2e/barcode.spec.ts`
+
+- [ ] **Step 1：dev 後端。** `docker compose up -d --build api` → `docker compose exec -T api python -m alembic upgrade head` → `alembic current` 是 `0022`。`docker compose exec -T api printenv OFF_ENABLED` 是 `false`（dev 的 override；規格 D12）。**不要 `down -v`。**
+
+- [ ] **Step 2：`e2e/barcode.spec.ts`**——三條，各用 `newAccount`＋`loginAs`（`e2e/new-account.ts`），`page.setViewportSize({ width: 390, height: 844 })`；登入之後只用點擊換頁、每次換頁先等那一頁的標題；名稱一律 `exact: true`。
+
+1. **手動輸入，全部是真的**：「飲食」→「食物庫」→「新增食物」→ 名稱 `E2E 條碼 ${Date.now()}`、條碼 `4710088432094`、四個數字 → 「建立食物」→ 詳情頁「條碼」一節看到 `4710088432094`。→「新增紀錄」→「記一餐」→「掃條碼」→ 掃描層（`getByRole("dialog", { name: "掃條碼" })`）→ `expectTouchTargets(dialog.getByRole("button"), "掃描層")` → 「手動輸入條碼」→ 輸入 → 「查詢」→ 「已選擇：E2E 條碼 …」→ 量 100 → 「記錄」→ 總覽 →「飲食」→ 那一餐看得到那個食物。**不斷言相機的狀態文字**（headless Chromium 的權限行為因版本而異）。
+2. **OFF 預填，只假造 `GET /api/foods/by-barcode/**`**：`page.route("**/api/foods/by-barcode/**", …)` 回 `{code: "5449000000996", food: null, prefill: {...}} satisfies BarcodeLookupResponse`（可樂：ml、42／0／0／10.6、`serving: {amount: "330.00", unit: "ml"}`；名稱帶 `Date.now()` 免得撞名）。記一餐 → 掃（手動 `5449000000996`）→ 卡片「Open Food Facts 有這個商品：…」＋「資料來源：」出處 →「用這個條碼建立食物」→ 新增食物（標題）已預填（名稱、單位 ml、熱量 42.00、份 330.00、條碼）、出處在 →「建立食物」（**真的 POST**）→ 回到記一餐、「已選擇：…」（預設份量「份」已選上）→「記錄」→ 總覽。斷言 `route` 被打到一次。
+3. **沒有預填＋拍營養標示，只假造 `POST /api/ai/read-label`**：真的後端（`OFF_ENABLED=false`）。記一餐 → 掃（手動 `4710088432094`——新帳號沒有這個條碼）→「找不到這個條碼（4710088432094）」、**沒有** Open Food Facts 那一行 →「用這個條碼建立食物」→ 新增食物只有條碼＋「找不到這個條碼的資料。拍營養標示…」→ `page.route("**/api/ai/read-label", …)` 回規格 §8.4 那一份（`satisfies LabelReadResponse`；名稱帶 `Date.now()`）→ `setInputFiles` 到「拍營養標示」（`generateJpegBuffer(page)`，`e2e/jpeg.ts`）→ 數字填好（「514.29」）、份 35.00、「AI 讀的數字，請對照包裝確認」→「建立食物」→ 記一餐「已選擇：…」→「記錄」。斷言送出的 body 有 `image_base64`、沒有別的欄位。
+
+- [ ] **Step 3：跑。** `npx playwright test e2e/barcode.spec.ts`，再整套 `npx playwright test` 兩次（預設 workers），記下條數與秒數。`npm run -s typecheck`（Playwright 不做型別檢查）。
+
+- [ ] **Step 4：突變**：spec 2 的假回應拿掉 `prefill` → 那條紅在「Open Food Facts 有這個商品」；`NewFood` 的 `finish` 不回去（暫時改成一律導詳情頁）→ spec 1 以外的兩條紅在「已選擇」；改回。
+
+- [ ] **Step 5：commit。**
+
+```bash
+git add frontend/e2e/barcode.spec.ts
+```
+
+訊息：`test(e2e): 掃條碼的手動輸入、Open Food Facts 預填、拍營養標示三條`
+
+---
+
+## Task 12：文件
+
+**Files:** `docs/handover.md`、`docs/deployment.md`、規格的「狀態」、這份計畫的「執行中發現的差異」「與規格的差異」
+
+- [ ] **Step 1：量數字。** 端點數（`app.openapi()` 的 operation 數，預期 105 → 108）、後端 `pytest -q -W error` 的條數、前端 vitest 印出來的 `Test Files`／`Tests`（**照印出來的寫**，handover §7）、e2e 條數與兩次的秒數、資料表數（22，沒有新表）、bundle（主程式那一塊的差、ponyfill、wasm）。
+- [ ] **Step 2：`docs/handover.md`。** §2 的表（端點、測試、Migration `0001`～`0022`）；階段進度多一列「掃條碼／營養標示」（規格、計畫的路徑；「營養標示**沒有對真的 LLM 打過**」）；第 10 節多一節「掃條碼／營養標示」：端點表、條碼的標準形式與唯一（兩個索引、不進版本）、OFF（ODbL、4 秒、快取、限速、`OFF_ENABLED`、**隱私：條碼會送到第三方**）、掃描（原生／ponyfill、授權與大小、wasm 自己服務、iOS 沒有實機驗證）、營養標示（模型只抄、換算在後端、`AI_LABEL_UNREADABLE` 算額度）、前端的交接（`replace`、`returnTo` 白名單）、新的東西在哪裡、e2e；§8.2 多「掃條碼的已知限制」（規格 §14 的九點）；§6 若執行中長出新的「綠燈說謊」照慣例加。
+- [ ] **Step 3：`docs/deployment.md`。** 「各版本的升級備註」加 `0022`：可以退版（理由同規格 §10.2，條碼的資料在退版後的 downgrade 會不見）；新的 `OFF_ENABLED`（預設開；`.env.production` 留白＝開、`false`＝關）；**NAS 要能連出去 `world.openfoodfacts.org:443`**（防火牆、DNS），不通也只是「沒有預填」；相機：要 HTTPS（`tailscale serve` 已經是）、Caddy 沒有 `Permissions-Policy`（不用改，之後加的話要有 `camera=(self)`）、`.wasm` 的 MIME；上線後手動驗證：Android Chrome 掃一次（原生）、iPhone 加到主畫面掃一次（ponyfill、權限每次都問）、掃一個 OFF 有的商品看預填與出處、有金鑰的人拍一張真的營養標示。
+- [ ] **Step 4：規格的狀態**改成「已實作（日期、分支；跟規格不一樣的地方在計畫的『與規格的差異』）」；計畫填好兩節。
+- [ ] **Step 5：commit**（只有文件；掃描、`git add` 逐一列出）。訊息：`docs: handover 與部署文件記下掃條碼／營養標示（migration 0022、OFF_ENABLED、數字、已知限制）`
+
+---
+
+## 完成條件
+
+- 後端整套 `pytest -q -W error`、`ruff check .`、`mypy app` 綠；`alembic check` 乾淨；dev 資料庫在 `0022`。
+- 前端 `npm run -s test`、`npm run -s typecheck`、`npm run -s lint` 綠；`npm run build` 的主程式沒有 zxing、ponyfill 與 wasm 是獨立的檔案。
+- e2e 整套兩次都綠。
+- `schema.d.ts` 跟後端一致（重新產生之後 `git diff` 沒有東西）。
+- 每個 task 的突變都記進「執行中發現的差異」（紅了哪一條、存活的為什麼可以接受）。
+- 沒有 push；`lunch.jpg` 沒有被 stage。
