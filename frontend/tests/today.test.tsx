@@ -9,7 +9,11 @@ import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { Today } from "../src/screens/Today";
 import { NO_EXERCISE } from "./helpers/exercise-routes";
-import { json, mockApiByPath } from "./helpers/mock-api";
+import {
+	json,
+	mockApiByPath,
+	mockApi as mockApiRoutes,
+} from "./helpers/mock-api";
 import { percentText } from "./helpers/percent";
 
 // 需要 MemoryRouter：P3-C Task 2 在「今日補劑」區塊加了一個連到
@@ -484,5 +488,72 @@ describe("飲食頁：運動（運動規格 §7.5）", () => {
 				String(input).includes("/api/exercises"),
 			),
 		).toBe(false);
+	});
+});
+
+describe("飲食頁：今天還能吃什麼（營養素配餐規格 §7.2）", () => {
+	it("「我的」那一邊：營養素卡片下面、今日餐點前面有那張卡片", async () => {
+		mockApi({
+			"/api/stats/daily": () => json(STATS_WITH_TARGET),
+			"/api/supplements/today": () => json([]),
+		});
+
+		render(wrap(<Today />));
+
+		const card = await screen.findByTestId("planner-card");
+		expect(
+			within(card).getByRole("heading", { name: "今天還能吃什麼" }),
+		).toBeInTheDocument();
+		// 舊的快取形狀（沒有 kcal_budget、目標有熱量）也算有額度。
+		expect(
+			within(card).getByRole("link", { name: "從食物庫配" }),
+		).toHaveAttribute("href", "/planner");
+		expectOrder(
+			screen.getByTestId("macro-kcal"),
+			card,
+			screen.getByRole("heading", { name: "今日餐點" }),
+		);
+	});
+
+	it("今天的營養素還沒回來時沒有卡片", async () => {
+		mockApiRoutes([
+			{ path: "/api/exercises", handler: () => json(NO_EXERCISE) },
+			// 一直掛著：看「載入中」那一刻。
+			{
+				path: "/api/stats/daily",
+				handler: () => new Promise<Response>(() => {}),
+			},
+			{ path: "/api/supplements/today", handler: () => json([]) },
+		]);
+
+		render(wrap(<Today />));
+
+		expect(await screen.findByText("載入中…")).toBeInTheDocument();
+		expect(screen.queryByTestId("planner-card")).not.toBeInTheDocument();
+	});
+
+	it("切到好友：沒有那張卡片", async () => {
+		mockApi({
+			"/api/stats/daily": () => json(STATS_WITH_TARGET),
+			"/api/supplements/today": () => json([]),
+			"/api/friends/feed": () => json({ meals: [], next_cursor: null }),
+			"/api/friends": () => json([]),
+		});
+		const client = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+
+		render(
+			<QueryClientProvider client={client}>
+				<MemoryRouter initialEntries={["/diet?view=friends"]}>
+					<Today />
+				</MemoryRouter>
+			</QueryClientProvider>,
+		);
+
+		expect(
+			await screen.findByText("還沒有好友。到「我的」→「好友」用好友碼加朋友"),
+		).toBeInTheDocument();
+		expect(screen.queryByTestId("planner-card")).not.toBeInTheDocument();
 	});
 });

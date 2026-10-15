@@ -1,0 +1,66 @@
+/* /planner 今天還能吃什麼（營養素配餐規格 §7.3）。卡片、h2、按鈕的基本樣子來自 ui.module.css 的
+   .screen；這裡只補清單、每一組的排版。只用 index.css 的變數。 */
+
+/* 只有一句話（＋一個連結或按鈕）的卡片：狀態、錯誤。 */
+.status {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: var(--space-2);
+}
+
+.link {
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+	font-weight: 600;
+}
+
+.empty {
+	color: var(--color-text-muted);
+}
+
+/* .screen 只重設 ul；組合是 ol（有順序：最好的在前）。 */
+.combos {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+/* 每一組：上下留白、組與組之間一條線（.screen li 的底線），按鈕在最下面。 */
+.combo {
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	gap: var(--space-1);
+	padding: var(--space-3) 0;
+}
+
+.combo:first-child {
+	padding-top: 0;
+}
+
+.combo h3 {
+	margin: 0;
+	font-size: 15px;
+}
+
+/* 一組裡的每一樣：不要 .screen li 的底線與內距——它們是一張卡片裡的幾行字，不是一列一列的清單。 */
+.items li {
+	padding: 0;
+	border-bottom: none;
+}
+
+.total {
+	font-size: 13px;
+	color: var(--color-text-muted);
+	font-variant-numeric: tabular-nums;
+}
+
+.combo button {
+	margin-top: var(--space-2);
+}
+
+.aiButton {
+	margin-top: var(--space-2);
+}

@@ -12,6 +12,7 @@ import {
 import { Card } from "../components/Card";
 import { MacroBar } from "../components/MacroBar";
 import macro from "../components/MacroBar.module.css";
+import { PlannerCard } from "../components/PlannerCard";
 import { TodayExercises } from "../components/TodayExercises";
 import ui from "../components/ui.module.css";
 import { formatTime } from "../lib/dates";
@@ -233,6 +234,9 @@ export function Today() {
 										/>
 									</Card>
 								))}
+							{/* 今天還能吃什麼（營養素配餐規格 §7.2）：營養素卡片下面，電腦版也在左欄。
+							    `stats` 還沒回來時不畫——有沒有熱量額度要看它。 */}
+							{stats && <PlannerCard stats={stats} />}
 						</div>
 						<div className={styles.meals}>
 							<MealList />

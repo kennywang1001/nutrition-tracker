@@ -15,6 +15,7 @@ import { PHOTO_UPLOAD_FAILED_NOTICE } from "../src/screens/LogMeal";
 import { setDesktop } from "../src/test/media";
 import { EMPTY_PROFILE, NO_WEIGHTS, NOT_READY } from "./helpers/body-routes";
 import { ACTIVITY_LIST, NO_EXERCISE } from "./helpers/exercise-routes";
+import { OK_SUGGESTIONS } from "./helpers/planner-routes";
 
 // 上傳會呼叫 shrinkToLongestEdge（用 canvas，jsdom 沒有）。
 vi.mock("../src/lib/resize-image", () => ({
@@ -87,6 +88,9 @@ function mockBackend(
 			if (url.includes("/api/exercise/activities"))
 				return jsonResponse(ACTIVITY_LIST);
 			if (url.includes("/api/exercises")) return jsonResponse(NO_EXERCISE);
+			// 今天還能吃什麼（營養素配餐規格 §7.3）。不包含 "/api/me"，放哪裡都不會被搶；排在泛用的前面。
+			if (url.includes("/api/planner/library-suggestions"))
+				return jsonResponse(OK_SUGGESTIONS);
 			if (url.includes("/api/me")) return jsonResponse(ME);
 			// 外框一掛上去就會問未讀通知數（社群規格 §6.4）。
 			if (url.includes("/api/notifications/unread-count"))
@@ -159,6 +163,21 @@ describe("App", () => {
 			await screen.findByRole("heading", { name: "報表" }),
 		).toBeInTheDocument();
 		expect(window.location.pathname).toBe("/reports");
+	});
+
+	it("/planner 是今天還能吃什麼（營養素配餐規格 §7.3）", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockBackend();
+		window.history.replaceState(null, "", "/planner");
+
+		render(<App />);
+
+		expect(
+			await screen.findByRole("heading", { level: 1, name: "今天還能吃什麼" }),
+		).toBeInTheDocument();
+		expect(
+			await screen.findByRole("list", { name: "從食物庫配的組合" }),
+		).toBeInTheDocument();
 	});
 
 	it("從「我的」登出之後回到登入畫面", async () => {

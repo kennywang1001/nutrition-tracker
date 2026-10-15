@@ -47,6 +47,7 @@ import { MealDetail } from "./screens/MealDetail";
 import { NewFood } from "./screens/NewFood";
 import { Notifications } from "./screens/Notifications";
 import { Overview } from "./screens/Overview";
+import { Planner } from "./screens/Planner";
 import {
 	ResetPassword,
 	ResetPasswordWhileLoggedIn,
@@ -241,6 +242,8 @@ export function App() {
 							<Route path="/" element={<Overview />} />
 							<Route path="/reports" element={<Expenses />} />
 							<Route path="/diet" element={<Today />} />
+							{/* 今天還能吃什麼（營養素配餐規格 §7.3），入口是飲食頁的卡片。 */}
+							<Route path="/planner" element={<Planner />} />
 							<Route path="/me" element={<Me />} />
 							{/* 每日目標（帳號設定規格 §5.2），入口是「我的」的每日目標卡片。 */}
 							<Route path="/me/targets" element={<Targets />} />

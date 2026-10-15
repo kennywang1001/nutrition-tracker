@@ -1,0 +1,46 @@
+/* 飲食頁「今天還能吃什麼」卡片（營養素配餐規格 §7.2）。標題的距離同「今日運動」；
+   兩個動作是按鈕外觀的連結（外框、珊瑚橘字，同 ui.module.css 的次要按鈕）。只用 index.css 的變數。 */
+
+.title {
+	margin: 0 0 var(--space-2);
+}
+
+/* 手機上兩個並排；太窄時（大字級）自動換成一欄。 */
+.actions {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+	gap: var(--space-2);
+}
+
+.action {
+	box-sizing: border-box;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 44px;
+	padding: 0 var(--space-3);
+	border: 1px solid var(--color-action);
+	border-radius: var(--radius-button);
+	color: var(--color-action);
+	font-weight: 600;
+	text-align: center;
+	text-decoration: none;
+}
+
+.action:hover,
+.action:active {
+	background: var(--color-accent-soft);
+}
+
+.hint {
+	margin: 0;
+	color: var(--color-text-muted);
+}
+
+/* 句子後面的連結：獨立一行、44px 高，手指點得到。 */
+.inlineLink {
+	display: flex;
+	align-items: center;
+	min-height: 44px;
+	font-weight: 600;
+}

@@ -29,6 +29,9 @@ describe("contentWidthFor", () => {
 		["/meals/5", "narrow"],
 		["/meals/5/", "narrow"],
 		["/notifications", "narrow"],
+		// 今天還能吃什麼（營養素配餐規格 D27）：一欄卡片，預設的 narrow。
+		["/planner", "narrow"],
+		["/planner/", "narrow"],
 		["/friends/2", "narrow"],
 		["/admin/revisions", "narrow"],
 		["/join", "narrow"],

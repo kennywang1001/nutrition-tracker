@@ -7,7 +7,8 @@ export const DESKTOP_MEDIA_QUERY = "(min-width: 1024px)";
  *  `/me/targets`、`/me/password`、`/me/body` 是單欄表單，跟記帳、記一餐一樣用 form
  *  （帳號設定規格 決定 19、身體資料規格 D20）。`/weight` 有圖表，用預設的 narrow。
  *  `/exercises/new` 也是 form；`/exercises/:id/edit` 同編輯餐點用 narrow（運動規格 D24）——
- *  這裡只比完整路徑，有 id 的路徑不會是 form。 */
+ *  這裡只比完整路徑，有 id 的路徑不會是 form。
+ *  `/planner`（今天還能吃什麼）是一欄卡片，用預設的 narrow（營養素配餐規格 D27）——刻意不列進下面兩組。 */
 export type ContentWidth = "wide" | "form" | "narrow";
 
 const WIDE = new Set(["/", "/reports", "/diet"]);
