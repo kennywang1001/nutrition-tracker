@@ -1,6 +1,12 @@
-import type { ActivityCode, EstimateParams } from "../api/exercises";
-import { fromLocalDateTime } from "./dates";
-import { checkRangeInput } from "./decimal";
+import type {
+	ActivityCode,
+	EstimateParams,
+	Exercise,
+	ExerciseInput,
+	ExercisePatch,
+} from "../api/exercises";
+import { fromLocalDateTime, localDateTime } from "./dates";
+import { checkRangeInput, sameNumber, toWholeNumber } from "./decimal";
 
 /** 記運動與編輯運動的表單（運動規格 §7.2）：純函式的檢查，畫面在 `components/ExerciseForm.tsx`。 */
 
@@ -72,4 +78,63 @@ export function estimateParams(
 		minutes: values.minutes.trim(),
 		performedAt: moment.toISOString(),
 	};
+}
+
+/** 估算看的那幾格：活動、分鐘、時間（裝置時區的日期與時間兩格）。 */
+export type EstimateInputs = Pick<
+	ExerciseFormValues,
+	"activity" | "minutes" | "date" | "time"
+>;
+
+/** 表單上的活動、分鐘、時間跟存好的一樣嗎（編輯估算的那一筆）。一樣的話存的時候後端
+ *  不重估、留著存好的熱量（D22、審查 I1），表單就不用問預覽、也不用因為沒有體重而改手動。
+ *  分鐘比數字（`030` 等於 `30`）；打到一半（不是 1–600 的整數）算不一樣。 */
+export function sameEstimateInputs(
+	values: EstimateInputs,
+	stored: EstimateInputs,
+): boolean {
+	if (
+		values.activity !== stored.activity ||
+		values.date !== stored.date ||
+		values.time !== stored.time
+	)
+		return false;
+	if (checkRangeInput(values.minutes, MINUTES_RULE) !== null) return false;
+	return toWholeNumber(values.minutes) === toWholeNumber(stored.minutes);
+}
+
+/** 編輯：表單送出的完整一組（估算的不帶 `kcal`）跟原本那一筆比，**只留改了的欄位**
+ *  （審查 I1）。熱量：
+ *
+ *  - 手動、而且原本是估算或數字不一樣 → 送數字；
+ *  - 估算、原本是手動 → `kcal: null`（改回估算）；
+ *  - 估算、原本也是估算 → 不帶：活動、分鐘、時間真的變了後端自己重估，沒變就留著存好的。
+ *
+ *  時間比到分鐘（表單只有到分鐘）：原本帶秒數的那一筆，沒動時間不算改。 */
+export function exercisePatch(
+	original: Exercise,
+	body: ExerciseInput,
+): ExercisePatch {
+	const patch: ExercisePatch = {};
+	if (body.activity !== original.activity) patch.activity = body.activity;
+	const name = body.name ?? null;
+	if (name !== original.name) patch.name = name;
+	if (body.minutes !== original.minutes) patch.minutes = body.minutes;
+	const before = localDateTime(original.performed_at);
+	const after = localDateTime(body.performed_at);
+	if (before.date !== after.date || before.time !== after.time)
+		patch.performed_at = body.performed_at;
+	const note = body.note ?? null;
+	if (note !== original.note) patch.note = note;
+	const kcal = body.kcal ?? null;
+	if (kcal !== null) {
+		if (
+			original.kcal_source === "estimated" ||
+			!sameNumber(String(kcal), original.kcal)
+		)
+			patch.kcal = kcal;
+	} else if (original.kcal_source === "manual") {
+		patch.kcal = null;
+	}
+	return patch;
 }

@@ -38,7 +38,6 @@ export function LogExercise() {
 					await invalidateExercises(client);
 				}}
 				onSaved={() => navigate("/")}
-				sendNullKcalWhenEstimated={false}
 			/>
 		</section>
 	);

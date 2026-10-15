@@ -136,6 +136,11 @@ export function toWholeNumber(value: string): number {
 	return new Decimal(value.trim()).toNumber();
 }
 
+/** 兩個數字字串是不是同一個數（`"250"` 跟 `"250.00"` 一樣）。兩個都要是有效的數字。 */
+export function sameNumber(a: Numeric, b: Numeric): boolean {
+	return new Decimal(a.trim()).equals(b.trim());
+}
+
 export function sumMacros(values: readonly Numeric[]): Numeric {
 	return values
 		.reduce((total, value) => total.plus(value), new Decimal(0))

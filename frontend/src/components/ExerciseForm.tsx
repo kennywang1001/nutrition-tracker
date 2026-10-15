@@ -10,9 +10,11 @@ import {
 import { fromLocalDateTime, localDateTime } from "../lib/dates";
 import { formatMacro, toWholeNumber } from "../lib/decimal";
 import {
+	type EstimateInputs,
 	type ExerciseFormValues,
 	estimateParams,
 	exerciseProblems,
+	sameEstimateInputs,
 } from "../lib/exercise";
 import { useDebounced } from "../lib/use-debounced";
 import { dateLabel } from "../lib/weights";
@@ -21,24 +23,24 @@ import ui from "./ui.module.css";
 
 const NEEDS_WEIGHT = "先記一次體重，就能自動估算";
 
+/** 編輯估算的那一筆：存好的熱量與算它的那幾格（活動、分鐘、時間）。 */
+export type StoredEstimate = { inputs: EstimateInputs; kcal: string };
+
 type Props = {
 	initial: ExerciseFormValues;
-	/** 送出：新增是 POST，編輯是 PATCH（`kcal: null`＝改回估算）。失效也放在這裡——
-	 *  它跟著請求走，元件卸載之後照樣要做。 */
+	/** 送出完整的一組：手動帶 `kcal`，估算的不帶這個鍵（D10）。新增直接 POST；編輯畫面
+	 *  跟原本那一筆比、只 PATCH 改了的欄位（審查 I1）。失效也放在這裡——它跟著請求走，
+	 *  元件卸載之後照樣要做。 */
 	save: (body: ExerciseInput) => Promise<unknown>;
 	/** 存好之後（導頁）。走 `mutate` 的 callback：元件卸載之後不會跑（handover §7）。 */
 	onSaved: () => void;
-	/** 編輯畫面要送 `kcal: null` 表示「改回估算」；新增畫面省略這個鍵（D10）。 */
-	sendNullKcalWhenEstimated: boolean;
+	/** 編輯估算的那一筆才有。活動、分鐘、時間跟它一樣（而且沒勾手動）時，存的時候後端
+	 *  不重估（D22）：顯示存好的熱量、不問預覽，沒有體重也不強制手動。 */
+	stored?: StoredEstimate;
 };
 
 /** 記運動與編輯運動共用的表單（運動規格 §7.2）。熱量是預覽，存的時候後端再算一次（§10 第 4 點）。 */
-export function ExerciseForm({
-	initial,
-	save,
-	onSaved,
-	sendNullKcalWhenEstimated,
-}: Props) {
+export function ExerciseForm({ initial, save, onSaved, stored }: Props) {
 	const [values, setValues] = useState(initial);
 	const [problems, setProblems] = useState<string[]>([]);
 	const [serverNeedsWeight, setServerNeedsWeight] = useState(false);
@@ -64,8 +66,16 @@ export function ExerciseForm({
 		setValues((current) => ({ ...current, [key]: value }));
 	}
 
+	// 編輯估算的那一筆、會影響估算的幾格都沒動：存的時候留著存好的熱量，預覽的數字（體重
+	// 後來可能改了）不是會存的那個，所以不問。
+	const keepsStored =
+		stored !== undefined &&
+		!values.manual &&
+		sameEstimateInputs(values, stored.inputs);
 	// 預覽：手動與否先只看使用者自己勾的——「沒有體重」要等預覽回來才知道（下面的 forcedManual）。
-	const params = estimateParams(values, values.manual, Date.now());
+	const params = keepsStored
+		? null
+		: estimateParams(values, values.manual, Date.now());
 	// debounce 的是字串，不是物件：物件每次 render 都是新的，`useDebounced` 的 effect 會每次
 	// 重設計時器、設回來又觸發 render，停不下來。字串一樣就是同一組參數。
 	const typed = params === null ? "" : JSON.stringify(params);
@@ -82,7 +92,8 @@ export function ExerciseForm({
 	}
 
 	const isOther = values.activity === "other";
-	const noWeight = serverNeedsWeight || lastReady === false;
+	// 留著存好的熱量就不用體重：沒有體重也不強制手動（審查 I1）。
+	const noWeight = !keepsStored && (serverNeedsWeight || lastReady === false);
 	const forcedManual = isOther || noWeight;
 	const manual = values.manual || forcedManual;
 
@@ -102,11 +113,7 @@ export function ExerciseForm({
 			minutes: toWholeNumber(values.minutes),
 			performed_at: moment.toISOString(),
 			note: note === "" ? null : note,
-			...(manual
-				? { kcal: values.kcal.trim() }
-				: sendNullKcalWhenEstimated
-					? { kcal: null }
-					: {}),
+			...(manual ? { kcal: values.kcal.trim() } : {}),
 		};
 		sending.current = true;
 		mutation.mutate(body, {
@@ -132,7 +139,9 @@ export function ExerciseForm({
 	}
 
 	let preview: string | null = null;
-	if (!manual && params !== null) {
+	if (!manual && keepsStored) {
+		preview = `目前 ${formatMacro(stored.kcal)} kcal（估算）`;
+	} else if (!manual && params !== null) {
 		if (answer?.ready === true) {
 			preview = `約 ${formatMacro(answer.kcal)} kcal（依 ${dateLabel(answer.weight_date, values.date)} 的體重 ${formatMacro(answer.weight_kg)} 公斤）`;
 		} else if (estimate.error instanceof ApiError) {

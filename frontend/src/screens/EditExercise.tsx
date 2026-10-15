@@ -14,11 +14,11 @@ import {
 	useExercise,
 } from "../api/exercises";
 import { queryKeys } from "../api/queries";
-import { ExerciseForm } from "../components/ExerciseForm";
+import { ExerciseForm, type StoredEstimate } from "../components/ExerciseForm";
 import ui from "../components/ui.module.css";
 import { localDateTime } from "../lib/dates";
 import { formatMacro } from "../lib/decimal";
-import type { ExerciseFormValues } from "../lib/exercise";
+import { type ExerciseFormValues, exercisePatch } from "../lib/exercise";
 import { parseResourceId } from "../lib/resource-id";
 import { useConfirmFocus } from "../lib/use-confirm-focus";
 import styles from "./EditExercise.module.css";
@@ -42,7 +42,8 @@ function initialValues(exercise: Exercise): ExerciseFormValues {
 /** `/exercises/:id/edit`（運動規格 §7.3）。
  *
  *  **離線快取還在還原時不掛表單**（同 `Targets`）：還原期間建立的 observer 會把還原回來的那份
- *  當成「掛載之後抓回來的」。儲存送的是完整的一組，拿舊值預填的話，沒動的欄位會被改回去。 */
+ *  當成「掛載之後抓回來的」。儲存送的是跟預填那一份比出來的差異，拿舊值預填的話，另一台裝置
+ *  改過、這裡沒動的欄位會被當成「改了」送回去。 */
 export function EditExercise() {
 	const restoring = useIsRestoring();
 	const { id } = useParams<{ id: string }>();
@@ -108,15 +109,23 @@ function EditForm({
 }) {
 	const client = useQueryClient();
 	const [initial] = useState(() => initialValues(exercise));
+	const stored: StoredEstimate | undefined =
+		exercise.kcal_source === "estimated"
+			? { inputs: initial, kcal: exercise.kcal }
+			: undefined;
 	return (
 		<ExerciseForm
 			initial={initial}
+			stored={stored}
 			save={async (body) => {
-				await updateExercise(exercise.id, body);
+				// 只送改了的欄位（審查 I1）：只改備註不帶熱量與活動分鐘時間，後端不重估。
+				const patch = exercisePatch(exercise, body);
+				// 什麼都沒改：不送，直接回去。
+				if (Object.keys(patch).length === 0) return;
+				await updateExercise(exercise.id, patch);
 				await invalidateExercises(client);
 			}}
 			onSaved={onDone}
-			sendNullKcalWhenEstimated
 		/>
 	);
 }

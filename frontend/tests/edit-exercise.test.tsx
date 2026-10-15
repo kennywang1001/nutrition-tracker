@@ -18,8 +18,20 @@ const MANUAL: Exercise = {
 	note: "河濱",
 };
 
+const READY = {
+	ready: true,
+	kcal: "343",
+	met: "9.8",
+	weight_kg: "70.00",
+	weight_date: "2026-10-14",
+};
+
 /** 單筆的路由排在 `exerciseRoutes()` 前面：`/api/exercises` 會吃掉 `/api/exercises/31`。 */
-function routes(exercise: unknown = RUN, extra: MockRoute[] = []): MockRoute[] {
+function routes(
+	exercise: unknown = RUN,
+	extra: MockRoute[] = [],
+	estimate: () => Response = () => json(READY),
+): MockRoute[] {
 	return [
 		...extra,
 		{ method: "GET", path: "/api/exercises/31", handler: () => json(exercise) },
@@ -33,18 +45,7 @@ function routes(exercise: unknown = RUN, extra: MockRoute[] = []): MockRoute[] {
 			path: "/api/exercises/31",
 			handler: () => new Response(null, { status: 204 }),
 		},
-		{
-			method: "GET",
-			path: "/api/exercise/estimate",
-			handler: () =>
-				json({
-					ready: true,
-					kcal: "343",
-					met: "9.8",
-					weight_kg: "70.00",
-					weight_date: "2026-10-14",
-				}),
-		},
+		{ method: "GET", path: "/api/exercise/estimate", handler: estimate },
 		...exerciseRoutes(),
 	];
 }
@@ -147,7 +148,7 @@ describe("編輯運動", () => {
 		expect(screen.getByLabelText("備註（選填）")).toHaveValue("河濱");
 	});
 
-	it("只改分鐘：PATCH 送完整的一組，kcal: null（改回估算）；存好回總覽", async () => {
+	it("只改分鐘：PATCH 只送分鐘（後端看分鐘變了自己重估）；存好回總覽", async () => {
 		const fetchMock = mockApi(routes());
 		const client = renderEdit();
 		const invalidate = vi.spyOn(client, "invalidateQueries");
@@ -159,14 +160,7 @@ describe("編輯運動", () => {
 		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
 
 		expect(await screen.findByText("總覽頁")).toBeInTheDocument();
-		expect(patchedBody(fetchMock)).toEqual({
-			activity: "running",
-			name: null,
-			minutes: 60,
-			performed_at: "2026-10-14T10:30:00.000Z",
-			note: null,
-			kcal: null,
-		});
+		expect(patchedBody(fetchMock)).toEqual({ minutes: 60 });
 		const keys = invalidate.mock.calls.map((call) => call[0]?.queryKey);
 		expect(keys).toEqual(
 			expect.arrayContaining([queryKeys.exercisesAll, queryKeys.dailyStats]),
@@ -184,7 +178,7 @@ describe("編輯運動", () => {
 		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
 
 		expect(await screen.findByText("總覽頁")).toBeInTheDocument();
-		expect(patchedBody(fetchMock)).toMatchObject({ kcal: null, note: "河濱" });
+		expect(patchedBody(fetchMock)).toEqual({ kcal: null });
 	});
 
 	it('勾手動、填 400：送 kcal: "400"', async () => {
@@ -199,7 +193,91 @@ describe("編輯運動", () => {
 		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
 
 		expect(await screen.findByText("總覽頁")).toBeInTheDocument();
-		expect(patchedBody(fetchMock)).toMatchObject({ kcal: "400", minutes: 30 });
+		expect(patchedBody(fetchMock)).toEqual({ kcal: "400" });
+	});
+
+	it("只改備註：不送熱量、活動、分鐘、時間（體重後來改了也不重估，審查 I1）", async () => {
+		const fetchMock = mockApi(routes());
+		renderEdit();
+
+		await prefilled();
+		await userEvent.type(screen.getByLabelText("備註（選填）"), "晨跑");
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		expect(await screen.findByText("總覽頁")).toBeInTheDocument();
+		expect(patchedBody(fetchMock)).toEqual({ note: "晨跑" });
+	});
+
+	it("什麼都沒改：不送 PATCH，直接回總覽", async () => {
+		const fetchMock = mockApi(routes());
+		renderEdit();
+
+		await prefilled();
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+		expect(await screen.findByText("總覽頁")).toBeInTheDocument();
+		expect(calls(fetchMock, "PATCH", "/api/exercises/31")).toHaveLength(0);
+	});
+
+	it("估算的那一筆、活動分鐘時間沒動：顯示存好的熱量，不問預覽（體重改了的預覽數字不是會存的）", async () => {
+		const fetchMock = mockApi(
+			routes(RUN, [], () =>
+				json({ ...READY, kcal: "353", weight_kg: "72.00" }),
+			),
+		);
+		renderEdit();
+
+		await prefilled();
+		expect(screen.getByText("目前 343 kcal（估算）")).toBeInTheDocument();
+		expect(calls(fetchMock, "GET", "/api/exercise/estimate")).toHaveLength(0);
+
+		// 改了分鐘才問；改回來又是存好的那個數字。
+		const minutes = screen.getByLabelText("分鐘");
+		await userEvent.clear(minutes);
+		await userEvent.type(minutes, "60");
+		expect(
+			await screen.findByText("約 353 kcal（依 10/14 的體重 72 公斤）"),
+		).toBeInTheDocument();
+		await userEvent.clear(minutes);
+		await userEvent.type(minutes, "30");
+		expect(screen.getByText("目前 343 kcal（估算）")).toBeInTheDocument();
+	});
+
+	it("體重全刪了：估算的那一筆不強制手動，只改備註存得了；改了分鐘才要手動", async () => {
+		const fetchMock = mockApi(
+			routes(RUN, [], () => json({ ready: false, missing: "weight" })),
+		);
+		renderEdit();
+
+		await prefilled();
+		const manual = screen.getByRole("checkbox", { name: "手動輸入熱量" });
+		expect(manual).not.toBeChecked();
+		expect(manual).not.toHaveAttribute("aria-disabled", "true");
+		expect(screen.getByText("目前 343 kcal（估算）")).toBeInTheDocument();
+		expect(
+			screen.queryByText("先記一次體重，就能自動估算"),
+		).not.toBeInTheDocument();
+
+		// 改了分鐘要重估，可是沒有體重：鎖成手動、說明。
+		const minutes = screen.getByLabelText("分鐘");
+		await userEvent.clear(minutes);
+		await userEvent.type(minutes, "60");
+		expect(
+			await screen.findByText("先記一次體重，就能自動估算"),
+		).toBeInTheDocument();
+		expect(manual).toBeChecked();
+		expect(manual).toHaveAttribute("aria-disabled", "true");
+
+		// 改回 30：又是存好的熱量，不用手動。
+		await userEvent.clear(minutes);
+		await userEvent.type(minutes, "30");
+		expect(manual).not.toBeChecked();
+		expect(screen.getByText("目前 343 kcal（估算）")).toBeInTheDocument();
+
+		await userEvent.type(screen.getByLabelText("備註（選填）"), "晨跑");
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+		expect(await screen.findByText("總覽頁")).toBeInTheDocument();
+		expect(patchedBody(fetchMock)).toEqual({ note: "晨跑" });
 	});
 
 	it("刪除要按兩次：第一次只開確認框，焦點在取消；取消不送", async () => {
