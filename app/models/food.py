@@ -56,11 +56,33 @@ class Food(Base):
             postgresql_using="gin",
             postgresql_ops={"name": "gin_trgm_ops"},
         ),
+        # 條碼（掃條碼規格 D1、D4）。存的一定是 app/barcode.py 的標準形式：8 位或 13 位數字。
+        # CHECK 是第二道防線（同 ai_analyses 的 kind_valid）：不假設只有 API 會寫這一欄。
+        # NULL 照 CHECK 的規則放行（handover §7）＝沒有條碼。
+        CheckConstraint("barcode ~ '^([0-9]{8}|[0-9]{13})$'", name="barcode_digits"),
+        # 唯一的範圍跟名稱（uq_foods_owner_id_name_brand）同一個概念，但要兩個索引：
+        #   uq_foods_owner_id_barcode  私人食物：同一個人不重複。owner_id 是 NULL 的公開食物在這個
+        #                              索引裡彼此不相等（一般的 NULL 語意），所以它管不到公開食物。
+        #   uq_foods_global_barcode    公開食物之間不重複（部分索引）。
+        # 不用 NULLS NOT DISTINCT：那會讓「沒有條碼」的 NULL 也互撞。
+        # 宣告在模型裡（不是只寫在 migration）：模型才是 alembic check 的單一事實來源
+        # （FoodRevision 的部分索引踩過，見那邊的註解）。
+        Index("uq_foods_owner_id_barcode", "owner_id", "barcode", unique=True),
+        Index(
+            "uq_foods_global_barcode",
+            "barcode",
+            unique=True,
+            postgresql_where=text("owner_id IS NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     brand: Mapped[str | None] = mapped_column(Text)
+    # 商品條碼（掃條碼規格 §3）：8 位（EAN-8）或 13 位（EAN-13；UPC-A／UPC-E 換成這個）。
+    # NULL＝沒有。
+    # **不進版本**（規格 D5）：條碼不影響任何已記的數字；私人食物擁有者改、公開食物管理員改。
+    barcode: Mapped[str | None] = mapped_column(Text)
     # NULL = 全域食物
     owner_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("users.id", ondelete="CASCADE")

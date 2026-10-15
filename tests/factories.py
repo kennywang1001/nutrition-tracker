@@ -70,6 +70,7 @@ async def create_food(
     fat_g: Decimal | int = 5,
     carb_g: Decimal | int = 20,
     base_unit: BaseUnit = BaseUnit.G,
+    barcode: str | None = None,
 ) -> Food:
     """建立食物與它的第一版營養素，並把指標指過去。
 
@@ -79,6 +80,8 @@ async def create_food(
     food = Food(
         name=name or f"測試食物{next(_food_counter)}",
         brand=brand,
+        # 原樣放進去、不正規化：model 層的測試要撞的是資料庫的約束（掃條碼規格 D1）。
+        barcode=barcode,
         owner_id=owner.id if owner is not None else None,
         created_by=created_by.id,
     )

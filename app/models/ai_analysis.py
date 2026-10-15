@@ -32,6 +32,10 @@ class AnalysisKind(enum.StrEnum):
     # 寫入後 refresh 的是自己剛寫的 'text'／'image'。哪天有程式把這張表的列整列讀出來
     # （匯出、管理頁），那一版之後的退版就要重新評估。
     SUGGEST = "suggest"
+    # 營養標示照片（掃條碼規格 D24）。`input_hash` 是圖片的 SHA-256。'label' 5 個字，
+    # 欄位（VARCHAR(7)，最長的仍然是 'suggest'）不用加寬；migration 0022 只換 CHECK。
+    # 退版的理由同 SUGGEST。
+    LABEL = "label"
 
 
 class AiAnalysis(Base):
@@ -50,7 +54,7 @@ class AiAnalysis(Base):
 
     __tablename__ = "ai_analyses"
     __table_args__ = (
-        # kind 只能是 'text' / 'image' / 'suggest'。
+        # kind 只能是 'text' / 'image' / 'suggest' / 'label'。
         #
         # native_enum=False + create_constraint=False + 這裡手寫一個一般的
         # CheckConstraint —— 跟 app/models/meal.py 的 MealType（meal_type_valid）
@@ -68,7 +72,7 @@ class AiAnalysis(Base):
         # CheckConstraint，等於完全沒有約束**——資料庫會允許任何字串，
         # 而所有靜態檢查與既有測試都是綠的，因為它們都不會去 INSERT
         # 一個非法值。
-        CheckConstraint("kind IN ('text', 'image', 'suggest')", name="kind_valid"),
+        CheckConstraint("kind IN ('text', 'image', 'suggest', 'label')", name="kind_valid"),
         # 額度查詢是 WHERE user_id = ? AND created_at >= ?（規格 §7.2）。
         #
         # 順序刻意是 (user_id, created_at) 不是反過來 —— 篩選力來自

@@ -56,7 +56,7 @@ async def test_a_failed_call_can_also_be_stored(db_session):
 
 
 async def test_kind_rejects_a_value_outside_text_or_image(db_session):
-    """kind 只能是 'text'／'image'／'suggest'——由資料庫的 CheckConstraint 把關。
+    """kind 只能是 'text'／'image'／'suggest'／'label'——由資料庫的 CheckConstraint 把關。
 
     Python 端的 AnalysisKind 型別**不會**擋一個手動塞進去的非法字串：
     native_enum=False 的欄位在綁定參數時就是把字串原樣送進 VARCHAR，
@@ -111,6 +111,18 @@ async def test_kind_accepts_suggest(db_session):
     await db_session.refresh(row)
 
     assert row.kind is AnalysisKind.SUGGEST
+
+
+async def test_kind_accepts_label(db_session):
+    """營養標示（掃條碼規格 D24）：'label' 5 個字，VARCHAR(7) 放得下——只有 CHECK 要換。"""
+    user = await create_user(db_session)
+    row = _row(user.id, kind=AnalysisKind.LABEL)
+
+    db_session.add(row)
+    await db_session.commit()
+    await db_session.refresh(row)
+
+    assert row.kind is AnalysisKind.LABEL
 
 
 async def test_the_kind_check_lists_every_kind(db_session):
