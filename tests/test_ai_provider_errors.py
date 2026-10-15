@@ -18,6 +18,7 @@
 import json
 import logging
 from collections.abc import Callable
+from decimal import Decimal
 from typing import Any
 
 import anthropic
@@ -44,6 +45,12 @@ from app.ai.estimator import (
     NutritionEstimator,
 )
 from app.ai.gemini_estimator import GeminiEstimator
+from app.ai.label import (
+    LABEL_IMAGE_INSTRUCTION,
+    LABEL_SYSTEM_PROMPT,
+    MAX_LABEL_OUTPUT_TOKENS,
+    LLMLabelSchema,
+)
 from app.api.deps import get_estimator_factory
 from app.config import settings
 from app.errors import BadGatewayError, UnprocessableEntityError
@@ -1169,3 +1176,103 @@ async def test_an_unclassified_exception_is_still_recorded_and_reraised(client, 
     rows = await _rows(db_session, user_id)
     assert len(rows) == 1
     assert rows[0].succeeded is False
+
+
+# ---------------------------------------------------------------------------
+# 營養標示（掃條碼規格 §8）：送出去的請求、讀不出來的分類、SDK 錯誤的分類
+# ---------------------------------------------------------------------------
+
+_VALID_LABEL_JSON = json.dumps(
+    {
+        "name": "洋芋片",
+        "base_unit": "g",
+        "serving_size": 35,
+        "servings_per_package": 4,
+        "serving_kcal": 180,
+        "serving_kj": None,
+        "serving_protein_g": 2.1,
+        "serving_fat_g": 9.8,
+        "serving_carb_g": 21.3,
+        "per_100_kcal": None,
+        "per_100_kj": None,
+        "per_100_protein_g": None,
+        "per_100_fat_g": None,
+        "per_100_carb_g": None,
+        "confidence": 0.8,
+    },
+    ensure_ascii=False,
+)
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+async def test_a_label_call_sends_the_label_prompt_schema_limit_and_image(provider):
+    upstream, estimator = _estimator_for(provider, _VALID_LABEL_JSON)
+
+    label = await estimator.read_label(_PNG, "image/png")
+
+    assert label.kcal == Decimal("514.29")
+    assert upstream.requests == 1
+    sent = _sent(provider, upstream.bodies[0])
+    assert sent["max_tokens"] == MAX_LABEL_OUTPUT_TOKENS == 8192
+    assert sent["system"] == LABEL_SYSTEM_PROMPT
+    assert sent["schema_fields"] == set(LLMLabelSchema.model_fields)
+    assert sent["text"] == [LABEL_IMAGE_INSTRUCTION]
+    assert sent["has_image"] is True
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+async def test_an_unreadable_label_from_the_provider_is_a_502_not_an_upstream_error(provider):
+    unreadable = json.dumps({**json.loads(_VALID_LABEL_JSON), "serving_size": None})
+    upstream, estimator = _estimator_for(provider, unreadable)
+
+    with pytest.raises(BadGatewayError) as caught:
+        await estimator.read_label(_PNG, "image/png")
+
+    assert caught.value.code == "AI_LABEL_UNREADABLE"
+    assert upstream.requests == 1
+
+
+@pytest.mark.parametrize(
+    ("make_upstream", "expected", "sdk_error"),
+    [case[1:] for case in _ANTHROPIC_CASES],
+    ids=[case[0] for case in _ANTHROPIC_CASES],
+)
+async def test_anthropic_label_errors_are_classified_the_same_way(
+    make_upstream, expected, sdk_error
+):
+    upstream = make_upstream()
+    estimator = _anthropic_estimator(upstream)
+
+    with pytest.raises(expected) as excinfo:
+        await estimator.read_label(_PNG, "image/png")
+
+    assert upstream.requests == 1
+    assert type(excinfo.value.__cause__) is sdk_error
+
+
+@pytest.mark.parametrize(
+    ("make_upstream", "expected", "sdk_error"),
+    [case[1:] for case in _GEMINI_CASES],
+    ids=[case[0] for case in _GEMINI_CASES],
+)
+async def test_gemini_label_errors_are_classified_the_same_way(make_upstream, expected, sdk_error):
+    upstream = make_upstream()
+    estimator = _gemini_estimator(upstream)
+
+    with pytest.raises(expected) as excinfo:
+        await estimator.read_label(_PNG, "image/png")
+
+    assert upstream.requests == 1
+    assert type(excinfo.value.__cause__) is sdk_error
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+async def test_an_unsupported_media_type_for_a_label_is_invalid_photo(provider):
+    upstream, estimator = _estimator_for(provider, _VALID_LABEL_JSON)
+
+    with pytest.raises(UnprocessableEntityError) as excinfo:
+        await estimator.read_label(b"not-an-image", "image/bmp")
+
+    assert excinfo.value.code == "INVALID_PHOTO"
+    # 沒送出去：格式在打 API 之前就擋了。
+    assert upstream.requests == 0

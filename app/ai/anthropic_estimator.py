@@ -1,5 +1,5 @@
 """用 Anthropic Claude 估算營養素：一份（單樣）或一餐的每一樣（多樣），以及營養素配餐的一餐建議
-（`AI_PROVIDER=anthropic`）。
+（`AI_PROVIDER=anthropic`），以及營養標示的照抄（`read_label`）。
 
 不打真的 API 測——花錢、不可重現（P2 規格 §8.1）。SDK 的錯誤怎麼分類，由
 `tests/test_ai_provider_errors.py` 把 client 換成接假傳輸層的版本來測。
@@ -52,6 +52,14 @@ from app.ai.estimator import (
     parse_raw_meal_estimate,
     parse_raw_meal_suggestion,
 )
+from app.ai.label import (
+    LABEL_IMAGE_INSTRUCTION,
+    LABEL_SYSTEM_PROMPT,
+    MAX_LABEL_OUTPUT_TOKENS,
+    LLMLabelSchema,
+    RawLabel,
+    parse_raw_label,
+)
 from app.errors import BadGatewayError, UnprocessableEntityError
 
 # Anthropic 的 Base64ImageSourceParam.media_type 是一個 Literal，只接受這四種；
@@ -92,6 +100,13 @@ _SINGLE = _Call(SYSTEM_PROMPT, MAX_OUTPUT_TOKENS, _OUTPUT_CONFIG)
 _MEAL = _Call(MEAL_SYSTEM_PROMPT, MAX_MEAL_OUTPUT_TOKENS, _MEAL_OUTPUT_CONFIG)
 # 配餐：多樣的 schema 與輸出上限，換 system prompt（營養素配餐規格 D19）。
 _SUGGEST = _Call(SUGGEST_SYSTEM_PROMPT, MAX_MEAL_OUTPUT_TOKENS, _MEAL_OUTPUT_CONFIG)
+# 營養標示：平的 schema（掃條碼規格 D28）。寫計畫時實測 transform_schema() 對它的輸出：
+# `Decimal | None` → anyOf [number, string, null]、`Literal` → enum（同 LLMEstimateSchema）。
+_LABEL = _Call(
+    LABEL_SYSTEM_PROMPT,
+    MAX_LABEL_OUTPUT_TOKENS,
+    {"format": {"type": "json_schema", "schema": transform_schema(LLMLabelSchema)}},
+)
 
 
 def _first_text(message: Message) -> str | None:
@@ -205,6 +220,10 @@ class AnthropicEstimator:
         # 訊息原樣送出：剩下的額度與偏好已經由 suggestion_request() 組好，不再套樣板。
         message: MessageParam = {"role": "user", "content": request}
         return parse_raw_meal_suggestion(await self._complete(message, _SUGGEST))
+
+    async def read_label(self, image: bytes, media_type: str) -> RawLabel:
+        message = _image_message(LABEL_IMAGE_INSTRUCTION, image, media_type)
+        return parse_raw_label(await self._complete(message, _LABEL))
 
     async def _complete(self, message: MessageParam, call: _Call) -> str:
         """打一次 API，回模型說的那段文字。**分類例外的地方只有這裡**——單樣與多樣共用。

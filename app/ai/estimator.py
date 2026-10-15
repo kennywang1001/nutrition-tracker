@@ -29,12 +29,17 @@ import json
 import logging
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from app.errors import BadGatewayError
 from app.schemas.validators import single_line
+
+if TYPE_CHECKING:
+    # 只給型別用：app/ai/label.py 執行期會 import 這個模組（`_round_to_cents`），這裡再
+    # import 它就循環了。
+    from app.ai.label import RawLabel
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +111,8 @@ class NutritionEstimator(Protocol):
     async def estimate_meal_image(self, image: bytes, media_type: str) -> RawMealEstimate: ...
     # 營養素配餐（規格 §5）：`request` 是 `suggestion_request()` 組好的整段使用者訊息。
     async def suggest_meal(self, request: str) -> RawMealEstimate: ...
+    # 營養標示（掃條碼規格 §8）：照抄、不換算；換算在 parse_raw_label()。
+    async def read_label(self, image: bytes, media_type: str) -> "RawLabel": ...
 
 
 # 兩家實作打 API 之前的第二道關卡：路由已經用 Pillow 實際解碼判斷過格式

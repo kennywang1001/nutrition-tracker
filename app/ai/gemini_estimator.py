@@ -1,5 +1,5 @@
 """用 Google Gemini 估算營養素：一份（單樣）或一餐的每一樣（多樣），以及營養素配餐的一餐建議
-（`AI_PROVIDER=gemini`）。
+（`AI_PROVIDER=gemini`），以及營養標示的照抄（`read_label`）。
 
 從 `feat/p2-gemini` 分支（P2 計畫一 b）搬來；那條分支把 Anthropic 整個換掉，
 這裡改成並存。不打真的 API 測——見 `app/ai/estimator.py` 的說明；SDK 的錯誤怎麼
@@ -31,6 +31,13 @@ from app.ai.estimator import (
     parse_raw_estimate,
     parse_raw_meal_estimate,
     parse_raw_meal_suggestion,
+)
+from app.ai.label import (
+    LABEL_IMAGE_INSTRUCTION,
+    LABEL_SYSTEM_PROMPT,
+    MAX_LABEL_OUTPUT_TOKENS,
+    RawLabel,
+    parse_raw_label,
 )
 from app.errors import BadGatewayError, UnprocessableEntityError
 
@@ -105,6 +112,36 @@ _SINGLE = _Call(SYSTEM_PROMPT, MAX_OUTPUT_TOKENS, _RESPONSE_SCHEMA)
 _MEAL = _Call(MEAL_SYSTEM_PROMPT, MAX_MEAL_OUTPUT_TOKENS, _MEAL_RESPONSE_SCHEMA)
 # 配餐：多樣的 schema 與輸出上限，換 system prompt（營養素配餐規格 D19）。
 _SUGGEST = _Call(SUGGEST_SYSTEM_PROMPT, MAX_MEAL_OUTPUT_TOKENS, _MEAL_RESPONSE_SCHEMA)
+
+_NULLABLE_NUMBER: dict[str, object] = {"type": "NUMBER", "nullable": True}
+_LABEL_NUMBER_FIELDS = (
+    "serving_size",
+    "servings_per_package",
+    "serving_kcal",
+    "serving_kj",
+    "serving_protein_g",
+    "serving_fat_g",
+    "serving_carb_g",
+    "per_100_kcal",
+    "per_100_kj",
+    "per_100_protein_g",
+    "per_100_fat_g",
+    "per_100_carb_g",
+)
+# 營養標示（掃條碼規格 §8.2）：平的，只用 Google `Schema` 認得的關鍵字（同 _RESPONSE_SCHEMA 的
+# 理由）。`base_unit` 不寫 enum——真的 API 收不收沒驗過，`parse_raw_label` 的 Literal 照樣把關。
+# 欄位要跟 LLMLabelSchema 一樣——tests/test_ai_provider_errors.py 拿兩邊的欄位名稱比。
+_LABEL_RESPONSE_SCHEMA: dict[str, object] = {
+    "type": "OBJECT",
+    "properties": {
+        "name": {"type": "STRING", "nullable": True},
+        "base_unit": {"type": "STRING"},
+        **{field: _NULLABLE_NUMBER for field in _LABEL_NUMBER_FIELDS},
+        "confidence": {"type": "NUMBER"},
+    },
+    "required": ["name", "base_unit", *_LABEL_NUMBER_FIELDS, "confidence"],
+}
+_LABEL = _Call(LABEL_SYSTEM_PROMPT, MAX_LABEL_OUTPUT_TOKENS, _LABEL_RESPONSE_SCHEMA)
 
 
 logger = logging.getLogger(__name__)
@@ -226,6 +263,10 @@ class GeminiEstimator:
     async def suggest_meal(self, request: str) -> RawMealEstimate:
         # 訊息原樣送出：剩下的額度與偏好已經由 suggestion_request() 組好，不再套樣板。
         return parse_raw_meal_suggestion(await self._complete(request, _SUGGEST))
+
+    async def read_label(self, image: bytes, media_type: str) -> RawLabel:
+        contents = _image_contents(LABEL_IMAGE_INSTRUCTION, image, media_type)
+        return parse_raw_label(await self._complete(contents, _LABEL))
 
     async def _complete(self, contents: types.ContentListUnionDict, call: _Call) -> str:
         """打一次 API，回模型說的那段文字。分類例外的地方只有這裡。"""
