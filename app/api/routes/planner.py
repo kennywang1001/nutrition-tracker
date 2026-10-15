@@ -15,7 +15,7 @@ from app.models.user import User
 from app.nutrition import Macros
 from app.planner import Combo, Remaining, is_full, suggest_combos
 from app.planner_data import PlannerFood, load_candidates, remaining_of
-from app.schemas.food import FoodResponse, NutritionResponse
+from app.schemas.food import FoodResponse
 from app.schemas.planner import (
     LibrarySuggestionsResponse,
     PlannedComboResponse,
@@ -66,13 +66,7 @@ def _combo_response(
         portion = planned.portion
         items.append(
             PlannedItemResponse(
-                food=FoodResponse(
-                    id=planned.food.id,
-                    name=planned.food.name,
-                    brand=planned.food.brand,
-                    is_global=planned.food.owner_id is None,
-                    nutrition=NutritionResponse.model_validate(planned.revision),
-                ),
+                food=FoodResponse.of(planned.food, planned.revision),
                 portion=None if portion is None else _portion_response(portion),
                 quantity=choice.quantity,
                 quantity_g=choice.quantity_g,

@@ -1,11 +1,17 @@
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
-from app.models.food import BaseUnit, RevisionStatus
+from app.barcode import normalize_barcode
+from app.models.food import BaseUnit, Food, FoodRevision, RevisionStatus
+
+# 收任何寫法（空白、「-」、UPC-A、UPC-E），存標準形式（掃條碼規格 §3.2）。`InvalidBarcodeError` 是
+# ValueError——Pydantic 把它變成 422 VALIDATION_ERROR，訊息就是那句中文。32：正規化之前的長度，
+# 擋掉一大串垃圾，不是條碼的規則。
+Barcode = Annotated[str, Field(max_length=32), AfterValidator(normalize_barcode)]
 
 
 class FoodScope(StrEnum):
@@ -67,15 +73,74 @@ class FoodCreateRequest(BaseModel):
         default=None, ge=0, le=1, max_digits=3, decimal_places=2
     )
     ai_raw_response: dict[str, Any] | None = None
+    # 選填的商品條碼（掃條碼規格 §5）：跟食物同一個交易；管理員建公開食物時就是公開範圍的條碼。
+    # 撞到同一個範圍的條碼是 409 BARCODE_EXISTS（靠唯一索引，不做前置查詢）。
+    barcode: Barcode | None = None
 
 
 class FoodResponse(BaseModel):
     id: int
     name: str
     brand: str | None
+    # 標準形式（8 或 13 位）或 null。**沒有預設值**：手組 FoodResponse 漏了它是 ValidationError，
+    # 不會安靜地回 null——組法只有 `of()` 一個地方（掃條碼計畫 Task 3）。
+    barcode: str | None
     is_global: bool
     # 沒有生效版本時為 None —— 全域食物的初版被駁回就會是這個狀態
     nutrition: NutritionResponse | None
+
+    @classmethod
+    def of(cls, food: Food, revision: FoodRevision | None) -> "FoodResponse":
+        """**組 FoodResponse 只有這一個地方**（食物庫、配餐都用它）——多一個欄位時不會漏一處。"""
+        return cls(
+            id=food.id,
+            name=food.name,
+            brand=food.brand,
+            barcode=food.barcode,
+            is_global=food.owner_id is None,
+            nutrition=NutritionResponse.model_validate(revision) if revision else None,
+        )
+
+
+class FoodBarcodeUpdate(BaseModel):
+    """`PATCH /api/foods/{id}`（掃條碼規格 §5）：只改條碼。`barcode` **必填**，null＝移除。"""
+
+    barcode: Barcode | None
+
+
+class Per100Nutrition(BaseModel):
+    kcal: Decimal
+    protein_g: Decimal
+    fat_g: Decimal
+    carb_g: Decimal
+
+
+class ServingSize(BaseModel):
+    """包裝上的「一份」：量＋單位（g 或 ml，跟食物的 base_unit 一樣）。"""
+
+    amount: Decimal
+    unit: BaseUnit
+
+
+class BarcodePrefill(BaseModel):
+    """Open Food Facts 的預填建議（規格 §6.3）。**不是食物**：使用者確認、按「建立食物」才存。
+    畫面上一定要標出處（ODbL，規格 §6.4）。"""
+
+    name: str | None
+    brand: str | None
+    base_unit: BaseUnit
+    per100: Per100Nutrition
+    serving: ServingSize | None
+    source: Literal["openfoodfacts"]
+
+
+class BarcodeLookupResponse(BaseModel):
+    """`GET /api/foods/by-barcode/{code}`。沒找到不是 404（規格「與原始決定的差異」第 1 點）：
+    `food` 是 null；`prefill` 只在 `food` 是 null、而且 Open Food Facts 有資料時才有。"""
+
+    code: str
+    food: FoodResponse | None
+    prefill: BarcodePrefill | None
 
 
 class RevisionCreateRequest(BaseModel):

@@ -543,6 +543,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/foods/by-barcode/{code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Lookup Barcode
+         * @description 用條碼找看得到的食物（掃條碼規格 D6、D7）：自己的私人食物優先，再來是公開的。
+         *     沒有生效版本的照樣回（`nutrition: null`，畫面說明它不能選）。
+         */
+        get: operations["lookup_barcode_api_foods_by_barcode__code__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/foods/{food_id}": {
         parameters: {
             query?: never;
@@ -557,7 +578,12 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Update Food Barcode
+         * @description 改條碼（掃條碼規格 §5）。**不進版本、不經審核**（規格 D5）：私人食物擁有者改；公開食物
+         *     只有管理員（一般使用者 403，同改公開份量）。null＝移除。
+         */
+        patch: operations["update_food_barcode_api_foods__food_id__patch"];
         trace?: never;
     };
     "/api/foods/{food_id}/revisions": {
@@ -2081,6 +2107,36 @@ export interface components {
             carb_g: number | string;
         };
         /**
+         * BarcodeLookupResponse
+         * @description `GET /api/foods/by-barcode/{code}`。沒找到不是 404（規格「與原始決定的差異」第 1 點）：
+         *     `food` 是 null；`prefill` 只在 `food` 是 null、而且 Open Food Facts 有資料時才有。
+         */
+        BarcodeLookupResponse: {
+            /** Code */
+            code: string;
+            food: components["schemas"]["FoodResponse"] | null;
+            prefill: components["schemas"]["BarcodePrefill"] | null;
+        };
+        /**
+         * BarcodePrefill
+         * @description Open Food Facts 的預填建議（規格 §6.3）。**不是食物**：使用者確認、按「建立食物」才存。
+         *     畫面上一定要標出處（ODbL，規格 §6.4）。
+         */
+        BarcodePrefill: {
+            /** Name */
+            name: string | null;
+            /** Brand */
+            brand: string | null;
+            base_unit: components["schemas"]["BaseUnit"];
+            per100: components["schemas"]["Per100Nutrition"];
+            serving: components["schemas"]["ServingSize"] | null;
+            /**
+             * Source
+             * @constant
+             */
+            source: "openfoodfacts";
+        };
+        /**
          * BaseUnit
          * @enum {string}
          */
@@ -2464,6 +2520,14 @@ export interface components {
             /** Note */
             note?: string | null;
         };
+        /**
+         * FoodBarcodeUpdate
+         * @description `PATCH /api/foods/{id}`（掃條碼規格 §5）：只改條碼。`barcode` **必填**，null＝移除。
+         */
+        FoodBarcodeUpdate: {
+            /** Barcode */
+            barcode: string | null;
+        };
         /** FoodCreateRequest */
         FoodCreateRequest: {
             /** Name */
@@ -2489,6 +2553,8 @@ export interface components {
             ai_raw_response?: {
                 [key: string]: unknown;
             } | null;
+            /** Barcode */
+            barcode?: string | null;
         };
         /** FoodResponse */
         FoodResponse: {
@@ -2498,6 +2564,8 @@ export interface components {
             name: string;
             /** Brand */
             brand: string | null;
+            /** Barcode */
+            barcode: string | null;
             /** Is Global */
             is_global: boolean;
             nutrition: components["schemas"]["NutritionResponse"] | null;
@@ -3076,6 +3144,17 @@ export interface components {
             /** Current Carb G */
             current_carb_g: string | null;
         };
+        /** Per100Nutrition */
+        Per100Nutrition: {
+            /** Kcal */
+            kcal: string;
+            /** Protein G */
+            protein_g: string;
+            /** Fat G */
+            fat_g: string;
+            /** Carb G */
+            carb_g: string;
+        };
         /**
          * PersonResponse
          * @description 好友看到的身分：只有 id 與名字，**沒有 email**（規格 §2）。
@@ -3294,6 +3373,15 @@ export interface components {
          * @enum {string}
          */
         RevisionStatus: "pending" | "approved" | "rejected";
+        /**
+         * ServingSize
+         * @description 包裝上的「一份」：量＋單位（g 或 ml，跟食物的 base_unit 一樣）。
+         */
+        ServingSize: {
+            /** Amount */
+            amount: string;
+            unit: components["schemas"]["BaseUnit"];
+        };
         /**
          * Sex
          * @enum {string}
@@ -4692,6 +4780,37 @@ export interface operations {
             };
         };
     };
+    lookup_barcode_api_foods_by_barcode__code__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BarcodeLookupResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     read_food_api_foods__food_id__get: {
         parameters: {
             query?: never;
@@ -4702,6 +4821,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FoodResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_food_barcode_api_foods__food_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                food_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FoodBarcodeUpdate"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

@@ -6,6 +6,7 @@ export const CHICKEN = {
 	id: 1,
 	name: "雞胸",
 	brand: null,
+	barcode: null,
 	is_global: false,
 	nutrition: {
 		base_unit: "g" as const,
@@ -21,6 +22,7 @@ export const RICE = {
 	id: 2,
 	name: "白飯",
 	brand: null,
+	barcode: null,
 	is_global: true,
 	nutrition: {
 		base_unit: "g" as const,

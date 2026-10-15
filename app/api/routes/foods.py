@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Path, Query, status
 from sqlalchemy import ColumnElement, Select, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,10 +16,12 @@ from app.models.food import Food, FoodPortion, FoodRevision, RevisionStatus
 from app.models.meal import Meal, MealItem
 from app.models.user import User, UserRole
 from app.schemas.food import (
+    Barcode,
+    BarcodeLookupResponse,
+    FoodBarcodeUpdate,
     FoodCreateRequest,
     FoodResponse,
     FoodScope,
-    NutritionResponse,
     PortionCreateRequest,
     PortionResponse,
     PortionUpdateRequest,
@@ -28,16 +30,6 @@ from app.schemas.food import (
 )
 
 router = APIRouter(prefix="/foods", tags=["foods"])
-
-
-def _to_response(food: Food, revision: FoodRevision | None) -> FoodResponse:
-    return FoodResponse(
-        id=food.id,
-        name=food.name,
-        brand=food.brand,
-        is_global=food.owner_id is None,
-        nutrition=NutritionResponse.model_validate(revision) if revision else None,
-    )
 
 
 async def _find_same_named_food(
@@ -63,6 +55,49 @@ def _food_exists(existing: Food | None) -> ConflictError:
     return ConflictError("FOOD_EXISTS", "你已經建過同名的食物了", details)
 
 
+async def _find_same_barcode(
+    db: AsyncSession, *, owner_id: int | None, barcode: str
+) -> Food | None:
+    """唯一的範圍同 `uq_foods_owner_id_barcode`／`uq_foods_global_barcode`：同一個擁有者，或
+    公開的之間——找到的一定是**你自己的**或公開的食物，附 id 不洩漏別人的。"""
+    existing: Food | None = await db.scalar(
+        select(Food).where(Food.owner_id.is_not_distinct_from(owner_id), Food.barcode == barcode)
+    )
+    return existing
+
+
+def _barcode_exists(existing: Food | None, *, public: bool) -> ConflictError:
+    """409 BARCODE_EXISTS（掃條碼規格 D4），附撞到的那一筆的 id——前端可以帶人去看它。"""
+    message = "已經有公開食物用這個條碼了" if public else "你已經有一個用這個條碼的食物了"
+    details = {"food_id": existing.id} if existing is not None else None
+    return ConflictError("BARCODE_EXISTS", message, details)
+
+
+async def _conflict_after_rollback(
+    db: AsyncSession,
+    *,
+    owner_id: int | None,
+    name: str | None,
+    brand: str | None,
+    barcode: str | None,
+) -> ConflictError:
+    """`flush` 撞到唯一約束、rollback 之後：先看同名（既有的 FOOD_EXISTS），再看同條碼。
+
+    條碼**沒有前置查詢**（掃條碼規格 §4）——這裡就是它唯一的一條路：前置查詢跟這條路回的東西
+    一模一樣，多寫一份是沒有測試殺得死的程式。兩個都沒找到（理論上不會）照舊回不附 id 的
+    FOOD_EXISTS（既有的防禦性行為）。
+    """
+    if name is not None:
+        raced = await _find_same_named_food(db, owner_id=owner_id, name=name, brand=brand)
+        if raced is not None:
+            return _food_exists(raced)
+    if barcode is not None:
+        taken = await _find_same_barcode(db, owner_id=owner_id, barcode=barcode)
+        if taken is not None:
+            return _barcode_exists(taken, public=owner_id is None)
+    return _food_exists(None)
+
+
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=FoodResponse)
 async def create_food(
     payload: FoodCreateRequest,
@@ -85,6 +120,7 @@ async def create_food(
     food = Food(
         name=payload.name,
         brand=payload.brand,
+        barcode=payload.barcode,
         owner_id=owner_id,
         created_by=user.id,
     )
@@ -101,11 +137,15 @@ async def create_food(
         await db.flush()
     except IntegrityError as exc:
         await db.rollback()
-        # 併發下另一個請求剛建好那一筆：rollback 之後重查一次，附上它的 id。
-        raced = await _find_same_named_food(
-            db, owner_id=owner_id, name=payload.name, brand=payload.brand
-        )
-        raise _food_exists(raced) from exc
+        # 併發下另一個請求剛建好同名的那一筆，或條碼撞到同一個範圍（條碼只靠唯一索引，
+        # 一定走這裡）：rollback 之後重查，附上撞到的那一筆的 id。
+        raise await _conflict_after_rollback(
+            db,
+            owner_id=owner_id,
+            name=payload.name,
+            brand=payload.brand,
+            barcode=payload.barcode,
+        ) from exc
 
     revision = FoodRevision(
         food_id=food.id,
@@ -155,16 +195,19 @@ async def create_food(
         await db.rollback()
         # 防禦性的：commit 時的 IntegrityError 通常是延後外鍵或份量約束，不是撞名，
         # 重查通常找不到東西，此時 `_food_exists(None)` 不附 details。
-        raced = await _find_same_named_food(
-            db, owner_id=owner_id, name=payload.name, brand=payload.brand
-        )
-        raise _food_exists(raced) from exc
+        raise await _conflict_after_rollback(
+            db,
+            owner_id=owner_id,
+            name=payload.name,
+            brand=payload.brand,
+            barcode=payload.barcode,
+        ) from exc
 
     await db.refresh(food)
     # kcal 等欄位在記憶體裡還是使用者傳進來的原始精度（例如 "180.5"），
     # 要 refresh 才能拿到 NUMERIC(8, 2) 實際存的精度（"180.50"）。
     await db.refresh(revision)
-    return _to_response(food, revision)
+    return FoodResponse.of(food, revision)
 
 
 @router.get("", response_model=list[FoodResponse])
@@ -194,7 +237,7 @@ async def search_foods(
         stmt = stmt.where(Food.name.ilike(f"%{q}%"))
 
     rows = (await db.execute(stmt)).all()
-    return [_to_response(food, revision) for food, revision in rows]
+    return [FoodResponse.of(food, revision) for food, revision in rows]
 
 
 # `/frequent` 與 `/recent` 必須宣告在 `/{food_id}` 之前 ——
@@ -264,7 +307,7 @@ async def list_frequent_foods(
     """使用者最常吃的食物，依吃過的次數多到少排序（規格第 11 節：每天走最多次的路徑）。"""
     stmt = my_recorded_foods_stmt(user, limit, func.count().desc())
     rows = (await db.execute(stmt)).all()
-    return [_to_response(food, revision) for food, revision in rows]
+    return [FoodResponse.of(food, revision) for food, revision in rows]
 
 
 @router.get("/recent", response_model=list[FoodResponse])
@@ -276,7 +319,33 @@ async def list_recent_foods(
     """使用者最近吃過的食物，依最後一次吃的時間新到舊排序。"""
     stmt = my_recorded_foods_stmt(user, limit, func.max(Meal.eaten_at).desc())
     rows = (await db.execute(stmt)).all()
-    return [_to_response(food, revision) for food, revision in rows]
+    return [FoodResponse.of(food, revision) for food, revision in rows]
+
+
+@router.get("/by-barcode/{code}", response_model=BarcodeLookupResponse)
+async def lookup_barcode(
+    code: Annotated[Barcode, Path()],
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BarcodeLookupResponse:
+    """用條碼找看得到的食物（掃條碼規格 D6、D7）：自己的私人食物優先，再來是公開的。
+    沒有生效版本的照樣回（`nutrition: null`，畫面說明它不能選）。"""
+    row = (
+        await db.execute(
+            select(Food, FoodRevision)
+            .outerjoin(FoodRevision, Food.current_revision_id == FoodRevision.id)
+            .where(
+                Food.barcode == code,
+                or_(Food.owner_id.is_(None), Food.owner_id == user.id),
+            )
+            # 自己的優先（False 排前面），再用 id 讓結果固定（同 _find_in_food_library）。
+            .order_by(Food.owner_id.is_(None), Food.id)
+            .limit(1)
+        )
+    ).first()
+    if row is not None:
+        return BarcodeLookupResponse(code=code, food=FoodResponse.of(row[0], row[1]), prefill=None)
+    return BarcodeLookupResponse(code=code, food=None, prefill=None)
 
 
 @router.get("/{food_id}", response_model=FoodResponse)
@@ -286,7 +355,36 @@ async def read_food(
     db: AsyncSession = Depends(get_db),
 ) -> FoodResponse:
     food, revision = await load_visible_food(db, food_id, user)
-    return _to_response(food, revision)
+    return FoodResponse.of(food, revision)
+
+
+@router.patch("/{food_id}", response_model=FoodResponse)
+async def update_food_barcode(
+    food_id: ResourceId,
+    payload: FoodBarcodeUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FoodResponse:
+    """改條碼（掃條碼規格 §5）。**不進版本、不經審核**（規格 D5）：私人食物擁有者改；公開食物
+    只有管理員（一般使用者 403，同改公開份量）。null＝移除。"""
+    food, revision = await load_visible_food(db, food_id, user)
+    if food.owner_id is None and user.role is not UserRole.ADMIN:
+        raise ForbiddenError("FORBIDDEN", "只有管理員能修改公開食物的條碼")
+    # rollback 之後 ORM 物件過期：重查要用的值先存起來。
+    owner_id = food.owner_id
+    food.barcode = payload.barcode
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        # 少了 rollback，這個 session 之後全部會拋 PendingRollbackError。
+        await db.rollback()
+        raise await _conflict_after_rollback(
+            db, owner_id=owner_id, name=None, brand=None, barcode=payload.barcode
+        ) from exc
+    # 回應在 commit 之前組好（身體資料審查 M6）。
+    response = FoodResponse.of(food, revision)
+    await db.commit()
+    return response
 
 
 @router.get("/{food_id}/revisions", response_model=list[RevisionResponse])
