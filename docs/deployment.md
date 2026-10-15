@@ -493,6 +493,21 @@ sudo docker compose --env-file .env.production \
 > 跨過 `0012` 時腳本會印退版警告（見「退版」）：這次如果新版起不來、被自動退回到 NAS 上原本那一版，
 > 舊版**無法建立新帳號**——修好新版再部署一次就好，不用還原。`0015` 有重複餐費時會停在第 5 步。
 
+- **`0021_add_suggest_analysis_kind`（營養素配餐：今天還能吃什麼）**：`ai_analyses.kind` 從 `VARCHAR(5)` 加寬成 `VARCHAR(7)`、
+  CHECK `ck_ai_analyses_kind_valid` 多一個值 `suggest`（`text`、`image`、`suggest`）。PostgreSQL 加寬 varchar 只改目錄、不重寫表。
+  `deploy.sh` 會自己跑，**可以退版**（不在 `ROLLBACK_UNSAFE_REVISIONS` 裡——那個清單仍然只有 `0012`，`scripts/deploy.sh` 這一版沒有改）。
+  **退版安全的理由比「舊程式不讀 `kind`」窄**：舊版的 `Enum` 真的**載入**一列 `suggest` 會丟 `LookupError`（測試資料庫上實測過），
+  只是舊程式**從來不載入整列 `ai_analyses`**——額度只數列數（`SELECT count(*)`），`refresh` 的是自己剛寫的 `text`／`image` 那一列
+  （照 `routes/ai.py` 讀的：整個 `app/` 只有它碰 `AiAnalysis`）。**之後要是有功能載入整列 `ai_analyses`**（例如管理員看 AI 用量的清單），
+  要重新想一次這一條。downgrade 把 `suggest` 的列改成 `text`（留著列數，當天的額度不變）、再縮回 `VARCHAR(5)`。
+  **沒有新的環境變數**：「從食物庫配」是後端的純函式（不呼叫 AI）；「讓 AI 配一餐」用既有的 `AI_PROVIDER`／`AI_MODEL`／金鑰，
+  一次算一次額度、跟估算共用每日上限（`AI_DAILY_LIMIT`），輸出上限同多樣估算（8192）。AI 沒設定也可以部署：「讓 AI 配一餐」照舊是「AI 分析未設定」，
+  從食物庫配不受影響。後端**不在 log 裡寫偏好**（只存整段使用者訊息的 SHA-256）。
+
+  **部署完請用有 AI 的帳號手動試一次「讓 AI 配一餐」**（飲食頁的卡片 → 打一個偏好 →「讓 AI 建議」）：跟 `0017` 的多樣估算一樣，
+  這條路**沒有任何自動測試打過真的 LLM，開發時也沒有手動打過**（e2e 只假造了 `POST /api/ai/suggest-meal` 的回應）。看三件事：
+  清單有沒有出來、合計大致在剩下的熱量以內（提示詞要求、後端不擋）、偏好有沒有被尊重。失敗的話 `docker compose logs api` 找
+  `AI_BAD_RESPONSE`／`AI_NO_SUGGESTION`（每一次都算一次額度）。
 - **`0020_create_exercise_entries`（運動紀錄）**：一張新表（`exercise_entries`）＋`users` 一個欄位
   `exercise_adds_to_budget boolean NOT NULL DEFAULT true`（既有使用者一律是開），`deploy.sh` 會自己跑，**可以退版**（不在
   `ROLLBACK_UNSAFE_REVISIONS` 裡——那個清單仍然只有 `0012`，`scripts/deploy.sh` 這一版沒有改）：舊版程式不讀也不寫新表；

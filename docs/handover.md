@@ -28,11 +28,11 @@
 
 | 項目 | 數字 |
 |---|---|
-| 端點 | **103**（OpenAPI 的 operation 數；`@router.` 101 ＋ `@activities_router.` 2——運動有兩個 router，只 grep `@router\.` 會少 2；2026-10-14 在 `feat/exercise` 量的。之前 95） |
-| 測試 | 後端 **1757**（`pytest -q -W error` 全綠，約 4 分 35 秒）；前端 `Test Files 178`、`Tests 2574`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **54** 條、22 個檔案（Playwright；預設 6 個 workers 連跑兩次都是 `54 passed`，各約 43–45 秒）。2026-10-15 在 `feat/exercise` 修完審查（I1、M1–M4）之後量的（修之前是後端 1745、前端 178／2538、e2e 54；開工前是後端 1606、前端 166／2312、e2e 53，跟下一句 `feat/body-targets` 的一樣）。**dev 資料庫 1090 個帳號時** `invites.spec.ts` 量「我的」每一顆按鈕的觸控高度逾時（第 1036 顆），改成跟 `account-settings.spec.ts` 一樣不量清單那一顆（見 §8.2「帳號與目標設定」第 6 點）。（`feat/body-targets` 修完審查之後：後端 1606、前端 166／2312、e2e 53 條 21 個檔案） |
+| 端點 | **105**（OpenAPI 的 operation 數，2026-10-15 在 `feat/meal-planner` 量的：營養素配餐多 `GET /api/planner/library-suggestions`、`POST /api/ai/suggest-meal`。之前 103：`@router.` 101 ＋ `@activities_router.` 2——運動有兩個 router，只 grep `@router\.` 會少 2；2026-10-14 在 `feat/exercise` 量的。之前 95） |
+| 測試 | 後端 **1851**（`pytest -q -W error` 全綠，約 4 分 35 秒）；前端 `Test Files 188`、`Tests 2710`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **56** 條、23 個檔案（Playwright；預設 6 個 workers 連跑兩次都是 `56 passed`，44.5 秒、45.5 秒）。2026-10-15 在 `feat/meal-planner` 做完 Task 12 時量的（開工前是 `feat/exercise` 修完審查之後的後端 1757、前端 178／2574、e2e 54 條 22 個檔案）。`feat/exercise`：2026-10-15 修完審查（I1、M1–M4）之後量的（修之前是後端 1745、前端 178／2538、e2e 54；開工前是後端 1606、前端 166／2312、e2e 53，跟下一句 `feat/body-targets` 的一樣）。**dev 資料庫 1090 個帳號時** `invites.spec.ts` 量「我的」每一顆按鈕的觸控高度逾時（第 1036 顆），改成跟 `account-settings.spec.ts` 一樣不量清單那一顆（見 §8.2「帳號與目標設定」第 6 點）。（`feat/body-targets` 修完審查之後：後端 1606、前端 166／2312、e2e 53 條 21 個檔案） |
 | 覆蓋率 | 96%（2026-09 量的，之後沒再量） |
-| 資料表 | 22（+ `alembic_version`；2026-10-14 在 dev 資料庫數的。之前 21） |
-| Migration | `0001` ~ `0020` |
+| 資料表 | 22（+ `alembic_version`；2026-10-15 在 dev 資料庫數的，營養素配餐沒有新表。之前 21） |
+| Migration | `0001` ~ `0021`（`0021` 是營養素配餐的 `ai_analyses.kind` 多 `suggest`；dev 資料庫在 `0021`） |
 | Commit | 600+ |
 | PR | 5 個，全部經 CI 驗證後合併 |
 
@@ -59,6 +59,7 @@
 | 按讚、留言、通知（社群第三步） | 餐點頁 `/meals/:id`（自己的餐與看得到的好友的餐：照片、項目、合計、描述，底下是讚與留言）；讚（一人一餐一個，卡片上的愛心與數字）；留言（一行、1–200 字，不能改，作者與餐的主人可以刪）；通知（只在 app 裡：讚、留言、好友邀請、邀請被接受）——「我的」分頁上的未讀數字、「我的」最上面的通知卡片、`/notifications`。**解除好友不刪資料，讀的時候過濾**；端點全部是新的（`/api/social/…`、`/api/notifications…`），`/api/meals` 仍然只回自己的餐。migration `0018`（三張新表，可以退版）（規格 `docs/superpowers/specs/2026-10-10-social-interactions-design.md`、計畫 `docs/superpowers/plans/2026-10-10-social-interactions.md`；見第 10 節「按讚、留言、通知」） | ✅（`feat/social-interactions`） |
 | 身體資料與目標（含體重紀錄） | 「我的」多兩張卡片：身體資料（`/me/body`：性別、出生年、身高、活動量、目標、速度、目標體重）與體重（最新一筆、跟 7 天前比、行內記錄）；`/weight` 是圖表（30 天／90 天／全部、每天一點、7 天移動平均、目標體重線）與清單（修改、刪除）。`/me/targets` 上面多一個「建議目標」（Mifflin-St Jeor → 活動量 → 依目標加減 → 下限 → 三大營養素）與「套用建議目標」；體重跟套用時差 1 公斤以上，「每日目標」卡片提示重算。匯出多一個 `weights.csv`。**體重與身體資料不給好友看**。migration `0019`（兩張新表，可以退版）（規格 `docs/superpowers/specs/2026-10-14-body-targets-design.md`、計畫 `docs/superpowers/plans/2026-10-14-body-targets.md`；見第 10 節「身體資料與目標」） | ✅（`feat/body-targets`） |
 | 運動紀錄 | 「＋ 新增」多「記運動」（`/exercises/new`、`/exercises/:id/edit`）：活動（18 個固定活動＋「其他」）、分鐘、時間、備註；後端用 **MET × 運動那一天或之前最新的體重 × 小時**估算熱量（沒有體重就手動輸入，表單先預覽）。今天的**熱量額度**＝目標＋運動（「我的」每日目標卡片的開關「運動消耗加回今天的熱量額度」，預設開），總覽與飲食頁用額度當分母、寫「含運動 +N」；總覽時間線與飲食頁「今日運動」卡片看得到運動，可改可刪。匯出多一個 `exercises.csv`。**運動不給好友看**；三大營養素、趨勢不變。migration `0020`（一張新表＋`users` 一個有預設值的欄位，可以退版）（規格 `docs/superpowers/specs/2026-10-14-exercise-design.md`、計畫 `docs/superpowers/plans/2026-10-14-exercise.md`；見第 10 節「運動紀錄」） | ✅（`feat/exercise`） |
+| 營養素配餐（今天還能吃什麼） | 飲食頁多一張卡片、新畫面 `/planner`：今天還剩多少熱量與三大營養素（額度含運動），**從食物庫配**（從自己常吃的食物用確定性的解題器配最多 3 組，免費，`GET /api/planner/library-suggestions`）與**讓 AI 配一餐**（記一餐裡打偏好、同一個勾選清單，算一次 AI 額度，`POST /api/ai/suggest-meal`）。兩種都只把項目帶進記一餐（有份量的送 `portion_id`），**不自動存**。migration `0021`（`ai_analyses.kind` 多 `suggest`，可以退版）（規格 `docs/superpowers/specs/2026-10-15-meal-planner-design.md`、計畫 `docs/superpowers/plans/2026-10-15-meal-planner.md`；見第 10 節「營養素配餐」） | ✅（`feat/meal-planner`；「讓 AI 配一餐」**沒有對真的 LLM 打過**，見 §8.2） |
 | UI 改版 第三階段 | 社群（P7）：「開帳號的路」「好友關係」「按讚、留言、通知」三步都已完成。**還沒做：封鎖與檢舉、好友的趨勢／統計／目標**（好友規格 §1.3 剩下的項目）；推播也沒有（通知只在 app 裡，見 §8.2） | 🟡 |
 
 > **P4 早於 P2/P3 完成是刻意的，但當初的理由有瑕疵。**
@@ -1132,6 +1133,23 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
 - **e2e 量觸控高度的範圍跟著 dev 資料庫長**：`invites.spec.ts` 量管理員「我的」的 `main button:visible`，帳號 1090 個時第 1036 顆
   逾時（整套第一次就紅）。`account-settings.spec.ts` 早就改過，這一個漏了。**只量有界的一組**。
 
+### 營養素配餐：幾條「突變存活才發現」，另外一條只在某些帳號上紅的 e2e
+
+沒有編新的號碼。逐條的經過在計畫 `docs/superpowers/plans/2026-10-15-meal-planner.md` 的「執行中發現的差異」。
+
+- **「最多共用一樣」拿掉之後存活**（Task 2）：計畫的八樣例子裡，「同一個食物最多出現在兩組」那一條擋得住第一條要擋的那一組，
+  兩條規則看起來都有測試、其實只有一條被守著。用 2 萬組隨機資料比對原版與突變版，找到只有第一條擋得住的最小例子，補成
+  `test_a_combo_one_item_short_of_a_picked_one_is_skipped`。
+- **座標下降 2 輪 → 0 輪存活，留著**（Task 2，計畫預告過）：三樣的品質只在規格 §4.5 的大例子看得出來，沒有寫成測試——**承認沒有被守住**（§8.2 第 1 點）。
+- **「看不到」的測試挑錯了對象**（Task 3）：計畫要的「別人的私人食物不是候選」本來就被可見性條件擋住，拿掉 `Meal.user_id == user.id`
+  的突變對它不會紅。換成**別人吃過的全域食物**才分得出來。
+- **舊快取那一格守的是反方向**（Task 8）：飲食頁卡片「舊快取（沒有 `kcal_budget`）、目標 1800」照樣畫兩個動作——`=== null` 的突變
+  （`undefined === null` 是 false）跟正確的版本一樣。補「舊快取、**也沒有目標**」那一格（正確是「設定每日目標」），它才紅；原本那一格守的是 `== null`。
+- **型別過不了的突變不算**（Task 7–10）：照字面拿掉「檢查 `quantity` 的型別」是 `TypeCheckError`，改成型別過得去的寫法才算數（31 個全紅）。
+- **e2e：只在有目標的帳號上紅**（Task 11）：飲食頁的新卡片有「從食物庫配」，`admin`、`foods`、`portions` 三個 spec 不帶 `exact` 的
+  `{ name: "食物庫" }` 對上兩個連結。Task 8 的時候沒有人跑整套 e2e；同樣寫法的另外三個 spec 用的是沒有目標的帳號（卡片不畫連結），**照樣綠**。
+  第一次跑整套才紅。同一次也抓到新 spec 自己的競態（`expectTouchTargets` 的 `count()` 不等卡片畫出來）。**加了新文字，就跑整套**。
+
 ---
 
 ## 7. 踩過的技術坑（節錄，完整版在各計畫文件）
@@ -1221,6 +1239,12 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
 | `alembic check` 看不到的漂移 | **不比 CHECK 的文字**（身體資料 Task 1），也**不比 `server_default`**：`migrations/env.py` 沒開 `compare_server_default`，模型的 `server_default=true()` 改 `false()` 不算漂移。這兩種要另外的測試直接讀資料庫：`test_the_activity_check_lists_every_code`（讀約束定義）、raw INSERT 不帶那一欄再讀回來（`users.exercise_adds_to_budget`） |
 | `AwareDatetime` 當查詢參數 | FastAPI＋Pydantic 現在的版本可以直接寫 `performed_at: AwareDatetime \| None = None`：naive 的 `2026-10-14T12:00:00` 是 422、`…Z` 照收、省略是 `None`，端點不用自己擋（`GET /api/exercise/estimate`）。前端送 `toISOString()`（帶 `Z`）。`Annotated[AwareDatetime, AfterValidator(...)]` 當查詢參數也行，`ValueError` 一樣是 422 `VALIDATION_ERROR`（運動的 `PerformedAt`，審查 M1：早於 1900 的時刻換時區會 `OverflowError`）。兩個有時區的時刻直接比（`<`）不換時區，不會溢位 |
 | `aria-disabled` 的勾選框長得跟能勾的一樣 | 原生 `disabled` 會把焦點弄丟（勾選框可能在焦點正在它身上時鎖住），所以用 `aria-disabled`＋`onChange` 擋——但瀏覽器不會替它淡掉。樣式要自己給（`.manual input[aria-disabled="true"]`）；Playwright 的 `toBeDisabled()` 認 `aria-disabled`、jest-dom 的不認（同上面 jsdom 那一格） |
+| `native_enum=False` 的 `Enum` 加一個更長的值 | 欄位是 **`VARCHAR(最長的值)`**：`text`／`image` 時是 `VARCHAR(5)`，`suggest` 放不進去。只在模型加值，`alembic check` 報的是 **`modify_type`**（`VARCHAR(length=5)` → `Enum(…)`），不是 CHECK——migration 要**加寬欄位**再換 CHECK（`0021`）。舊版的 `Enum` **載入**不認得的值會丟 `LookupError`：退版安全要看舊程式會不會載入那一列，不只是「讀不讀那一欄」 |
+| `python -I` 與 `PYTHONIOENCODING` | `-I` 含 `-E`，**忽略所有 `PYTHON*` 環境變數**：cp950 的主控台印不出 vitest 的框線字，小工具炸在 `print`。用 `-I` 跑的小工具在開頭 `sys.stdout.reconfigure(encoding="utf-8")` |
+| 中文的分隔符號「・」與 `nowrap` | 換行規則不讓「・」當一行的開頭：分好幾段、每段 `white-space: nowrap` 時，把「・」放在**下一段的開頭**，段與段之間就**沒有地方可以換行**（整行溢出）。放在**前一段的尾巴**（`/planner` 的合計） |
+| `base.secondary` 的高度 | 只有顏色與框線；`min-height: 44px` 寫在 `.actions button` 底下——放在 `.actions` 以外（例如記一餐的入口那一列）會小於 44px。入口用 `base.aiButton` |
+| e2e：新文字包含舊的名稱 | 不帶 `exact` 的 `getByRole("link", { name: "食物庫" })` 會對上新卡片的「從食物庫配」，strict mode 紅——而且**只在那個帳號有目標時**（卡片才畫連結），新帳號的 spec 照樣綠。名稱一律 `exact: true`；加新文字時拿它跟既有不帶 `exact` 的名稱比一次子字串 |
+| e2e：`expectTouchTargets` 之前先等 | 它用 `count()`，**不會等**：等統計回來才畫的卡片，忙的時候數到 0（「至少要有一個」紅）。先 `expect(…).toHaveText([...])` 或 `toBeVisible()` 再量 |
 
 ---
 
@@ -1590,6 +1614,22 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
   14. **`exercise.spec.ts` 跨午夜跑可能紅**（審查 M4）：記的是「今天」（台北）的體重與運動，預覽比對「依 M/D 的體重」、總覽比對今天的額度；
       跑到一半跨過午夜，日期與「今天」對不上。同其他記今天資料的 spec（`body-targets.spec.ts` 的同一天更正體重、總覽與飲食頁的今日數字），
       沒有遇到過；遇到就重跑。
+- **營養素配餐的已知限制**（規格 §10 的七點，加上執行中發現的）：
+  1. **解題器是啟發式、不保證最佳**（規格 §4.4）：兩樣只在單樣最好的 12 個裡找、三樣只從最好的 8 組兩樣出發。常吃的食物很多、很像時三組可能都普通。
+     **三樣的品質沒有測試守著**：`DESCENT_ROUNDS` 2 → 0 的突變存活（只在規格 §4.5 的大例子看得出來，沒有寫成測試）。
+  2. 只用預設份量；沒有預設份量的食物只會是 25 g（ml）的倍數。
+  3. 候選只來自自己記過的餐：新帳號沒有建議（`no_candidates`）；全域食物要先記過一次。
+  4. 「剩下的」只看今天；不管晚一點是否還要吃別餐（一次配完剩下的全部）。
+  5. **AI 的建議不保證不超過剩下的熱量**（只在提示詞要求、後端不擋）；畫面沒有顯示 AI 那一組的合計。
+  6. **「讓 AI 配一餐」從來沒有對真的 LLM 打過**（同多樣估算的第 1 點；e2e 只假造 `POST /api/ai/suggest-meal`）：部署後有金鑰的人要手動按一次（`docs/deployment.md` 的 `0021`）。
+  7. **在記一餐重新整理會失去帶進來的項目**（router state 交接，刻意，D22）：重新整理或返回都不會再帶一次，要回 `/planner` 再按一次「記成一餐」。
+  8. **`no_target` 的 `/planner` 只在目標被拿掉之後才走得到**：飲食頁的卡片沒有額度時只連到「設定每日目標」，不連 `/planner`；
+     要嘛之前就開著 `/planner`、要嘛在 `/planner` 時另一個分頁拿掉了熱量目標（`/planner` 每次掛載都重抓）。
+  9. **`suggest-meal` 的測試不 patch「今天」**：`app.api.routes.ai` 的 `today_in_timezone` 同時決定 AI 額度數哪一天，patch 成固定日期的話
+     `_seed_analyses` 寫的列（`created_at` 是真的現在）就不算在「今天」裡。所以那些測試只用「沒有餐」或「現在吃的一餐」——**跨午夜的那一秒可能誤判**（沒遇過，遇到就重跑）。
+  10. **舊版程式載入整列 `suggest` 會丟 `LookupError`**（`0021` 可以退版的理由只是「舊程式從來不載入整列 `ai_analyses`」，見 `docs/deployment.md`）。
+      之後有功能要載入整列 `ai_analyses`（例如管理員看 AI 用量的清單），要重新想一次退版安全。
+  11. `planner.spec.ts` 記的是「今天」（台北）的一餐，跑到一半跨過午夜時「今天的熱量差不多用完了」與總覽的數字對不上——同其他記今天資料的 spec，遇到就重跑。
 - **編輯自己已送出的提案**：後端沒有這個端點，目前只能等審核結果。
 
 ---
@@ -2403,6 +2443,77 @@ MET 一律用字串建 Decimal（`Decimal("9.8")`，不經 float）。值取自 
 
 **已知限制**在 §8.2「運動紀錄的已知限制」（14 點）。最要緊的四點：MET 是近似（第 1 點）、預覽跟存的時候可能不同（第 4 點）、
 補記到過去的運動畫面上打不開（第 10 點）、估算的一筆不跟著之後更正的體重變（第 12 點）。
+
+### 營養素配餐（今天還能吃什麼）
+
+算出今天還剩多少熱量與三大營養素，給兩種建議：**從食物庫配**（從自己常吃的食物用確定性的解題器配最多 3 組，免費）與
+**讓 AI 配一餐**（算一次 AI 額度）。兩種都只把項目帶進記一餐，由使用者確認、選餐別、按「記錄」——**不自動存**
+（規格 `docs/superpowers/specs/2026-10-15-meal-planner-design.md`、計畫 `docs/superpowers/plans/2026-10-15-meal-planner.md`，
+計畫的「執行中發現的差異」記了實作跟計畫不一樣的地方，「與規格的差異」是摘要）。
+**一個 migration（`0021`：`ai_analyses.kind` 加寬成 `VARCHAR(7)`、多 `suggest`，可以退版）、沒有新的環境變數。**
+
+**端點**（2 個，103 → 105；都要登入、只讀呼叫者自己的資料）：
+
+| 端點 | 做什麼 | 要記得的 |
+|---|---|---|
+| `GET /api/planner/library-suggestions` | `{date, status, remaining, combos}`；`status` ∈ `ok`／`no_target`／`full`／`no_candidates`／`no_fit` | 沒有參數、**使用者的今天**、只讀。`remaining` 只有 `no_target` 是 null；`combos` 只有 `ok` 有東西，每組 `items`（`food`：`FoodResponse`、`portion`：`{id, label, grams}` 或 null、`quantity`：字串，不補小數位，「175」「1.5」、`quantity_g`、`nutrition`）、`total`、`fill`（合計 / 剩下，兩位；不考慮或剩 0 是 null）。查詢 7 次（固定，跟候選數無關）。dev 上用 curl 量（2026-10-15）：8 個候選的 `ok` 14–24 ms；剩 0 的 `full`（不解題）9–13 ms |
+| `POST /api/ai/suggest-meal` | body `{preference?}`（清理前 ≤ 100 字）→ `AnalyzeMealResponse`（同多樣估算的形狀） | **兩個 422 在 AI 之前、不算額度、不記列**：`NO_KCAL_TARGET`、`DAY_ALREADY_FULL`；之後同多樣估算（`503`、`429`、`502`），加上 `502 AI_NO_SUGGESTION`（0 樣，**算一次額度**、記一列失敗）。一次呼叫算一次額度（跟估算共用每日上限），寫一列 `ai_analyses`（`kind = 'suggest'`）。回應在 commit 之前組好（flush 拿 id → 比對食物庫 → 組回應 → commit） |
+
+既有端點的改變：`GET /api/stats/daily` 改用抽出來的 `app/day_budget.py` 的 `load_day_budget`（那一天的實際、目標、運動、額度；兩個功能共用），
+回應與查詢次數（4）都不變。
+
+**剩下的額度**（`app/planner.py` 的 `remaining_for`）：熱量＝`max(額度 − 實際, 0)`（額度是運動的那一個：目標＋運動，看設定）；
+額度是 null（沒有目標或熱量沒設）→ 整個 `remaining` 是 null（`no_target`）。三大營養素：目標 null **或 0** → null（不考慮），否則
+`max(目標 − 實際, 0)`。已經吃的包含補劑（同 `/stats/daily`）。剩下的熱量 < 50 kcal 算吃滿（`full`／`DAY_ALREADY_FULL`）。
+
+**解題器**（`app/planner.py`，純函式，不碰資料庫、時間、log）：
+- 候選（`app/planner_data.py` 的 `load_candidates`）：自己記過的、看得到、有生效版本的食物，**常吃的前 20 → 最近吃的 → 剩下的常吃的**，去重取 30
+  （規格字面的「常吃前 30＋最近吃前 30」永遠等於常吃的前 30，實作時改的）。量：有預設份量（自己的優先，再來是公開的）→ 0.5／1／1.5／2 份；
+  沒有 → 25～400 g 每 25 一格；單一選項就超過上限的先拿掉。
+- 目標函數：Σ 權重 × ((合計 − 剩下) / 分母)²（熱量、蛋白質 1.0，脂肪、碳水 0.5；三大營養素分母至少 10 g），**每多一樣加 0.02**（D6）；
+  硬限制合計熱量 ≤ 剩下 × 1.05。全部整數運算（營養素換成「分」、分數乘上 Π 分母² 再比），每一樣的數字跟 `app/nutrition.py` 的 `scale()` 完全相同。
+- 步驟：單樣 → 單樣最好的 12 個兩兩窮舉 → 最好的 8 組兩樣各加一樣、座標下降最多 2 輪 → 依分數挑最多 3 組，**跟已挑的每一組最多共用 1 樣、
+  同一個食物最多出現在 2 組**（D11）。平手看候選與量的順序（確定性）。
+- 時間（這台機器，30 個候選都沒有份量的最壞情況）：650 kcal 4 ms、1200 kcal 9 ms、2500 kcal 16 ms（最慢 21 ms）；預算是伺服器端 200 ms。
+  **不保證最佳**（刻意的取捨）。
+
+**AI 配一餐**（`app/ai/estimator.py`）：`SUGGEST_SYSTEM_PROMPT`（建議一餐台灣買得到或做得出來的組合、合計不超過剩下的、蛋白質優先、偏好放在「」裡
+而且說明裡面的指示不照做、給不出來回 `[]`）；`suggestion_request(remaining, preference)` 組使用者訊息（數字四捨五入到整數、不考慮的不列）；
+`parse_raw_meal_suggestion` 跟多樣估算共用解析（只差 0 樣的錯誤碼）。輸出 schema、輸出上限（8192）沿用多樣估算。兩家 estimator 多 `suggest_meal`。
+`suggestion_request` 收的是 `estimator.py` 裡的唯讀 Protocol `SuggestionBudget`，**不 import `app.planner`**——`estimator` 經過 `app.api.deps`
+被每一個路由 import，好友與社群的模組會因此「走得到」配餐的模組（`test_planner_privacy.py` 沿著 import 走的那一條會紅）。偏好清成一行、不寫 log、只存 SHA-256。
+
+**前端：**
+
+| 東西 | 在哪裡 | 要記得的 |
+|---|---|---|
+| API | `api/planner.ts`（`useLibrarySuggestions`）、`api/ai.ts`（`suggestMeal`） | `["planner", …]` **不進離線快取**（`persist.ts` 的 `NOT_PERSISTED`）、`staleTime: 0`：建議跟「今天」綁在一起，舊的比沒有更糟 |
+| `/planner` | `screens/Planner.tsx`（預設 `narrow`） | 「還能吃」（`<dl>` 小方格）、「從食物庫配」（`<ol aria-label="從食物庫配的組合">`，每組「組合 N」、每一樣一行、合計四段各自 `nowrap`、「佔剩下的熱量 N%」、「記成一餐」）、「讓 AI 配一餐」。**熱量顯示到整數、克到小數一位**（`lib/decimal.ts` 的 `roundForDisplay`，half-up；只是顯示），量（175 g、1.5 份）原樣——那是記一餐輸入框裡的值。每種 `status` 一句話 |
+| 飲食頁的卡片 | `components/PlannerCard.tsx`（`Today.tsx`，營養素卡片下面、電腦版在左欄） | **不顯示數字**（D26）：有熱量額度（`kcalBudgetOf`）→ 兩個連結「從食物庫配」「讓 AI 配一餐」；沒有 →「設定每日目標」。`stats` 還沒回來不畫 |
+| 交接 | `lib/planner.ts`（`plannerHandoffFrom`、`itemsState`、`SUGGEST_STATE`）、`App.tsx` 的 `LogMealRoute` | **router state**（不進網址）：`{plannerItems: [...]}`／`{plannerSuggest: true}`。`LogMealRoute` 讀一次、`replace` 清掉 history 的 state——**重新整理會失去帶進來的項目**（刻意）。形狀不對當作沒有 |
+| 記一餐 | `screens/LogMeal.tsx` | AI 的項目清單多 `portion`、`origin`；配餐的幾樣在另一個標題「配餐的項目」底下。有份量的那一列標籤「白飯（份，1 份＝1 碗）」、**送 `portion_id`＋份數**（公克數由伺服器換算並凍結）。移除最後一樣 AI 的項目時清描述與照片的規則只看 AI 的項目 |
+| AI 配一餐 | `components/AiMealPanel.tsx` | 第三種輸入（`kind: "suggest"`）：入口「讓 AI 配一餐」（`base.aiButton`，同「用 AI 估算」；`base.secondary` 的 44px 只在 `.actions` 底下才有）→ `<form aria-label="讓 AI 配一餐">`「偏好（選填）」「讓 AI 建議」「取消」。從卡片或 `/planner` 進來時一開始就展開、焦點在偏好。結果是同一個勾選清單（`region`「AI 建議的一餐」）、同一個「加入這 N 樣」 |
+
+**新的東西在哪裡：**
+
+- 後端：`migrations/versions/0021_add_suggest_analysis_kind.py`；`app/models/ai_analysis.py`（`AnalysisKind.SUGGEST`）；`app/day_budget.py`；
+  `app/planner.py`、`app/planner_data.py`；`app/schemas/planner.py`、`app/api/routes/planner.py`（`main.py` 掛上）；`routes/foods.py` 的
+  `my_recorded_foods_stmt`（公開、多 `require_nutrition`）；`app/ai/{estimator,anthropic_estimator,gemini_estimator}.py`；`app/schemas/ai.py`（`SuggestMealRequest`）、
+  `routes/ai.py`（`suggest_meal`）。測試 `tests/test_day_budget.py`、`test_planner_solver.py`、`test_planner.py`、`test_planner_privacy.py`（不寫 log、
+  好友與社群的模組碰不到，含沿著 import 走）、`test_ai_suggest_meal.py`，以及 `test_ai_analysis_model.py`、`test_ai_estimator.py`、`test_ai_provider_errors.py` 的新增。
+- 前端：上表的檔案，加上 `lib/layout.ts`（註解）。測試 `tests/planner-lib.test.ts`、`planner-api.test.tsx`、`planner.test.tsx`、`planner-card.test.tsx`、
+  `log-meal-planner.test.tsx`，共用的回應在 `tests/helpers/planner-routes.ts`；`ai-api`、`ai-meal-panel`、`log-meal-ai`、`today`、`app`、`offline`、`layout`、`decimal` 的新增。
+- e2e：`e2e/planner.spec.ts`（兩條，新帳號、手機尺寸）：
+  1. **從食物庫配，全部是真的**：API 建雞胸（110／23／1.5／0）與白飯（180／3／0.5／40，預設「1 碗」200 g）、記在兩天前、目標 700／蛋白質 50 →
+     卡片「從食物庫配」→「還能吃」700 kcal、50 g → 三組，第一組「雞胸 175 g・193 kcal」「白飯 1.5 份（1 碗）・540 kcal」「合計 733 kcal・蛋白質 49.3 g…」
+     （`test_the_e2e_pair`）→ 量三顆「記成一餐」→ 記一餐「配餐的項目」175／1.5 → 晚餐、記錄 → 總覽「732.5 / 700 kcal」→ `/planner`「今天的熱量差不多用完了」
+     → 飲食頁那一餐「雞胸 · 175 g」「白飯 · 300 g」。
+  2. **讓 AI 配一餐，只假造 `POST /api/ai/suggest-meal`**：卡片的連結 → 表單已展開、焦點在偏好 →「不吃牛」→ 送出的 body `{preference: "不吃牛"}` →
+     兩樣（茶葉蛋用食物庫那一筆）→ 加入（沙拉真的 `POST /api/foods`）→ 描述帶好 → 記錄 → 飲食頁那一餐兩樣、合計 384 kcal。
+  `desktop-layout.spec.ts` 的「補劑在營養素下面」改從配餐卡片的底量起；六個 spec 的 `{ name: "食物庫" }` 改成 `exact`（「從食物庫配」也對得上）。
+
+**已知限制**在 §8.2「營養素配餐的已知限制」（11 點）。最要緊的三點：「讓 AI 配一餐」沒有對真的 LLM 打過（第 6 點）、解題器不保證最佳（第 1 點）、
+在記一餐重新整理會失去帶進來的項目（第 7 點）。
 
 ---
 

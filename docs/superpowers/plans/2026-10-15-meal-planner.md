@@ -153,6 +153,51 @@
   結果 `region`「AI 建議的一餐」，「加入這 N 樣」之後項目在「AI 估的項目」底下。
 - 量觸控高度：組合清單的按鈕、卡片的兩個連結、偏好欄位都是 44px（`.screen button`、`.action`、`.suggestForm input`）。
 
+### Task 11–12（e2e、文件，2026-10-15）
+
+**開工前的顯示修正**（`3f322a8`）：`/planner` 的卡片直接印後端的兩位小數（「236.25 kcal」「蛋白質 60.98 g」「合計 824.25 kcal」）。
+`lib/decimal.ts` 多 `roundForDisplay(value, 0 | 1)`（half-up、尾數的 0 不寫，只是顯示）：每一樣的熱量、合計四段、「還能吃」的方格——熱量 0 位、克 1 位。
+量（175 g、1.5 份）照舊 `formatMacro`：那是交給記一餐、出現在輸入框裡的值。測試：`decimal.test` 11 格（192.5、49.25 分得出 half-up 與 half-even）、
+`planner.test` 改期望值（193／733／49.3／4.1）、多「還能吃有小數」一格。突變 6 個全紅（half-even、克改 0 位、「還能吃」熱量／克原樣、每一樣熱量原樣、
+合計蛋白質原樣）。手機截圖看過（`$S/planner-polish/planner-ok-phone.png`）。前端 `Test Files 188`／`Tests 2710`。
+**所以 Task 11 的 e2e 期望值跟計畫不一樣**：「雞胸 … 175 g・193 kcal」「合計 733 kcal・蛋白質 49.3 g・脂肪 4.1 g・碳水 120 g」；總覽照舊「732.5」。
+
+**Task 11**（`fe4d912`，修正 `5900d7e`）：
+- `e2e/planner.spec.ts` 兩條照計畫。多看的：`/planner` 的組合是**三組**（`test_the_e2e_pair` 的雞胸 250 g、白飯 2 份），量三顆「記成一餐」；
+  總覽用「732.5 / 700 kcal」（分母也對）；剩 0 之後「還能吃」是「0 kcal」；飲食頁那一餐的兩列是「雞胸 · 175 g」「白飯 · 300 g」（`MealList` 寫 `quantity_g`）、
+  合計 732.5。AI 那一條：卡片的兩個連結量 44px、偏好欄位量 44px、勾選清單的名稱（茶葉蛋用食物庫那一筆 154 kcal）、建議只打一次、
+  選午餐、飲食頁那一餐兩列＋描述＋合計 384（沙拉 250 g × 92／100＋茶葉蛋 110 g × 140／100）。`estimatedItem` 多一個「每 100 g 熱量」參數。
+- **`desktop-layout.spec.ts` 跟著改**（計畫 Step 3 擔心的那一件）：「補劑在營養素下面、間距 < 100」量到 150——配餐卡片在兩者之間（同一欄）。
+  改成從卡片的底量起，另外斷言卡片在營養素下面、同一欄。看過電腦版截圖，版面是對的。守的缺陷（第二列 `auto` 時多出來的高度平分、≥ 1500 px）照樣量得到。
+- **整套第一次 4 條紅**：`admin`、`foods`、`portions` 的 `getByRole("link", { name: "食物庫" })` 沒有 `exact`，對上卡片的「從食物庫配」
+  （示範帳號有目標才畫連結；同寫法的 `edit-meal`、`ai-estimate`、`mobile-form-zoom` 用新帳號、沒目標，照樣綠）。六個 spec 的 `{ name: "食物庫" }`
+  全部改成 `exact`；拿新文字跟其他不帶 `exact` 的名稱比過子字串，沒有別的。第四條是新 spec 自己的競態：`expectTouchTargets` 用 `count()`、不等卡片畫出來，
+  忙的時候數到 0——先等兩個連結的文字。
+- 之後整套 `npx playwright test`（預設 6 個 workers）**連跑兩次都是 `56 passed`**（44.5 s、45.5 s），23 個 spec 檔。
+  `docker compose logs api --since 20m | grep 重用`：0 行（5156 行的 log 裡沒有 refresh token 重用偵測）。
+- 突變（e2e 層，5 個全紅；前端靠 vite dev 即時生效，後端那一個重建 api 再改回、再重建，每一個之後 `git diff` 乾淨）：
+  ① `LogMeal` 送出時不帶 `portion_id` → 總覽「195.2 / 700 kcal」（計畫預告的數字）；② `Planner.tsx`「記成一餐」不帶 state → 「配餐的項目」找不到；
+  ③ `AiMealPanel` 送出時不用打的偏好 → `expect.poll(sentBody)` 紅；④ 卡片的「讓 AI 配一餐」不帶 `SUGGEST_STATE` → 表單沒展開；
+  ⑤ 後端 `planner_data.py` 不給解題器預設份量（`portion_grams=None`）→ 組合 1 變成「白飯 275 份（1 碗）・495 kcal」。
+- dev 上 `GET /api/planner/library-suggestions` 用 curl 量（各 6 次）：8 個候選、`ok` 14–24 ms；剩 0 的 `full`（不解題）9–13 ms。存取紀錄沒有時間，所以用 curl。
+
+**Task 12**：量到的數字——後端 **1851**（`pytest -q -W error` 全綠，約 4 分 35 秒；Task 6 做完時 1851，之後沒有改後端）；前端 `Test Files 188`／`Tests 2710`；e2e 56 條、23 個檔案；端點 105（`app.openapi()` 數的）；
+dev 資料庫 23 張表（22＋`alembic_version`，不變）、`alembic_version` 是 `0021`。handover §2、進度表、§6、§7、§8.2、§10 照計畫；部署手冊加 `0021`。
+規格的狀態改成「已實作」，§7.3 的顯示例子跟著顯示修正改。
+
+## 與規格的差異
+
+執行中改過、跟規格寫的不一樣的地方（細節在上面「執行中發現的差異」）：
+
+1. **候選的合併**（Task 3，D12）：常吃的前 20 → 最近吃的 → 剩下的常吃的，去重取 30。規格原本的「常吃前 30＋最近吃前 30」永遠等於常吃的前 30；規格跟著改了。
+2. **`suggestion_request` 收唯讀 Protocol `SuggestionBudget`，不 import `app.planner.Remaining`**（Task 5）：否則好友與社群的模組沿著 import 走得到配餐的模組。
+3. **suggest-meal 的回應在 commit 之前組好**（Task 6）：計畫說照 `analyze_meal` 的順序；這裡照身體資料審查 M6。
+4. **退版安全的理由比規格 §6 窄**（Task 4）：舊版的 `Enum` 載入 `suggest` 會丟 `LookupError`，只是舊程式從來不載入整列 `ai_analyses`。
+5. **「讓 AI 配一餐」的入口用 `base.aiButton`**（Task 10），不是 `base.secondary`（44px 只在 `.actions` 底下）。配好之後焦點移到入口。
+6. **`/planner` 的「記成一餐」是次要按鈕、合計分四段各自不換行**（Task 8 截圖之後）。
+7. **`/planner` 的數字：熱量到整數、克到小數一位**（Task 11 之前的顯示修正）；規格 §7.3 原本寫 `formatMacro`（後端的兩位小數原樣）。規格跟著改了。
+8. **e2e 多看幾處、`desktop-layout.spec.ts` 跟著改、六個 spec 的「食物庫」改 `exact`**（Task 11）。
+
 ## 執行環境
 
 - 分支 `feat/meal-planner`（已建立，**不要 push**）。`S=C:/Users/user/AppData/Local/Temp/claude/f--wallet/e7b60c93-fbd5-4a61-9c85-74550ff7244b/scratchpad`。
