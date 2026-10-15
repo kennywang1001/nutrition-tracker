@@ -1589,6 +1589,8 @@ export interface paths {
          *
          *     熱量額度（運動規格 D15）：`kcal_budget` 是目標加上那一天的運動（設定關掉時就是目標）；
          *     `ratio` 刻意不跟著變（D16）。設定只看**現在**的值，查過去某一天也一樣（D17）。
+         *     那一天的實際、目標、運動與額度由 `app/day_budget.py` 的 `load_day_budget` 讀
+         *     （營養素配餐共用同一份定義）。
          */
         get: operations["get_daily_stats_api_stats_daily_get"];
         put?: never;

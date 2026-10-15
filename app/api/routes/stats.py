@@ -6,11 +6,10 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.day_budget import load_day_budget
 from app.days import today_in_timezone
 from app.db import get_db
 from app.errors import UnprocessableEntityError
-from app.exercise import kcal_budget
-from app.exercise_data import exercise_kcal_on
 from app.models.target import UserTarget
 from app.models.user import User
 from app.nutrition import Macros
@@ -22,7 +21,7 @@ from app.schemas.stats import (
     NullableMacrosResponse,
     RangeStatsResponse,
 )
-from app.stats import DayMacros, adherence_rate, bucket_daily_macros, daily_macros
+from app.stats import DayMacros, adherence_rate, bucket_daily_macros
 
 router = APIRouter(prefix="/stats", tags=["stats"])
 
@@ -74,43 +73,20 @@ async def get_daily_stats(
 
     熱量額度（運動規格 D15）：`kcal_budget` 是目標加上那一天的運動（設定關掉時就是目標）；
     `ratio` 刻意不跟著變（D16）。設定只看**現在**的值，查過去某一天也一樣（D17）。
+    那一天的實際、目標、運動與額度由 `app/day_budget.py` 的 `load_day_budget` 讀
+    （營養素配餐共用同一份定義）。
     """
     # 先讀成純值：之後的查詢不再碰 `user` 這個 ORM 物件。
     user_id, tz_name = user.id, user.timezone
     adds_exercise = user.exercise_adds_to_budget
     day = date or today_in_timezone(tz_name)
 
-    day_macros = await daily_macros(db, user_id=user_id, tz_name=tz_name, day=day)
-    actual = day_macros.actual
-
-    # 半開區間判斷「那一天生效的目標」：跟 GET /api/targets?date= 是同一條
-    # 規則（effective_from <= date < effective_to，effective_to 為 NULL 視為
-    # 無窮遠的未來），兩處不能有一處用 <=。
-    target_row = await db.scalar(
-        select(UserTarget).where(
-            UserTarget.user_id == user_id,
-            UserTarget.effective_from <= day,
-            or_(UserTarget.effective_to.is_(None), UserTarget.effective_to > day),
-        )
+    budget = await load_day_budget(
+        db, user_id=user_id, tz_name=tz_name, adds_exercise=adds_exercise, day=day
     )
-    exercise_kcal = await exercise_kcal_on(db, user_id=user_id, tz_name=tz_name, day=day)
-    target_kcal = target_row.kcal if target_row is not None else None
-
-    target_response: NullableMacrosResponse | None = None
-    ratio_response: NullableMacrosResponse | None = None
-    if target_row is not None:
-        target_response = NullableMacrosResponse(
-            kcal=target_row.kcal,
-            protein_g=target_row.protein_g,
-            fat_g=target_row.fat_g,
-            carb_g=target_row.carb_g,
-        )
-        ratio_response = NullableMacrosResponse(
-            kcal=_ratio_field(actual.kcal, target_row.kcal),
-            protein_g=_ratio_field(actual.protein_g, target_row.protein_g),
-            fat_g=_ratio_field(actual.fat_g, target_row.fat_g),
-            carb_g=_ratio_field(actual.carb_g, target_row.carb_g),
-        )
+    actual = budget.macros.actual
+    # target／ratio 跟 /stats/range 共用 `_target_and_ratio`：同一天兩個端點的兩層 null 一致。
+    target_response, ratio_response = _target_and_ratio(actual, budget.target)
 
     return DailyStatsResponse(
         date=day,
@@ -118,12 +94,12 @@ async def get_daily_stats(
         target=target_response,
         ratio=ratio_response,
         breakdown=BreakdownResponse(
-            food=_macros_response(day_macros.food),
-            supplement=_macros_response(day_macros.supplement),
+            food=_macros_response(budget.macros.food),
+            supplement=_macros_response(budget.macros.supplement),
         ),
-        exercise_kcal=exercise_kcal,
+        exercise_kcal=budget.exercise_kcal,
         exercise_adds_to_budget=adds_exercise,
-        kcal_budget=kcal_budget(target_kcal, exercise_kcal, adds_exercise),
+        kcal_budget=budget.kcal_budget,
     )
 
 
