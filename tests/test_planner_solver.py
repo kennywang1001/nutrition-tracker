@@ -248,6 +248,23 @@ def test_the_e2e_pair():
     assert combos[0].total == _m("732.50", "49.25", "4.13", "120.00")
 
 
+def test_a_food_with_almost_no_energy_is_never_suggested():
+    """審查後的修正 M1：黑咖啡（每 100 ml 2 kcal）加進任何一組只多 0.02 的代價，單獨一組的分數
+    跟「什麼都不吃」一樣——以前三組是「雞胸 250 g」「雞胸 ＋ 黑咖啡 400 ml」「黑咖啡 400 ml」。"""
+    foods = [_c("110", "23", "1.5", "0"), _c("2", "0.3", "0", "0")]
+    remaining = Remaining(kcal=Decimal("700"), protein_g=Decimal("50"), fat_g=None, carb_g=None)
+    assert _summary(suggest_combos(foods, remaining)) == [[(0, "250", "250.00")]]
+
+
+def test_the_energy_floor_is_five_kcal_per_100():
+    """每 100 g／ml 不到 5 kcal 的不當候選；剛好 5 的還是（有份量的也看每 100）。"""
+    assert suggest_combos([_c("4.99", "0", "0", "0")], _kcal_only("100")) == []
+    assert suggest_combos([_c("4.99", "0", "0", "0", "250")], _kcal_only("100")) == []
+    assert _summary(suggest_combos([_c("5", "0", "0", "0")], _kcal_only("100"))) == [
+        [(0, "400", "400.00")]
+    ]
+
+
 def test_no_candidates_means_no_combos():
     assert suggest_combos([], DINNER) == []
 

@@ -31,6 +31,10 @@ _MACRO_FLOOR_CENTS = 1000
 _ITEM_PENALTY = 2
 # 硬限制（規格 D7）：合計熱量 ≤ 剩下的 × 105 / 100。
 _KCAL_CAP_PERCENT = 105
+# 每 100 g／ml 不到 5 kcal 的食物（黑咖啡、茶、水、零卡飲料）不當候選（審查後的修正 M1）：
+# 它們加進任何一組只多一個代價（D6），單獨一組的分數跟「什麼都不吃」一樣——三組裡會出現
+# 「X ＋ 黑咖啡 25 ml」「黑咖啡 25 ml」這種沒用的建議。400 g 也不到 20 kcal，不是「一餐」。
+MIN_KCAL_PER_100 = Decimal(5)
 
 TOP_SINGLES = 12  # 兩樣、三樣只在單樣最好的這幾個食物之間找
 SEED_PAIRS = 8  # 三樣：從最好的這幾組兩樣出發，各加一樣
@@ -148,6 +152,9 @@ def _options(candidate: Candidate, cap_numerator: int) -> list[_Option]:
         _cents(candidate.per_100.fat_g),
         _cents(candidate.per_100.carb_g),
     )
+    if candidate.per_100.kcal < MIN_KCAL_PER_100:
+        # 沒有選項＝不是候選；位置不變（組合裡的 `candidate` 仍是傳進來的順序）。
+        return []
     if candidate.portion_grams is not None:
         grams = candidate.portion_grams
         steps = [(step, _cents(grams * step)) for step in SERVING_STEPS]
