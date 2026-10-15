@@ -2205,3 +2205,520 @@ git add app/schemas/ai.py app/api/routes/ai.py tests/test_ai_suggest_meal.py \
 ```
 
 訊息：`feat(api): POST /api/ai/suggest-meal——依今天剩下的額度請 AI 配一餐（算一次額度）`
+
+---
+
+## Task 7：前端——API 層、交接的型別與解析
+
+**Files:**
+- Create: `frontend/src/api/planner.ts`、`frontend/src/lib/planner.ts`、`frontend/tests/planner-lib.test.ts`、`frontend/tests/planner-api.test.tsx`
+- Modify: `frontend/src/api/{ai.ts,queries.ts,persist.ts}`、`frontend/src/lib/decimal.ts`、`frontend/tests/{ai-api.test.ts,offline.test.tsx,decimal.test.ts}`
+
+- [ ] **Step 0：** `cd frontend && npm run -s typecheck`（Task 3、6 重新產生了 `schema.d.ts`；應該是綠的）。
+
+- [ ] **Step 1：寫會紅的測試。**
+  - `tests/planner-lib.test.ts`：
+    1. `itemsState(combo)` 把一組轉成 `{ plannerItems: [{ food, quantity: "175", portion: null }, { food, quantity: "1.5", portion: { id: 9, label: "1 碗" } }] }`——`portion` 只留 `id`、`label`（不帶 `grams`），`quantity` 原樣是字串。
+    2. `plannerHandoffFrom(itemsState(combo))` → `{ kind: "items", items }`（跟上一條一樣的內容）。
+    3. `plannerHandoffFrom(SUGGEST_STATE)` → `{ kind: "suggest" }`。
+    4. 不像交接的一律 `null`（`it.each`）：`undefined`、`null`、`"x"`、`{}`、`{ notice: "…" }`（總覽的通知）、`{ plannerItems: [] }`、`{ plannerItems: "x" }`、一樣的 `quantity` 是數字、`food.id` 是字串、`portion` 是 `{ id: "9" }`、`food.nutrition` 是 `"x"`、`plannerSuggest: "yes"`。
+  - `tests/decimal.test.ts`：`percentOf("1.05") === "105%"`、`percentOf("0.985") === "99%"`（四捨五入 half-up）、`percentOf("0") === "0%"`。
+  - `tests/planner-api.test.tsx`：`useLibrarySuggestions` 打 `GET /api/planner/library-suggestions`、回傳 body；掛兩次（unmount 再 mount 同一個 `QueryClient`）會抓兩次（`staleTime: 0`）。
+  - `tests/ai-api.test.ts`：`suggestMeal("  不吃牛 ")` 送 `POST /api/ai/suggest-meal`、body `{"preference":"不吃牛"}`；`suggestMeal("   ")` 的 body 是 `{}`；`describeAnalyzeError` 對 `AI_NO_SUGGESTION`、`NO_KCAL_TARGET`、`DAY_ALREADY_FULL` 回後端的 `message`。
+  - `tests/offline.test.tsx`：照「運動的估算預覽與活動清單不會被寫進 localStorage」那一條，加「今天還能吃什麼的建議不會被寫進 localStorage」：`["planner", "library"]` 有資料 → 持久化之後的 localStorage 裡沒有它，同時 `dailyStats` 有（先證明有東西寫進去）。
+
+  Run: `npx vitest run tests/planner-lib.test.ts tests/planner-api.test.tsx tests/ai-api.test.ts tests/offline.test.tsx tests/decimal.test.ts` → Expected：FAIL（import／斷言）。
+
+- [ ] **Step 2：`queries.ts`、`persist.ts`。** `queryKeys` 加：
+
+```ts
+	/** 今天還能吃什麼（營養素配餐規格 §7.3）。**不進離線快取**（`persist.ts` 的 `NOT_PERSISTED`）：
+	 *  建議跟「今天、剛記了什麼」綁在一起，舊的比沒有更糟（D25）。 */
+	plannerLibrary: ["planner", "library"] as const,
+```
+
+`persist.ts` 的 `NOT_PERSISTED` 加 `"planner"`，註解「營養素配餐的建議：一次性、跟今天綁在一起（營養素配餐規格 D25）」。
+
+- [ ] **Step 3：`api/planner.ts`。**
+
+```ts
+import { useQuery } from "@tanstack/react-query";
+import { apiFetch } from "./client";
+import { queryKeys } from "./queries";
+import type { components } from "./schema";
+
+export type LibrarySuggestions =
+	components["schemas"]["LibrarySuggestionsResponse"];
+export type PlannedCombo = components["schemas"]["PlannedComboResponse"];
+export type PlannedItem = components["schemas"]["PlannedItemResponse"];
+
+/** 今天還能吃什麼——從常吃的食物配（營養素配餐規格 §7.3）。`staleTime: 0`：每次進頁面重抓
+ *  （剛記完一餐回來，剩下的就變了）；也不進離線快取（D25）。 */
+export function useLibrarySuggestions() {
+	return useQuery({
+		queryKey: queryKeys.plannerLibrary,
+		queryFn: async () => {
+			const result = await apiFetch<LibrarySuggestions>(
+				"/api/planner/library-suggestions",
+			);
+			if (result === null) throw new Error("沒有回傳建議");
+			return result;
+		},
+		staleTime: 0,
+	});
+}
+```
+
+- [ ] **Step 4：`api/ai.ts`。**
+
+```ts
+const SUGGEST_MEAL = "/api/ai/suggest-meal";
+
+/** 依今天剩下的額度請 AI 配一餐（營養素配餐規格 §5）。回應同 `analyzeMealText`，所以多樣面板的
+ *  勾選清單原樣用。偏好留空就不帶（後端也會把只有空白的當成沒有）。算一次額度。 */
+export function suggestMeal(preference: string): Promise<AnalyzeMealResponse> {
+	const trimmed = preference.trim();
+	return post(SUGGEST_MEAL, trimmed === "" ? {} : { preference: trimmed });
+}
+```
+
+`describeAnalyzeError` 的 `switch` 加三個 case，跟 `AI_NO_FOOD_FOUND` 放在一起、回 `error.message`（註解：後端那句說的是該做什麼——換個偏好、先設定目標、今天吃滿了）。
+
+- [ ] **Step 5：`lib/decimal.ts` 的 `percentOf`。**
+
+```ts
+/** 後端算好的比例（`"1.05"`）→ `"105%"`，四捨五入到整數百分比（half-up）。給 `/planner` 的
+ *  「佔剩下的熱量」用——比例由後端除（營養素配餐規格 D13），這裡只換成百分比。 */
+export function percentOf(ratio: Numeric): string {
+	return `${new Decimal(ratio).times(100).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toString()}%`;
+}
+```
+
+- [ ] **Step 6：`lib/planner.ts`。**
+
+```ts
+import type { Food } from "../api/foods";
+import type { PlannedCombo } from "../api/planner";
+
+/** 交給記一餐的一樣（營養素配餐規格 D22、D23）。`portion` 不是 null 時 `quantity` 是「幾份」
+ *  （送 `portion_id`）；是 null 時是直接輸入的 g／ml。`quantity` 是後端給的字串，原樣用。 */
+export type HandoffItem = {
+	food: Food;
+	quantity: string;
+	portion: { id: number; label: string } | null;
+};
+
+export type PlannerHandoff =
+	| { kind: "items"; items: HandoffItem[] }
+	| { kind: "suggest" };
+
+/** 「讓 AI 配一餐」連到記一餐時的 router state。 */
+export const SUGGEST_STATE = { plannerSuggest: true } as const;
+
+/** 「記成一餐」連到記一餐時的 router state。 */
+export function itemsState(combo: PlannedCombo): {
+	plannerItems: HandoffItem[];
+} {
+	return {
+		plannerItems: combo.items.map((item) => ({
+			food: item.food,
+			quantity: item.quantity,
+			portion:
+				item.portion === null
+					? null
+					: { id: item.portion.id, label: item.portion.label },
+		})),
+	};
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function isFood(value: unknown): value is Food {
+	return (
+		isRecord(value) &&
+		typeof value.id === "number" &&
+		typeof value.name === "string" &&
+		(value.nutrition === null ||
+			(isRecord(value.nutrition) &&
+				typeof value.nutrition.base_unit === "string"))
+	);
+}
+
+function handoffItemFrom(value: unknown): HandoffItem | null {
+	if (!isRecord(value) || !isFood(value.food)) return null;
+	if (typeof value.quantity !== "string") return null;
+	const portion = value.portion;
+	if (portion === null) {
+		return { food: value.food, quantity: value.quantity, portion: null };
+	}
+	if (
+		!isRecord(portion) ||
+		typeof portion.id !== "number" ||
+		typeof portion.label !== "string"
+	) {
+		return null;
+	}
+	return {
+		food: value.food,
+		quantity: value.quantity,
+		portion: { id: portion.id, label: portion.label },
+	};
+}
+
+/** 記一餐收到的 router state → 交接的內容。state 是 unknown：任何頁面都可能 navigate 過來，
+ *  history 裡也可能是舊版本存的形狀——不對就當作沒有（同總覽的 `noticeFrom`）。
+ *  一樣不對就整個不要（不收半套）。 */
+export function plannerHandoffFrom(state: unknown): PlannerHandoff | null {
+	if (!isRecord(state)) return null;
+	if (state.plannerSuggest === true) return { kind: "suggest" };
+	if (!Array.isArray(state.plannerItems) || state.plannerItems.length === 0) {
+		return null;
+	}
+	const items: HandoffItem[] = [];
+	for (const raw of state.plannerItems) {
+		const item = handoffItemFrom(raw);
+		if (item === null) return null;
+		items.push(item);
+	}
+	return { kind: "items", items };
+}
+```
+
+Run Step 1 的指令 → Expected：PASS。
+
+- [ ] **Step 7：突變（vitest；型別過得去的改法）。** ①`plannerHandoffFrom` 拿掉 `length === 0` 的判斷 → `{ plannerItems: [] }` 那一格紅；②`handoffItemFrom` 不檢查 `quantity` 的型別 → 數字那一格紅；③`NOT_PERSISTED` 拿掉 `"planner"` → offline 那條紅；④`useLibrarySuggestions` 拿掉 `staleTime: 0` → 掛兩次那條紅（預設 staleTime 是 60 秒——照 `src/api/queries.ts` 的 `queryClient` 現況）；⑤`suggestMeal` 不 trim → ai-api 那條紅。
+
+- [ ] **Step 8：檢查、commit。** `npm run -s test`（grep `FAIL`／`Unhandled`）、`npm run -s lint`、`npm run -s typecheck`。
+
+```bash
+git add frontend/src/api/planner.ts frontend/src/api/ai.ts frontend/src/api/queries.ts \
+  frontend/src/api/persist.ts frontend/src/lib/planner.ts frontend/src/lib/decimal.ts \
+  frontend/tests/planner-lib.test.ts frontend/tests/planner-api.test.tsx frontend/tests/ai-api.test.ts \
+  frontend/tests/offline.test.tsx frontend/tests/decimal.test.ts
+```
+
+訊息：`feat(frontend): 營養素配餐的 API 層與交給記一餐的 router state`
+
+---
+
+## Task 8：前端——`/planner`「今天還能吃什麼」與飲食頁的卡片
+
+**Files:**
+- Create: `frontend/src/screens/Planner.{tsx,module.css}`、`frontend/src/components/PlannerCard.{tsx,module.css}`、`frontend/tests/planner.test.tsx`、`frontend/tests/planner-card.test.tsx`
+- Modify: `frontend/src/App.tsx`、`frontend/src/screens/Today.tsx`、`frontend/tests/{today.test.tsx,app.test.tsx}`
+
+- [ ] **Step 1：寫會紅的測試。** 共用的回應放 `tests/helpers/planner-routes.ts`（`OK_SUGGESTIONS`：剩 700／50、兩組——第一組「雞胸 175 g＋白飯 1.5 份（1 碗）」、`fill.kcal: "1.05"`；`plannerRoutes(body = OK_SUGGESTIONS)` 回 `GET /api/planner/library-suggestions` 的路由）。
+  - `tests/planner.test.tsx`（`MemoryRouter initialEntries={["/planner"]}`＋一個 `<Route path="/meals/new">` 畫出 `useLocation().state` 的 JSON，用來看「記成一餐」帶了什麼）：
+    1. 標題 `<h1>今天還能吃什麼</h1>`；「還能吃」：`熱量` `700 kcal`、`蛋白質` `50 g`；**沒有**脂肪、碳水（不考慮）。
+    2. `getByRole("list", { name: "從食物庫配的組合" })` 有 2 個（直接子層的）`listitem`；第一組：標題「組合 1」、`雞胸 175 g・192.5 kcal`、`白飯 1.5 份（1 碗）・540 kcal`、`合計 732.5 kcal・蛋白質 49.25 g・脂肪 4.13 g・碳水 120 g`、`佔剩下的熱量 105%`。
+    3. 點「把組合 1 記成一餐」→ 到 `/meals/new`，state 是 `itemsState(第一組)`（`JSON.stringify` 比）。
+    4. 點「讓 AI 配一餐」→ 到 `/meals/new`，state 是 `{"plannerSuggest":true}`。
+    5. `it.each` 四種狀態：`no_target` →「先設定每日目標，才知道今天還能吃多少」＋連結「設定每日目標」（`href="/me/targets"`）、**沒有**「讓 AI 配一餐」；`full` →「今天的熱量差不多用完了」、沒有「讓 AI 配一餐」；`no_candidates` →「先記幾餐，常吃的食物會出現在這裡」＋「讓 AI 配一餐」；`no_fit` →「常吃的食物裡，沒有份量夠小的組合」＋「讓 AI 配一餐」。
+    6. 載入失敗（500）→ `role="alert"`「無法載入建議」＋「再試一次」，點了會再打一次。
+  - `tests/planner-card.test.tsx`：有額度（`kcal_budget: "2000.00"`）→ `<h2>今天還能吃什麼</h2>`、連結「從食物庫配」（`/planner`）、「讓 AI 配一餐」（`/meals/new`，點了之後 state 是 `{"plannerSuggest":true}`）；`kcal_budget: null`、`target: null` → 只有連結「設定每日目標」（`/me/targets`）；**舊的離線快取**（物件裡沒有 `kcal_budget` 這個 key、`target.kcal` 是 `"1800.00"`）→ 照樣有兩個動作（`kcalBudgetOf` 的退回）。
+  - `tests/today.test.tsx`：「我的」那一邊有「今天還能吃什麼」卡片；「好友」那一邊沒有；`stats` 還沒回來時沒有。
+  - `tests/app.test.tsx`：照既有的路由測試加 `/planner` 畫出 `<h1>今天還能吃什麼</h1>`（`mockBackend` 的 `if` 串要多一條 `/api/planner/library-suggestions`，排在泛用的路徑前面）。
+
+  Run: `npx vitest run tests/planner.test.tsx tests/planner-card.test.tsx tests/today.test.tsx tests/app.test.tsx` → Expected：FAIL。
+
+- [ ] **Step 2：`PlannerCard`。**
+
+```tsx
+import { Link } from "react-router";
+import { type DailyStats, kcalBudgetOf } from "../api/stats";
+import { SUGGEST_STATE } from "../lib/planner";
+import { Card } from "./Card";
+import styles from "./PlannerCard.module.css";
+import ui from "./ui.module.css";
+
+/** 飲食頁的「今天還能吃什麼」（營養素配餐規格 §7.2）。**不顯示剩下的數字**（D26）：數字在
+ *  `/planner`——卡片要數字就得多打一個請求、或在前端做第二份「額度」的減法。
+ *  有沒有熱量額度用 `kcalBudgetOf`（舊的離線快取沒有 `kcal_budget`，退回目標）。 */
+export function PlannerCard({ stats }: { stats: DailyStats }) {
+	return (
+		<Card testId="planner-card">
+			<h2 className={`${ui.sectionTitle} ${styles.title}`}>今天還能吃什麼</h2>
+			{kcalBudgetOf(stats) === null ? (
+				<p className={styles.hint}>
+					先設定每日目標，才知道今天還能吃多少。
+					<Link to="/me/targets">設定每日目標</Link>
+				</p>
+			) : (
+				<div className={styles.actions}>
+					<Link to="/planner" className={styles.action}>
+						從食物庫配
+					</Link>
+					<Link to="/meals/new" state={SUGGEST_STATE} className={styles.action}>
+						讓 AI 配一餐
+					</Link>
+				</div>
+			)}
+		</Card>
+	);
+}
+```
+
+CSS：`.actions` 是兩欄的 grid（`grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr))`、`gap` 用設計變數），`.action` 是按鈕外觀的連結：`min-height: 44px`、`display: flex; align-items: center; justify-content: center`、顏色與圓角用 `index.css` 的設計變數（照 `TodayExercises.module.css` 的「記運動」連結）。**只用設計變數，不寫色碼。**
+
+- [ ] **Step 3：飲食頁。** `Today.tsx` 的 `.macros` 那一欄，營養素卡片（`stats && (…)` 那一段）後面：
+
+```tsx
+							{/* 今天還能吃什麼（營養素配餐規格 §7.2）：營養素卡片下面，電腦版也在左欄。 */}
+							{stats && <PlannerCard stats={stats} />}
+```
+
+- [ ] **Step 4：`/planner`。** `screens/Planner.tsx`：
+
+```tsx
+/** 今天還能吃什麼（營養素配餐規格 §7.3）：剩下的額度、從食物庫配的最多 3 組、讓 AI 配一餐。
+ *  「記成一餐」與「讓 AI 配一餐」都只是帶著 router state 到記一餐（D22）；這一頁不寫任何東西。 */
+export function Planner() {
+	const query = useLibrarySuggestions();
+	const navigate = useNavigate();
+	const data = query.data;
+	…
+}
+```
+
+畫面（照規格 §7.3；每一塊的文字照 Step 1 的測試）：
+- `query.isLoading` →「載入中…」；`query.isError && data === undefined` → `<p role="alert">無法載入建議</p>`＋按鈕「再試一次」（`query.refetch()`）。
+- `data.status === "no_target"` → 提示＋`<Link to="/me/targets">設定每日目標</Link>`，其餘都不畫。
+- 其餘狀態先畫「還能吃」：`<section aria-labelledby="planner-remaining">`、`<h2 id="planner-remaining">還能吃</h2>`、`<dl>`：熱量（`${formatMacro(kcal)} kcal`），蛋白質／脂肪／碳水只畫不是 null 的（`${formatMacro(x)} g`）。
+- `full` →「今天的熱量差不多用完了」。`no_candidates`、`no_fit` → 各自那一句。
+- `ok` → `<section aria-labelledby="planner-library">`、`<h2>從食物庫配</h2>`、`<ol aria-label="從食物庫配的組合">`，每一組一個 `<li>`（卡片外觀）：`<h3>組合 N</h3>`、`<ul>` 每一樣一行（`itemLine`）、合計一行、`fill.kcal` 不是 null 時「佔剩下的熱量 ${percentOf(fill.kcal)}」、按鈕「記成一餐」（`aria-label={`把組合 ${n} 記成一餐`}`，`onClick={() => navigate("/meals/new", { state: itemsState(combo) })}`）。
+- `ok`、`no_candidates`、`no_fit` 都畫「讓 AI 配一餐」那一塊：`<section aria-labelledby="planner-ai">`、`<h2>讓 AI 配一餐</h2>`、一句「依今天剩下的額度請 AI 建議一餐（用掉一次 AI 次數）」、按鈕「讓 AI 配一餐」（`navigate("/meals/new", { state: SUGGEST_STATE })`）。
+
+一行的寫法（不做任何運算，數字都是後端給的）：
+
+```tsx
+function itemLine(item: PlannedItem): string {
+	const amount =
+		item.portion === null
+			? `${formatMacro(item.quantity)} ${item.food.nutrition?.base_unit ?? "g"}`
+			: `${formatMacro(item.quantity)} 份（${item.portion.label}）`;
+	return `${item.food.name} ${amount}・${formatMacro(item.nutrition.kcal)} kcal`;
+}
+
+function totalLine(combo: PlannedCombo): string {
+	const t = combo.total;
+	return `合計 ${formatMacro(t.kcal)} kcal・蛋白質 ${formatMacro(t.protein_g)} g・脂肪 ${formatMacro(t.fat_g)} g・碳水 ${formatMacro(t.carb_g)} g`;
+}
+```
+
+CSS module：卡片、`<ol>` 重設、按鈕 `min-height: 44px`——只用設計變數（`Today.module.css`、`TodayExercises.module.css` 的寫法）。手機一欄；電腦版 `narrow`（不用動 `lib/layout.ts`）。
+
+- [ ] **Step 5：路由。** `App.tsx`：`<Route path="/planner" element={<Planner />} />`（放在 `/diet` 旁邊，註解「今天還能吃什麼（營養素配餐規格 §7.3），入口是飲食頁的卡片」）。
+
+Run Step 1 的指令 → Expected：PASS。
+
+- [ ] **Step 6：突變。** ①`PlannerCard` 的判斷改成 `stats.kcal_budget === null`（不經過 `kcalBudgetOf`）→ 舊快取那條紅；②`itemLine` 的份量分支顯示 `quantity_g` → 第 2 條紅；③「讓 AI 配一餐」在 `no_target` 也畫 → 第 5 條紅；④「記成一餐」帶 `combo` 原樣（不經過 `itemsState`）→ 第 3 條紅。
+
+- [ ] **Step 7：檢查、commit。** `npm run -s test`、`npm run -s lint`、`npm run -s typecheck`。
+
+```bash
+git add frontend/src/screens/Planner.tsx frontend/src/screens/Planner.module.css \
+  frontend/src/components/PlannerCard.tsx frontend/src/components/PlannerCard.module.css \
+  frontend/src/screens/Today.tsx frontend/src/App.tsx frontend/tests/helpers/planner-routes.ts \
+  frontend/tests/planner.test.tsx frontend/tests/planner-card.test.tsx frontend/tests/today.test.tsx \
+  frontend/tests/app.test.tsx
+```
+
+訊息：`feat(frontend): 今天還能吃什麼——/planner 與飲食頁的卡片`
+
+---
+
+## Task 9：前端——記一餐收「配餐的項目」
+
+**Files:**
+- Create: `frontend/tests/log-meal-planner.test.tsx`
+- Modify: `frontend/src/App.tsx`（`LogMealRoute`）、`frontend/src/screens/LogMeal.{tsx,module.css}`、`frontend/tests/app.test.tsx`
+
+- [ ] **Step 1：寫會紅的測試。** `tests/log-meal-planner.test.tsx`（照 `log-meal-ai.test.tsx` 的 `wrap`、`mockApi`；`LogMeal` 本身不碰 router，直接給 props）：
+  1. `initialItems`＝雞胸（`portion: null`、`"175"`、`nutrition.base_unit: "g"`）＋白飯（`portion: { id: 9, label: "1 碗" }`、`"1.5"`）→ `<h2>配餐的項目</h2>` 底下兩格：`getByLabelText("雞胸（g）")` 的值 `175`、`getByLabelText("白飯（份，1 份＝1 碗）")` 的值 `1.5`；**沒有**「AI 估的項目」；表單已經展開（「記錄」看得到）。
+  2. 選「晚餐」→「記錄」→ `POST /api/meals` 的 `items` 是 `[{"food_id":1,"quantity":"175"},{"food_id":2,"quantity":"1.5","portion_id":9}]`、`meal_type: "dinner"`；`onSaved` 被呼叫。
+  3. 改白飯成 `abc` →「記錄」→「「白飯」的份量要是大於 0 的數字」、沒有送出。
+  4. 「移除 雞胸」→ 只剩白飯；再「移除 白飯」→ 表單收起來（沒有「記錄」）。
+  5. 配餐的項目＋手選一個常吃的食物 →「不記這一樣」看得到；送出的 `items` 是配餐的兩樣在前、手選的在後。
+  6. **AI 填的描述只在表單收起來時清**（審查 M5 的延伸）：有配餐的項目時用 AI 加入一樣（`analyze-meal` 的假回應，照 `log-meal-ai.test.tsx`）→ 描述是 AI 那句；移除 AI 那一樣 → 描述**還在**（表單還開著）；再移除配餐的兩樣 → 表單收起來，再手選一個食物 → 描述是空的。
+  7. `startSuggesting` 沒給時，AI 面板的「讓 AI 配一餐」表單沒有打開（Task 10 才有這個表單——這一條在 Task 10 補，這裡先不寫）。
+  - `tests/app.test.tsx`：`/meals/new` 帶 `state: itemsState(…)`（`MemoryRouter initialEntries={[{ pathname: "/meals/new", state }]}`）→ 畫出「配餐的項目」；之後 `useLocation().state` 是 `null`（被清掉，D22）。帶 `{ notice: "x" }` 這種不相干的 state → 照常的記一餐、沒有「配餐的項目」。
+
+  Run: `npx vitest run tests/log-meal-planner.test.tsx tests/app.test.tsx tests/log-meal-ai.test.tsx tests/log-meal.test.tsx` → Expected：FAIL（新的那幾條）。
+
+- [ ] **Step 2：`LogMealRoute`。** `App.tsx`：
+
+```tsx
+/** `/meals/new`（介面改版）：記完一餐之後導回總覽；照片沒傳上去時帶著通知回總覽。
+ *  （既有的說明不動）
+ *
+ *  營養素配餐（規格 D22）：從 `/planner` 或飲食頁的卡片來的 router state，讀一次、放進自己的
+ *  state，再用 `replace` 把 history 的 state 清掉——重新整理或返回不會再帶一次（同總覽的通知）。 */
+function LogMealRoute() {
+	const navigate = useNavigate();
+	const location = useLocation();
+	const [handoff] = useState(() => plannerHandoffFrom(location.state));
+	useEffect(() => {
+		if (location.state == null) return;
+		navigate(`${location.pathname}${location.search}`, {
+			replace: true,
+			state: null,
+		});
+	}, [location.state, location.pathname, location.search, navigate]);
+	return (
+		<LogMeal
+			initialItems={handoff?.kind === "items" ? handoff.items : undefined}
+			onSaved={({ photoFailed }) =>
+				navigate(
+					"/",
+					photoFailed
+						? { state: { notice: PHOTO_UPLOAD_FAILED_NOTICE } }
+						: undefined,
+				)
+			}
+		/>
+	);
+}
+```
+
+（`{ kind: "suggest" }` 這個 task 先收下、不用：`startSuggesting` 由 Task 10 一路接到 `AiMealPanel`——`LogMeal` 的 prop、這裡的傳遞、面板的 prop 在同一個 commit 加，中間不會有宣告了卻沒用的 prop。）
+
+- [ ] **Step 3：`LogMeal`。** 「AI 估的項目」的 state 一般化成「另外加進來的項目」：
+
+```tsx
+import type { HandoffItem } from "../lib/planner";
+
+/** 另外加進來的一樣（跟手選的那一樣並存，存的時候一起送）：AI 估的（`origin: "ai"`，AI 多樣估算
+ *  規格 D19）或從「今天還能吃什麼」帶進來的（`"planner"`，營養素配餐規格 D23）。
+ *  `portion` 不是 null 時 `quantity` 是「幾份」、送 `portion_id`；是 null 時是直接輸入的 g／ml。
+ *  `key` 只給 React 與欄位的 id 用——同一個食物可以出現兩次。 */
+type ExtraItem = HandoffItem & { key: number; origin: "ai" | "planner" };
+
+type Props = {
+	onSaved: (result: { photoFailed: boolean }) => void;
+	/** 營養素配餐帶進來的項目（規格 D22）。只在掛載時讀。 */
+	initialItems?: readonly HandoffItem[];
+};
+```
+
+改法（逐處）：
+- `aiItems`／`setAiItems`／`nextAiKeyRef` → `extraItems`／`setExtraItems`／`nextExtraKeyRef`；初始值：
+
+```tsx
+	const [extraItems, setExtraItems] = useState<ExtraItem[]>(() =>
+		(initialItems ?? []).map((item, index) => ({
+			...item,
+			key: index,
+			origin: "planner" as const,
+		})),
+	);
+	const nextExtraKeyRef = useRef(initialItems?.length ?? 0);
+	const plannerItems = extraItems.filter((item) => item.origin === "planner");
+	const aiItems = extraItems.filter((item) => item.origin === "ai");
+```
+
+- `onItemsReady`：`{ key, food, quantity, portion: null, origin: "ai" as const }`。
+- 送出的 `items`：
+
+```tsx
+				...extraItems.map((item) => ({
+					food_id: item.food.id,
+					quantity: item.quantity.trim(),
+					...(item.portion !== null ? { portion_id: item.portion.id } : {}),
+				})),
+```
+
+- 移除（取代 `removeAiItem`；**表單收起來時**才清 AI 填的描述與照片——以前「最後一樣 AI 的項目＋沒有手選」就是表單收起來的唯一情況，現在還有配餐的項目）：
+
+```tsx
+	function removeExtraItem(key: number) {
+		const left = extraItems.filter((other) => other.key !== key);
+		setExtraItems(left);
+		// 還有別的項目、或有手選的食物：表單還在，AI 填的描述與照片看得到，留給使用者決定。
+		if (left.length > 0 || selectedFood !== null) return;
+		setDescriptionState((current) =>
+			current.value === current.fromAi ? NO_DESCRIPTION : current,
+		);
+		setPhotoState((current) =>
+			current.value === current.fromAi ? NO_PHOTO : current,
+		);
+	}
+```
+
+（以前用 updater 過濾；這裡直接 `setExtraItems(left)`——`left` 是從這一次 render 的 `extraItems` 算的，按鈕在送出中是 disabled，不會兩次點擊疊在同一個 render 上。測試 4、6 守著。）
+
+- 表單展開的條件、「不記這一樣」的條件、`onSuccess` 的清空、`onSubmit` 的份量檢查：`aiItems` 換成 `extraItems`。
+- 一列的畫法抽成區域函式，兩個區塊共用：
+
+```tsx
+	function renderExtraItem(item: ExtraItem) {
+		const inputId = `meal-extra-item-${item.key}`;
+		const label =
+			item.portion === null
+				? `${item.food.name}（${item.food.nutrition?.base_unit ?? "g"}）`
+				: `${item.food.name}（份，1 份＝${item.portion.label}）`;
+		return (
+			<li key={item.key}>
+				<label htmlFor={inputId}>{label}</label>
+				<input
+					id={inputId}
+					type="text"
+					inputMode="decimal"
+					value={item.quantity}
+					onChange={(event) => {
+						const quantity = event.target.value;
+						setExtraItems((current) =>
+							current.map((other) =>
+								other.key === item.key ? { ...other, quantity } : other,
+							),
+						);
+					}}
+				/>
+				<button
+					type="button"
+					className={ui.secondary}
+					aria-label={`移除 ${item.food.name}`}
+					disabled={saveMeal.isPending}
+					onClick={() => removeExtraItem(item.key)}
+				>
+					移除
+				</button>
+			</li>
+		);
+	}
+```
+
+- 兩個區塊（配餐的在前，DOM 順序就是送出的順序）：
+
+```tsx
+					{plannerItems.length > 0 && (
+						<section aria-labelledby="meal-planner-items" className={styles.aiItems}>
+							<h2 id="meal-planner-items">配餐的項目</h2>
+							<ul>{plannerItems.map(renderExtraItem)}</ul>
+						</section>
+					)}
+					{aiItems.length > 0 && (
+						<section aria-labelledby="meal-ai-items" className={styles.aiItems}>
+							<h2 id="meal-ai-items" ref={aiItemsHeadingRef} tabIndex={-1}>
+								AI 估的項目
+							</h2>
+							<ul>{aiItems.map(renderExtraItem)}</ul>
+						</section>
+					)}
+```
+
+**輸入框的 id 改了**（`meal-ai-item-N` → `meal-extra-item-N`）：`grep -rn "meal-ai-item" frontend/` 確認沒有測試或 e2e 用 id 找它（都用標籤找）；有的話一起改。`.aiItems` 的 CSS 名稱不動（兩個區塊共用；註解補一句）。
+
+Run Step 1 的指令 → Expected：PASS；`log-meal-ai.test.tsx`、`log-meal.test.tsx` 既有的全部照樣綠。
+
+- [ ] **Step 4：突變。** ①送出時拿掉 `portion_id` 那一行 → 測試 2 紅；②`removeExtraItem` 的條件拿掉 `left.length > 0` → 測試 6 紅（描述在表單還開著時就被清掉）；③`LogMealRoute` 不清 history 的 state → app 那條紅；④初始值的 `origin` 寫成 `"ai"` → 測試 1 紅（標題變成「AI 估的項目」）。
+
+- [ ] **Step 5：檢查、commit。** `npm run -s test`、`npm run -s lint`、`npm run -s typecheck`。
+
+```bash
+git add frontend/src/App.tsx frontend/src/screens/LogMeal.tsx frontend/src/screens/LogMeal.module.css \
+  frontend/tests/log-meal-planner.test.tsx frontend/tests/app.test.tsx
+```
+
+訊息：`feat(frontend): 記一餐收「配餐的項目」（router state 交接，有份量的送 portion_id）`
