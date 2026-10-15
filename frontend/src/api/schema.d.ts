@@ -1627,6 +1627,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/planner/library-suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Library Suggestions
+         * @description 今天還剩多少，以及從常吃、最近吃的食物配出的最多 3 組（1～3 樣）。
+         *
+         *     `status`：`no_target`（沒有熱量目標）、`full`（剩不到 50 kcal）、`no_candidates`（還沒有
+         *     記過有營養素的食物）、`no_fit`（每一樣最小的量就超過剩下的 105%）、`ok`。「今天」是
+         *     使用者時區的今天；熱量的剩下用今天的額度（運動設定開時含運動）。不寫任何東西。
+         */
+        get: operations["library_suggestions_api_planner_library_suggestions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/ai/analyze": {
         parameters: {
             query?: never;
@@ -2667,6 +2691,18 @@ export interface components {
             /** Serving Kcal */
             serving_kcal: string;
         };
+        /** LibrarySuggestionsResponse */
+        LibrarySuggestionsResponse: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            status: components["schemas"]["PlannerStatus"];
+            remaining: components["schemas"]["RemainingResponse"] | null;
+            /** Combos */
+            combos: components["schemas"]["PlannedComboResponse"][];
+        };
         /**
          * LikeState
          * @description 按讚與收回都回這個：過濾後的數字，前端拿它對帳（規格 D19）。
@@ -3026,6 +3062,42 @@ export interface components {
             /** Display Name */
             display_name: string;
         };
+        /** PlannedComboResponse */
+        PlannedComboResponse: {
+            /** Items */
+            items: components["schemas"]["PlannedItemResponse"][];
+            total: components["schemas"]["MacrosResponse"];
+            fill: components["schemas"]["NullableMacrosResponse"];
+        };
+        /**
+         * PlannedItemResponse
+         * @description 組合裡的一樣。`portion` 不是 null 時 `quantity` 是「幾份」（記一餐送 `portion_id`）；
+         *     是 null 時 `quantity` 是 g 或 ml（看 `food.nutrition.base_unit`）。`nutrition` 是這一樣的量的
+         *     四個數字（跟記下去之後 `/stats/daily` 算的一樣，`app/nutrition.py` 的 `scale()`）。
+         */
+        PlannedItemResponse: {
+            food: components["schemas"]["FoodResponse"];
+            portion: components["schemas"]["PlannedPortionResponse"] | null;
+            /** Quantity */
+            quantity: string;
+            /** Quantity G */
+            quantity_g: string;
+            nutrition: components["schemas"]["MacrosResponse"];
+        };
+        /** PlannedPortionResponse */
+        PlannedPortionResponse: {
+            /** Id */
+            id: number;
+            /** Label */
+            label: string;
+            /** Grams */
+            grams: string;
+        };
+        /**
+         * PlannerStatus
+         * @enum {string}
+         */
+        PlannerStatus: "ok" | "no_target" | "full" | "no_candidates" | "no_fit";
         /** PortionCreateRequest */
         PortionCreateRequest: {
             /** Label */
@@ -3132,6 +3204,20 @@ export interface components {
             timezone: string;
             /** Invite Token */
             invite_token: string;
+        };
+        /**
+         * RemainingResponse
+         * @description 今天還能吃多少。三大營養素是 null＝沒設目標（或目標是 0），不考慮（規格 D2）。
+         */
+        RemainingResponse: {
+            /** Kcal */
+            kcal: string;
+            /** Protein G */
+            protein_g: string | null;
+            /** Fat G */
+            fat_g: string | null;
+            /** Carb G */
+            carb_g: string | null;
         };
         /** RevisionCreateRequest */
         RevisionCreateRequest: {
@@ -6370,6 +6456,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    library_suggestions_api_planner_library_suggestions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibrarySuggestionsResponse"];
                 };
             };
         };

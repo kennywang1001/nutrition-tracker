@@ -206,8 +206,12 @@ async def search_foods(
 _CurrentRevision = aliased(FoodRevision)
 
 
-def _my_recorded_foods_stmt(
-    user: User, limit: int, order_by: ColumnElement[Any]
+def my_recorded_foods_stmt(
+    user: User,
+    limit: int,
+    order_by: ColumnElement[Any],
+    *,
+    require_nutrition: bool = False,
 ) -> Select[tuple[Food, FoodRevision]]:
     """`frequent` 與 `recent` 共用的查詢：使用者記錄過的食物，join 回食物「目前」
     生效的版本（不是項目當時釘住的版本 —— 那是 `GET /api/meals/{id}` 的事，
@@ -226,8 +230,12 @@ def _my_recorded_foods_stmt(
     都沒有出現在計畫裡 —— 這個查詢的篩選力來自 `user_id`，不是 `food_revision_id`，
     所以規格原本設想「這個索引就是為 frequent/recent 而存在」並不成立，
     是先前沒有實測就寫進計畫的假設。
+
+    `require_nutrition`：只要「目前有生效版本」的食物（營養素配餐規格 D12——沒有生效版本的
+    食物記不了，不當候選）。條件接在後面也是在 LIMIT 之前（SQL 的 WHERE），所以仍然是前 N 個。
+    `frequent`／`recent` 兩個端點不帶（它們回 `nutrition: null`，畫面讓那種食物不能選）。
     """
-    return (
+    stmt = (
         select(Food, _CurrentRevision)
         .select_from(MealItem)
         .join(Meal, MealItem.meal_id == Meal.id)
@@ -242,6 +250,9 @@ def _my_recorded_foods_stmt(
         .order_by(order_by, Food.id)
         .limit(limit)
     )
+    if require_nutrition:
+        stmt = stmt.where(_CurrentRevision.id.is_not(None))
+    return stmt
 
 
 @router.get("/frequent", response_model=list[FoodResponse])
@@ -251,7 +262,7 @@ async def list_frequent_foods(
     db: AsyncSession = Depends(get_db),
 ) -> list[FoodResponse]:
     """使用者最常吃的食物，依吃過的次數多到少排序（規格第 11 節：每天走最多次的路徑）。"""
-    stmt = _my_recorded_foods_stmt(user, limit, func.count().desc())
+    stmt = my_recorded_foods_stmt(user, limit, func.count().desc())
     rows = (await db.execute(stmt)).all()
     return [_to_response(food, revision) for food, revision in rows]
 
@@ -263,7 +274,7 @@ async def list_recent_foods(
     db: AsyncSession = Depends(get_db),
 ) -> list[FoodResponse]:
     """使用者最近吃過的食物，依最後一次吃的時間新到舊排序。"""
-    stmt = _my_recorded_foods_stmt(user, limit, func.max(Meal.eaten_at).desc())
+    stmt = my_recorded_foods_stmt(user, limit, func.max(Meal.eaten_at).desc())
     rows = (await db.execute(stmt)).all()
     return [_to_response(food, revision) for food, revision in rows]
 

@@ -18,6 +18,7 @@ from app.api.routes import (
     me,
     meals,
     notifications,
+    planner,
     social,
     stats,
     supplement_intakes,
@@ -61,6 +62,7 @@ app.include_router(supplement_plans.router, prefix="/api")
 app.include_router(supplement_intakes.router, prefix="/api")
 app.include_router(targets.router, prefix="/api")
 app.include_router(stats.router, prefix="/api")
+app.include_router(planner.router, prefix="/api")
 app.include_router(ai.router, prefix="/api")
 app.include_router(expenses.router, prefix="/api")
 app.include_router(export.router, prefix="/api")
