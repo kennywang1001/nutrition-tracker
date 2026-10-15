@@ -1,4 +1,4 @@
-"""用 Anthropic Claude 估算營養素：一份（單樣）或一餐的每一樣（多樣）
+"""用 Anthropic Claude 估算營養素：一份（單樣）或一餐的每一樣（多樣），以及營養素配餐的一餐建議
 （`AI_PROVIDER=anthropic`）。
 
 不打真的 API 測——花錢、不可重現（P2 規格 §8.1）。SDK 的錯誤怎麼分類，由
@@ -39,6 +39,7 @@ from app.ai.estimator import (
     MEAL_IMAGE_INSTRUCTION,
     MEAL_SYSTEM_PROMPT,
     MEAL_TEXT_INSTRUCTION,
+    SUGGEST_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     TEXT_ESTIMATE_INSTRUCTION,
     EstimatorMisconfiguredError,
@@ -49,6 +50,7 @@ from app.ai.estimator import (
     RawMealEstimate,
     parse_raw_estimate,
     parse_raw_meal_estimate,
+    parse_raw_meal_suggestion,
 )
 from app.errors import BadGatewayError, UnprocessableEntityError
 
@@ -88,6 +90,8 @@ class _Call:
 
 _SINGLE = _Call(SYSTEM_PROMPT, MAX_OUTPUT_TOKENS, _OUTPUT_CONFIG)
 _MEAL = _Call(MEAL_SYSTEM_PROMPT, MAX_MEAL_OUTPUT_TOKENS, _MEAL_OUTPUT_CONFIG)
+# 配餐：多樣的 schema 與輸出上限，換 system prompt（營養素配餐規格 D19）。
+_SUGGEST = _Call(SUGGEST_SYSTEM_PROMPT, MAX_MEAL_OUTPUT_TOKENS, _MEAL_OUTPUT_CONFIG)
 
 
 def _first_text(message: Message) -> str | None:
@@ -196,6 +200,11 @@ class AnthropicEstimator:
     async def estimate_meal_image(self, image: bytes, media_type: str) -> RawMealEstimate:
         message = _image_message(MEAL_IMAGE_INSTRUCTION, image, media_type)
         return parse_raw_meal_estimate(await self._complete(message, _MEAL))
+
+    async def suggest_meal(self, request: str) -> RawMealEstimate:
+        # 訊息原樣送出：剩下的額度與偏好已經由 suggestion_request() 組好，不再套樣板。
+        message: MessageParam = {"role": "user", "content": request}
+        return parse_raw_meal_suggestion(await self._complete(message, _SUGGEST))
 
     async def _complete(self, message: MessageParam, call: _Call) -> str:
         """打一次 API，回模型說的那段文字。**分類例外的地方只有這裡**——單樣與多樣共用。

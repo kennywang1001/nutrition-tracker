@@ -37,6 +37,7 @@ from app.ai.estimator import (
     MEAL_IMAGE_INSTRUCTION,
     MEAL_SYSTEM_PROMPT,
     MEAL_TEXT_INSTRUCTION,
+    SUGGEST_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     EstimatorMisconfiguredError,
     EstimatorUpstreamError,
@@ -633,6 +634,87 @@ async def test_a_bad_meal_reply_from_the_provider_is_a_502_not_an_upstream_error
         await estimator.estimate_meal_text("雞腿便當")
 
     assert excinfo.value.code == code
+    assert excinfo.value.status_code == 502
+    assert upstream.requests == 1
+
+
+# ---------------------------------------------------------------------------
+# 營養素配餐（規格 §5.3）：兩家的 suggest_meal 用多樣的 schema 與上限、換 system prompt
+# ---------------------------------------------------------------------------
+
+_SUGGEST_REQUEST = "今天剩下的額度：\n- 熱量：650 大卡"
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+async def test_a_suggestion_call_sends_the_suggest_prompt_the_meal_schema_and_limit(provider):
+    upstream, estimator = _estimator_for(provider, _VALID_MEAL_JSON)
+
+    result = await estimator.suggest_meal(_SUGGEST_REQUEST)
+
+    assert [item.name for item in result.items] == ["滷肉飯", "滷雞腿"]
+    assert upstream.requests == 1
+    sent = _sent(provider, upstream.bodies[0])
+    assert sent["max_tokens"] == 8192
+    assert sent["system"] == SUGGEST_SYSTEM_PROMPT
+    assert sent["schema_fields"] == {"description", "items"}
+    # 使用者訊息就是組好的那一段，不再套任何指示的樣板。
+    assert sent["text"] == [_SUGGEST_REQUEST]
+    assert sent["has_image"] is False
+    body = upstream.bodies[0]
+    items_schema = (
+        body["output_config"]["format"]["schema"]["properties"]["items"]
+        if provider == "anthropic"
+        else body["generationConfig"]["responseSchema"]["properties"]["items"]
+    )
+    assert items_schema["type"].lower() == "array"
+    assert not {"minItems", "min_items"} & set(items_schema)
+
+
+@pytest.mark.parametrize(
+    ("make_upstream", "expected", "sdk_error"),
+    [case[1:] for case in _ANTHROPIC_CASES],
+    ids=[case[0] for case in _ANTHROPIC_CASES],
+)
+async def test_anthropic_suggestion_errors_are_classified_the_same_way(
+    make_upstream, expected, sdk_error
+):
+    upstream = make_upstream()
+    estimator = _anthropic_estimator(upstream)
+
+    with pytest.raises(expected) as excinfo:
+        await estimator.suggest_meal("剩下 650 大卡")
+
+    assert upstream.requests == 1
+    assert type(excinfo.value.__cause__) is sdk_error
+
+
+@pytest.mark.parametrize(
+    ("make_upstream", "expected", "sdk_error"),
+    [case[1:] for case in _GEMINI_CASES],
+    ids=[case[0] for case in _GEMINI_CASES],
+)
+async def test_gemini_suggestion_errors_are_classified_the_same_way(
+    make_upstream, expected, sdk_error
+):
+    upstream = make_upstream()
+    estimator = _gemini_estimator(upstream)
+
+    with pytest.raises(expected) as excinfo:
+        await estimator.suggest_meal("剩下 650 大卡")
+
+    assert upstream.requests == 1
+    assert type(excinfo.value.__cause__) is sdk_error
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+async def test_no_items_from_the_provider_is_ai_no_suggestion(provider):
+    """配餐 0 樣是自己的錯誤碼（規格 D20）：「換一張照片」對配餐是錯的指示。"""
+    upstream, estimator = _estimator_for(provider, _NO_ITEMS_REPLY)
+
+    with pytest.raises(BadGatewayError) as excinfo:
+        await estimator.suggest_meal("剩下 650 大卡")
+
+    assert excinfo.value.code == "AI_NO_SUGGESTION"
     assert excinfo.value.status_code == 502
     assert upstream.requests == 1
 
