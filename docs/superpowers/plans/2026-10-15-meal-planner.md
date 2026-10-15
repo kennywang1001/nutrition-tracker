@@ -2722,3 +2722,221 @@ git add frontend/src/App.tsx frontend/src/screens/LogMeal.tsx frontend/src/scree
 ```
 
 訊息：`feat(frontend): 記一餐收「配餐的項目」（router state 交接，有份量的送 portion_id）`
+
+---
+
+## Task 10：前端——`AiMealPanel` 的「讓 AI 配一餐」
+
+**Files:**
+- Modify: `frontend/src/components/AiMealPanel.{tsx,module.css}`、`frontend/src/screens/LogMeal.tsx`、`frontend/src/App.tsx`（`LogMealRoute`）、`frontend/tests/{ai-meal-panel.test.tsx,log-meal-ai.test.tsx,app.test.tsx}`
+
+- [ ] **Step 1：寫會紅的測試。**
+  - `tests/ai-meal-panel.test.tsx`（假回應用既有的 `ESTIMATE` 形狀，`analysis_id` 不是 null）：
+    1. 入口有「讓 AI 配一餐」（`aria-expanded="false"`）；點了展開 `form` 名稱「讓 AI 配一餐」：「偏好（選填）」（`maxLength` 100）、提示「例如：不吃牛、想吃便當、在便利商店…」、「讓 AI 建議」、「取消」；`aria-expanded="true"`。
+    2. 打「 不吃牛 」→「讓 AI 建議」→ 送 `POST /api/ai/suggest-meal`、body `{"preference":"不吃牛"}`；回來之後 `section` 名稱「AI 建議的一餐」（**不是**「AI 估算結果」）、描述、「今天還能用 18 次」、兩個勾選框；表單收起來。
+    3. 「加入這 2 樣」→ `onItemsReady` 收到兩樣、`source` 是 `{ image: null, description: "…" }`（加入的流程整個沿用：食物庫有的讀、沒有的建）。
+    4. 錯誤：`NO_KCAL_TARGET`／`DAY_ALREADY_FULL`／`AI_NO_SUGGESTION` 的 422／502 → `role="alert"` 是後端那句。
+    5. `startSuggesting` → 一開始就展開、焦點在偏好欄位；沒給 → 沒展開、焦點不動。
+    6. `AI_NOT_CONFIGURED` 之後「讓 AI 配一餐」跟「拍照估算」一起停用；文字估算照舊可以按。
+    7. 送出中「讓 AI 建議」是 `aria-disabled="true"`，再按不會多打一次；狀態列是「AI 配餐中…」。
+  - `tests/log-meal-ai.test.tsx`：`<LogMeal startSuggesting onSaved={…} />` → 偏好欄位有焦點 →「讓 AI 建議」→「加入這 2 樣」→「AI 估的項目」兩列、描述是 AI 那句 →「記錄」送出兩樣。
+  - `tests/app.test.tsx`：`/meals/new` 帶 `SUGGEST_STATE` → 「讓 AI 配一餐」的表單是展開的。
+
+  Run: `npx vitest run tests/ai-meal-panel.test.tsx tests/log-meal-ai.test.tsx tests/app.test.tsx` → Expected：FAIL（新的那幾條）。
+
+- [ ] **Step 2：面板。** `AiMealPanel.tsx`：
+
+```tsx
+type AnalyzeInput =
+	| { kind: "text"; text: string }
+	| { kind: "image"; file: File }
+	// 營養素配餐（規格 §5、D15）：剩下的額度由後端算，這裡只送偏好。
+	| { kind: "suggest"; preference: string };
+
+type Props = {
+	…既有的三個…
+	/** 一開始就展開「讓 AI 配一餐」、焦點在偏好欄位（從飲食頁或 `/planner` 來的；規格 D22）。 */
+	startSuggesting?: boolean;
+};
+```
+
+- `analyze` 的 `mutationFn` 多一支：`input.kind === "suggest" ? suggestMeal(input.preference) : …`；`onSuccess` 多記 `setResultKind(input.kind === "suggest" ? "suggest" : "estimate")`，`suggest` 時 `setSuggesting(false)`。
+- state：`const [suggesting, setSuggesting] = useState(startSuggesting === true)`、`const [preference, setPreference] = useState("")`、`const [resultKind, setResultKind] = useState<"estimate" | "suggest">("estimate")`。
+- 焦點：`focusNextRef` 的型別多兩個值 `"preference" | "suggest-button"`，初始值 `useRef(startSuggesting === true ? "preference" : null)`；既有的 effect 多一支 `next === "preference" ? preferenceInputRef.current`。按「讓 AI 配一餐」展開時也設成 `"preference"`；「取消」收起時設成「讓 AI 配一餐」那顆按鈕（多一個 ref）。
+- 入口（`base.entry` 裡、「拍照估算」後面）：
+
+```tsx
+				<button
+					ref={suggestButtonRef}
+					type="button"
+					className={base.secondary}
+					aria-expanded={suggesting}
+					disabled={busy || aiUnavailable}
+					onClick={() => {
+						const next = !suggesting;
+						setSuggesting(next);
+						if (next) focusNextRef.current = "preference";
+					}}
+				>
+					讓 AI 配一餐
+				</button>
+```
+
+- 表單（入口那一列下面、狀態列上面）：
+
+```tsx
+			{suggesting && (
+				<form
+					aria-label="讓 AI 配一餐"
+					className={`${base.form} ${styles.suggestForm}`}
+					onSubmit={(event) => {
+						event.preventDefault();
+						if (busy) return;
+						analyze.mutate({ kind: "suggest", preference });
+					}}
+				>
+					<label htmlFor={`${id}-preference`}>偏好（選填）</label>
+					<input
+						ref={preferenceInputRef}
+						id={`${id}-preference`}
+						type="text"
+						maxLength={100}
+						value={preference}
+						aria-describedby={`${id}-preference-hint`}
+						onChange={(event) => setPreference(event.target.value)}
+					/>
+					<p id={`${id}-preference-hint`} className={base.muted}>
+						例如：不吃牛、想吃便當、在便利商店。依今天剩下的熱量與營養素建議，用掉一次 AI 次數。
+					</p>
+					<div className={base.actions}>
+						{/* aria-disabled：按下去的當下它正在焦點上（同「加入這 N 樣」）。 */}
+						<button type="submit" className={base.primary} aria-disabled={busy}>
+							讓 AI 建議
+						</button>
+						<button
+							type="button"
+							className={base.secondary}
+							onClick={() => {
+								setSuggesting(false);
+								focusNextRef.current = "suggest-button";
+							}}
+						>
+							取消
+						</button>
+					</div>
+				</form>
+			)}
+```
+
+- 狀態列：`analyze.isPending ? (analyze.variables?.kind === "suggest" ? "AI 配餐中…" : "AI 估算中…") : …`。
+- 結果區：`aria-label={resultKind === "suggest" ? "AI 建議的一餐" : "AI 估算結果"}`；其餘（描述、今天還能用 N 次、清單、加入、收起）**一行不改**。
+- `AiMealPanel.module.css`：`.suggestForm input` 同 `.editForm input` 的 44px（handover「不共用、要記得的」那一點）。
+
+- [ ] **Step 3：接起來。** `LogMeal` 的 `Props` 加 `startSuggesting?: boolean`（「一開始就打開『讓 AI 配一餐』（規格 D15）；只在掛載時讀」），傳給 `<AiMealPanel startSuggesting={startSuggesting} … />`；`LogMealRoute` 加 `startSuggesting={handoff?.kind === "suggest"}`。
+
+Run Step 1 的指令 → Expected：PASS；`ai-meal-panel`、`log-meal-ai` 既有的全部照樣綠。
+
+- [ ] **Step 4：突變。** ①`mutationFn` 的 `suggest` 那支改呼叫 `analyzeMealText(input.preference)` → 測試 2 紅（打到 `analyze-meal`，`mockApi` 丟「沒有準備回應」）；②結果區的 `aria-label` 寫死「AI 估算結果」→ 測試 2 紅；③`useState(startSuggesting === true)` 改 `false` → 測試 5 與 app 那條紅；④入口按鈕不看 `aiUnavailable` → 測試 6 紅；⑤`onSubmit` 拿掉 `if (busy) return` → 測試 7 紅。
+
+- [ ] **Step 5：檢查、commit。** `npm run -s test`、`npm run -s lint`、`npm run -s typecheck`。
+
+```bash
+git add frontend/src/components/AiMealPanel.tsx frontend/src/components/AiMealPanel.module.css \
+  frontend/src/screens/LogMeal.tsx frontend/src/App.tsx frontend/tests/ai-meal-panel.test.tsx \
+  frontend/tests/log-meal-ai.test.tsx frontend/tests/app.test.tsx
+```
+
+訊息：`feat(frontend): 記一餐的「讓 AI 配一餐」——偏好＋同一個勾選清單`
+
+---
+
+## Task 11：e2e
+
+**Files:** Create `frontend/e2e/planner.spec.ts`
+
+- [ ] **Step 1：環境。** `docker compose up -d --build api` → `docker compose exec -T api python -m alembic upgrade head` → `docker compose exec -T api python -m alembic current`（`0021`）。前端照既有 e2e 的方式起（`playwright.config.ts` 的 `webServer`）。
+- [ ] **Step 2：spec。** 手機尺寸（`test.use({ viewport: { width: 390, height: 844 } })`），兩條測試、各開新帳號。設定資料用 API（登入拿 token：照 `ai-multi-food.spec.ts` 的 `createFood`），要驗的行為用畫面；小工具**複製**進這個檔案（不要從別的 spec import——Playwright 會把那個檔案的測試一起註冊）。API 佈置：
+  - `PUT /api/targets/today`：`{ kcal: "700", protein_g: "50", fat_g: null, carb_g: null }`（`TargetTodayRequest` 四個鍵都必填，照 `app/schemas/target.py` 現況）。
+  - `POST /api/foods`：`E2E 雞胸 ${stamp}`（`110／23／1.5／0`）；`E2E 白飯 ${stamp}`（`180／3／0.5／40`，`default_portion: { label: "1 碗", grams: "200" }`）。
+  - `POST /api/meals`：`eaten_at` 是**兩天前**（`new Date(Date.now() - 2 * 86_400_000).toISOString()`，不佔今天的額度）、`meal_type: "lunch"`、兩樣各 100（白飯直接 g、不帶 `portion_id`）。
+
+  **測試一（模式 A，全部真的）**：
+  1. `loginAs` → 點「飲食」→ 等 `<h2>今日餐點</h2>` → 卡片 `getByTestId("planner-card")` 裡的連結「從食物庫配」→ 等 `<h1>今天還能吃什麼</h1>`。
+  2. 「還能吃」有 `700 kcal`、`50 g`；`getByRole("list", { name: "從食物庫配的組合", exact: true })` 的第一個 `listitem`（`.first()`，handover §7 巢狀 listitem）有 `E2E 雞胸 ${stamp} 175 g・192.5 kcal`、`E2E 白飯 ${stamp} 1.5 份（1 碗）・540 kcal`、`合計 732.5 kcal`。（期望值寫成測試自己算的常數，註明出處：規格 §4.5、`tests/test_planner_solver.py::test_the_e2e_pair`。）
+  3. 量觸控高度：`expectTouchTargets(組合清單.getByRole("button"), "今天還能吃什麼")`（最多 3 顆，有界）。
+  4. 點「把組合 1 記成一餐」→ 等 `<h1>記一餐</h1>` → `<h2>配餐的項目</h2>`；``getByLabel(`E2E 雞胸 ${stamp}（g）`, { exact: true })`` 的值 `175`、``getByLabel(`E2E 白飯 ${stamp}（份，1 份＝1 碗）`, { exact: true })`` 的值 `1.5`。
+  5. 餐別選「晚餐」→「記錄」→ 等總覽的 `<h1>總覽</h1>`；`today-kcal` 有 `732.5`。
+  6. 點「飲食」→ 卡片「從食物庫配」→「今天的熱量差不多用完了」（剩 0）。
+  7. 再點一次「飲食」→「今日餐點」那一張卡片列出兩樣（白飯那一列是份量的寫法——照 `MealList` 現況斷言名稱即可）。
+
+  **測試二（模式 B）**：只假造 `POST /api/ai/suggest-meal`：
+
+```ts
+	let sentBody: unknown = null;
+	await page.route("**/api/ai/suggest-meal", async (route) => {
+		sentBody = route.request().postDataJSON();
+		const body = {
+			analysis_id: 1,
+			description: `便利商店：E2E 沙拉 ${stamp}、${eggName}`,
+			items: [
+				{ ...estimatedItem(`E2E 沙拉 ${stamp}`, "250.00", "230.00"), library_food: null },
+				{
+					...estimatedItem(eggName, "110.00", "150.00"),
+					library_food: { food_id: eggId, name: eggName, base_unit: "g", serving_kcal: "154.00" },
+				},
+			],
+			remaining_today: 19,
+		} satisfies AnalyzeMealResponse;
+		await route.fulfill({ json: body });
+	});
+```
+
+  （`estimatedItem` 照 `ai-multi-food.spec.ts` 的假回應寫一份；`eggName`／`eggId` 是用 API 建的私人食物「E2E 茶葉蛋 ${stamp}」，每 100 g 140 kcal。）
+  1. 目標用 API 設 700（同上）。`loginAs` → 「飲食」→ 卡片的「讓 AI 配一餐」→ 等 `<h1>記一餐</h1>` → `getByRole("form", { name: "讓 AI 配一餐", exact: true })` 看得到、偏好欄位 `toBeFocused()`。
+  2. 偏好打「不吃牛」→「讓 AI 建議」→ `expect.poll(() => sentBody).toEqual({ preference: "不吃牛" })` → `getByRole("region", { name: "AI 建議的一餐", exact: true })`（或照 `ai-multi-food.spec.ts` 找 section 的寫法）→「今天還能用 19 次」→「加入這 2 樣」。
+  3. `<h2>AI 估的項目</h2>` 兩列；「描述（選填）」的值是假回應的描述 →「記錄」→ 總覽。
+  4. 「飲食」→ 那一餐的卡片有兩樣（沙拉是剛建的私人食物、茶葉蛋是食物庫那一筆）。
+- [ ] **Step 3：跑。** `npx playwright test e2e/planner.spec.ts e2e/ai-multi-food.spec.ts e2e/desktop-layout.spec.ts`（飲食頁多了一張卡片：電腦版的 grid 還對嗎）；然後整套 `npx playwright test` 連跑兩次，記條數與時間。
+- [ ] **Step 4：突變（e2e 層）。** ①`LogMeal` 送出時拿掉 `portion_id` → 白飯變成 1.5 g（2.7 kcal），第 5 步的 `732.5` 變成 `195.2`——紅；②`Planner.tsx` 的「記成一餐」不帶 state → 第 4 步紅。改回、重建前端。
+- [ ] **Step 5：typecheck、commit。** `npm run -s typecheck`（Playwright 不做型別檢查——`satisfies` 只有這裡看得到）、`npm run -s lint`。
+
+```bash
+git add frontend/e2e/planner.spec.ts
+```
+
+訊息：`test(e2e): 營養素配餐——從食物庫配到記成一餐、AI 配一餐（只假造 suggest-meal）`
+
+---
+
+## Task 12：文件
+
+**Files:** `docs/handover.md`、`docs/deployment.md`、規格的狀態、這份計畫
+
+- [ ] **Step 1：量數字。** 後端整套條數與時間；前端 `Test Files`／`Tests`（vitest 印的）；e2e 條數與檔案數；端點數（OpenAPI operation 數，應該是 **105**）；dev 資料庫的表數（不變，22＋`alembic_version`）；`/api/planner/library-suggestions` 在 dev 上的實際回應時間（用 e2e 那個帳號在瀏覽器的 Network 看，或 `docker compose logs api` 的存取紀錄；寫進 handover 的那一節）。
+- [ ] **Step 2：`docs/handover.md`。**
+  - §2 的表：端點、測試、Migration（`0001` ~ `0021`）——量到的數字、日期、分支名，舊的留在括號裡。
+  - 階段進度表加一列「營養素配餐」（一句話＋規格、計畫路徑）✅。
+  - §10 加一節「### 營養素配餐（今天還能吃什麼）」，形狀照「運動紀錄」那一節：一句話；端點表（2 個＋`/stats/daily` 改用 `load_day_budget`）；剩下的額度的定義；解題器（目標函數、步驟、D6、D11、量到的時間）；AI 配餐（提示詞、`suggest` 的 kind、`AI_NO_SUGGESTION`、兩個 422 在 AI 之前）；前端表（`/planner`、卡片、router state 的交接與清掉、「配餐的項目」、`AiMealPanel` 的第三種輸入、`["planner"]` 不進離線快取）；新的東西在哪裡；e2e。
+  - §8.2 加「營養素配餐的已知限制」：規格 §10 的七點，加上執行中發現的（至少：suggest-meal 的測試不 patch 今天，跨午夜那一秒可能誤判）。
+  - §7：執行中踩到、值得留下來的坑（至少這一條：**`native_enum=False` 的 `Enum` 是 VARCHAR(最長的值)——加一個更長的值要加寬欄位**，`alembic check` 報的是 `modify_type`）。
+  - §6：有新的「突變存活才發現」就照「運動紀錄」那一段的格式加一段。
+- [ ] **Step 3：`docs/deployment.md`。** 「各版本的升級備註」加 `0021_add_suggest_analysis_kind`：`ai_analyses.kind` 加寬成 `VARCHAR(7)`、CHECK 多 `suggest`；`deploy.sh` 會自己跑；**可以退版**（舊程式只數列數、不讀 `kind`；不進 `ROLLBACK_UNSAFE_REVISIONS`）；沒有新的環境變數。**部署後有金鑰的人手動試一次「讓 AI 配一餐」**（同 `0017` 的多樣估算：沒有任何測試對真的 LLM 打過）。
+- [ ] **Step 4：規格的狀態** 改成「已實作（日期、分支）」；這份計畫最上面（「執行環境」之前）加「## 執行中發現的差異」（每個 task 的條數、突變結果、跟計畫不一樣的地方）與「## 與規格的差異」（摘要），照運動紀錄計畫的格式。
+- [ ] **Step 5：commit。**
+
+```bash
+git add docs/handover.md docs/deployment.md docs/superpowers/specs/2026-10-15-meal-planner-design.md \
+  docs/superpowers/plans/2026-10-15-meal-planner.md
+```
+
+訊息：`docs: handover 與部署文件記下營養素配餐（migration 0021、數字、已知限制）`
+
+---
+
+## 完成條件
+
+- 後端 `pytest -q -W error` 全綠、`ruff check .`、`mypy app` 乾淨；`alembic check` 乾淨、`0021` 可以退版再升回來（含 `suggest` 那一列的資料路徑）。
+- 前端 `npm run -s test`（沒有 `FAIL`／`Unhandled`）、`npm run -s typecheck`、`npm run -s lint` 全綠。
+- e2e 整套連跑兩次都綠。
+- 每個 task 的突變結果寫進「執行中發現的差異」，存活的說明是誰在守、或承認沒有被守住。
+- `git status` 只剩 `lunch.jpg`；沒有 push。
