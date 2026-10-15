@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useId, useRef, useState } from "react";
 import { Link } from "react-router";
 import { ApiError } from "../api/errors";
@@ -7,6 +7,7 @@ import {
 	useActivities,
 	useExerciseEstimate,
 } from "../api/exercises";
+import { queryKeys } from "../api/queries";
 import { fromLocalDateTime, localDateTime } from "../lib/dates";
 import { formatMacro, toWholeNumber } from "../lib/decimal";
 import {
@@ -48,6 +49,7 @@ export function ExerciseForm({ initial, save, onSaved, stored }: Props) {
 	// `isPending` 要等下一次 render 才更新，連按兩下兩次都看到 false。
 	const sending = useRef(false);
 	const activities = useActivities();
+	const client = useQueryClient();
 	const id = useId();
 	const ids = {
 		activity: `${id}-activity`,
@@ -90,6 +92,11 @@ export function ExerciseForm({ initial, save, onSaved, stored }: Props) {
 	if (answer !== undefined && answer.ready !== lastReady) {
 		setLastReady(answer.ready);
 	}
+	// 伺服器說沒有體重之後，舊的答案已經清掉（見 onError）：之後再問到「有體重」（使用者在
+	// 別的分頁記了體重、回來時預覽重抓）就解鎖（審查 M2）。
+	if (serverNeedsWeight && answer?.ready === true) {
+		setServerNeedsWeight(false);
+	}
 
 	const isOther = values.activity === "other";
 	// 留著存好的熱量就不用體重：沒有體重也不強制手動（審查 I1）。
@@ -123,7 +130,9 @@ export function ExerciseForm({ initial, save, onSaved, stored }: Props) {
 					error instanceof ApiError &&
 					error.code === "EXERCISE_NEEDS_WEIGHT"
 				) {
-					// 另一個分頁剛刪了體重：換成手動，跟預覽說沒有體重時同一句話。
+					// 另一個分頁剛刪了體重：換成手動，跟預覽說沒有體重時同一句話。手上的預覽
+					// 是刪之前問的（還說有體重），清掉重問——不然它會馬上把手動解鎖。
+					void client.resetQueries({ queryKey: queryKeys.exerciseEstimateAll });
 					setServerNeedsWeight(true);
 					setProblems([NEEDS_WEIGHT]);
 				} else if (error instanceof ApiError) {

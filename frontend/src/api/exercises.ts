@@ -48,7 +48,7 @@ export function useExerciseEstimate(params: EstimateParams | null) {
 	return useQuery({
 		queryKey:
 			params === null
-				? (["exercise-estimate"] as const)
+				? queryKeys.exerciseEstimateAll
 				: queryKeys.exerciseEstimate(
 						params.activity,
 						params.minutes,

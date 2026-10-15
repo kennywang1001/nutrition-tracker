@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+	act,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -354,18 +360,25 @@ describe("記運動：表單", () => {
 	});
 
 	it("伺服器說要體重（另一個分頁剛刪了體重）：換成手動、說明", async () => {
+		// 體重在預覽之後、儲存之前被刪了：之後再問預覽也是沒有體重。
+		let weight = true;
 		mockApi(
-			routes([
-				{
-					method: "POST",
-					path: "/api/exercises",
-					handler: () =>
-						error(
-							"EXERCISE_NEEDS_WEIGHT",
-							"先記一次體重，就能自動估算；或是直接輸入熱量",
-						),
-				},
-			]),
+			routes(
+				[
+					{
+						method: "POST",
+						path: "/api/exercises",
+						handler: () => {
+							weight = false;
+							return error(
+								"EXERCISE_NEEDS_WEIGHT",
+								"先記一次體重，就能自動估算；或是直接輸入熱量",
+							);
+						},
+					},
+				],
+				() => json(weight ? READY : NO_WEIGHT),
+			),
 		);
 		renderForm();
 
@@ -381,6 +394,49 @@ describe("記運動：表單", () => {
 			screen.getByRole("checkbox", { name: "手動輸入熱量" }),
 		).toBeChecked();
 		expect(screen.getByLabelText("熱量（kcal）")).toBeInTheDocument();
+	});
+
+	it("伺服器說要體重之後又記了體重：預覽再問到有體重就解鎖（審查 M2）", async () => {
+		let weight = true;
+		mockApi(
+			routes(
+				[
+					{
+						method: "POST",
+						path: "/api/exercises",
+						handler: () => {
+							weight = false;
+							return error(
+								"EXERCISE_NEEDS_WEIGHT",
+								"先記一次體重，就能自動估算；或是直接輸入熱量",
+							);
+						},
+					},
+				],
+				() => json(weight ? READY : NO_WEIGHT),
+			),
+		);
+		const client = renderForm();
+
+		await choose("running");
+		await typeMinutes("30");
+		await screen.findByText("約 343 kcal（依 10/14 的體重 70 公斤）");
+		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+		await screen.findByRole("alert");
+		const manual = screen.getByRole("checkbox", { name: "手動輸入熱量" });
+		expect(manual).toBeChecked();
+		expect(manual).toHaveAttribute("aria-disabled", "true");
+
+		// 另一個分頁記了體重；預覽重問（回到這個分頁時 TanStack 會自己重抓）。
+		weight = true;
+		await act(() => client.refetchQueries({ queryKey: ["exercise-estimate"] }));
+
+		expect(
+			await screen.findByText("約 343 kcal（依 10/14 的體重 70 公斤）"),
+		).toBeInTheDocument();
+		expect(manual).not.toBeChecked();
+		expect(manual).not.toHaveAttribute("aria-disabled", "true");
+		expect(screen.queryByLabelText("熱量（kcal）")).not.toBeInTheDocument();
 	});
 
 	it("伺服器的其他錯誤：顯示它的訊息，留在表單", async () => {

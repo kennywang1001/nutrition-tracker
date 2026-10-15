@@ -91,6 +91,8 @@ export const queryKeys = {
 	 *  同 `food-search` 的理由）。`performedAt` 是 ISO 時刻。 */
 	exerciseEstimate: (activity: string, minutes: string, performedAt: string) =>
 		["exercise-estimate", activity, minutes, performedAt] as const,
+	/** 所有預覽的前綴：伺服器說沒有體重之後，表單清掉舊的答案重問（審查 M2）。 */
+	exerciseEstimateAll: ["exercise-estimate"] as const,
 	/** 單一食物。**刻意是 `portions` 與 `foodRevisions` 的前綴。**
 	 *
 	 *  審核通過之後，那個食物的目前數值、份量、編輯歷史都該重取 ——
