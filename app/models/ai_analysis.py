@@ -21,6 +21,17 @@ from app.models.base import Base
 class AnalysisKind(enum.StrEnum):
     TEXT = "text"
     IMAGE = "image"
+    # 營養素配餐的「讓 AI 配一餐」（營養素配餐規格 D18）。輸入是剩下的額度＋偏好，
+    # `input_hash` 是整段使用者訊息的 SHA-256。
+    #
+    # 欄位是「最長的值」那麼長的 VARCHAR（native_enum=False）：加了它就從 VARCHAR(5) 變成
+    # VARCHAR(7)，migration 0021 加寬。
+    #
+    # 退版（scripts/deploy.sh：舊程式跟新的資料表一起跑）是安全的，但理由很窄：舊的 Enum
+    # **載入** 'suggest' 會丟 LookupError（實測），只是舊程式從來不載入別人的 kind——額度只數列數，
+    # 寫入後 refresh 的是自己剛寫的 'text'／'image'。哪天有程式把這張表的列整列讀出來
+    # （匯出、管理頁），那一版之後的退版就要重新評估。
+    SUGGEST = "suggest"
 
 
 class AiAnalysis(Base):
@@ -39,7 +50,7 @@ class AiAnalysis(Base):
 
     __tablename__ = "ai_analyses"
     __table_args__ = (
-        # kind 只能是 'text' / 'image'。
+        # kind 只能是 'text' / 'image' / 'suggest'。
         #
         # native_enum=False + create_constraint=False + 這裡手寫一個一般的
         # CheckConstraint —— 跟 app/models/meal.py 的 MealType（meal_type_valid）
@@ -57,7 +68,7 @@ class AiAnalysis(Base):
         # CheckConstraint，等於完全沒有約束**——資料庫會允許任何字串，
         # 而所有靜態檢查與既有測試都是綠的，因為它們都不會去 INSERT
         # 一個非法值。
-        CheckConstraint("kind IN ('text', 'image')", name="kind_valid"),
+        CheckConstraint("kind IN ('text', 'image', 'suggest')", name="kind_valid"),
         # 額度查詢是 WHERE user_id = ? AND created_at >= ?（規格 §7.2）。
         #
         # 順序刻意是 (user_id, created_at) 不是反過來 —— 篩選力來自

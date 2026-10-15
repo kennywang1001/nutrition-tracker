@@ -1,5 +1,5 @@
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from app.models.ai_analysis import AiAnalysis, AnalysisKind
@@ -56,7 +56,7 @@ async def test_a_failed_call_can_also_be_stored(db_session):
 
 
 async def test_kind_rejects_a_value_outside_text_or_image(db_session):
-    """kind 只能是 'text' / 'image'——由資料庫的 CheckConstraint 把關。
+    """kind 只能是 'text'／'image'／'suggest'——由資料庫的 CheckConstraint 把關。
 
     Python 端的 AnalysisKind 型別**不會**擋一個手動塞進去的非法字串：
     native_enum=False 的欄位在綁定參數時就是把字串原樣送進 VARCHAR，
@@ -98,3 +98,30 @@ async def test_the_quota_query_only_counts_the_calling_user(db_session):
 
     assert alice_count is not None
     assert len(bob_rows) == 2
+
+
+async def test_kind_accepts_suggest(db_session):
+    """營養素配餐（規格 D18）：配餐的呼叫記成 'suggest'。'suggest' 有 7 個字——欄位要夠寬
+    （VARCHAR(5) 時是 StringDataRightTruncationError，不是 CHECK）。"""
+    user = await create_user(db_session)
+    row = _row(user.id, kind=AnalysisKind.SUGGEST)
+
+    db_session.add(row)
+    await db_session.commit()
+    await db_session.refresh(row)
+
+    assert row.kind is AnalysisKind.SUGGEST
+
+
+async def test_the_kind_check_lists_every_kind(db_session):
+    """alembic check 不比 CHECK 的文字（handover §7）：模型多了一個值而 migration 沒跟上，
+    只有這條會紅。"""
+    definition = await db_session.scalar(
+        text(
+            "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+            "WHERE conname = 'ck_ai_analyses_kind_valid'"
+        )
+    )
+    assert definition is not None
+    for kind in AnalysisKind:
+        assert f"'{kind.value}'" in definition
