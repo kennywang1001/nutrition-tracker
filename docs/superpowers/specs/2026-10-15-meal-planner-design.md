@@ -63,7 +63,7 @@
 | D15 | 模式 B 的位置 | **記一餐裡**的 `AiMealPanel` 多一個入口「讓 AI 配一餐」（展開偏好欄位＋「讓 AI 建議」）；結果用同一個勾選清單、同一個「加入這 N 樣」 | 加入的流程（用食物庫的、建私人食物、409 的「用現有的」、跑到一半離開就停）原樣重用，不寫第二份；另做一頁的話要把建好的食物再交給記一餐（§7.1 比較） |
 | D16 | 模式 B 的端點 | `POST /api/ai/suggest-meal`，body `{preference?}`；回 `AnalyzeMealResponse` | 同形狀 → 前端的清單、型別、`toEstimate` 全部重用 |
 | D17 | 模式 B 的順序 | 剩下的額度（D3、D4，422）→ 建 estimator（`503`）→ 額度（`429`）→ 呼叫（失敗記一列）→ 記一列成功 → 每一樣比對食物庫 | 422 的兩種是使用者自己能處理的狀態，不該先說「AI 沒設定」，也不該吃額度 |
-| D18 | `ai_analyses.kind` | 新值 **`suggest`**（migration `0021`：CHECK 改成三個值） | 誠實記錄：之後才問得出「配餐用掉多少額度」；`text` 會讓 `input_hash` 的重複率統計混在一起 |
+| D18 | `ai_analyses.kind` | 新值 **`suggest`**（migration `0021`：欄位 `VARCHAR(5)` → `VARCHAR(7)`、CHECK 改成三個值；§6） | 誠實記錄：之後才問得出「配餐用掉多少額度」；`text` 會讓 `input_hash` 的重複率統計混在一起 |
 | D19 | 提示詞 | 新的 `SUGGEST_SYSTEM_PROMPT`；輸出 schema、輸出上限（8192）、解析的把關**全部沿用多樣估算**（`LLMMealEstimateSchema`、`MAX_MEAL_OUTPUT_TOKENS`） | 同一個形狀、同一道防線（四捨五入、樣數、範圍、清成一行）；I1 的「思考吃掉輸出上限」同樣適用 |
 | D20 | 0 樣 | 新錯誤碼 **`AI_NO_SUGGESTION`**（502、記一列失敗、算一次額度） | `AI_NO_FOOD_FOUND` 的訊息是「換一張照片」，對配餐是錯的指示（「與原始決定的差異」第 4 點） |
 | D21 | 偏好 | 選填；`single_line` 清成一行，清完是空的＝沒有；≤ 100 字（清理之前）；**不寫 log**；`input_hash` 是整段使用者訊息的 SHA-256（同文字估算） | 跟文字估算同一個隱私等級 |
@@ -213,12 +213,19 @@ e2e 用的那一組（§9.3）：雞胸 110／23／1.5／0（沒有份量）、�
 
 ## 6. 資料模型與 migration
 
-只有一個：**`0021_add_suggest_analysis_kind`**——`ck_ai_analyses_kind_valid` 從 `kind IN ('text', 'image')` 改成
-`kind IN ('text', 'image', 'suggest')`（drop＋create）；模型的 `AnalysisKind` 多 `SUGGEST`、`CheckConstraint` 的文字跟著改。
-`alembic check` **不比 CHECK 的文字**（handover §7），所以另有一條測試直接讀約束定義。
+只有一個：**`0021_add_suggest_analysis_kind`**，兩件事：
+
+1. **`ai_analyses.kind` 從 `VARCHAR(5)` 加寬成 `VARCHAR(7)`。** `native_enum=False` 的 `Enum` 是「最長的值」那麼長的 VARCHAR：
+   `text`／`image` 時是 5，`suggest` 放不進去。寫規格時實測（只在測試資料庫、做完還原）：只在模型加 `SUGGEST`、不動欄位，
+   `alembic check` 報 `modify_type`（`VARCHAR(length=5)` → `Enum('text', 'image', 'suggest', …)`）；欄位改成 `VARCHAR(7)` 之後乾淨。
+   PostgreSQL 加寬 varchar 只改目錄、不重寫表。
+2. `ck_ai_analyses_kind_valid` 從 `kind IN ('text', 'image')` 改成 `kind IN ('text', 'image', 'suggest')`（drop＋create）。
+   `alembic check` **不比 CHECK 的文字**（handover §7），所以另有一條測試直接讀約束定義。
+
+模型的 `AnalysisKind` 多 `SUGGEST`、`CheckConstraint` 的文字跟著改。
 
 - **可以退版**：舊程式只數列數（額度）、寫 `text`／`image`，不讀 `kind`；多一個值不影響它。不進 `ROLLBACK_UNSAFE_REVISIONS`。
-- **downgrade**：先把 `suggest` 的列改成 `text`（留著列數，額度不變），再換回兩個值的 CHECK。
+- **downgrade**：先把 `suggest` 的列改成 `text`（留著列數，額度不變），再換回兩個值的 CHECK、欄位縮回 `VARCHAR(5)`。
 
 沒有新的表、沒有新的環境變數。
 
