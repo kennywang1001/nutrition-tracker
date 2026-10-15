@@ -72,7 +72,7 @@ async function expectInputsAtLeast16px(
 	}
 }
 
-test("沒有體重要手動；記了體重之後估算；總覽的額度含運動；改分鐘、關掉加回、刪除", async ({
+test("沒有體重要手動；記了體重之後估算；總覽的額度含運動；改分鐘、只改備註不重估、關掉加回、刪除", async ({
 	page,
 	request,
 }) => {
@@ -208,6 +208,34 @@ test("沒有體重要手動；記了體重之後估算；總覽的額度含運�
 	await expect(
 		page.getByText(`共 -${sixty} kcal`, { exact: true }),
 	).toBeVisible();
+
+	// 6b. 體重更正成 72（同一天覆蓋），再打開那一筆只改備註：顯示存好的熱量、存了也不用新的
+	//     體重重估（審查 I1；重估的話會是 706）。
+	await openMe(page);
+	const weightCard = page.getByTestId("weight-card");
+	await weightCard
+		.getByRole("button", { name: "記錄體重", exact: true })
+		.click();
+	await weightCard.getByLabel("體重（公斤）", { exact: true }).fill("72");
+	await weightCard.getByRole("button", { name: "儲存", exact: true }).click();
+	await expect(weightCard).toContainText(`72 公斤・${shortDate(today)}`);
+	expect(expectedKcal(RUNNING_MET, 72, 60)).not.toBe(sixty);
+	await openOverview(page);
+	await exerciseRow("60").getByRole("link").click();
+	await expect(
+		page.getByRole("heading", { name: "編輯運動", exact: true, level: 1 }),
+	).toBeVisible();
+	await expect(minutes).toHaveValue("60");
+	await expect(
+		page.getByText(`目前 ${sixty} kcal（估算）`, { exact: true }),
+	).toBeVisible();
+	await page.getByLabel("備註（選填）", { exact: true }).fill("河濱");
+	await page.getByRole("button", { name: "儲存", exact: true }).click();
+	await expect(
+		page.getByRole("heading", { name: "總覽", exact: true, level: 1 }),
+	).toBeVisible();
+	await expect(todayKcal).toContainText(`/ ${2000 + sixty} kcal`);
+	await expect(exerciseRow("60")).toContainText(`-${sixty} kcal`);
 
 	// 7. 關掉「加回」：分母回到目標，運動照樣在時間線上。
 	await openMe(page);
