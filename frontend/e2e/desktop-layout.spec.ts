@@ -167,11 +167,17 @@ test.describe("電腦版 1280×800", () => {
 				const height = grid.getBoundingClientRect().height + 3000;
 				mealsColumn.style.minHeight = `${height}px`;
 			});
+		// 營養素與補劑中間是「今天還能吃什麼」的卡片（營養素配餐，同一欄）：從它的底量起。
+		// 它本身也要在營養素下面、補劑上面。
 		const lastMacro = await box(page.getByTestId("macro-carb_g"));
+		const planner = await box(page.getByTestId("planner-card"));
 		const supplementsAfter = await box(
 			page.getByRole("heading", { name: "今日補劑", exact: true }),
 		);
-		const gap = supplementsAfter.y - (lastMacro.y + lastMacro.height);
+		expect(Math.abs(planner.x - macros.x)).toBeLessThan(40);
+		expect(planner.y).toBeGreaterThan(lastMacro.y + lastMacro.height);
+		const gap = supplementsAfter.y - (planner.y + planner.height);
+		expect(gap).toBeGreaterThan(0);
 		expect(gap).toBeLessThan(100);
 	});
 
