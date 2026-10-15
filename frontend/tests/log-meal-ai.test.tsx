@@ -121,6 +121,12 @@ function mockLogMeal(estimate: unknown = ESTIMATE) {
 			path: "/api/ai/analyze-meal",
 			handler: () => json(estimate),
 		},
+		// 讓 AI 配一餐（營養素配餐規格 §5）：同形狀的回應。跟上一條互不包含。
+		{
+			method: "POST",
+			path: "/api/ai/suggest-meal",
+			handler: () => json(ESTIMATE),
+		},
 		{
 			method: "POST",
 			path: "/api/foods",
@@ -669,5 +675,53 @@ describe("記一餐：整段文字就是食物庫裡的食物", () => {
 
 		await screen.findByText("已選擇：白飯");
 		expect(screen.getByLabelText("份量")).not.toHaveValue("300");
+	});
+});
+
+describe("記一餐：讓 AI 配一餐（營養素配餐規格 §7.4）", () => {
+	it("startSuggesting：偏好欄位有焦點 →「讓 AI 建議」→ 加入 →「AI 估的項目」兩列、描述是 AI 那句 →「記錄」送出兩樣", async () => {
+		const fetchMock = mockLogMeal();
+		render(wrap(<LogMeal startSuggesting onSaved={vi.fn()} />));
+
+		const preference = screen.getByLabelText("偏好（選填）");
+		await waitFor(() => expect(preference).toHaveFocus());
+		await userEvent.type(preference, "想吃便當");
+		await userEvent.click(screen.getByRole("button", { name: "讓 AI 建議" }));
+		const card = await screen.findByRole("region", { name: "AI 建議的一餐" });
+		await userEvent.click(
+			within(card).getByRole("button", { name: "加入這 2 樣" }),
+		);
+
+		const list = await screen.findByRole("region", { name: "AI 估的項目" });
+		expect(within(list).getByLabelText("白飯（g）")).toHaveValue("200");
+		expect(within(list).getByLabelText("滷雞腿（g）")).toHaveValue("150");
+		expect(screen.getByLabelText("描述（選填）")).toHaveValue(
+			"一碗白飯、滷雞腿一隻",
+		);
+		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
+
+		await waitFor(() => expect(mealBody(fetchMock)).toBeDefined());
+		expect((mealBody(fetchMock) as { items: unknown[] }).items).toEqual([
+			{ food_id: 7, quantity: "200" },
+			{ food_id: 30, quantity: "150" },
+		]);
+		const suggestCall = fetchMock.mock.calls.find(([input]) =>
+			String(input).includes("/api/ai/suggest-meal"),
+		);
+		expect(suggestCall?.[1]?.body).toBe('{"preference":"想吃便當"}');
+	});
+
+	it("沒給 startSuggesting：「讓 AI 配一餐」的表單沒有打開", async () => {
+		mockLogMeal();
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+
+		expect(
+			await screen.findByRole("button", { name: "讓 AI 配一餐" }),
+		).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByLabelText("偏好（選填）")).not.toBeInTheDocument();
+		// 等常吃的清單回來（不然 act 警告）。
+		expect(
+			await screen.findByRole("button", { name: "牛肉麵" }),
+		).toBeInTheDocument();
 	});
 });

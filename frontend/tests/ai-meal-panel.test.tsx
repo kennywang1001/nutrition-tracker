@@ -116,6 +116,8 @@ function apiError(status: number, code: string, message: string) {
 
 type Options = {
 	estimate?: () => Response;
+	/** `POST /api/ai/suggest-meal`（營養素配餐規格 §5）。預設回跟估算同形狀的 `ESTIMATE`。 */
+	suggest?: () => Response | Promise<Response>;
 	/** `POST /api/foods`。 */
 	createFood?: () => Response | Promise<Response>;
 	/** `GET /api/foods?q=`（改名之後的同名檢查）。 */
@@ -133,6 +135,12 @@ function mockPanel(options: Options = {}) {
 			method: "POST",
 			path: "/api/ai/analyze-meal",
 			handler: options.estimate ?? (() => json(ESTIMATE)),
+		},
+		// 跟 `/api/ai/analyze-meal` 互不包含：打錯哪一支，`calls` 的網址分得出來。
+		{
+			method: "POST",
+			path: "/api/ai/suggest-meal",
+			handler: options.suggest ?? (() => json(ESTIMATE)),
 		},
 		{
 			method: "GET",
@@ -173,7 +181,7 @@ function createdBodies(fetchMock: FetchMock): Array<Record<string, unknown>> {
 		.map(([, init]) => JSON.parse(String(init?.body)));
 }
 
-function renderPanel(text = "雞腿便當") {
+function renderPanel(text = "雞腿便當", startSuggesting?: boolean) {
 	const onFoodPicked = vi.fn();
 	const onItemsReady = vi.fn();
 	const client = new QueryClient({
@@ -185,6 +193,7 @@ function renderPanel(text = "雞腿便當") {
 				text={text}
 				onFoodPicked={onFoodPicked}
 				onItemsReady={onItemsReady}
+				startSuggesting={startSuggesting}
 			/>
 		</QueryClientProvider>,
 	);
@@ -1205,5 +1214,226 @@ describe("AI 多樣估算面板：不呼叫 AI 的路與錯誤", () => {
 		expect(
 			screen.getByRole("button", { name: "加入這 1 樣" }),
 		).toBeInTheDocument();
+	});
+});
+
+describe("AI 多樣估算面板：讓 AI 配一餐（營養素配餐規格 §5、§7.4）", () => {
+	function suggestEntry() {
+		return screen.getByRole("button", { name: "讓 AI 配一餐" });
+	}
+
+	async function openSuggestForm() {
+		await userEvent.click(suggestEntry());
+		return screen.getByRole("form", { name: "讓 AI 配一餐" });
+	}
+
+	it("入口展開一個表單：偏好（選填，最多 100 字）、提示、「讓 AI 建議」、「取消」；焦點在偏好", async () => {
+		mockPanel();
+		renderPanel();
+
+		expect(suggestEntry()).toHaveAttribute("aria-expanded", "false");
+		expect(
+			screen.queryByRole("form", { name: "讓 AI 配一餐" }),
+		).not.toBeInTheDocument();
+
+		const form = await openSuggestForm();
+
+		expect(suggestEntry()).toHaveAttribute("aria-expanded", "true");
+		const preference = within(form).getByLabelText("偏好（選填）");
+		expect(preference).toHaveAttribute("maxLength", "100");
+		expect(preference).toHaveAccessibleDescription(
+			/^例如：不吃牛、想吃便當、在便利商店/,
+		);
+		await waitFor(() => expect(preference).toHaveFocus());
+		expect(
+			within(form).getByRole("button", { name: "讓 AI 建議" }),
+		).toBeInTheDocument();
+
+		await userEvent.click(within(form).getByRole("button", { name: "取消" }));
+
+		expect(
+			screen.queryByRole("form", { name: "讓 AI 配一餐" }),
+		).not.toBeInTheDocument();
+		expect(suggestEntry()).toHaveAttribute("aria-expanded", "false");
+		// 「取消」那顆按鈕消失了：焦點回到入口，不是掉到 body。
+		await waitFor(() => expect(suggestEntry()).toHaveFocus());
+	});
+
+	it("「讓 AI 建議」送 POST /api/ai/suggest-meal（偏好去掉前後空白）；結果是「AI 建議的一餐」，表單收起來", async () => {
+		const fetchMock = mockPanel();
+		renderPanel();
+		const form = await openSuggestForm();
+
+		await userEvent.type(
+			within(form).getByLabelText("偏好（選填）"),
+			" 不吃牛 ",
+		);
+		await userEvent.click(
+			within(form).getByRole("button", { name: "讓 AI 建議" }),
+		);
+
+		const card = await screen.findByRole("region", { name: "AI 建議的一餐" });
+		const sent = calls(fetchMock, "POST", "/api/ai/suggest-meal");
+		expect(sent).toHaveLength(1);
+		expect(sent[0]?.[1]?.body).toBe('{"preference":"不吃牛"}');
+		expect(calls(fetchMock, "POST", "/api/ai/analyze-meal")).toHaveLength(0);
+		expect(
+			screen.queryByRole("region", { name: "AI 估算結果" }),
+		).not.toBeInTheDocument();
+		expect(within(card).getByText("一碗白飯、滷雞腿一隻")).toBeInTheDocument();
+		expect(within(card).getByText("今天還能用 18 次")).toBeInTheDocument();
+		expect(within(card).getAllByRole("checkbox")).toHaveLength(2);
+		expect(
+			screen.queryByRole("form", { name: "讓 AI 配一餐" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("「加入這 2 樣」：加入的流程整個沿用（食物庫有的讀、沒有的建），交回描述、沒有照片", async () => {
+		const fetchMock = mockPanel();
+		const { onItemsReady } = renderPanel();
+		const form = await openSuggestForm();
+		await userEvent.click(
+			within(form).getByRole("button", { name: "讓 AI 建議" }),
+		);
+		const card = await screen.findByRole("region", { name: "AI 建議的一餐" });
+
+		await userEvent.click(
+			within(card).getByRole("button", { name: "加入這 2 樣" }),
+		);
+
+		await waitFor(() => expect(onItemsReady).toHaveBeenCalledTimes(1));
+		expect(onItemsReady).toHaveBeenCalledWith(
+			[
+				{ food: LIBRARY_RICE, quantity: "200" },
+				{ food: CREATED_CHICKEN, quantity: "150" },
+			],
+			{ image: null, description: "一碗白飯、滷雞腿一隻" },
+		);
+		expect(calls(fetchMock, "GET", "/api/foods/7")).toHaveLength(1);
+		expect(createdBodies(fetchMock)).toHaveLength(1);
+		// 沒有偏好：body 是空物件（後端用剩下的額度配）。
+		expect(calls(fetchMock, "POST", "/api/ai/suggest-meal")[0]?.[1]?.body).toBe(
+			"{}",
+		);
+	});
+
+	it.each([
+		[422, "NO_KCAL_TARGET", "先設定每日熱量目標，才知道今天還能吃多少"],
+		[422, "DAY_ALREADY_FULL", "今天的熱量差不多用完了，沒有可以配的"],
+		[
+			502,
+			"AI_NO_SUGGESTION",
+			"AI 這次配不出合適的一餐，換個偏好再試（這一次也算在今天的次數裡）",
+		],
+	])(
+		"%i %s：顯示後端那句；表單還開著（可以換個偏好）",
+		async (status, code, message) => {
+			mockPanel({ suggest: () => apiError(status, code, message) });
+			renderPanel();
+			const form = await openSuggestForm();
+
+			await userEvent.click(
+				within(form).getByRole("button", { name: "讓 AI 建議" }),
+			);
+
+			expect((await screen.findByRole("alert")).textContent).toBe(message);
+			expect(
+				screen.getByRole("form", { name: "讓 AI 配一餐" }),
+			).toBeInTheDocument();
+			// 這不是「AI 沒設定」：拍照與配餐照樣能按。
+			expect(screen.getByLabelText("拍照估算")).toBeEnabled();
+			expect(suggestEntry()).toBeEnabled();
+		},
+	);
+
+	it("startSuggesting：一開始就展開、焦點在偏好欄位", async () => {
+		mockPanel();
+		renderPanel("", true);
+
+		const form = screen.getByRole("form", { name: "讓 AI 配一餐" });
+		expect(suggestEntry()).toHaveAttribute("aria-expanded", "true");
+		await waitFor(() =>
+			expect(within(form).getByLabelText("偏好（選填）")).toHaveFocus(),
+		);
+	});
+
+	it("沒給 startSuggesting：沒有展開、焦點不動", async () => {
+		mockPanel();
+		renderPanel("");
+
+		expect(
+			screen.queryByRole("form", { name: "讓 AI 配一餐" }),
+		).not.toBeInTheDocument();
+		expect(suggestEntry()).toHaveAttribute("aria-expanded", "false");
+		expect(document.body).toHaveFocus();
+	});
+
+	it("AI 沒設定（配餐回 503）：「讓 AI 配一餐」跟拍照一起停用；文字估算照舊可以按", async () => {
+		mockPanel({
+			suggest: () => apiError(503, "AI_NOT_CONFIGURED", "AI 分析未設定"),
+		});
+		renderPanel();
+		const form = await openSuggestForm();
+
+		await userEvent.click(
+			within(form).getByRole("button", { name: "讓 AI 建議" }),
+		);
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("AI 分析未設定");
+		expect(suggestEntry()).toBeDisabled();
+		expect(screen.getByLabelText("拍照估算")).toBeDisabled();
+		expect(
+			screen.getByRole("button", { name: "用 AI 估算「雞腿便當」" }),
+		).toBeEnabled();
+		// 還開著的表單也不能再送（同一個理由；aria-disabled，焦點正在它身上）。
+		expect(
+			within(form).getByRole("button", { name: "讓 AI 建議" }),
+		).toHaveAttribute("aria-disabled", "true");
+	});
+
+	it("AI 沒設定（文字估算回 503）：「讓 AI 配一餐」也停用", async () => {
+		mockPanel({
+			estimate: () => apiError(503, "AI_NOT_CONFIGURED", "AI 分析未設定"),
+		});
+		renderPanel();
+
+		await userEvent.click(
+			screen.getByRole("button", { name: "用 AI 估算「雞腿便當」" }),
+		);
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("AI 分析未設定");
+		expect(suggestEntry()).toBeDisabled();
+	});
+
+	it("送出中：「讓 AI 建議」是 aria-disabled，再按不會多打一次；狀態列是「AI 配餐中…」", async () => {
+		const fetchMock = mockPanel({ suggest: () => new Promise(() => {}) });
+		renderPanel();
+		const form = await openSuggestForm();
+		const submit = within(form).getByRole("button", { name: "讓 AI 建議" });
+
+		await userEvent.click(submit);
+
+		expect(submit).toHaveAttribute("aria-disabled", "true");
+		expect(screen.getByRole("status")).toHaveTextContent("AI 配餐中…");
+		await userEvent.click(submit);
+		// Enter 也是送出：同一道擋。
+		fireEvent.submit(form);
+		expect(calls(fetchMock, "POST", "/api/ai/suggest-meal")).toHaveLength(1);
+	});
+
+	it("配過一餐之後再用文字估算：結果的標籤換回「AI 估算結果」", async () => {
+		mockPanel();
+		renderPanel();
+		const form = await openSuggestForm();
+		await userEvent.click(
+			within(form).getByRole("button", { name: "讓 AI 建議" }),
+		);
+		await screen.findByRole("region", { name: "AI 建議的一餐" });
+
+		await estimate();
+
+		expect(
+			screen.queryByRole("region", { name: "AI 建議的一餐" }),
+		).not.toBeInTheDocument();
 	});
 });

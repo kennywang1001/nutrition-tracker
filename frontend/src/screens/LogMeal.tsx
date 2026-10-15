@@ -53,13 +53,15 @@ type Props = {
 	onSaved: (result: { photoFailed: boolean }) => void;
 	/** 營養素配餐帶進來的項目（規格 D22）。只在掛載時讀。 */
 	initialItems?: readonly HandoffItem[];
+	/** 一開始就打開「讓 AI 配一餐」（規格 D15、D22）；只在掛載時讀。 */
+	startSuggesting?: boolean;
 };
 
 /** 餐存好、照片沒傳上去時給總覽顯示的話。補傳走飲食頁 `MealList` 既有的上傳。 */
 export const PHOTO_UPLOAD_FAILED_NOTICE =
 	"這一餐已記錄，照片沒有傳上去，可以到飲食頁的那一餐補傳";
 
-export function LogMeal({ onSaved, initialItems }: Props) {
+export function LogMeal({ onSaved, initialItems, startSuggesting }: Props) {
 	const queryClient = useQueryClient();
 	const [selectedFood, setSelectedFood] = useState<Food | null>(null);
 	const portion = usePortionQuantity(selectedFood?.id ?? null);
@@ -337,6 +339,7 @@ export function LogMeal({ onSaved, initialItems }: Props) {
 				renderBelowSearch={(query) => (
 					<AiMealPanel
 						text={query}
+						startSuggesting={startSuggesting}
 						onFoodPicked={(food) => {
 							// 整段文字就是食物庫裡的食物：跟從清單選一個一樣（份量歸位，
 							// 不然上一個食物打的 200 會留下來）。

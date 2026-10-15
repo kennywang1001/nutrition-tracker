@@ -12,6 +12,7 @@ import {
 	analyzeMealImage,
 	analyzeMealText,
 	describeAnalyzeError,
+	suggestMeal,
 } from "../api/ai";
 import { apiFetch } from "../api/client";
 import { ApiError, describeFieldErrors } from "../api/errors";
@@ -42,7 +43,9 @@ import ui from "./ui.module.css";
 
 type AnalyzeInput =
 	| { kind: "text"; text: string }
-	| { kind: "image"; file: File };
+	| { kind: "image"; file: File }
+	// 營養素配餐（規格 §5、D15）：剩下的額度由後端算，這裡只送偏好。
+	| { kind: "suggest"; preference: string };
 
 /** 交給記一餐的一樣：食物＋量（g 或 ml——直接輸入的那種，不是「幾份」）。 */
 export type ReadyItem = { food: Food; quantity: string };
@@ -60,6 +63,9 @@ type Props = {
 		items: ReadyItem[],
 		source: { image: File | null; description: string },
 	) => void;
+	/** 一開始就展開「讓 AI 配一餐」、焦點在偏好欄位（從飲食頁或 `/planner` 來的；營養素配餐
+	 *  規格 D22）。只在掛載時讀。 */
+	startSuggesting?: boolean;
 };
 
 /** 同名檢查搜尋的筆數（同 `AiEstimatePanel`：用後端的上限）。 */
@@ -181,7 +187,12 @@ function failureOf(
  *  **什麼都還沒存成餐**：這裡只建食物（或拿食物庫的）。餐由記一餐的「記錄」存。
  *
  *  **不顯示 `confidence`**（同單樣面板）：那是模型自己說的。 */
-export function AiMealPanel({ text, onFoodPicked, onItemsReady }: Props) {
+export function AiMealPanel({
+	text,
+	onFoodPicked,
+	onItemsReady,
+	startSuggesting,
+}: Props) {
 	const queryClient = useQueryClient();
 	const id = useId();
 	const trimmed = text.trim();
@@ -199,8 +210,16 @@ export function AiMealPanel({ text, onFoodPicked, onItemsReady }: Props) {
 	const [adding, setAdding] = useState(false);
 	// 一輪加入之後的結果（有沒成功的才寫）。
 	const [summary, setSummary] = useState("");
-	// 這一次畫面上已經知道 AI 沒設定：只停用拍照（文字仍可按——命中食物庫不用 AI）。
+	// 這一次畫面上已經知道 AI 沒設定：停用拍照與配餐（文字仍可按——命中食物庫不用 AI；
+	// 配餐一定要呼叫 AI）。
 	const [aiUnavailable, setAiUnavailable] = useState(false);
+	// 「讓 AI 配一餐」的表單（營養素配餐規格 §7.4）。偏好留在 state 裡：收起再打開還在。
+	const [suggesting, setSuggesting] = useState(startSuggesting === true);
+	const [preference, setPreference] = useState("");
+	// 結果是估的還是配的：只差區塊的名稱（清單、勾選、加入全部同一套）。
+	const [resultKind, setResultKind] = useState<"estimate" | "suggest">(
+		"estimate",
+	);
 
 	// 同一時間只跑一輪「加入」。平常 React 在兩次點擊之間就會重畫，下面按鈕的
 	// `adding` 檢查擋得住；這個 ref 是**不靠重畫時機**的那一半——同一批更新裡進來的
@@ -218,8 +237,14 @@ export function AiMealPanel({ text, onFoodPicked, onItemsReady }: Props) {
 	// 修改表單 ↔ 那一列的按鈕切換時，按下去的那顆按鈕會消失、焦點掉到 body。
 	// 開表單 → 焦點到「食物名稱」；關表單（或「改用 AI 的數字」）→ 焦點到那一列的
 	// 「修改」。只在切換那一次移（旗標），不是每次 render——剛估算完不搶焦點。
-	const focusNextRef = useRef<"form" | { editButton: number } | null>(null);
+	// 配餐的表單同一套：打開（含一掛載就打開）→ 偏好欄位；「取消」、或配好了表單收起來 →
+	// 入口那顆按鈕（按下去的那顆消失了，焦點不能掉到 body）。
+	const focusNextRef = useRef<
+		"form" | "preference" | "suggest-button" | { editButton: number } | null
+	>(startSuggesting === true ? "preference" : null);
 	const nameInputRef = useRef<HTMLInputElement>(null);
+	const preferenceInputRef = useRef<HTMLInputElement>(null);
+	const suggestButtonRef = useRef<HTMLButtonElement>(null);
 	const editButtonsRef = useRef(new Map<number, HTMLButtonElement>());
 	useEffect(() => {
 		const next = focusNextRef.current;
@@ -227,7 +252,11 @@ export function AiMealPanel({ text, onFoodPicked, onItemsReady }: Props) {
 		const target =
 			next === "form"
 				? nameInputRef.current
-				: (editButtonsRef.current.get(next.editButton) ?? null);
+				: next === "preference"
+					? preferenceInputRef.current
+					: next === "suggest-button"
+						? suggestButtonRef.current
+						: (editButtonsRef.current.get(next.editButton) ?? null);
 		if (target !== null) {
 			focusNextRef.current = null;
 			target.focus();
@@ -249,14 +278,22 @@ export function AiMealPanel({ text, onFoodPicked, onItemsReady }: Props) {
 
 	const analyze = useMutation({
 		mutationFn: (input: AnalyzeInput) =>
-			input.kind === "text"
-				? analyzeMealText(input.text)
-				: analyzeMealImage(input.file),
+			input.kind === "suggest"
+				? suggestMeal(input.preference)
+				: input.kind === "text"
+					? analyzeMealText(input.text)
+					: analyzeMealImage(input.file),
 		onMutate: () => clearResult(),
 		onSuccess: (response, input) => {
 			setResult(response);
 			setItems(initialChecklist(response));
 			setImage(input.kind === "image" ? input.file : null);
+			setResultKind(input.kind === "suggest" ? "suggest" : "estimate");
+			if (input.kind === "suggest") {
+				// 配好了：表單收起來，結果就在下面。「讓 AI 建議」跟著消失，焦點回到入口。
+				setSuggesting(false);
+				focusNextRef.current = "suggest-button";
+			}
 		},
 		onError: (error) => {
 			if (error instanceof ApiError && error.code === "AI_NOT_CONFIGURED") {
@@ -405,11 +442,82 @@ export function AiMealPanel({ text, onFoodPicked, onItemsReady }: Props) {
 					disabled={busy || aiUnavailable}
 					onChange={handlePhoto}
 				/>
+				{/* 營養素配餐的模式 B（規格 D15）：在記一餐裡、用同一個勾選清單。外觀同「用 AI 估算」。
+				    原生 disabled（同拍照）：它停用的時候（估算中、AI 沒設定）焦點不會在它身上——
+				    按下它就是打開表單、焦點移到偏好欄位。 */}
+				<button
+					ref={suggestButtonRef}
+					type="button"
+					className={base.aiButton}
+					aria-expanded={suggesting}
+					disabled={busy || aiUnavailable}
+					onClick={() => {
+						const next = !suggesting;
+						setSuggesting(next);
+						if (next) focusNextRef.current = "preference";
+					}}
+				>
+					讓 AI 配一餐
+				</button>
 			</div>
+
+			{suggesting && (
+				<form
+					aria-label="讓 AI 配一餐"
+					className={`${base.form} ${styles.suggestForm}`}
+					onSubmit={(event) => {
+						event.preventDefault();
+						// 送出中、或已經知道 AI 沒設定：按鈕是 aria-disabled（還收得到焦點），擋在這裡。
+						if (busy || aiUnavailable) return;
+						analyze.mutate({ kind: "suggest", preference });
+					}}
+				>
+					<label htmlFor={`${id}-preference`}>偏好（選填）</label>
+					<input
+						ref={preferenceInputRef}
+						id={`${id}-preference`}
+						type="text"
+						maxLength={100}
+						value={preference}
+						aria-describedby={`${id}-preference-hint`}
+						onChange={(event) => setPreference(event.target.value)}
+					/>
+					<p id={`${id}-preference-hint`} className={base.muted}>
+						例如：不吃牛、想吃便當、在便利商店。依今天剩下的熱量與營養素建議，用掉一次
+						AI 次數。
+					</p>
+					<div className={base.actions}>
+						{/* aria-disabled：按下去的當下它正在焦點上（同「加入這 N 樣」）。 */}
+						<button
+							type="submit"
+							className={`${base.primary} ${styles.add}`}
+							aria-disabled={busy || aiUnavailable}
+						>
+							讓 AI 建議
+						</button>
+						<button
+							type="button"
+							className={base.secondary}
+							onClick={() => {
+								setSuggesting(false);
+								focusNextRef.current = "suggest-button";
+							}}
+						>
+							取消
+						</button>
+					</div>
+				</form>
+			)}
 
 			{/* 一直掛著、只換文字：動態插入的 live region 常被讀屏軟體略過。 */}
 			<p role="status" className={styles.status}>
-				{analyze.isPending ? "AI 估算中…" : adding ? "加入中…" : summary}
+				{analyze.isPending
+					? analyze.variables?.kind === "suggest"
+						? "AI 配餐中…"
+						: "AI 估算中…"
+					: adding
+						? "加入中…"
+						: summary}
 			</p>
 			{analyze.isError && (
 				<p role="alert" className={styles.error}>
@@ -449,7 +557,12 @@ export function AiMealPanel({ text, onFoodPicked, onItemsReady }: Props) {
 			)}
 
 			{result !== null && result.analysis_id !== null && (
-				<section aria-label="AI 估算結果" className={base.card}>
+				<section
+					aria-label={
+						resultKind === "suggest" ? "AI 建議的一餐" : "AI 估算結果"
+					}
+					className={base.card}
+				>
 					<p className={styles.description}>{result.description}</p>
 					<p className={base.muted}>
 						{`今天還能用 ${result.remaining_today} 次`}

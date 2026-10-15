@@ -82,6 +82,7 @@ function LogMealRoute() {
 	return (
 		<LogMeal
 			initialItems={handoff?.kind === "items" ? handoff.items : undefined}
+			startSuggesting={handoff?.kind === "suggest"}
 			onSaved={({ photoFailed }) =>
 				navigate(
 					"/",

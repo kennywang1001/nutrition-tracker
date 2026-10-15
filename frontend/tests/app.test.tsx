@@ -11,7 +11,7 @@ import {
 	getRefreshToken,
 	setTokens,
 } from "../src/auth/store";
-import { itemsState } from "../src/lib/planner";
+import { itemsState, SUGGEST_STATE } from "../src/lib/planner";
 import { PHOTO_UPLOAD_FAILED_NOTICE } from "../src/screens/LogMeal";
 import { setDesktop } from "../src/test/media";
 import { EMPTY_PROFILE, NO_WEIGHTS, NOT_READY } from "./helpers/body-routes";
@@ -390,6 +390,24 @@ describe("App", () => {
 		// 清掉 history 之後，畫面上帶進來的項目還在（讀一次、放進自己的 state）。
 		expect(
 			screen.getByRole("region", { name: "配餐的項目" }),
+		).toBeInTheDocument();
+	});
+
+	it("從卡片的「讓 AI 配一餐」來：記一餐的「讓 AI 配一餐」表單已經展開、焦點在偏好", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockBackend(foodLists);
+		openWithState("/meals/new", SUGGEST_STATE);
+
+		render(<App />);
+
+		const form = await screen.findByRole("form", { name: "讓 AI 配一餐" });
+		await waitFor(() =>
+			expect(within(form).getByLabelText("偏好（選填）")).toHaveFocus(),
+		);
+		await waitFor(() => expect(window.history.state?.usr ?? null).toBeNull());
+		// 清掉 history 之後表單照樣開著（讀一次、放進自己的 state）。
+		expect(
+			screen.getByRole("form", { name: "讓 AI 配一餐" }),
 		).toBeInTheDocument();
 	});
 

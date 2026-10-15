@@ -103,6 +103,23 @@
 	padding-bottom: var(--space-2);
 }
 
+/* 「讓 AI 配一餐」的表單（營養素配餐規格 §7.4）：偏好欄位同修改表單，至少 44px——共用的
+   .form input 沒有設高度（同上面 .editForm 那一格，不共用、要記得）。框起來，跟底下的結果分開。 */
+.suggestForm {
+	padding: var(--space-3);
+	border-radius: var(--radius-card);
+	background: var(--color-surface);
+}
+
+.suggestForm input {
+	box-sizing: border-box;
+	min-height: 44px;
+}
+
+.suggestForm p {
+	margin: 0;
+}
+
 /* 整張清單的動作，跟最後一樣之間隔一條線。 */
 .footer {
 	margin-top: var(--space-3);
