@@ -28,6 +28,10 @@ services:
       # "dev-secret-change-me-in-production"——那個字串在公開的 GitHub repo
       # 裡，Settings 會直接拒絕啟動。
       JWT_SECRET: local-docker-compose-dev-only-not-a-real-secret
+      # dev 預設**關**（掃條碼規格「與原始決定的差異」第 4 點）：e2e 的「沒有預填」那條要確定、
+      # 本機跑測試不打外部網路。要試 OFF：.env 寫 OFF_ENABLED=true，`docker compose up -d api`。
+      # 一樣要寫預設值（bool 收到空字串，app 起不來）。
+      OFF_ENABLED: "${OFF_ENABLED:-false}"
     ports:
       # 本機沒有「Tailscale 是邊界」這個前提，綁 0.0.0.0 沒問題。
       - "8000:8000"

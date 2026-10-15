@@ -233,6 +233,8 @@ jobs:
     env:
       DATABASE_URL: postgresql+asyncpg://wallet:wallet@localhost:5432/wallet
       JWT_SECRET: ci-only-not-a-secret-0123456789abcdef
+      # e2e 不打外部網路；掃條碼的「沒有預填」那條要確定（掃條碼規格 D12）。
+      OFF_ENABLED: "false"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7

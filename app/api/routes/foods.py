@@ -7,26 +7,33 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from app import off
 from app.api.deps import get_current_user
 from app.api.params import ResourceId
+from app.config import settings
 from app.db import get_db
 from app.errors import ConflictError, ForbiddenError, NotFoundError
 from app.food_visibility import assert_food_visible, load_visible_food
 from app.models.food import Food, FoodPortion, FoodRevision, RevisionStatus
 from app.models.meal import Meal, MealItem
 from app.models.user import User, UserRole
+from app.off import ProductLookup, ProductPrefill
+from app.ratelimit import barcode_lookup_rate_limiter
 from app.schemas.food import (
     Barcode,
     BarcodeLookupResponse,
+    BarcodePrefill,
     FoodBarcodeUpdate,
     FoodCreateRequest,
     FoodResponse,
     FoodScope,
+    Per100Nutrition,
     PortionCreateRequest,
     PortionResponse,
     PortionUpdateRequest,
     RevisionCreateRequest,
     RevisionResponse,
+    ServingSize,
 )
 
 router = APIRouter(prefix="/foods", tags=["foods"])
@@ -322,14 +329,48 @@ async def list_recent_foods(
     return [FoodResponse.of(food, revision) for food, revision in rows]
 
 
+def get_product_lookup() -> ProductLookup:
+    """OFF 的用戶端（掃條碼規格 D14）。測試用 `app.dependency_overrides[get_product_lookup]` 換掉；
+    `OFF_ENABLED=false` 時是什麼都不做的那一個。"""
+    return off.product_lookup if settings.off_enabled else off.DisabledLookup()
+
+
+def _prefill(found: ProductPrefill) -> BarcodePrefill:
+    """OFF 模組的 dataclass → 回應的 schema（一對一；模組不依賴 API 的 schema 形狀）。"""
+    return BarcodePrefill(
+        name=found.name,
+        brand=found.brand,
+        base_unit=found.base_unit,
+        per100=Per100Nutrition(
+            kcal=found.per100.kcal,
+            protein_g=found.per100.protein_g,
+            fat_g=found.per100.fat_g,
+            carb_g=found.per100.carb_g,
+        ),
+        serving=(
+            None
+            if found.serving is None
+            else ServingSize(amount=found.serving.amount, unit=found.serving.unit)
+        ),
+        source=found.source,
+    )
+
+
 @router.get("/by-barcode/{code}", response_model=BarcodeLookupResponse)
 async def lookup_barcode(
     code: Annotated[Barcode, Path()],
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    lookup: ProductLookup = Depends(get_product_lookup),
 ) -> BarcodeLookupResponse:
     """用條碼找看得到的食物（掃條碼規格 D6、D7）：自己的私人食物優先，再來是公開的。
-    沒有生效版本的照樣回（`nutrition: null`，畫面說明它不能選）。"""
+    沒有生效版本的照樣回（`nutrition: null`，畫面說明它不能選）。
+
+    看得到的食物都沒有時問 Open Food Facts 要預填建議（`prefill`）；**看得到的命中時不問**。
+    每人每分鐘 30 次，整個端點都算（429 `TOO_MANY_BARCODE_LOOKUPS`）。
+    """
+    # 在查資料庫之前（規格 D11）：命中的查詢也算，不然「只有沒命中才算」等於在端點中間判斷。
+    barcode_lookup_rate_limiter.hit(str(user.id))
     row = (
         await db.execute(
             select(Food, FoodRevision)
@@ -345,7 +386,10 @@ async def lookup_barcode(
     ).first()
     if row is not None:
         return BarcodeLookupResponse(code=code, food=FoodResponse.of(row[0], row[1]), prefill=None)
-    return BarcodeLookupResponse(code=code, food=None, prefill=None)
+    found = await lookup.lookup(code)
+    return BarcodeLookupResponse(
+        code=code, food=None, prefill=None if found is None else _prefill(found)
+    )
 
 
 @router.get("/{food_id}", response_model=FoodResponse)

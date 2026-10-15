@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     ai_model: str | None = None
     # 規格 §7：只算真的呼叫 LLM 的次數，失敗的也算（一樣花了錢）。
     ai_daily_limit: int = Field(20, gt=0)
+    # Open Food Facts（掃條碼規格 D8、D12）：條碼在看得到的食物裡找不到時，問公開的食品資料庫
+    # 要預填建議。**預設開**；關掉＝條碼不會離開這台伺服器（規格 §6.6）。bool 收到空字串會讓
+    # 啟動失敗——所以 docker-compose.yml 一定要寫預設值（`${OFF_ENABLED:-true}`，
+    # 同 AI_DAILY_LIMIT）。
+    off_enabled: bool = True
 
     @field_validator(
         "ai_provider", "anthropic_api_key", "gemini_api_key", "ai_model", mode="before"

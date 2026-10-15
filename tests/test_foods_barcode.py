@@ -1,8 +1,19 @@
-"""條碼：建立、修改、查詢（掃條碼規格 §4、§5、§9）。OFF 的那幾條在 Task 4。"""
+"""條碼：建立、修改、查詢（掃條碼規格 §4、§5、§9），以及查不到時問 Open Food Facts、
+限速（§6、D11）。
+
+OFF 一律是假的：要結果就 `app.dependency_overrides[get_product_lookup]`；沒覆寫的測試要是真的
+走到 OFF，conftest 的守衛會讓它 500（規格 D14）。
+"""
+
+from decimal import Decimal
 
 from sqlalchemy import select
 
-from app.models.food import Food, FoodRevision
+from app import off
+from app.api.routes.foods import get_product_lookup
+from app.config import settings
+from app.main import app
+from app.models.food import BaseUnit, Food, FoodRevision
 from app.models.user import UserRole
 from app.security.tokens import create_access_token
 from tests.factories import create_food, create_meal, create_user
@@ -13,6 +24,28 @@ NUTRITION = {"kcal": "100", "protein_g": "1", "fat_g": "1", "carb_g": "1"}
 
 def auth(user):
     return {"Authorization": f"Bearer {create_access_token(user.id)}"}
+
+
+class FakeLookup:
+    """假的 OFF：記下被問了哪些條碼，回固定的結果。"""
+
+    def __init__(self, result=None):
+        self.result = result
+        self.codes: list[str] = []
+
+    async def lookup(self, code):
+        self.codes.append(code)
+        return self.result
+
+
+def _coke():
+    return off.ProductPrefill(
+        name="可口可樂",
+        brand="Coca-Cola",
+        base_unit=BaseUnit.ML,
+        per100=off.Per100(Decimal("42.00"), Decimal("0.00"), Decimal("0.00"), Decimal("10.60")),
+        serving=off.Serving(Decimal("330.00"), BaseUnit.ML),
+    )
 
 
 async def _create(client, headers, *, name="洋芋片", barcode=None, is_global=False):
@@ -257,6 +290,9 @@ async def test_lookup_cannot_see_someone_elses_private_food(client, db_session):
     # 先證明同一個條碼查得到（擁有者自己）
     seen = await client.get(f"/api/foods/by-barcode/{CODE}", headers=auth(owner))
     assert seen.json()["food"] is not None
+    # 沒命中會問 OFF：給一個說「沒有」的假的（不然會撞上 conftest 的守衛）。
+    fake = FakeLookup()
+    app.dependency_overrides[get_product_lookup] = lambda: fake
 
     response = await client.get(f"/api/foods/by-barcode/{CODE}", headers=auth(other))
 
@@ -284,3 +320,86 @@ async def test_lookup_rejects_a_malformed_code(client, db_session):
 
 async def test_lookup_needs_login(client):
     assert (await client.get(f"/api/foods/by-barcode/{CODE}")).status_code == 401
+
+
+# ---- 查不到時問 Open Food Facts（規格 §6）、限速（D11） ----
+
+
+async def test_a_miss_returns_the_prefill(client, db_session):
+    user = await create_user(db_session)
+    fake = FakeLookup(_coke())
+    app.dependency_overrides[get_product_lookup] = lambda: fake
+
+    response = await client.get("/api/foods/by-barcode/036000291452", headers=auth(user))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["code"] == "0036000291452"
+    assert body["food"] is None
+    assert body["prefill"] == {
+        "name": "可口可樂",
+        "brand": "Coca-Cola",
+        "base_unit": "ml",
+        "per100": {"kcal": "42.00", "protein_g": "0.00", "fat_g": "0.00", "carb_g": "10.60"},
+        "serving": {"amount": "330.00", "unit": "ml"},
+        "source": "openfoodfacts",
+    }
+    # 送給 OFF 的是標準形式
+    assert fake.codes == ["0036000291452"]
+
+
+async def test_a_miss_without_off_data_has_no_prefill(client, db_session):
+    user = await create_user(db_session)
+    fake = FakeLookup(None)
+    app.dependency_overrides[get_product_lookup] = lambda: fake
+
+    response = await client.get(f"/api/foods/by-barcode/{CODE}", headers=auth(user))
+
+    assert response.json() == {"code": CODE, "food": None, "prefill": None}
+    assert fake.codes == [CODE]
+
+
+async def test_a_hit_never_asks_off(client, db_session):
+    user = await create_user(db_session)
+    await create_food(db_session, created_by=user, owner=user, barcode=CODE)
+    fake = FakeLookup(_coke())
+    app.dependency_overrides[get_product_lookup] = lambda: fake
+
+    response = await client.get(f"/api/foods/by-barcode/{CODE}", headers=auth(user))
+
+    assert response.json()["food"] is not None
+    assert response.json()["prefill"] is None
+    assert fake.codes == []
+
+
+async def test_off_disabled_never_asks(client, db_session, monkeypatch):
+    """**不覆寫**依賴：設定關掉時用的是 DisabledLookup。要是打出去，conftest 的守衛會讓它 500。"""
+    monkeypatch.setattr(settings, "off_enabled", False)
+    user = await create_user(db_session)
+
+    response = await client.get(f"/api/foods/by-barcode/{CODE}", headers=auth(user))
+
+    assert response.status_code == 200
+    assert response.json() == {"code": CODE, "food": None, "prefill": None}
+
+
+async def test_the_31st_lookup_in_a_minute_is_429(client, db_session):
+    """31 次都查**自己的那一筆（命中）**：限速要在查資料庫之前、命中也算——全部沒命中的話，
+    「限速移到沒命中那一支」的突變會活下來。"""
+    user, other = await create_user(db_session), await create_user(db_session)
+    await create_food(db_session, created_by=user, owner=user, barcode=CODE)
+    await create_food(db_session, created_by=other, owner=other, barcode=CODE)
+    headers = auth(user)
+
+    for _ in range(30):
+        ok = await client.get(f"/api/foods/by-barcode/{CODE}", headers=headers)
+        assert ok.status_code == 200
+        assert ok.json()["food"] is not None
+    blocked = await client.get(f"/api/foods/by-barcode/{CODE}", headers=headers)
+
+    assert blocked.status_code == 429
+    assert blocked.json()["error"]["code"] == "TOO_MANY_BARCODE_LOOKUPS"
+    assert "retry-after" in blocked.headers
+    # 鍵是使用者：別人照樣查得到
+    others = await client.get(f"/api/foods/by-barcode/{CODE}", headers=auth(other))
+    assert others.status_code == 200

@@ -554,6 +554,9 @@ export interface paths {
          * Lookup Barcode
          * @description 用條碼找看得到的食物（掃條碼規格 D6、D7）：自己的私人食物優先，再來是公開的。
          *     沒有生效版本的照樣回（`nutrition: null`，畫面說明它不能選）。
+         *
+         *     看得到的食物都沒有時問 Open Food Facts 要預填建議（`prefill`）；**看得到的命中時不問**。
+         *     每人每分鐘 30 次，整個端點都算（429 `TOO_MANY_BARCODE_LOOKUPS`）。
          */
         get: operations["lookup_barcode_api_foods_by_barcode__code__get"];
         put?: never;

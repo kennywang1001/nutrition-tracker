@@ -410,3 +410,15 @@ friend_request_rate_limiter = KeyedRateLimiter(
     code="TOO_MANY_FRIEND_REQUESTS",
     message="邀請送得太頻繁，請稍後再試",
 )
+
+BARCODE_LOOKUP_LIMIT = 30
+
+# 條碼查詢（`GET /api/foods/by-barcode/{code}`；掃條碼規格 D11），鍵是使用者 id。**整個端點都算**、
+# 在查資料庫之前：一分鐘掃 30 次不是正常使用；擋的是寫壞的迴圈，以及把 OFF 當免費代理的人
+# （OFF 對商品查詢有每分鐘的上限，用完了是這台伺服器的每一個人都查不到）。
+barcode_lookup_rate_limiter = KeyedRateLimiter(
+    limit=BARCODE_LOOKUP_LIMIT,
+    window_seconds=SOCIAL_WINDOW_SECONDS,
+    code="TOO_MANY_BARCODE_LOOKUPS",
+    message="查得太頻繁了，請稍後再試",
+)

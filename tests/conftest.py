@@ -11,11 +11,13 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
 
+from app import off
 from app.config import settings
 from app.db import get_db
 from app.main import app
 from app.models.user import UserRole
 from app.ratelimit import (
+    barcode_lookup_rate_limiter,
     comment_rate_limiter,
     export_in_flight,
     export_rate_limiter,
@@ -93,6 +95,7 @@ def _reset_login_rate_limiter() -> None:
     `like_rate_limiter`、`comment_rate_limiter`（社群規格 D20）跟 `export_rate_limiter` 一樣
     鍵是使用者 id：現在不重置也不會互相影響，重置是同一條「沒有例外」的規矩。
     `friend_request_rate_limiter`（送好友邀請，社群審查 M3）同上。
+    `barcode_lookup_rate_limiter`（條碼查詢，掃條碼規格 D11）同上。
     """
     login_rate_limiter.reset()
     session_rate_limiter.reset()
@@ -101,6 +104,23 @@ def _reset_login_rate_limiter() -> None:
     like_rate_limiter.reset()
     comment_rate_limiter.reset()
     friend_request_rate_limiter.reset()
+    barcode_lookup_rate_limiter.reset()
+
+
+@pytest.fixture(autouse=True)
+def _no_network_to_open_food_facts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """**每一個**測試都不能打到 Open Food Facts（掃條碼規格 D14）。
+
+    要 OFF 的結果：`app.dependency_overrides[get_product_lookup] = lambda: FakeLookup(...)`。
+    忘了覆寫的測試會在這裡紅，不會安靜地打出去——同 `_photo_dir_in_tmp_path` 的理由：
+    「記得加 fixture」擋不住，程式碼擋得住。快取也每次清掉（`product_lookup` 是模組裡的一個實例）。
+    """
+
+    async def refuse(url: str) -> object:
+        raise AssertionError(f"測試不能打外部網路：{url}")
+
+    monkeypatch.setattr(off, "_http_get", refuse)
+    off.product_lookup.clear()
 
 
 @pytest.fixture(scope="session")

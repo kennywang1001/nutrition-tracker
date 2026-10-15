@@ -200,3 +200,53 @@ def test_ai_daily_limit_is_read_from_the_environment(monkeypatch):
 
     monkeypatch.setenv("AI_DAILY_LIMIT", "20")
     assert Settings(jwt_secret="x" * 32, _env_file=None).ai_daily_limit == 20
+
+
+# ---------------------------------------------------------------------------
+# OFF_ENABLED（掃條碼規格 D12）：bool，空字串會讓 app 起不來，所以 compose 一定要寫預設值
+# ---------------------------------------------------------------------------
+
+_OVERRIDE_FILE = _COMPOSE_FILE.parent / "docker-compose.override.yml"
+_CI_FILE = _COMPOSE_FILE.parent / ".github" / "workflows" / "ci.yml"
+_OFF_ENABLED_LINE = re.compile(
+    r'^\s+OFF_ENABLED:\s*"\$\{OFF_ENABLED:-(?P<default>[^}]*)\}"\s*$', re.MULTILINE
+)
+
+
+def test_off_is_on_by_default(monkeypatch):
+    """應用程式與 production 的預設是開（規格 D12）；`_env_file=None`：本機的 .env 不算數。"""
+    monkeypatch.delenv("OFF_ENABLED", raising=False)
+    assert Settings(jwt_secret="x" * 32, _env_file=None).off_enabled is True
+
+
+@pytest.mark.parametrize(("value", "expected"), [("false", False), ("0", False), ("true", True)])
+def test_off_enabled_is_read_from_the_environment(monkeypatch, value, expected):
+    monkeypatch.setenv("OFF_ENABLED", value)
+    assert Settings(jwt_secret="x" * 32, _env_file=None).off_enabled is expected
+
+
+def test_an_empty_off_enabled_would_stop_the_app_from_starting(monkeypatch):
+    """為什麼 compose 那一行要寫預設值、不能寫成 `${OFF_ENABLED:-}`：空字串對 bool 是
+    解析失敗（同 AI_DAILY_LIMIT），不是「沒設」。"""
+    monkeypatch.setenv("OFF_ENABLED", "")
+
+    with pytest.raises(ValidationError):
+        Settings(jwt_secret="x" * 32, _env_file=None)
+
+
+def test_compose_forwards_off_enabled_with_the_same_default():
+    """compose 一旦傳了這個變數，容器裡生效的是 compose 的預設值——要跟 `off_enabled` 的
+    預設值一樣（true），不然兩邊各寫各的、改了一邊不會有東西變紅。"""
+    matches = _OFF_ENABLED_LINE.findall(_COMPOSE_FILE.read_text(encoding="utf-8"))
+
+    assert matches == ["true"]
+    assert Settings.model_fields["off_enabled"].default is True
+
+
+def test_dev_and_ci_e2e_turn_off_open_food_facts():
+    """dev 與 CI 的 e2e 預設關（規格「與原始決定的差異」第 4 點）：e2e 的「沒有預填」那條
+    要確定，本機跑也不打外部網路。"""
+    assert _OFF_ENABLED_LINE.findall(_OVERRIDE_FILE.read_text(encoding="utf-8")) == ["false"]
+    ci = _CI_FILE.read_text(encoding="utf-8")
+    e2e_job = ci[ci.index("\n  e2e:\n") :]
+    assert 'OFF_ENABLED: "false"' in e2e_job
