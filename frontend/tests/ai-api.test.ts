@@ -4,7 +4,10 @@ import {
 	analyzeMealImage,
 	analyzeMealText,
 	analyzeText,
+	describeAnalyzeError,
+	suggestMeal,
 } from "../src/api/ai";
+import { ApiError } from "../src/api/errors";
 import { MAX_PHOTO_BYTES, PhotoTooLargeError } from "../src/api/photos";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
@@ -135,6 +138,53 @@ describe("AI 估算的 API", () => {
 			PhotoTooLargeError,
 		);
 		expect(fetchMock).not.toHaveBeenCalled();
+	});
+});
+
+describe("AI 配一餐（營養素配餐規格 §5）", () => {
+	// `/api/ai/suggest-meal` 跟 `/api/ai/analyze…` 互不包含；照樣斷言實際的網址（同上面的理由）。
+	it("POST /api/ai/suggest-meal，偏好去掉前後空白", async () => {
+		const fetchMock = mockApi([
+			{
+				method: "POST",
+				path: "/api/ai/suggest-meal",
+				handler: () => json({ description: "便當", items: [] }),
+			},
+		]);
+
+		const result = await suggestMeal("  不吃牛 ");
+
+		expect(sentUrl(fetchMock)).toBe("/api/ai/suggest-meal");
+		expect(sentBody(fetchMock)).toEqual({ preference: "不吃牛" });
+		expect(result.description).toBe("便當");
+	});
+
+	it("只有空白的偏好就不帶（body 是空物件）", async () => {
+		const fetchMock = mockApi([
+			{
+				method: "POST",
+				path: "/api/ai/suggest-meal",
+				handler: () => json({ description: "便當", items: [] }),
+			},
+		]);
+
+		await suggestMeal("   ");
+
+		expect(String(fetchMock.mock.calls[0]?.[1]?.body)).toBe("{}");
+	});
+
+	it.each([
+		[422, "NO_KCAL_TARGET", "先設定每日熱量目標，才知道今天還能吃多少"],
+		[422, "DAY_ALREADY_FULL", "今天的熱量差不多用完了，沒有可以配的"],
+		[
+			502,
+			"AI_NO_SUGGESTION",
+			"AI 這次配不出合適的一餐，換個偏好再試（這一次也算在今天的次數裡）",
+		],
+	])("describeAnalyzeError：%i %s 顯示後端那句", (status, code, message) => {
+		expect(describeAnalyzeError(new ApiError(status, code, message))).toBe(
+			message,
+		);
 	});
 });
 

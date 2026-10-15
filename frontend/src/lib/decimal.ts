@@ -165,6 +165,13 @@ export function ratioOf(
 	return new Decimal(actual).dividedBy(targetValue).toNumber();
 }
 
+/** 後端算好的比例（`"1.05"`）→ `"105%"`，四捨五入到整數百分比（half-up）。給 `/planner` 的
+ *  「佔剩下的熱量」用——比例由後端除（營養素配餐規格 D13），這裡只換成百分比。
+ *  不用 `toLocaleString` 的 percent（`MacroBar` 那種）：那要先變成 number，而字串進字串出才是這個模組的規矩。 */
+export function percentOf(ratio: Numeric): string {
+	return `${new Decimal(ratio).times(100).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toString()}%`;
+}
+
 /** 一組數值的平均。**空陣列回 `null`，不是 `"0"`**——沒有資料就沒有平均，
  *  「平均 0」讀起來是「每天都吃了 0」（跟 `ratioOf` 的 null 同一個道理）。
  *

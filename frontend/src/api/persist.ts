@@ -104,6 +104,9 @@ const NOT_PERSISTED: ReadonlySet<unknown> = new Set([
 	// `staleTime: 0`，離線快取對它們沒有好處。
 	// 自己的餐點清單（`["meals"]`，會存）上只多了兩個數字，沒有名字與內容。
 	"social",
+	// 營養素配餐的建議（`["planner", …]`）：一次性、跟今天綁在一起（營養素配餐規格 D25）——
+	// 離線還原出上一次的組合，等於拿已經過時的「剩下多少」配餐。畫面本來就每次掛載重抓（`staleTime: 0`）。
+	"planner",
 ]);
 
 /** 寫進 localStorage 前改寫每一個查詢的狀態。做兩件事：

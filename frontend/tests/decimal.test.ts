@@ -10,6 +10,7 @@ import {
 	isPositiveAmount,
 	isZero,
 	paddedExtent,
+	percentOf,
 	perServingToPer100,
 	positionIn,
 	ratioOf,
@@ -303,5 +304,18 @@ describe("toWholeNumber", () => {
 		["1", 1],
 	] as const)("%j → %j", (value, number) => {
 		expect(toWholeNumber(value)).toBe(number);
+	});
+});
+
+describe("percentOf（後端算好的比例 → 百分比；營養素配餐規格 D13）", () => {
+	it.each([
+		["1.05", "105%"],
+		["0.985", "99%"],
+		["0.984", "98%"],
+		["0", "0%"],
+		["0.00", "0%"],
+		["2", "200%"],
+	] as const)("%j → %j", (ratio, text) => {
+		expect(percentOf(ratio)).toBe(text);
 	});
 });

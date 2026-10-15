@@ -862,6 +862,43 @@ describe("離線 L2：持久化與「最後更新於」", () => {
 		);
 	});
 
+	it("今天還能吃什麼的建議不會被寫進 localStorage；今日營養素會", async () => {
+		// 營養素配餐規格 D25：建議是一次性的、跟「今天、剛記了什麼」綁在一起，舊的比沒有更糟。
+		// 同上面幾條的做法：`dailyStats` 在（persist 真的跑過一輪）、建議不在；用 queryKeys 深比對。
+		mockApi({
+			"/api/stats/daily": () => json(STATS_WITH_TARGET),
+			"/api/supplements/today": () => json([]),
+			"/api/meals": () => json([]),
+		});
+		const client = newTestClient();
+		render(wrap(client, <Today />));
+		await screen.findByText(/1800/);
+
+		client.setQueryData(queryKeys.plannerLibrary, {
+			date: "2026-10-15",
+			status: "no_candidates",
+			remaining: { kcal: "700.00", protein_g: null, fat_g: null, carb_g: null },
+			combos: [],
+		});
+		const plannerKeyJson = JSON.stringify(queryKeys.plannerLibrary);
+		const statsKeyJson = JSON.stringify(queryKeys.dailyStats);
+
+		await waitFor(
+			() => {
+				const raw = localStorage.getItem(OFFLINE_CACHE_STORAGE_KEY);
+				expect(raw).not.toBeNull();
+				const persisted = (
+					JSON.parse(raw ?? "{}").clientState.queries as {
+						queryKey: unknown[];
+					}[]
+				).map((query) => JSON.stringify(query.queryKey));
+				expect(persisted).toContain(statsKeyJson);
+				expect(persisted).not.toContain(plannerKeyJson);
+			},
+			{ timeout: 3000 },
+		);
+	});
+
 	it("好友的資料與照片都不會被寫進 localStorage", async () => {
 		// 對方可以解除好友、可以把一餐改成「只有我看得到」——那之後這台裝置
 		// 不該還能離線翻出舊的好友資料。跟 food-search 那條同一個做法：先讓

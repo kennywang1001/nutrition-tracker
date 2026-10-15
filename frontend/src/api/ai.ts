@@ -58,6 +58,15 @@ export async function analyzeMealImage(
 	});
 }
 
+const SUGGEST_MEAL = "/api/ai/suggest-meal";
+
+/** 依今天剩下的額度請 AI 配一餐（營養素配餐規格 §5）。回應同 `analyzeMealText`，所以多樣面板的
+ *  勾選清單原樣用。偏好留空就不帶（後端也會把只有空白的當成沒有）。算一次額度。 */
+export function suggestMeal(preference: string): Promise<AnalyzeMealResponse> {
+	const trimmed = preference.trim();
+	return post(SUGGEST_MEAL, trimmed === "" ? {} : { preference: trimmed });
+}
+
 /** 估算失敗時給人看的話。兩個端點的錯誤碼是同一組（後端是同一批函式丟的），
  *  單樣面板與多樣面板共用這一份。 */
 export function describeAnalyzeError(error: unknown): string {
@@ -81,6 +90,12 @@ export function describeAnalyzeError(error: unknown): string {
 				// 模型看不出任何食物（多半是一張不是食物的照片）。後端的訊息說的是
 				// 「換一張照片或換個說法」——下面那句「可以再試一次」對它是錯的指示：
 				// 原樣再按一次，結果一樣，而且再吃一次額度。
+				return error.message;
+			case "AI_NO_SUGGESTION":
+			case "NO_KCAL_TARGET":
+			case "DAY_ALREADY_FULL":
+				// 配一餐的三種（營養素配餐規格 §5.3）：後端那句說的是該做什麼——換個偏好、
+				// 先設定目標、今天吃滿了。通用的「再試一次」對它們都是錯的指示。
 				return error.message;
 			case "AI_BAD_RESPONSE":
 				return "AI 這次的回答看不懂，可以再試一次";

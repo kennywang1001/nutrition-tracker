@@ -199,6 +199,9 @@ export const queryKeys = {
 	/** 縮圖（縮圖規格 §4.1）：掛在 `mealPhoto(id)` 底下——上傳、刪照片時失效
 	 *  `mealPhoto(id)` 是前綴比對，原圖與縮圖一起失效。 */
 	mealPhotoThumb: (mealId: number) => ["meal-photo", mealId, "thumb"] as const,
+	/** 今天還能吃什麼（營養素配餐規格 §7.3）。**不進離線快取**（`persist.ts` 的 `NOT_PERSISTED`）：
+	 *  建議跟「今天、剛記了什麼」綁在一起，舊的比沒有更糟（D25）。 */
+	plannerLibrary: ["planner", "library"] as const,
 } as const;
 
 /** 整個 app 共用的單一 `QueryClient`。
