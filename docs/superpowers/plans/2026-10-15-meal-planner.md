@@ -87,6 +87,72 @@
   `502 AI_UPSTREAM_ERROR`／`AI_BAD_RESPONSE`／`AI_NO_SUGGESTION`（「AI 這次配不出合適的一餐，換個偏好再試（這一次也算在今天的次數裡）」）。
   兩種 422 在 503 之前。
 
+### Task 7–10（前端，2026-10-15）
+
+做完：前端 `Test Files 188`／`Tests 2696`（開工時 178／2574）、`lint`、`typecheck` 乾淨。突變全部用型別過得去的寫法
+（`$S/plan-fe-mutate.py`，`Type Errors no errors` 才算），**31 個全紅**、沒有存活（另外截圖之後的修正 2 個，也紅）。
+
+**Task 7**（`cb6fe57`）：
+- 共用的回應 `tests/helpers/planner-routes.ts` 在 Task 7 就建了（`planner-lib.test.ts` 要那一組），不是 Task 8；
+  多 `CHICKEN`、`RICE`、`suggestionsWithStatus(status)`。
+- `planner-lib` 多兩格：經過 `structuredClone`（history 的結構化複製）還讀得出來、「一樣對一樣不對」整個不收；比對用 `toStrictEqual`
+  （多帶 `grams` 會紅）。`percentOf` 多 `"0.984"`、`"0.00"`、`"2"`。
+- 突變 ②「不檢查 `quantity` 的型別」照字面拿掉是 `TypeCheckError`（`quantity` 變 `unknown`），改成「數字先轉字串再檢查」。
+  多做的三個：`percentOf` 用 `ROUND_DOWN`、`itemsState` 份量原樣帶（多了 `grams`）、`describeAnalyzeError` 少 `NO_KCAL_TARGET`。8 個全紅。
+- 突變小工具用 `python -I` 跑時 `PYTHONIOENCODING` 不生效（`-I` 含 `-E`），cp950 印不出 vitest 的框線字——工具裡改成
+  `sys.stdout.reconfigure(encoding="utf-8")`。
+
+**Task 8**（`16b2238`，截圖之後 `9ede7d4`）：
+- **計畫的卡片測試殺不掉計畫的突變 ①**：舊快取（沒有 `kcal_budget`、目標 1800）時 `stats.kcal_budget === null` 是
+  `undefined === null`＝false，照樣畫兩個動作——跟 `kcalBudgetOf` 一樣。補「舊快取、**也沒有目標**」那一格（正確是「設定每日目標」），
+  它才紅。原本那一格守的是反方向的突變（`== null`）。
+- 畫面的結構：`no_target` 的判斷寫成 `status === "no_target" || remaining === null`（`remaining` 才縮得成非 null）；`full` 畫「還能吃」＋
+  一句；`no_candidates`／`no_fit` 那一句放在「從食物庫配」的區塊裡；「還能吃」用 `ui.stats`／`ui.stat` 的 2×2 小方格。
+- `/planner` 用預設的 narrow，`lib/layout.ts` 不用改清單；註解寫明、`layout.test.ts` 多 `/planner`、`/planner/` 兩格。
+- `today.test`：多斷言 DOM 順序（營養素 → 卡片 → 今日餐點）；「stats 還沒回來」用陣列版的 `mockApi`（`mockApiByPath` 的 handler 型別不收 Promise）。
+- 突變 ③ 照畫面的結構改成「在 `no_target` 那一塊多一顆『讓 AI 配一餐』」。多做的兩個：「再試一次」不重抓、「佔剩下的熱量」用蛋白質的 `fill`。6 個全紅。
+- **看截圖之後改的**（`9ede7d4`）：「記成一餐」從實心滿版改成次要按鈕、靠左（一頁三顆實心大按鈕太重，電腦版尤其）；合計拆成四段、
+  各自 `nowrap`（手機上「碳水 112.5」與「g」被拆開），分隔的「・」接在**前一段**的尾巴（它不能當行首，放下一段開頭就整行沒有斷點）。
+  測試改成 `getByText(/^合計 /).closest("p")` 的 `toHaveTextContent`；兩個突變（分隔不加、少碳水）紅。
+
+**Task 9**（`f672601`）：
+- `app.test.tsx` 的 `App` 是 `BrowserRouter`，不能用 `MemoryRouter initialEntries`：用 `history.replaceState({ usr: state, key, idx }, "", "/meals/new")`
+  放 state，`window.history.state?.usr` 看有沒有清掉。
+- 測試 6 的 AI 那一樣叫「滷雞腿」（一樣、要建的）——用 `log-meal-ai` 的「白飯」會跟配餐的「白飯」撞名，「移除 白飯」找到兩顆。
+- 測試 7（沒給 `startSuggesting` 時表單沒打開）照計畫在 Task 10 補，放在 `log-meal-ai.test.tsx`。
+- `grep meal-ai-item`：除了 `LogMeal` 自己沒有人用（e2e 也是用標籤找）。
+- 突變 ①–④ 照計畫紅（② 也讓 `log-meal-ai` 既有的「AI 的項目全部移除之後」那條紅）；多做的三個：有份量的標籤不寫「份，1 份＝」、
+  份量檢查只看 AI 的項目、`LogMealRoute` 不傳 `initialItems`。7 個全紅。
+
+**Task 10**（`2ca7c8b`）：
+- **入口用 `base.aiButton`（同「用 AI 估算」的虛線外框），不是計畫的 `base.secondary`**：後者只有顏色與框線，`min-height` 只在
+  `.actions button` 底下——放在入口那一列會小於 44px。
+- 「讓 AI 建議」的 `aria-disabled` 與 `onSubmit` 的擋也看 `aiUnavailable`（503 之後表單還開著、焦點正在它身上）；
+  用 `styles.add` 拿 `aria-disabled` 的淡化。入口照計畫用原生 `disabled`（同拍照）：它停用的那一刻焦點不會在它身上。
+- 配好了表單收起來時「讓 AI 建議」跟著消失：焦點移到入口（計畫沒寫；不移的話掉到 body）。錯誤時表單留著（換個偏好再試）。
+- 多的測試：提示用 `aria-describedby` 接上（`toHaveAccessibleDescription`）、文字估算回 503 也停用入口、配過再估算標籤換回「AI 估算結果」、
+  Enter 送出（`fireEvent.submit`）也擋。
+- 突變 ①–⑤ 照計畫紅；多做的五個：配好了不收表單、狀態列一律「AI 估算中…」、一掛載不移焦點、`LogMealRoute` 不傳 `startSuggesting`、
+  「取消」之後焦點不回入口。10 個全紅。
+- 截圖之後：表單的標籤改成同「搜尋食物」的小字灰色（`9ede7d4`）。
+
+**畫面檢查**：`docker compose up -d --build api` → dev 資料庫 `0020 → 0021`。每一種狀態一個新帳號（API 建 8 個食物、記一餐在兩天前、設目標），
+登入之後只用點擊換頁；只假造 `POST /api/ai/suggest-meal`（送出的 body 是 `{"preference":"想吃便當、不吃牛"}`）。手機與電腦各一套＋深色一張
+（`$S/planner/*.png`）。`no_target` 的 `/planner` 從卡片點不到（卡片那時只連到目標）：先設目標點進去一次、用 API 把熱量目標拿掉、再從飲食頁點一次
+（`/planner` 每次掛載重抓）。e2e 寫 `no_target` 時要用同一招，或只測卡片。
+
+**給 Task 11 的事實**（可及名稱照實作）：
+- 飲食頁卡片 `getByTestId("planner-card")`：`<h2>今天還能吃什麼</h2>`、連結「從食物庫配」「讓 AI 配一餐」；沒有額度時連結「設定每日目標」。
+- `/planner`：`<h1>今天還能吃什麼</h1>`；區塊（`region`）「還能吃」（`<dt>` 熱量／蛋白質／…、`<dd>`「700 kcal」「50 g」）、「從食物庫配」、
+  「讓 AI 配一餐」；清單 `list`「從食物庫配的組合」，每組 `<h3>組合 N</h3>`、每一樣一個 `listitem`（「E2E 雞胸 … 175 g・192.5 kcal」）、
+  合計一個 `<p>`（四段各一個 `<span>`，第一段是「合計 732.5 kcal・」——用不帶 `exact` 的 `getByText` 或看整個 `<p>` 的字）、「佔剩下的熱量 105%」；
+  按鈕「把組合 N 記成一餐」、「讓 AI 配一餐」。狀態的句子：「先設定每日目標，才知道今天還能吃多少」＋連結「設定每日目標」、
+  「今天的熱量差不多用完了」、「先記幾餐，常吃的食物會出現在這裡」、「常吃的食物裡，沒有份量夠小的組合」；錯誤 `alert`「無法載入建議」＋「再試一次」。
+- 記一餐：`region`「配餐的項目」（`<h2>`）；欄位標籤「E2E 雞胸 …（g）」「E2E 白飯 …（份，1 份＝1 碗）」；按鈕「移除 X」。
+  入口按鈕「讓 AI 配一餐」（`aria-expanded`）；`form`「讓 AI 配一餐」：「偏好（選填）」、「讓 AI 建議」、「取消」；狀態列「AI 配餐中…」；
+  結果 `region`「AI 建議的一餐」，「加入這 N 樣」之後項目在「AI 估的項目」底下。
+- 量觸控高度：組合清單的按鈕、卡片的兩個連結、偏好欄位都是 44px（`.screen button`、`.action`、`.suggestForm input`）。
+
 ## 執行環境
 
 - 分支 `feat/meal-planner`（已建立，**不要 push**）。`S=C:/Users/user/AppData/Local/Temp/claude/f--wallet/e7b60c93-fbd5-4a61-9c85-74550ff7244b/scratchpad`。
