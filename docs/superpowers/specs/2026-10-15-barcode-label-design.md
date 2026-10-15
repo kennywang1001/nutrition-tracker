@@ -174,8 +174,9 @@ UPC-E `S d1 d2 d3 d4 d5 d6 C`（`S` 是數字系統、`C` 是檢查碼），看 
 | 兩個人各自的私人食物同一個條碼 | 可以 | 同上 |
 | 很多食物都沒有條碼（NULL） | 可以 | 唯一索引裡 NULL 互不相等 |
 
-跟名稱一樣**先查再寫**（`_find_same_barcode`，同 `_find_same_named_food`），併發時靠 `flush` 的 `IntegrityError`：rollback 之後
-依序重查同名、同條碼，回撞到的那一種（兩個都沒找到就照舊回 `FOOD_EXISTS` 不附 id——既有的防禦性行為）。`409` 的
+**條碼不做前置查詢，只靠兩個唯一索引**（名稱照舊有前置查詢）：`flush` 的 `IntegrityError` → rollback → 依序重查同名、
+同條碼（`_find_same_barcode`，範圍同索引）→ 回撞到的那一種（兩個都沒找到就照舊回 `FOOD_EXISTS` 不附 id——既有的防禦性行為）。
+前置查詢跟併發那條路回的東西一模一樣，多寫一份是一段沒有測試殺得死的程式（handover「多寫的守衛殺不死」）。`409` 的
 `details.food_id` 只會是自己的或公開的食物。
 
 ---
