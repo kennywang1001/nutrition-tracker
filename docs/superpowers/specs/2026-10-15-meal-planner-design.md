@@ -262,7 +262,8 @@ e2e 用的那一組（§9.3）：雞胸 110／23／1.5／0（沒有份量）、�
 ### 7.4 記一餐的交接
 
 - `lib/planner.ts`：`plannerHandoffFrom(state: unknown)` → `{kind: "items", items}`／`{kind: "suggest"}`／`null`（形狀不對當作沒有，同 `noticeFrom`）；
-  `handoffItemsFrom(combo)` 把一組轉成 `{food, quantity, portion}`（`quantity` 是後端給的字串，不做運算）。
+  `itemsState(combo)` 把一組轉成 `{plannerItems: [{food, quantity, portion}]}`（`quantity` 是後端給的字串，不做運算）；
+  `SUGGEST_STATE` 是 `{plannerSuggest: true}`。
 - `LogMealRoute`：`useState(() => plannerHandoffFrom(location.state))` 讀一次，effect 裡 `navigate(pathname, {replace: true, state: null})`。
   傳給 `LogMeal` 的 `initialItems`、`startSuggesting`。
 - `LogMeal`：`AiItem` 多 `portion`、`origin`；初始值來自 `initialItems`（`origin: "planner"`）。「配餐的項目」與「AI 估的項目」兩個區塊共用一個畫列的函式；
