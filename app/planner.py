@@ -266,9 +266,16 @@ def _pairs(problem: _Problem, top: list[int]) -> _Found:
 
 
 def _triple(
-    problem: _Problem, seed: tuple[int, ...], picks: tuple[int, ...], third: int
+    problem: _Problem,
+    seed: tuple[int, ...],
+    picks: tuple[int, ...],
+    third: int,
+    rank: dict[int, int],
 ) -> tuple[int, tuple[int, ...]] | None:
-    """兩樣的組合加第三樣：先挑第三樣最好的量，再輪流重挑每一樣（其他的不動），有進步才換。"""
+    """兩樣的組合加第三樣：先挑第三樣最好的量，再輪流重挑每一樣（其他的不動），有進步才換。
+
+    輪流的順序是 `rank`（單樣的名次），**不是**候選的位置：座標下降停在哪個局部最好跟輪流的
+    順序有關，照位置輪的話同樣的食物換個順序傳進來，三樣的答案就可能不同（審查後的修正 M3）。"""
     chosen = dict(zip(seed, picks, strict=True))
     first = problem.best_option(third, problem.total(chosen))
     if first is None:
@@ -277,7 +284,7 @@ def _triple(
     foods = tuple(sorted(chosen))
     for _ in range(DESCENT_ROUNDS):
         improved = False
-        for food in foods:
+        for food in sorted(chosen, key=rank.__getitem__):
             candidate = problem.best_option(food, problem.total(chosen, skip=food))
             if candidate is not None and candidate[0] < current:
                 current, chosen[food] = candidate
@@ -324,6 +331,7 @@ def suggest_combos(candidates: Sequence[Candidate], remaining: Remaining) -> lis
     found = _singles(problem)
     top = sorted((foods[0] for foods in found), key=lambda food: (found[(food,)][0], food))
     top = top[:TOP_SINGLES]
+    rank = {food: position for position, food in enumerate(top)}
     pairs = _pairs(problem, top)
     found.update(pairs)
     for seed in sorted(pairs, key=lambda foods: (pairs[foods][0], foods))[:SEED_PAIRS]:
@@ -331,7 +339,7 @@ def suggest_combos(candidates: Sequence[Candidate], remaining: Remaining) -> lis
             foods = tuple(sorted((*seed, third)))
             if third in seed or foods in found:
                 continue
-            result = _triple(problem, seed, pairs[seed][1], third)
+            result = _triple(problem, seed, pairs[seed][1], third, rank)
             if result is not None:
                 found[foods] = result
 

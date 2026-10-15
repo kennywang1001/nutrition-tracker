@@ -272,8 +272,40 @@ def test_no_candidates_means_no_combos():
 # ── 確定性與時間（D10、規格 §4.5） ─────────────────────────────────────────
 
 
-def test_the_same_input_gives_the_same_output():
-    assert suggest_combos(EIGHT, DINNER) == suggest_combos(list(EIGHT), DINNER)
+def _thirty_foods(seed: int) -> list[Candidate]:
+    """30 個不一樣的食物（一半有份量）：比 `TOP_SINGLES` 多，「只在前 12 個裡找」才有作用。"""
+    rng = random.Random(seed)
+    return [
+        _c(str(rng.randint(40, 600)), str(rng.randint(0, 30)), str(rng.randint(0, 40)),
+           str(rng.randint(0, 80)), None if index % 2 else str(rng.randint(5, 30) * 10))
+        for index in range(30)
+    ]  # fmt: skip
+
+
+def _in_original_order(combos, order: list[int]) -> list[list[tuple[int, str, str]]]:
+    """`order[i]`＝重排之後第 i 個是原本的第幾個：把每一樣換回原本的位置、照原本的位置排。"""
+    return [
+        sorted((order[c.candidate], str(c.quantity), str(c.quantity_g)) for c in combo.choices)
+        for combo in combos
+    ]
+
+
+def test_the_order_of_the_candidates_does_not_change_the_answer():
+    """審查後的修正 M3：同樣的食物換個順序（倒過來、固定種子打亂），沒有平手時答案一樣——
+    順序只用來決定平手（D10）。以前這條比的是 `EIGHT` 跟 `list(EIGHT)`，一模一樣的輸入，紅不了。"""
+    remaining = Remaining(
+        kcal=Decimal("900"), protein_g=Decimal("60"), fat_g=Decimal("30"), carb_g=Decimal("100")
+    )
+    cases = [(EIGHT, DINNER), (_thirty_foods(11), remaining), (_thirty_foods(12), remaining)]
+    for foods, left in cases:
+        expected = _summary(suggest_combos(foods, left))
+        assert expected  # 有東西可以比
+        shuffled = list(range(len(foods)))
+        random.Random(20261015).shuffle(shuffled)
+        for order in (list(reversed(range(len(foods)))), shuffled):
+            permuted = [foods[index] for index in order]
+            got = _in_original_order(suggest_combos(permuted, left), order)
+            assert got == expected, order
 
 
 def test_thirty_gram_based_candidates_finish_well_under_200_ms():
