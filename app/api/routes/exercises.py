@@ -36,10 +36,6 @@ router = APIRouter(prefix="/exercises", tags=["exercises"])
 # D18：給裝置時鐘的誤差。
 FUTURE_TOLERANCE = timedelta(minutes=5)
 
-# 估算的那一筆改了這幾個欄位就重估（D22）：活動換 MET、分鐘換長度、時間可能換一筆體重。
-_ESTIMATE_INPUTS = frozenset({"activity", "minutes", "performed_at"})
-
-
 def check_not_in_future(performed_at: datetime) -> None:
     """D18：運動的時間會決定用哪一筆體重，所以後端也擋未來（餐點只有前端擋）。"""
     if performed_at > utc_now() + FUTURE_TOLERANCE:
@@ -236,8 +232,9 @@ async def update_exercise(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ExerciseResponse:
-    """部分更新。估算的那一筆改了活動、分鐘或時間就重估；只改備註不重估（D22）。
-    `kcal` 帶數字＝手動、帶 null＝改回估算。"""
+    """部分更新。估算的那一筆活動、分鐘或時間**真的變了**才重估（活動換 MET、分鐘換長度、
+    時間可能換一筆體重）；只改備註、或重送一樣的值都不重估（D22）。`kcal` 帶數字＝手動；
+    帶 null＝手動的那一筆改回估算，已經是估算的那一筆不因為它重估（審查 I1）。"""
     user_id, tz_name = user.id, user.timezone
     changes = payload.model_dump(exclude_unset=True)
     entry = await _load_owned(db, user_id, exercise_id)
@@ -254,10 +251,16 @@ async def update_exercise(
     if "performed_at" in changes:
         check_not_in_future(performed_at)
 
+    # 值真的變了才算（審查 I1）：前端重送一樣的值、或同一個時刻換一種時差寫法，都不該重估。
+    inputs_changed = (activity, minutes, performed_at) != (
+        entry.activity,
+        entry.minutes,
+        entry.performed_at,
+    )
     if changes.get("kcal") is not None:
         kcal, source = changes["kcal"], KcalSource.MANUAL
-    elif "kcal" in changes or (
-        entry.kcal_source is KcalSource.ESTIMATED and changes.keys() & _ESTIMATE_INPUTS
+    elif ("kcal" in changes and entry.kcal_source is KcalSource.MANUAL) or (
+        entry.kcal_source is KcalSource.ESTIMATED and inputs_changed
     ):
         kcal = await _estimated_kcal(
             db,

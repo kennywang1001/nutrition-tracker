@@ -478,8 +478,9 @@ export interface paths {
         head?: never;
         /**
          * Update Exercise
-         * @description 部分更新。估算的那一筆改了活動、分鐘或時間就重估；只改備註不重估（D22）。
-         *     `kcal` 帶數字＝手動、帶 null＝改回估算。
+         * @description 部分更新。估算的那一筆活動、分鐘或時間**真的變了**才重估（活動換 MET、分鐘換長度、
+         *     時間可能換一筆體重）；只改備註、或重送一樣的值都不重估（D22）。`kcal` 帶數字＝手動；
+         *     帶 null＝手動的那一筆改回估算，已經是估算的那一筆不因為它重估（審查 I1）。
          */
         patch: operations["update_exercise_api_exercises__exercise_id__patch"];
         trace?: never;

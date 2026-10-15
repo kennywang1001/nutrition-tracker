@@ -399,6 +399,55 @@ async def test_changing_only_the_note_does_not_re_estimate(client, db_session, c
     assert (await _rows(db_session, user.id))[0]["note"] is None
 
 
+async def test_resending_the_same_values_does_not_re_estimate(client, db_session, clock):
+    """D22（審查 I1）：重估看的是「值變了沒」，不是「鍵有沒有帶」。體重後來改成 80
+    （重估會是 392）；同一個時刻換一種時差寫法也算沒變。"""
+    user = await _user(db_session)
+    await create_weight(db_session, user=user, day=TODAY, weight_kg="80.00")
+    entry = await create_exercise(db_session, user=user, performed_at=NOON)
+    entry_id = entry.id
+
+    same = await _patch(
+        client,
+        user.id,
+        entry_id,
+        activity="running",
+        minutes=30,
+        performed_at="2026-10-14T20:00:00+04:00",
+        note="晨跑",
+    )
+
+    assert same.status_code == 200
+    assert same.json()["kcal"] == "343.00"
+    assert same.json()["kcal_source"] == "estimated"
+    assert same.json()["note"] == "晨跑"
+    assert (await _rows(db_session, user.id))[0]["kcal"] == 343
+
+
+async def test_kcal_null_on_an_estimated_entry_with_nothing_else_changed_keeps_the_kcal(
+    client, db_session, clock
+):
+    """`kcal: null`＝「改回估算」只對手動的那一筆有意義；已經是估算的、活動分鐘時間都沒變，
+    就留著存好的熱量（審查 I1）——體重後來改了不重估，連體重都刪光了也存得了備註。"""
+    user = await _user(db_session)
+    await create_weight(db_session, user=user, day=TODAY, weight_kg="80.00")
+    entry = await create_exercise(db_session, user=user, performed_at=NOON)
+    no_weight_user = await _user(db_session)
+    no_weight_entry = await create_exercise(db_session, user=no_weight_user, performed_at=NOON)
+
+    kept = await _patch(client, user.id, entry.id, kcal=None, minutes=30, note="晨跑")
+    without_weight = await _patch(
+        client, no_weight_user.id, no_weight_entry.id, kcal=None, note="晨跑"
+    )
+
+    assert kept.status_code == 200
+    assert kept.json()["kcal"] == "343.00"
+    assert kept.json()["kcal_source"] == "estimated"
+    assert without_weight.status_code == 200
+    assert without_weight.json()["kcal"] == "343.00"
+    assert without_weight.json()["note"] == "晨跑"
+
+
 async def test_changing_the_minutes_re_estimates(client, db_session, clock):
     user = await _user(db_session)
     await create_weight(db_session, user=user, day=TODAY, weight_kg="70.00")
