@@ -2549,3 +2549,589 @@ git add app/schemas/ai.py app/api/routes/ai.py tests/test_ai_read_label.py front
 訊息：`feat(api): POST /api/ai/read-label——營養標示照片讀成每 100 的營養素（算一次 AI 額度）`
 
 ---
+## Task 7：前端——API 層、條碼輸入的整理、測試資料
+
+**Files:**
+- Create: `frontend/src/lib/barcode.ts`、`frontend/src/api/barcode.ts`、`frontend/tests/helpers/foods.ts`、`frontend/tests/barcode-lib.test.ts`、`frontend/tests/barcode-api.test.ts`
+- Modify: `frontend/src/api/ai.ts`、`frontend/tests/ai-api.test.ts`
+
+- [ ] **Step 1：寫會紅的測試。**
+
+`tests/barcode-lib.test.ts`（`cleanBarcodeInput`）：`"4710088432094"`、`" 4710088-432094 "`、全形空白（U+3000，**用 `String.fromCharCode(0x3000)` 組**，原始碼不放那個字）夾著的 → `"4710088432094"`；`"036000291452"`（12）、`"96385074"`（8）原樣；`"12345"`、`"47100884320941"`、`"abc"`、`""`、全形數字 `"４７１００８８４３２０９４"`（JS 的 `\d` 只認 ASCII）→ `null`。**不驗檢查碼**：`"4710088432096"` → 原樣（後端回 422）。
+
+`tests/barcode-api.test.ts`（`mockApi`；**`/api/foods/by-barcode` 的路由排在 `/api/foods` 之前**）：
+
+- `lookupBarcode("4710088432094")` 打的是 `GET /api/foods/by-barcode/4710088432094`，回傳原樣（命中、沒命中＋`prefill`、沒命中＋null 三種）。
+- `updateFoodBarcode(7, "96385074")` → `PATCH /api/foods/7`、body `{"barcode":"96385074"}`；`updateFoodBarcode(7, null)` → body `{"barcode":null}`（**有 key**，不是 `{}`）。
+- `describeBarcodeError`：`422 VALIDATION_ERROR`（`details.errors: [{loc: ["body", "barcode"], msg: "Value error, 條碼的檢查碼不對，請再確認一次"}]`）→「條碼的檢查碼不對，請再確認一次」（拿掉 Pydantic 的 `Value error, ` 前綴）；`429 TOO_MANY_BARCODE_LOOKUPS`、`409 BARCODE_EXISTS` → 後端的訊息；其他 →「查詢失敗，請再試一次」。
+
+`tests/ai-api.test.ts` 加：`readLabel(file)` 送 `POST /api/ai/read-label`、body 只有 `image_base64`（同 `analyzeImage` 的前處理：太大的檔案丟 `PhotoTooLargeError`、不送請求）；`describeAnalyzeError(new ApiError(502, "AI_LABEL_UNREADABLE", "AI 讀不出…"))` 回後端那一句。
+
+Run: `cd frontend && npx vitest run tests/barcode-lib.test.ts tests/barcode-api.test.ts tests/ai-api.test.ts` → Expected：FAIL（模組不存在、`readLabel` 不存在）。
+
+- [ ] **Step 2：實作。**
+
+`src/lib/barcode.ts`：
+
+```ts
+/** 輸入框、偵測器給的條碼 → 送給後端的字串（掃條碼規格 D3）。只去空白（含全形）與「-」、
+ *  看是不是 8／12／13 位 ASCII 數字；不是就 null（不必送一個一定錯的請求）。
+ *  **不驗檢查碼**——演算法只在後端一份，後端的 422 訊息照樣顯示。 */
+export function cleanBarcodeInput(raw: string): string | null {
+	const digits = raw.replace(/[\s-]+/g, "");
+	return /^(\d{8}|\d{12}|\d{13})$/.test(digits) ? digits : null;
+}
+```
+
+`src/api/barcode.ts`：
+
+```ts
+import { apiFetch } from "./client";
+import { ApiError, describeFieldErrors } from "./errors";
+import type { Food } from "./foods";
+import type { components } from "./schema";
+
+export type BarcodeLookup = components["schemas"]["BarcodeLookupResponse"];
+export type BarcodePrefill = components["schemas"]["BarcodePrefill"];
+
+/** 用條碼找看得到的食物；沒有時 `food` 是 null，Open Food Facts 有資料時多 `prefill`
+ *  （掃條碼規格 D6）。**不進快取**：每一次掃都是新的問題，舊答案沒有用（離線快取也不該留著）。 */
+export async function lookupBarcode(code: string): Promise<BarcodeLookup> {
+	const result = await apiFetch<BarcodeLookup>(
+		`/api/foods/by-barcode/${encodeURIComponent(code)}`,
+	);
+	if (result === null) throw new Error("查詢條碼沒有回傳結果");
+	return result;
+}
+
+/** 改條碼（`null`＝移除）。私人食物擁有者、公開食物管理員（規格 D5）。 */
+export async function updateFoodBarcode(
+	foodId: number,
+	barcode: string | null,
+): Promise<Food> {
+	const result = await apiFetch<Food>(`/api/foods/${foodId}`, {
+		method: "PATCH",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ barcode }),
+	});
+	if (result === null) throw new Error("修改條碼沒有回傳結果");
+	return result;
+}
+
+const PYDANTIC_PREFIX = "Value error, ";
+
+/** 查詢或修改條碼失敗時給人看的話。 */
+export function describeBarcodeError(error: unknown): string {
+	if (error instanceof ApiError) {
+		if (error.code === "VALIDATION_ERROR") {
+			const [first] = describeFieldErrors(error);
+			if (first !== undefined) {
+				const at = first.indexOf(PYDANTIC_PREFIX);
+				return at === -1 ? first : first.slice(at + PYDANTIC_PREFIX.length);
+			}
+			return "條碼格式不對";
+		}
+		if (error.code === "TOO_MANY_BARCODE_LOOKUPS" || error.code === "BARCODE_EXISTS") {
+			return error.message;
+		}
+	}
+	return "查詢失敗，請再試一次";
+}
+```
+
+（`describeFieldErrors` 回的是「`loc`：`msg`」——例如「`barcode：Value error, 條碼的檢查碼不對，請再確認一次`」、路徑參數是「`path.code：…`」；所以用 `indexOf` 找前綴、取後面那段。）
+
+`src/api/ai.ts`：
+
+```ts
+export type LabelReadResponse = components["schemas"]["LabelReadResponse"];
+
+/** 營養標示的照片 → 每 100 的營養素、一份多少（掃條碼規格 §8）。前處理同 `analyzeImage`。
+ *  算一次 AI 額度；照片只拿來讀，後端不存。 */
+export async function readLabel(file: File): Promise<LabelReadResponse> {
+	const resized = await preparePhoto(file);
+	return post("/api/ai/read-label", { image_base64: await fileToBase64(resized) });
+}
+```
+
+`describeAnalyzeError` 的 `AI_NO_FOOD_FOUND` 那一組加 `case "AI_LABEL_UNREADABLE":`（後端那一句說的是「換一張清楚一點的照片」，同理由）。
+
+`tests/helpers/foods.ts`：
+
+```ts
+import type { Food } from "../../src/api/foods";
+
+/** 有型別的 `FoodResponse`（掃條碼規格 §10.3）：新測試用它，`barcode` 預設 null。 */
+export function makeFood(overrides: Partial<Food> = {}): Food {
+	return {
+		id: 1,
+		name: "洋芋片",
+		brand: null,
+		barcode: null,
+		is_global: false,
+		nutrition: {
+			base_unit: "g",
+			kcal: "514.29",
+			protein_g: "6.00",
+			fat_g: "28.00",
+			carb_g: "60.86",
+		},
+		...overrides,
+	};
+}
+```
+
+Run Step 1 的指令 → PASS。
+
+- [ ] **Step 3：突變**（型別過得去的寫法）：`cleanBarcodeInput` 的正規表示式少 `\d{12}` → 12 位那一格紅；`updateFoodBarcode` 的 body 改成 `barcode === null ? {} : { barcode }` → null 那一格紅；`describeAnalyzeError` 少 `AI_LABEL_UNREADABLE` → 那一格紅（變成「AI 估算失敗，請再試一次」）。
+
+- [ ] **Step 4：檢查、commit。** `npm run -s test`、`npm run -s typecheck`、`npm run -s lint`。
+
+```bash
+git add frontend/src/lib/barcode.ts frontend/src/api/barcode.ts frontend/src/api/ai.ts \
+  frontend/tests/helpers/foods.ts frontend/tests/barcode-lib.test.ts frontend/tests/barcode-api.test.ts \
+  frontend/tests/ai-api.test.ts
+```
+
+訊息：`feat(frontend): 條碼查詢與修改、讀營養標示的 API 層`
+
+---
+
+## Task 8：前端——偵測器（原生或延遲載入的 ponyfill）與掃描層
+
+**Files:**
+- Modify: `frontend/package.json`、`frontend/package-lock.json`、`frontend/src/test/setup.ts`
+- Create: `frontend/src/lib/barcode-detector.ts`、`frontend/src/lib/barcode-ponyfill.ts`、`frontend/src/lib/use-barcode-scanner.ts`、`frontend/src/components/BarcodeScanner.tsx`、`frontend/src/components/BarcodeScanner.module.css`、`frontend/tests/barcode-detector.test.ts`、`frontend/tests/barcode-scanner.test.tsx`
+
+> 三個 `lib/` 檔案的全文寫計畫時在 `$S/bc-vite/` 用同版本的 Vite／TypeScript `tsc` 與 `vite build` 過、用 `frontend/` 的 Biome 格式化過（「寫計畫時實測過的事」第 5 點）。照抄。
+
+- [ ] **Step 1：量開工前的 bundle。** `cd frontend && npm run build`，記下 `dist/assets/index-*.js` 的大小（raw／gzip）到「執行中發現的差異」。
+
+- [ ] **Step 2：依賴。** `cd frontend && npm install --save-exact barcode-detector@3.2.2 zxing-wasm@3.1.3`。`npm ls zxing-wasm` 只能有**一份** `3.1.3`（`barcode-detector` 的依賴與直接依賴同一份；兩份的話 `?url` 指到的可能不是 ponyfill 實際載入的那一個）。授權：兩個都是 MIT（`node_modules/*/LICENSE`），wasm 裡的 ZXing-C++ 是 Apache-2.0——寫進 handover。
+
+- [ ] **Step 3：測試裡不載入真的 ponyfill。** `src/test/setup.ts` 加：
+
+```ts
+import { vi } from "vitest";
+
+// 掃條碼（規格 D15）：沒有原生 BarcodeDetector 時 `lib/barcode-detector.ts` 會 import() ponyfill，
+// 它會去抓 zxing 的 wasm——jsdom 抓不到，而且測試不該依賴它。每個測試檔都換成一個永遠讀不到
+// 東西的假偵測器；要測「讀到了」的測試自己注入偵測器（`BarcodeScanner` 的 `loadDetector`）。
+vi.mock("../lib/barcode-ponyfill", () => ({
+	createPonyfillDetector: () => ({ detect: async () => [] }),
+}));
+```
+
+（`vi.mock` 在 setupFiles 裡對每個測試檔生效；寫好之後用 `tests/barcode-detector.test.ts` 的「沒有原生 → ponyfill」那一格確認拿到的是假的。若 vitest 5 在 setupFiles 裡的 `vi.mock` 不生效，改成在用到的測試檔各自 `vi.mock`，回報。）
+
+- [ ] **Step 4：寫會紅的測試。**
+
+`tests/barcode-detector.test.ts`（`globalThis.BarcodeDetector` 用 `vi.stubGlobal`，每個測試後 `vi.unstubAllGlobals()`）：
+
+| 情況 | 期望 |
+|---|---|
+| 原生存在、`getSupportedFormats()` 含 `ean_13`、`ean_8`、`qr_code` | 用原生、`formats` 是 `["ean_13", "ean_8"]`（只留商品條碼裡支援的） |
+| 原生存在、不支援 `ean_13` | ponyfill（setup 的假的：`detect` 回 `[]`） |
+| 原生的 `getSupportedFormats()` 丟例外 | ponyfill |
+| 沒有原生 | ponyfill |
+| `firstProductCode` | `[{rawValue: "https://x"}, {rawValue: "4710088432094"}]` → 後者；`"036000291452"`、`"96385074"` 照收；`"12345"`、全部不合 → null |
+
+`tests/barcode-scanner.test.tsx`——`BarcodeScanner` 的 props：`onCode`、`onCancel`、測試注入 `loadDetector`、`getUserMedia`、`intervalMs`（給 5）。假的相機：
+
+```ts
+function fakeCamera({ torch = false } = {}) {
+	const track = {
+		stop: vi.fn(),
+		getCapabilities: () => (torch ? { torch: true } : {}),
+		applyConstraints: vi.fn(async () => undefined),
+	};
+	const stream = {
+		getTracks: () => [track],
+		getVideoTracks: () => [track],
+	} as unknown as MediaStream;
+	return { track, stream, getUserMedia: vi.fn(async () => stream) };
+}
+```
+
+`beforeEach`：`HTMLMediaElement.prototype.play = vi.fn(async () => undefined)`（jsdom 沒有實作）。偵測器：`{ detect: vi.fn().mockResolvedValueOnce([]).mockResolvedValue([{ rawValue: "4710088432094", format: "ean_13" }]) }`。
+
+| 測試 | 斷言 |
+|---|---|
+| 掃到 | `onCode("4710088432094")` 一次；`track.stop` 被呼叫；`getUserMedia` 收到 `{video: {facingMode: {ideal: "environment"}}, audio: false}`；狀態先「正在開啟相機…」再「把條碼對準框框」 |
+| 不是商品條碼的結果被略過 | 偵測器先回 `[{rawValue: "https://example.com"}]` 再回條碼 → `onCode` 只收到條碼 |
+| 「取消」、`Escape` | `onCancel`；`track.stop` |
+| 卸載 | `unmount()` → `track.stop`；`getUserMedia` 在卸載之後才 resolve 的（用手動控制的 Promise）→ 拿到的 stream 也被停掉 |
+| 權限被拒 | `getUserMedia` 丟 `new DOMException("x", "NotAllowedError")` → 「沒有相機權限。…」；「手動輸入條碼」「從照片讀條碼」都還在 |
+| 沒有相機 | `NotFoundError` → 「找不到可以用的相機。…」；**不傳 `getUserMedia`**（jsdom 沒有 `navigator.mediaDevices`）→ 同一句 |
+| 偵測器載不起來 | `loadDetector` reject → 「這台裝置不能用相機掃條碼，請手動輸入。」、「從照片讀條碼」不見、`track.stop` |
+| 手電筒 | `torch: true` → 「開手電筒」（`aria-pressed="false"`）→ 按 → `applyConstraints({advanced: [{torch: true}]})`、變「關手電筒」（`aria-pressed="true"`）；`torch: false` → 沒有這顆 |
+| 手動輸入 | 按「手動輸入條碼」→ 焦點在輸入框（`inputMode="numeric"`）→ 打 `123`、「查詢」→「條碼要是 8、12 或 13 位數字」、`onCode` 0 次 → 打 `4710088-432094` → `onCode("4710088432094")`、相機停了 |
+| 從照片讀 | `userEvent.upload(getByLabelText("從照片讀條碼"), file)` → 偵測器的 `detect` 收到那個 `File` → `onCode`；讀不到 →「這張照片裡找不到條碼」 |
+| 焦點 | 一打開焦點在「取消」；`role="dialog"`、`aria-modal="true"`、名稱「掃條碼」 |
+| 換到背景 | `document.visibilityState` 改 `"hidden"`（`Object.defineProperty`）＋發 `visibilitychange` → `onCancel` |
+
+Run: `cd frontend && npx vitest run tests/barcode-detector.test.ts tests/barcode-scanner.test.tsx` → Expected：FAIL（模組不存在）。
+
+- [ ] **Step 5：`lib/` 三個檔案。**
+
+`src/lib/barcode-detector.ts`：
+
+```ts
+/** 掃條碼用的偵測器：有原生的 `BarcodeDetector` 就用原生的，沒有就延遲載入 ponyfill（規格 D15、§7.2）。
+ *
+ *  兩種都是同一個介面（`detect(影像) → [{rawValue, format}]`），呼叫端分不出來。`lib.dom` 沒有這個
+ *  API 的型別，這裡只宣告用得到的那一面。 */
+
+export type DetectedBarcode = { rawValue: string; format: string };
+
+export type Detector = {
+	detect(source: ImageBitmapSource): Promise<DetectedBarcode[]>;
+};
+
+/** 商品條碼的四種格式。少掃幾種格式也比較快、比較不會誤判。 */
+export const PRODUCT_FORMATS = ["ean_13", "ean_8", "upc_a", "upc_e"] as const;
+
+type NativeDetectorClass = {
+	new (options: { formats: string[] }): Detector;
+	getSupportedFormats(): Promise<string[]>;
+};
+
+function nativeDetectorClass(): NativeDetectorClass | null {
+	const candidate = (globalThis as { BarcodeDetector?: unknown })
+		.BarcodeDetector;
+	return typeof candidate === "function"
+		? (candidate as NativeDetectorClass)
+		: null;
+}
+
+/** 偵測器。原生的存在、而且支援 EAN-13 → 原生；否則 ponyfill。
+ *
+ *  ponyfill 的模組載不起來（離線、wasm 抓不到）會丟例外——呼叫端說明「這台裝置不能用相機掃」。
+ *  `getSupportedFormats()` 丟例外當作不支援（有的實作在沒有偵測後端時會丟）。 */
+export async function loadDetector(): Promise<Detector> {
+	const Native = nativeDetectorClass();
+	if (Native !== null) {
+		const supported = await Native.getSupportedFormats().catch(
+			() => [] as string[],
+		);
+		if (supported.includes("ean_13")) {
+			return new Native({
+				formats: PRODUCT_FORMATS.filter((format) => supported.includes(format)),
+			});
+		}
+	}
+	const { createPonyfillDetector } = await import("./barcode-ponyfill");
+	return createPonyfillDetector(PRODUCT_FORMATS);
+}
+
+/** 偵測結果裡第一個「看起來像商品條碼」的值（8／12／13 位數字）。檢查碼不在這裡驗（規格 D3）。 */
+export function firstProductCode(
+	results: readonly DetectedBarcode[],
+): string | null {
+	for (const result of results) {
+		if (/^(\d{8}|\d{12}|\d{13})$/.test(result.rawValue)) return result.rawValue;
+	}
+	return null;
+}
+```
+
+`src/lib/barcode-ponyfill.ts`：
+
+```ts
+import {
+	BarcodeDetector,
+	type BarcodeFormat,
+	prepareZXingModule,
+} from "barcode-detector/ponyfill";
+import wasmUrl from "zxing-wasm/reader/zxing_reader.wasm?url";
+import type { Detector } from "./barcode-detector";
+
+/** 沒有原生 `BarcodeDetector` 的瀏覽器（iOS、桌機的 Windows／Linux Chrome、Firefox）用的偵測器。
+ *
+ *  **只能用 `import()` 載入**（`lib/barcode-detector.ts`）：它會把 `barcode-detector` 的 ponyfill
+ *  （約 43 KB）與 zxing 的 `.wasm`（1.09 MB）拉進來，主程式不該付這個成本。
+ *
+ *  `.wasm` 自己服務（規格 D15）：套件預設從 jsDelivr 抓，那等於每個人掃條碼時都告訴第三方一次，
+ *  離線也不能用。`?url` 讓 Vite 把它當成一個雜湊過檔名的資源放進 `dist/assets/`。
+ *  `zxing-wasm` 在 package.json 裡釘的版本要跟 `barcode-detector` 依賴的完全一樣（3.1.3），
+ *  不然這個 URL 指到的是另一份 wasm。 */
+prepareZXingModule({
+	overrides: {
+		locateFile: (path: string, prefix: string) =>
+			path.endsWith(".wasm") ? wasmUrl : prefix + path,
+	},
+});
+
+export function createPonyfillDetector(
+	formats: readonly BarcodeFormat[],
+): Detector {
+	return new BarcodeDetector({ formats: [...formats] });
+}
+```
+
+`src/lib/use-barcode-scanner.ts`：
+
+```ts
+import {
+	type RefObject,
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
+import {
+	type Detector,
+	loadDetector as defaultLoadDetector,
+	firstProductCode,
+} from "./barcode-detector";
+
+/** 相機的狀態。`torch` 是 null＝這支相機沒有手電筒（按鈕不畫）。 */
+export type ScannerStatus =
+	| { kind: "starting" }
+	| { kind: "scanning"; torch: boolean | null }
+	| { kind: "error"; reason: CameraProblem };
+
+/** - `denied`：使用者（或瀏覽器設定）不給相機權限。
+ *  - `no-camera`：沒有相機、沒有 `mediaDevices`（不是安全連線也是這個）、約束滿足不了。
+ *  - `no-detector`：偵測器載不起來（ponyfill 的 wasm 抓不到）——照片那條也不能用。
+ *  - `failed`：其他。 */
+export type CameraProblem = "denied" | "no-camera" | "no-detector" | "failed";
+
+type GetUserMedia = (
+	constraints: MediaStreamConstraints,
+) => Promise<MediaStream>;
+
+export type ScannerOptions = {
+	videoRef: RefObject<HTMLVideoElement | null>;
+	/** 掃到了。相機在呼叫之前已經停了。 */
+	onCode: (code: string) => void;
+	/** 測試注入假的；預設 `lib/barcode-detector.ts` 的 `loadDetector`。 */
+	loadDetector?: () => Promise<Detector>;
+	/** 測試注入假的；預設 `navigator.mediaDevices.getUserMedia`（不存在＝`no-camera`）。 */
+	getUserMedia?: GetUserMedia;
+	/** 兩次偵測之間的間隔（前一次回來才排下一次）。 */
+	intervalMs?: number;
+};
+
+const DEFAULT_INTERVAL_MS = 250;
+
+function defaultGetUserMedia(): GetUserMedia | null {
+	const devices = globalThis.navigator?.mediaDevices;
+	return devices?.getUserMedia ? devices.getUserMedia.bind(devices) : null;
+}
+
+function problemOf(error: unknown): CameraProblem {
+	const name = error instanceof DOMException ? error.name : "";
+	if (name === "NotAllowedError" || name === "SecurityError") return "denied";
+	if (
+		name === "NotFoundError" ||
+		name === "OverconstrainedError" ||
+		name === "NotReadableError"
+	) {
+		return "no-camera";
+	}
+	return "failed";
+}
+
+function stopStream(stream: MediaStream | null): void {
+	for (const track of stream?.getTracks() ?? []) track.stop();
+}
+
+type TorchCapabilities = MediaTrackCapabilities & { torch?: boolean };
+
+/** 開相機、一直偵測到掃到為止（規格 §7.3）。**卸載、`stop()`、掃到的時候一定停掉每一條 track**——
+ *  相機的燈要熄。StrictMode 的「掛、卸、再掛」：第一次的 `getUserMedia` 晚回來時已經是取消的，
+ *  拿到的 stream 直接停掉。
+ *
+ *  `detectFile` 是「從照片讀條碼」：同一個偵測器讀那個檔案（相機壞了也能用，偵測器壞了不能）。 */
+export function useBarcodeScanner({
+	videoRef,
+	onCode,
+	loadDetector = defaultLoadDetector,
+	getUserMedia,
+	intervalMs = DEFAULT_INTERVAL_MS,
+}: ScannerOptions) {
+	const [status, setStatus] = useState<ScannerStatus>({ kind: "starting" });
+	const onCodeRef = useRef(onCode);
+	onCodeRef.current = onCode;
+	const detectorRef = useRef<Promise<Detector> | null>(null);
+	const loadDetectorRef = useRef(loadDetector);
+	const streamRef = useRef<MediaStream | null>(null);
+	const stopRef = useRef<() => void>(() => {});
+
+	const detector = useCallback((): Promise<Detector> => {
+		detectorRef.current ??= loadDetectorRef.current();
+		return detectorRef.current;
+	}, []);
+
+	useEffect(() => {
+		let cancelled = false;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const stop = () => {
+			cancelled = true;
+			if (timer !== undefined) clearTimeout(timer);
+			stopStream(streamRef.current);
+			streamRef.current = null;
+		};
+		stopRef.current = stop;
+
+		async function start() {
+			const request = getUserMedia ?? defaultGetUserMedia();
+			const detectorPromise = detector();
+			if (request === null) {
+				setStatus({ kind: "error", reason: "no-camera" });
+				return;
+			}
+			let stream: MediaStream;
+			try {
+				stream = await request({
+					video: { facingMode: { ideal: "environment" } },
+					audio: false,
+				});
+			} catch (error) {
+				if (!cancelled) setStatus({ kind: "error", reason: problemOf(error) });
+				return;
+			}
+			if (cancelled) {
+				stopStream(stream);
+				return;
+			}
+			streamRef.current = stream;
+
+			let found: Detector;
+			try {
+				found = await detectorPromise;
+			} catch {
+				stop();
+				setStatus({ kind: "error", reason: "no-detector" });
+				return;
+			}
+			if (cancelled) return;
+
+			const video = videoRef.current;
+			if (video === null) return;
+			video.srcObject = stream;
+			// `autoPlay`＋`muted`＋`playsInline` 通常就會播；play() 的拒絕（例如省電模式）不算失敗，
+			// 偵測讀的是目前的畫面，播不了就一直是空的結果。
+			await Promise.resolve(video.play()).catch(() => undefined);
+			if (cancelled) return;
+
+			const [track] = stream.getVideoTracks();
+			const capabilities = track?.getCapabilities?.() as
+				| TorchCapabilities
+				| undefined;
+			setStatus({
+				kind: "scanning",
+				torch: capabilities?.torch === true ? false : null,
+			});
+
+			const tick = async () => {
+				if (cancelled) return;
+				let code: string | null = null;
+				try {
+					code = firstProductCode(await found.detect(video));
+				} catch {
+					// 影片還沒有畫面（InvalidStateError）之類：下一次再試。
+				}
+				if (cancelled) return;
+				if (code !== null) {
+					stop();
+					onCodeRef.current(code);
+					return;
+				}
+				timer = setTimeout(tick, intervalMs);
+			};
+			timer = setTimeout(tick, intervalMs);
+		}
+
+		void start();
+		return stop;
+	}, [detector, getUserMedia, intervalMs, videoRef]);
+
+	const setTorch = useCallback(async (on: boolean) => {
+		const [track] = streamRef.current?.getVideoTracks() ?? [];
+		if (track === undefined) return;
+		try {
+			await track.applyConstraints({
+				advanced: [{ torch: on } as MediaTrackConstraintSet],
+			});
+			setStatus((current) =>
+				current.kind === "scanning" ? { ...current, torch: on } : current,
+			);
+		} catch {
+			// 有的裝置宣稱有、開不起來：按鈕維持原狀。
+		}
+	}, []);
+
+	const detectFile = useCallback(
+		async (file: Blob): Promise<string | null> =>
+			firstProductCode(await (await detector()).detect(file)),
+		[detector],
+	);
+
+	const stop = useCallback(() => stopRef.current(), []);
+
+	return { status, setTorch, detectFile, stop };
+}
+```
+
+- [ ] **Step 6：`components/BarcodeScanner.tsx`。** 結構（文字逐字照這裡；樣式只用設計變數）：
+
+```tsx
+type Props = {
+	/** 拿到一個看起來像條碼的字串（相機、照片、手動輸入三條路都整理過）。相機已經停了。 */
+	onCode: (code: string) => void;
+	onCancel: () => void;
+	// 測試注入（正式的呼叫端不傳）
+	loadDetector?: () => Promise<Detector>;
+	getUserMedia?: (constraints: MediaStreamConstraints) => Promise<MediaStream>;
+	intervalMs?: number;
+};
+
+const STATUS_TEXT = {
+	starting: "正在開啟相機…",
+	scanning: "把條碼對準框框",
+	denied: "沒有相機權限。到瀏覽器（或手機設定）允許這個網站使用相機，或改用手動輸入、從照片讀。",
+	"no-camera": "找不到可以用的相機。可以手動輸入條碼，或從照片讀。",
+	"no-detector": "這台裝置不能用相機掃條碼，請手動輸入。",
+	failed: "相機打不開。可以手動輸入條碼，或從照片讀。",
+} as const;
+```
+
+- 外層 `<div className={styles.overlay} role="dialog" aria-modal="true" aria-labelledby="barcode-scanner-title" onKeyDown={Escape → onCancel}>`，`<h2 id="barcode-scanner-title">掃條碼</h2>`。
+- `<div className={styles.viewfinder}>`：`<video ref={videoRef} playsInline muted autoPlay aria-hidden="true" />`＋一個 `aria-hidden` 的框線 `<div className={styles.frame} />`。狀態 `no-detector`／`denied`／`no-camera`／`failed` 時不畫取景框。
+- `<p role="status">{STATUS_TEXT[...]}</p>`；照片的錯誤（「這張照片裡找不到條碼」）另一個 `<p role="alert">`。
+- 手電筒（`status.kind === "scanning" && status.torch !== null`）：`<button type="button" aria-pressed={status.torch} onClick={() => setTorch(!status.torch)}>{status.torch ? "關手電筒" : "開手電筒"}</button>`。
+- 動作列 `<div className={styles.actions}>`：「手動輸入條碼」（`aria-expanded`）、`PhotoPickerButton`（`id="barcode-photo"`、`label="從照片讀條碼"`、`accept="image/*"`、**不帶 `capture`**；`no-detector` 時不畫）、「取消」（`ref={cancelRef}`，掛載時 `focus()`）。按鈕都 `min-height: 44px`。
+- 手動輸入的 `<form aria-label="手動輸入條碼">`：`<label htmlFor="barcode-manual">條碼</label>`、`<input id="barcode-manual" inputMode="numeric" autoComplete="off" enterKeyHint="search">`（16px 字）、「查詢」（submit）、錯誤 `role="alert"`。打開時焦點到輸入框。送出：`cleanBarcodeInput` 是 null →「條碼要是 8、12 或 13 位數字」；否則 `stop()` 再 `onCode`。
+- 照片：`detectFile(file)` → `cleanBarcodeInput(結果)` → `onCode`；null 或丟例外 →「這張照片裡找不到條碼」。input 的 value 清掉（同一張再選一次也會觸發）。
+- `useEffect`：`visibilitychange` 到 `hidden` → `onCancel()`（相機在背景不該開著；回來再按一次「掃條碼」）。
+- `BarcodeScanner.module.css`：`.overlay { position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4); padding-bottom: calc(var(--space-4) + var(--safe-bottom)); background: var(--color-bg); color: var(--color-text); overflow-y: auto; }`（z-index 同 `ZoomablePhoto` 的檢視層，蓋過分頁列與側欄）；`.viewfinder`（`position: relative; aspect-ratio: 4 / 3; background: var(--viewer-scrim); border-radius: var(--radius-card); overflow: hidden;`）、`video { width: 100%; height: 100%; object-fit: cover; }`、`.frame`（置中、寬 80%、高 40%、`border: 2px solid var(--color-accent)`、`border-radius: var(--radius-button)`）、`.actions`（`flex-wrap: wrap; gap: var(--space-2)`；`button { min-height: 44px; }`）、`input { font-size: 16px; min-height: 44px; }`。
+
+Run Step 4 的指令 → PASS。
+
+- [ ] **Step 7：bundle。** `npm run build`：輸出要有獨立的 `barcode-ponyfill-*.js`（約 43 KB／gzip 15 KB）與 `zxing_reader-*.wasm`（約 1,093 KB／gzip 464 KB）；`grep -c "zxing" dist/assets/index-*.js` 是 0（主程式沒有 zxing 的程式碼）；`index-*.js` 跟 Step 1 比的差（掃描層＋hook，預期幾 KB）記進「執行中發現的差異」。`dist/sw.js` 的預先快取清單有 ponyfill 的 JS、沒有 `.wasm`（規格 §7.1：離線時 ponyfill 掃不了）。
+
+- [ ] **Step 8：突變**（型別過得去的寫法）：
+  1. `stop` 不停 track（拿掉 `stopStream`）→「掃到」「取消」「卸載」三格紅。
+  2. 卸載之後晚到的 stream 不停（拿掉 `if (cancelled) { stopStream(stream); … }` 裡的 `stopStream`）→ 卸載那格紅。
+  3. `problemOf` 把 `NotAllowedError` 當 `failed` → 權限那格紅。
+  4. `loadDetector` 不檢查 `ean_13`（有原生就用）→「不支援 `ean_13`」那格紅。
+  5. `firstProductCode` 收任何字串 → 略過那格紅。
+  6. 手動輸入不 `cleanBarcodeInput`（原樣交出）→ `4710088-432094` 那格紅。
+  7. 照片的 input 帶 `capture="environment"` → 寫一格斷言 `not.toHaveAttribute("capture")`，紅。
+  8. 不監聽 `visibilitychange` → 背景那格紅。
+
+- [ ] **Step 9：檢查、commit。** `npm run -s test`、`npm run -s typecheck`、`npm run -s lint`。
+
+```bash
+git add frontend/package.json frontend/package-lock.json frontend/src/test/setup.ts \
+  frontend/src/lib/barcode-detector.ts frontend/src/lib/barcode-ponyfill.ts \
+  frontend/src/lib/use-barcode-scanner.ts frontend/src/components/BarcodeScanner.tsx \
+  frontend/src/components/BarcodeScanner.module.css frontend/tests/barcode-detector.test.ts \
+  frontend/tests/barcode-scanner.test.tsx
+```
+
+訊息：`feat(frontend): 掃描層——原生 BarcodeDetector 或延遲載入的 ponyfill（wasm 自己服務）、手動輸入、從照片讀`
+
+---
