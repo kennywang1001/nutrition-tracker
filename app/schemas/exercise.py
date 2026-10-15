@@ -1,13 +1,29 @@
 """運動紀錄的請求與回應（運動規格 §6）。"""
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, BaseModel, Field, model_validator
+from pydantic import AfterValidator, AwareDatetime, BaseModel, Field, model_validator
 
 from app.exercise import ActivityCode, KcalSource
 from app.schemas.validators import OptionalSingleLine
+
+# 審查 M1：太早的時間在換到使用者時區時會超出 `datetime` 的範圍（`0001-01-01T00:00+14:00`
+# 是 500 OverflowError）。1900 年以前的運動紀錄沒有意義，在 schema 擋成 422。
+EARLIEST_PERFORMED_AT = datetime(1900, 1, 1, tzinfo=UTC)
+
+
+def _not_before_1900(value: datetime) -> datetime:
+    # 有時區的兩個時刻直接比（不換時區），不會溢位。
+    if value < EARLIEST_PERFORMED_AT:
+        raise ValueError("時間不能早於 1900-01-01（UTC）")
+    return value
+
+
+# naive 的時間是 422（同餐點）：「哪一天」要用帳號時區算，沒有時區就算不出來。
+# 新增、修改與估算端點的查詢參數共用這一個型別。
+PerformedAt = Annotated[AwareDatetime, AfterValidator(_not_before_1900)]
 
 
 class ActivityResponse(BaseModel):
@@ -43,8 +59,7 @@ class ExerciseCreateRequest(BaseModel):
     # max_length 量的是清之前的長度（同 meals.description）：清完只會更短。
     name: OptionalSingleLine = Field(default=None, max_length=50)
     minutes: int = Field(ge=1, le=600)
-    # naive 的時間是 422（同餐點）：「哪一天」要用帳號時區算，沒有時區就算不出來。
-    performed_at: AwareDatetime
+    performed_at: PerformedAt
     # 兩位小數、1–5000（D5）；max_digits=6 剛好收得下 5000.00。
     kcal: Decimal | None = Field(default=None, ge=1, le=5000, max_digits=6, decimal_places=2)
     note: OptionalSingleLine = Field(default=None, max_length=200)
@@ -71,7 +86,7 @@ class ExerciseUpdateRequest(BaseModel):
     activity: ActivityCode | None = None
     name: OptionalSingleLine = Field(default=None, max_length=50)
     minutes: int | None = Field(default=None, ge=1, le=600)
-    performed_at: AwareDatetime | None = None
+    performed_at: PerformedAt | None = None
     kcal: Decimal | None = Field(default=None, ge=1, le=5000, max_digits=6, decimal_places=2)
     note: OptionalSingleLine = Field(default=None, max_length=200)
 

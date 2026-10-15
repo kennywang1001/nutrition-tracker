@@ -234,6 +234,9 @@ async def test_the_future_is_refused_after_five_minutes(
         {"minutes": "1.5"},
         {"activity": "swim"},
         {"performed_at": "2026-10-14T12:00:00"},  # naive：沒有時區
+        # 審查 M1：換到使用者時區會超出 datetime 的範圍（原本是 500 OverflowError）。
+        {"performed_at": "0001-01-01T00:00:00+14:00"},
+        {"performed_at": "1899-12-31T23:59:59Z"},
     ],
 )
 async def test_bad_parameters_are_422(client, db_session, clock, params):
@@ -244,6 +247,17 @@ async def test_bad_parameters_are_422(client, db_session, clock, params):
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+async def test_the_earliest_accepted_time_is_1900_utc(client, db_session, clock):
+    """審查 M1 的邊界：1900-01-01 00:00 UTC 收（那天以前沒有體重，所以是 ready: false）。"""
+    user = await _user(db_session)
+    await create_weight(db_session, user=user, day=TODAY, weight_kg="70.00")
+
+    response = await _estimate(client, user.id, performed_at="1900-01-01T00:00:00Z")
+
+    assert response.status_code == 200
+    assert response.json() == {"ready": False, "missing": "weight"}
 
 
 async def test_minutes_is_required(client, db_session, clock):

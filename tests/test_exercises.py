@@ -260,6 +260,30 @@ async def test_post_refuses_the_future_and_naive_times(
         assert _code(response) == "EXERCISE_IN_FUTURE"
 
 
+@pytest.mark.parametrize(
+    ("performed_at", "status"),
+    [
+        ("1900-01-01T00:00:00Z", 201),
+        ("1899-12-31T23:59:59Z", 422),
+        ("1900-01-01T08:00:00+08:00", 201),  # 同一刻，換一種時差
+        ("1900-01-01T07:59:59+08:00", 422),
+        # 換到使用者時區會超出 datetime 的範圍（原本是 500 OverflowError）。
+        ("0001-01-01T00:00:00+14:00", 422),
+    ],
+)
+async def test_post_refuses_times_before_1900_utc(client, db_session, clock, performed_at, status):
+    """審查 M1：太早的時間是 422 VALIDATION_ERROR（schema 擋），不是 500。"""
+    user = await _user(db_session)
+    user_id = user.id
+
+    response = await _post(client, user_id, kcal="100", performed_at=performed_at)
+
+    assert response.status_code == status
+    if status == 422:
+        assert _code(response) == "VALIDATION_ERROR"
+        assert await _rows(db_session, user_id) == []
+
+
 async def test_a_too_high_estimate_is_422_but_the_same_minutes_by_hand_are_fine(
     client, db_session, clock
 ):
@@ -609,6 +633,21 @@ async def test_back_to_estimated_without_a_weight_is_422_and_nothing_changes(
     assert _code(response) == "EXERCISE_NEEDS_WEIGHT"
     row = (await _rows(db_session, user.id))[0]
     assert (row["kcal"], row["kcal_source"], row["note"]) == (250, KcalSource.MANUAL, None)
+
+
+@pytest.mark.parametrize("performed_at", ["0001-01-01T00:00:00+14:00", "1899-12-31T23:59:59Z"])
+async def test_patch_refuses_times_before_1900_utc(client, db_session, clock, performed_at):
+    """審查 M1：同 POST；手動的那一筆（不重估）也擋，存好的時間不動。"""
+    user = await _user(db_session)
+    entry = await create_exercise(
+        db_session, user=user, performed_at=NOON, kcal=250, kcal_source=KcalSource.MANUAL
+    )
+
+    response = await _patch(client, user.id, entry.id, performed_at=performed_at)
+
+    assert response.status_code == 422
+    assert _code(response) == "VALIDATION_ERROR"
+    assert (await _rows(db_session, user.id))[0]["performed_at"] == NOON
 
 
 @pytest.mark.parametrize("field", ["activity", "minutes", "performed_at"])

@@ -6,7 +6,6 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query, Response, status
-from pydantic import AwareDatetime
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,6 +26,7 @@ from app.schemas.exercise import (
     ExerciseListResponse,
     ExerciseResponse,
     ExerciseUpdateRequest,
+    PerformedAt,
 )
 
 # 兩個前綴（規格 §6）：`/api/exercise/...` 是活動清單與預覽，`/api/exercises` 是紀錄本身。
@@ -57,7 +57,7 @@ async def list_activities(user: User = Depends(get_current_user)) -> list[Activi
 async def preview_estimate(
     activity: ActivityCode,
     minutes: int = Query(ge=1, le=600),
-    performed_at: AwareDatetime | None = None,
+    performed_at: PerformedAt | None = None,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> EstimateReady | EstimateMissing:
