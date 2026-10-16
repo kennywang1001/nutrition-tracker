@@ -1,6 +1,6 @@
 # 掃條碼／營養標示
 
-**狀態：** 規格（2026-10-15，`feat/barcode-label`；尚未實作）
+**狀態：** 已實作（2026-10-16，`feat/barcode-label`；實作跟這份規格不一樣的地方在計畫的「與規格的差異」）
 **日期：** 2026-10-15
 **分支：** `feat/barcode-label`
 **前置：** 食物庫（`foods`／`food_revisions`／`food_portions`、`base_unit`、409 `FOOD_EXISTS`）、AI 估算（`POST /api/ai/analyze`、

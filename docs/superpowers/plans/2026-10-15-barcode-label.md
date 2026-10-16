@@ -143,9 +143,71 @@
     （`--use-fake-device-for-media-stream`）讓狀態從「正在開啟相機…」走到「把條碼對準框框」，dev 伺服器服務的 wasm
     載得起來、沒有 pageerror。手機（390）上掃描層的按鈕量到 46／46，手動輸入框與「查詢」44。
 
+### e2e 與文件 Task 11–12（2026-10-16）
+
+| Task | commit | 內容 | 突變 |
+|---|---|---|---|
+| 11 e2e | `a9fe214` | `e2e/barcode.spec.ts` 三條（新帳號、390×844） | 計畫的 2 個＋6 個（4 個前端、2 個後端），8／8 紅 |
+| 12 文件 | （這個 commit） | handover、部署手冊、規格的狀態、這份計畫 | — |
+
+整套 e2e：**59 條、24 個檔案**（開工前 56／23），預設 6 個 workers 連跑兩次 `59 passed`（49.4 秒、54.8 秒）；
+`docker compose logs api --since 20m | grep 重用` 0 行。
+
+**突變**（`$S/bc-e2e-mutate.py`：JSON 規格、改之前存原始位元組、還原後逐位元組比對、後端的突變前後各重建一次 api；
+`$S/bc-e2e-mutations.json`。每一批之後 `git status`／`git diff` 乾淨）：
+
+| 突變 | 紅在 |
+|---|---|
+| e1（計畫的）spec 2 的假回應拿掉 `prefill` | spec 2：卡片沒有「Open Food Facts 有這個商品：…」 |
+| e2（計畫的）`NewFood` 的 `finish` 一律到詳情頁 | spec 2、3：等不到「記一餐」的標題 |
+| e3 `NewFood` 建立時 `barcode: null` | spec 1、2：`POST /api/foods` 回的 `barcode` |
+| e4 讀營養標示不填一份 | spec 3：「份量名稱」不是「份」 |
+| e5 掃描層的手動輸入交出打的字（不整理） | spec 1：查詢的路徑是 `/api/foods/by-barcode/4710088-432094` |
+| e6 沒命中的卡片拿掉 `OffAttribution` | spec 2：「資料來源：Open Food Facts（ODbL）」 |
+| b1（後端）`by-barcode` 看不到自己的私人食物 | spec 1：「已選擇：…」 |
+| b2（後端）`PATCH` 不改條碼 | spec 1：「已移除條碼」 |
+
+**跟計畫不一樣的地方：**
+
+1. **spec 1 多走食物詳情的改條碼**：建好之後「移除條碼」→「已移除條碼」「沒有條碼」→ 用有空白的寫法（`4 710088 43209 4`）
+   「儲存條碼」→ `PATCH` 的回應與輸入框都是標準形式 →「移除條碼」又出現。掃描層裡也多兩件：位數不對（`123`）的 alert、
+   帶分隔符號（`4710088-432094`）的查詢路徑是整理過的。`FoodDetail` 的改條碼原本只有單元測試，真的後端走一次（b2 守它）。
+2. **掃描層的觸控高度**：`expectTouchTargets(dialog.locator("button"))`（不是 `getByRole("button")`：Playwright 把 1px 的
+   `input[type=file]` 也算成 button 角色）；照片那顆量它的標籤（`label[for="barcode-photo"]`，有畫才量）；手動輸入的表單量
+   `input, button`。不斷言相機的狀態文字（計畫說的）。
+3. **回到記一餐之後先等份量「份」選上再按「記錄」**：第一次跑整套時 spec 3 紅過一次，`--repeat-each=12`（6 個 workers）重現
+   5／12——飲食頁是「· 1 g」。食物的份量是**另外載入的**：還沒選上「份」時份量是直接輸入的 1 g，這時按「記錄」就記成 1 g。
+   spec 2 本來就等了（`#portion option:checked` 是「份」）、spec 3 沒等。補上之後 `--repeat-each=12` 36／36 綠。
+   **這是產品裡既有的競態**（從搜尋選食物也一樣，`portions.spec.ts` 也是先等它），不是這次長出來的，記在 handover §8.2。
+4. **`optimizeDeps.include` 不用加**：用一個全新的依賴快取（`cacheDir` 指到 scratchpad、5174 埠的暫時設定，用完刪掉）起 dev
+   伺服器跑 `barcode.spec.ts`：3 條綠、伺服器的 log 沒有「new dependencies optimized」／重新載入，快取裡啟動時就有
+   `barcode-detector_ponyfill.js`——Vite 啟動時的掃描會跟著 `import()` 走。上面第 13 點的重新載入只發生在「dev 伺服器在裝套件之前就起了」。
+   CI 每次都是全新的 dev 伺服器，所以不會遇到。
+5. **spec 3 斷言真的後端的回應** `{code, food: null, prefill: null}`（不只看卡片沒有 OFF 那一行），送出的讀標示 body 的鍵**剛好**是
+   `["image_base64"]`。spec 2 斷言假的查詢只被打一次（回到記一餐沒有再查），飲食頁那一餐是「330 ml」；spec 3 是「35 g」。
+
+**Task 12 量到的數字**：端點 **108**（OpenAPI 的 operation 數，105 → 108）；後端 `pytest -q -W error` **2071 passed**（308 秒；跟 Task 6 之後一樣，Task 7–12 沒有動後端）；前端
+`Test Files 204 passed (204)`、`Tests 2978 passed (2978)`（Task 11 沒有加 vitest）；e2e 59；資料表 22（dev 資料庫數的，沒有新表）；
+migration head `0022`（dev 資料庫在 `0022`）。Bundle 見上面前端那一節的表（Task 12 沒有再 build：Task 11、12 沒有動 `src/`）。
+
+**部署相關的實測**（Task 12）：用 `caddy:2-alpine`＋`caddy/Caddyfile`＋`frontend/dist` 起一個暫時的容器（18080 埠，用完停掉）：
+`zxing_reader-*.wasm` 回 `Content-Type: application/wasm`、首頁**沒有** `Permissions-Policy`（同源的頁面預設就能要相機，Caddy 不用改）。
+**Caddyfile 沒有 `encode`**：wasm 實際傳的是 1,093,289 bytes，不是 gzip 的 464 KB（整個 app 本來就都沒壓縮，不是這次的事）。
+
 ## 與規格的差異
 
-（執行完填摘要。）
+執行中改過、跟規格寫的不一樣的地方（細節在上面「執行中發現的差異」）：
+
+1. **偵測器載不起來時的那一句是「…請手動輸入。」**（Task 8），不是規格 §7.3 的「…請手動輸入或從照片讀。」：照片用同一個偵測器，
+   那顆按鈕這時候也不畫（規格 §7.3 自己的下一句也是這個意思）。
+2. **偵測器的 Promise 先接住**（Task 8）：相機那條提早結束時偵測器的拒絕不會變成 unhandled rejection；偵測器壞了就不畫「從照片讀條碼」。
+3. **掃描層掛到 `body`（portal）、Escape 與 Tab 圈住掛在 `window`**（Task 8）；`aria-hidden` 放在取景框的外層、不放在 `<video>` 上。
+4. **沒命中的卡片用後端回的標準形式**（Task 9）：12 位的 UPC-A 交接時是 13 位；狀態那一行一直在畫面上、只換字，找不到時它就是卡片的標題。
+5. **`LogMeal` 不碰 router**（Task 9）：導到新增食物的 `replace` 與 `returnTo` 在 `LogMealRoute` 做（`onCreateFromBarcode` prop）。
+6. **編輯這一餐交回的食物只給第一次打開的「加一項」**（Task 9）。
+7. **新增食物選了營養標示的照片之後焦點移到狀態那一塊**（Task 10）；「已帶入包裝上的一份，不要的話清掉」照規格 D29 加上（計畫漏了）。
+8. **e2e 多走食物詳情的改條碼、掃描層的位數提示與分隔符號**（Task 11）；`optimizeDeps` 不用加。
+9. **部署：wasm 沒有壓縮**（Task 12 實測）：規格 §7.1 的「gzip 464 KB」是 build 量的；Caddy 沒有 `encode`，實際傳 1,093 KB。
 
 ---
 

@@ -493,6 +493,37 @@ sudo docker compose --env-file .env.production \
 > 跨過 `0012` 時腳本會印退版警告（見「退版」）：這次如果新版起不來、被自動退回到 NAS 上原本那一版，
 > 舊版**無法建立新帳號**——修好新版再部署一次就好，不用還原。`0015` 有重複餐費時會停在第 5 步。
 
+- **`0022_add_food_barcode_and_label_kind`（掃條碼／營養標示）**：`foods` 多一個可以是空的 `barcode`（`TEXT`，既有的食物全部是
+  NULL，加欄位不重寫表）＋CHECK `ck_foods_barcode_digits`（8 或 13 位數字）＋兩個唯一索引：`uq_foods_owner_id_barcode (owner_id, barcode)`
+  （同一個人的私人食物不重複）與部分索引 `uq_foods_global_barcode (barcode) WHERE owner_id IS NULL`（公開食物之間不重複）。
+  `ai_analyses.kind` 的 CHECK `ck_ai_analyses_kind_valid` 多一個值 `label`（5 個字，`0021` 已經加寬到 `VARCHAR(7)`，只換 CHECK）。
+  `deploy.sh` 會自己跑，**可以退版**（不在 `ROLLBACK_UNSAFE_REVISIONS` 裡——那個清單仍然只有 `0012`，`scripts/deploy.sh` 這一版沒有改）：
+  舊程式的 `Food` 沒有 `barcode`（SELECT 只列它知道的欄位、INSERT 不帶 → NULL，CHECK 與兩個索引都放行 NULL）；舊程式從來不載入整列
+  `ai_analyses`（理由同下面 `0021` 那一條，`label` 的列跟 `suggest` 一樣）。退版只是程式退回去，**條碼還在**；要是連 migration 也
+  downgrade，**條碼的資料會不見**，`label` 的列改記成 `image`（列數留著，當天的額度不變）。
+
+  **新的環境變數 `OFF_ENABLED`**（`.env.production.example` 有說明）：**預設開**——`.env.production` 留白或不寫＝開（compose 是
+  `${OFF_ENABLED:-true}`），填 `false` 就關。開著的時候，食物庫裡找不到的條碼會**從伺服器**送到 Open Food Facts
+  （`https://world.openfoodfacts.org/api/v2/product/{條碼}.json`，4 秒逾時、記憶體裡的快取 500 筆／24 小時、重啟就清空；
+  整個條碼查詢端點每人每分鐘 30 次），拿名稱與營養素給
+  「新增食物」預填。**送出去的只有條碼本身**，但那等於告訴第三方「這台伺服器有人掃了這個商品」——不想要就填 `false`（掃條碼照樣能用，
+  只是沒有預填）。**NAS 要能連出去 `world.openfoodfacts.org:443`**（防火牆、DNS）；不通也不會壞，只是每次查詢等到逾時、沒有預填
+  （`docker compose logs api` 會看到 OFF 的警告）。OFF 的資料是 ODbL，畫面上一律標出處。
+
+  **相機**：`getUserMedia` 只在安全連線可用——`tailscale serve` 的 HTTPS 已經是，不用改。**Caddy 不用改**（實測過：用
+  `caddy:2-alpine`＋這份 `caddy/Caddyfile`＋build 出來的 `dist` 起一個暫時的容器，首頁的回應**沒有** `Permissions-Policy`，同源的頁面
+  預設就能要相機；`zxing_reader-*.wasm` 回 `Content-Type: application/wasm`）。之後要是有人在 Caddy 加了 `Permissions-Policy`，要包含
+  `camera=(self)`。`tailscale serve` 會不會加標頭沒有在 NAS 上驗證過——上線後在手機上掃一次就知道。Caddyfile 沒有 `encode`，
+  沒有原生偵測器的裝置（iPhone、桌機）第一次掃條碼時要下載 **1.09 MB 的 wasm**（不在 PWA 的預先快取裡，**離線時這些裝置掃不了**；
+  手動輸入與查詢本來就要連線）。
+
+  **部署完請手動試兩件事**——兩條路都**沒有任何自動測試在真的裝置或真的 LLM 上跑過**：
+  1. **用手機真的掃一次條碼**：Android 的 Chrome（原生 `BarcodeDetector`）與 iPhone（Safari 或加到主畫面的 PWA，走 wasm；
+     iOS 的 PWA 可能**每次啟動都問一次相機權限**）各一次。記一餐 →「掃條碼」→ 對準一個包裝的條碼。看三件事：相機有沒有打開、
+     掃不掃得到、`OFF_ENABLED` 開著時掃一個 Open Food Facts 有的商品（台灣的商品收錄得少，進口的飲料比較容易有）看預填與出處。
+  2. **有 AI 金鑰的人拍一次真的營養標示**：新增食物 →「拍營養標示」→ 拍包裝背面。開發時沒有金鑰，e2e 只假造了
+     `POST /api/ai/read-label` 的回應；**Gemini 收不收這個輸出 schema 也沒有驗證過**。看數字是不是每 100（每份的標示會被換算）、
+     一份的量對不對。失敗的話 `docker compose logs api` 找 `AI_LABEL_UNREADABLE`／`AI_BAD_RESPONSE`（每一次都算一次額度）。
 - **`0021_add_suggest_analysis_kind`（營養素配餐：今天還能吃什麼）**：`ai_analyses.kind` 從 `VARCHAR(5)` 加寬成 `VARCHAR(7)`、
   CHECK `ck_ai_analyses_kind_valid` 多一個值 `suggest`（`text`、`image`、`suggest`）。PostgreSQL 加寬 varchar 只改目錄、不重寫表。
   `deploy.sh` 會自己跑，**可以退版**（不在 `ROLLBACK_UNSAFE_REVISIONS` 裡——那個清單仍然只有 `0012`，`scripts/deploy.sh` 這一版沒有改）。

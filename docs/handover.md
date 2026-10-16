@@ -28,11 +28,11 @@
 
 | 項目 | 數字 |
 |---|---|
-| 端點 | **105**（OpenAPI 的 operation 數，2026-10-15 在 `feat/meal-planner` 量的：營養素配餐多 `GET /api/planner/library-suggestions`、`POST /api/ai/suggest-meal`。之前 103：`@router.` 101 ＋ `@activities_router.` 2——運動有兩個 router，只 grep `@router\.` 會少 2；2026-10-14 在 `feat/exercise` 量的。之前 95） |
-| 測試 | 後端 **1853**（`pytest -q -W error` 全綠，約 5 分）；前端 `Test Files 188`、`Tests 2712`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **56** 條、23 個檔案（Playwright；預設 6 個 workers 連跑兩次都是 `56 passed`，40.8 秒、41.9 秒）。2026-10-15 在 `feat/meal-planner` 修完審查（M1–M3）之後量的（做完 Task 12 時是後端 1851、前端 188／2710、e2e 56；開工前是 `feat/exercise` 修完審查之後的後端 1757、前端 178／2574、e2e 54 條 22 個檔案）。`feat/exercise`：2026-10-15 修完審查（I1、M1–M4）之後量的（修之前是後端 1745、前端 178／2538、e2e 54；開工前是後端 1606、前端 166／2312、e2e 53，跟下一句 `feat/body-targets` 的一樣）。**dev 資料庫 1090 個帳號時** `invites.spec.ts` 量「我的」每一顆按鈕的觸控高度逾時（第 1036 顆），改成跟 `account-settings.spec.ts` 一樣不量清單那一顆（見 §8.2「帳號與目標設定」第 6 點）。（`feat/body-targets` 修完審查之後：後端 1606、前端 166／2312、e2e 53 條 21 個檔案） |
+| 端點 | **108**（OpenAPI 的 operation 數，2026-10-16 在 `feat/barcode-label` 量的：掃條碼多 `GET /api/foods/by-barcode/{code}`、`PATCH /api/foods/{id}`、`POST /api/ai/read-label`。之前 105，2026-10-15 在 `feat/meal-planner` 量的：營養素配餐多 `GET /api/planner/library-suggestions`、`POST /api/ai/suggest-meal`。之前 103：`@router.` 101 ＋ `@activities_router.` 2——運動有兩個 router，只 grep `@router\.` 會少 2；2026-10-14 在 `feat/exercise` 量的。之前 95） |
+| 測試 | 後端 **2071**（`pytest -q -W error` 全綠，約 5 分）；前端 `Test Files 204`、`Tests 2978`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **59** 條、24 個檔案（Playwright；預設 6 個 workers 連跑兩次都是 `59 passed`，49.4 秒、54.8 秒）。2026-10-16 在 `feat/barcode-label` 做完 Task 12 時量的（開工前是 `feat/meal-planner` 修完審查之後的後端 1853、前端 188／2712、e2e 56 條 23 個檔案）。`feat/meal-planner`：2026-10-15 修完審查（M1–M3）之後量的（做完 Task 12 時是後端 1851、前端 188／2710、e2e 56；開工前是 `feat/exercise` 修完審查之後的後端 1757、前端 178／2574、e2e 54 條 22 個檔案）。`feat/exercise`：2026-10-15 修完審查（I1、M1–M4）之後量的（修之前是後端 1745、前端 178／2538、e2e 54；開工前是後端 1606、前端 166／2312、e2e 53，跟下一句 `feat/body-targets` 的一樣）。**dev 資料庫 1090 個帳號時** `invites.spec.ts` 量「我的」每一顆按鈕的觸控高度逾時（第 1036 顆），改成跟 `account-settings.spec.ts` 一樣不量清單那一顆（見 §8.2「帳號與目標設定」第 6 點）。（`feat/body-targets` 修完審查之後：後端 1606、前端 166／2312、e2e 53 條 21 個檔案） |
 | 覆蓋率 | 96%（2026-09 量的，之後沒再量） |
-| 資料表 | 22（+ `alembic_version`；2026-10-15 在 dev 資料庫數的，營養素配餐沒有新表。之前 21） |
-| Migration | `0001` ~ `0021`（`0021` 是營養素配餐的 `ai_analyses.kind` 多 `suggest`；dev 資料庫在 `0021`） |
+| 資料表 | 22（+ `alembic_version`；2026-10-16 在 dev 資料庫數的，掃條碼與營養素配餐都沒有新表。之前 21） |
+| Migration | `0001` ~ `0022`（`0022` 是掃條碼的 `foods.barcode`＋兩個唯一索引、`ai_analyses.kind` 多 `label`；`0021` 是營養素配餐的 `suggest`；dev 資料庫在 `0022`） |
 | Commit | 600+ |
 | PR | 5 個，全部經 CI 驗證後合併 |
 
@@ -60,6 +60,7 @@
 | 身體資料與目標（含體重紀錄） | 「我的」多兩張卡片：身體資料（`/me/body`：性別、出生年、身高、活動量、目標、速度、目標體重）與體重（最新一筆、跟 7 天前比、行內記錄）；`/weight` 是圖表（30 天／90 天／全部、每天一點、7 天移動平均、目標體重線）與清單（修改、刪除）。`/me/targets` 上面多一個「建議目標」（Mifflin-St Jeor → 活動量 → 依目標加減 → 下限 → 三大營養素）與「套用建議目標」；體重跟套用時差 1 公斤以上，「每日目標」卡片提示重算。匯出多一個 `weights.csv`。**體重與身體資料不給好友看**。migration `0019`（兩張新表，可以退版）（規格 `docs/superpowers/specs/2026-10-14-body-targets-design.md`、計畫 `docs/superpowers/plans/2026-10-14-body-targets.md`；見第 10 節「身體資料與目標」） | ✅（`feat/body-targets`） |
 | 運動紀錄 | 「＋ 新增」多「記運動」（`/exercises/new`、`/exercises/:id/edit`）：活動（18 個固定活動＋「其他」）、分鐘、時間、備註；後端用 **MET × 運動那一天或之前最新的體重 × 小時**估算熱量（沒有體重就手動輸入，表單先預覽）。今天的**熱量額度**＝目標＋運動（「我的」每日目標卡片的開關「運動消耗加回今天的熱量額度」，預設開），總覽與飲食頁用額度當分母、寫「含運動 +N」；總覽時間線與飲食頁「今日運動」卡片看得到運動，可改可刪。匯出多一個 `exercises.csv`。**運動不給好友看**；三大營養素、趨勢不變。migration `0020`（一張新表＋`users` 一個有預設值的欄位，可以退版）（規格 `docs/superpowers/specs/2026-10-14-exercise-design.md`、計畫 `docs/superpowers/plans/2026-10-14-exercise.md`；見第 10 節「運動紀錄」） | ✅（`feat/exercise`） |
 | 營養素配餐（今天還能吃什麼） | 飲食頁多一張卡片、新畫面 `/planner`：今天還剩多少熱量與三大營養素（額度含運動），**從食物庫配**（從自己常吃的食物用確定性的解題器配最多 3 組，免費，`GET /api/planner/library-suggestions`）與**讓 AI 配一餐**（記一餐裡打偏好、同一個勾選清單，算一次 AI 額度，`POST /api/ai/suggest-meal`）。兩種都只把項目帶進記一餐（有份量的送 `portion_id`），**不自動存**。migration `0021`（`ai_analyses.kind` 多 `suggest`，可以退版）（規格 `docs/superpowers/specs/2026-10-15-meal-planner-design.md`、計畫 `docs/superpowers/plans/2026-10-15-meal-planner.md`；見第 10 節「營養素配餐」） | ✅（`feat/meal-planner`；「讓 AI 配一餐」**沒有對真的 LLM 打過**，見 §8.2） |
+| 掃條碼／營養標示 | 食物多一個條碼（`foods.barcode`，標準形式是 8 或 13 位、自己的私人食物之間與公開食物之間各不重複）。記一餐、編輯這一餐的「加一項」、食物庫多「掃條碼」：全螢幕的掃描層（有原生 `BarcodeDetector` 就用、否則延遲載入 wasm 的 ponyfill；一直都有「手動輸入條碼」「從照片讀條碼」）→ `GET /api/foods/by-barcode/{code}`：自己的或公開的那一筆就選上；找不到時問 **Open Food Facts** 要預填建議（`OFF_ENABLED`，預設開；ODbL、標出處），「用這個條碼建立食物」帶到新增食物、存好回到記一餐已選好。新增食物多「條碼（選填）」與「拍營養標示」（`POST /api/ai/read-label`：AI **只照抄**標示上的數字，每份換算每 100 在後端做，算一次 AI 額度）；食物詳情可以改、移除條碼（`PATCH /api/foods/{id}`）。migration `0022`（可以退版）（規格 `docs/superpowers/specs/2026-10-15-barcode-label-design.md`、計畫 `docs/superpowers/plans/2026-10-15-barcode-label.md`；見第 10 節「掃條碼／營養標示」） | ✅（`feat/barcode-label`；營養標示**沒有對真的 LLM 打過**、相機**沒有在真的手機上掃過**，見 §8.2） |
 | UI 改版 第三階段 | 社群（P7）：「開帳號的路」「好友關係」「按讚、留言、通知」三步都已完成。**還沒做：封鎖與檢舉、好友的趨勢／統計／目標**（好友規格 §1.3 剩下的項目）；推播也沒有（通知只在 app 裡，見 §8.2） | 🟡 |
 
 > **P4 早於 P2/P3 完成是刻意的，但當初的理由有瑕疵。**
@@ -1150,6 +1151,18 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
   `{ name: "食物庫" }` 對上兩個連結。Task 8 的時候沒有人跑整套 e2e；同樣寫法的另外三個 spec 用的是沒有目標的帳號（卡片不畫連結），**照樣綠**。
   第一次跑整套才紅。同一次也抓到新 spec 自己的競態（`expectTouchTargets` 的 `count()` 不等卡片畫出來）。**加了新文字，就跑整套**。
 
+### 掃條碼／營養標示：幾條「突變存活才發現」，另外一條只在 6 個 worker 時紅的 e2e
+
+沒有編新的號碼。逐條的經過在計畫 `docs/superpowers/plans/2026-10-15-barcode-label.md` 的「執行中發現的差異」。
+
+- **「409 附的是哪一筆」的測試每次只有一筆同條碼的食物**（Task 3）：`_find_same_barcode` 不看範圍的突變存活（`scalar()` 剛好拿到唯一那一筆）——
+  而它是一個洩漏別人私人食物 id 的洞。補「別人先建了同條碼的私人食物、公開食物」那一條才紅。第 4 種「看不到的測試先看得到一次」的同一個形狀。
+- **不打網路的守衛**（Task 4）：拿掉 `autouse` 時計畫指定的那一條照預期存活（它本來就斷言不問 OFF），另外補一條直接斷言 `_http_get` 已經被換掉。
+- **等價突變**（Task 6）：「commit 移到組回應之前」存活——`expire_on_commit=False`、回應只用記憶體裡的值，順序在外面看不出來。測試留著，守的是以後在組回應時加查詢。
+- **型別過不了的突變不算**（Task 8、10）：兩個突變第一次寫成 `TypeCheckError`，改成型別過得去的寫法重跑才算紅。
+- **e2e：只在 6 個 worker 時紅**（Task 11）：單跑 `barcode.spec.ts` 綠、第一次跑整套紅一條。食物的份量是另外載入的，回到記一餐太快按「記錄」記成 1 g
+  （`--repeat-each=12` 重現 5／12）。先等份量「份」選上。**這是產品裡既有的競態**（§8.2「掃條碼的已知限制」第 10 點）。
+
 ---
 
 ## 7. 踩過的技術坑（節錄，完整版在各計畫文件）
@@ -1245,6 +1258,9 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
 | `base.secondary` 的高度 | 只有顏色與框線；`min-height: 44px` 寫在 `.actions button` 底下——放在 `.actions` 以外（例如記一餐的入口那一列）會小於 44px。入口用 `base.aiButton` |
 | e2e：新文字包含舊的名稱 | 不帶 `exact` 的 `getByRole("link", { name: "食物庫" })` 會對上新卡片的「從食物庫配」，strict mode 紅——而且**只在那個帳號有目標時**（卡片才畫連結），新帳號的 spec 照樣綠。名稱一律 `exact: true`；加新文字時拿它跟既有不帶 `exact` 的名稱比一次子字串 |
 | e2e：`expectTouchTargets` 之前先等 | 它用 `count()`，**不會等**：等統計回來才畫的卡片，忙的時候數到 0（「至少要有一個」紅）。先 `expect(…).toHaveText([...])` 或 `toBeVisible()` 再量 |
+| e2e：`input[type=file]` 是 button | Playwright 把 `PhotoPickerButton` 那個視覺上藏起來的 1px 檔案輸入框算成 **button 角色**：`getByRole("button")` 會量到它（高度 1）。量觸控高度用 `locator("button")`，照片那顆量它的 `<label>`（掃描層、`barcode.spec.ts`） |
+| dev 伺服器第一次開掃描層整頁重新載入 | Vite 在**啟動時**掃依賴（會跟著 `import()` 走）。在裝 `barcode-detector` **之前**就起的 dev 伺服器，第一次 `import("./barcode-ponyfill")` 時才發現它、重新打包、**整頁重新載入**（截圖腳本找不到掃描層）。重新起 dev 伺服器就好；全新的依賴快取實測過不會重新載入（CI 每次都是全新的），所以**沒有加 `optimizeDeps.include`**。之後裝了新的、只被 `import()` 載入的依賴，也記得重起 |
+| `LogMeal` 不碰 router | `log-meal*.test.tsx` 三個檔案都不掛 Router——`LogMeal` 裡一加 `useNavigate` 就全紅。要導頁的事情用 prop 交給 `LogMealRoute`（`onSaved`、`onCreateFromBarcode`）；「history 沒有變長」那種斷言寫在 `app.test.tsx`（真的 `BrowserRouter`） |
 
 ---
 
@@ -1632,6 +1648,28 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
   11. `planner.spec.ts` 記的是「今天」（台北）的一餐，跑到一半跨過午夜時「今天的熱量差不多用完了」與總覽的數字對不上——同其他記今天資料的 spec，遇到就重跑。
   12. **常吃的食物全部每 100 不到 5 kcal 時是 `no_fit`**（審查 M1 的門檻；規格 §10 第 8 點）：那一句「沒有份量夠小的組合」說得不對，很少見、沒有另開狀態。
       5 kcal 以上的低卡食物（生菜）仍可能以「X ＋ 生菜 25 g」出現——要贏過 D6 的代價才進得來。
+- **掃條碼的已知限制**（規格 §14 的九點，加上執行中發現的）：
+  1. **相機那條路沒有在真的裝置上掃過**：原生 `BarcodeDetector`（Android 的 Chrome）與 iOS（Safari、加到主畫面的 PWA）都沒有實機驗證
+     （規格 §7.4；開發機是 Windows，headless Chromium 沒有原生偵測器，e2e 只走手動輸入）。單元測試用假的 `getUserMedia` 與偵測器守著。
+     iOS 的 PWA 可能每次啟動都問一次相機權限。部署後各掃一次（`docs/deployment.md` 的 `0022`）。
+  2. **營養標示從來沒有對真的 LLM 打過**（同多樣估算的第 1 點；e2e 只假造 `POST /api/ai/read-label`）：守的是送出去的請求與回覆的解析。
+     **Gemini 收不收這個輸出 schema 沒有驗證過**（Anthropic 的 `transform_schema()` 寫計畫時看過形狀，Gemini 那邊沒有）。標示的照片跟其他 AI 照片一樣
+     縮到長邊 1280：字很小的標示可能讀不清楚（`AI_LABEL_UNREADABLE`，算一次額度）。
+  3. **ponyfill 的 wasm 不在 PWA 的預先快取裡**：離線時沒有原生偵測器的裝置（iPhone、桌機）掃不了（D15、§7.1）；手動輸入的查詢本來就要連線。
+     Caddy 沒有 `encode`，第一次掃要下載 1.09 MB（不是 gzip 的 464 KB）。
+  4. **條碼會送到第三方**：`OFF_ENABLED` 開著時，食物庫裡找不到的條碼由伺服器送到 Open Food Facts（只送條碼，但等於說「有人掃了這個商品」）。
+     不想要就 `OFF_ENABLED=false`。OFF 的快取只在記憶體：每次部署、重啟清空。
+  5. **台灣的條碼在 Open Food Facts 收錄得少**：多半是「沒有預填」，要拍營養標示或自己填。OFF 的 `_100g` 對飲料其實是每 100 ml；
+     `product_quantity_unit` 沒填的飲料會被當成 g（使用者可以在新增食物改單位）。
+  6. **從記一餐跳到新增食物，記一餐在跳之前填的東西會不見**（D21）：回來時只有掃的那個食物選好。編輯這一餐已存的項目不受影響（每一項是立刻存的）。
+     在新增食物按瀏覽器的「上一頁」會回到記一餐**之前**的那一頁（那一筆 history 被換掉了，D20）；要回記一餐用「取消，回到記一餐」。
+  7. **直接用網址打開的編輯這一餐，經過新增食物回來之後「關閉」回不到總覽**：`EditMeal` 的「關閉」在 `location.key === "default"`（直接打開）時
+     回 `/`、否則 `navigate(-1)`；去新增食物再回來的兩次 `replace` 讓 key 不再是 `default`，「關閉」退回打開這個網址之前的那一頁（可能是 app 外面）。
+  8. 0 開頭的 8 位數字一律先試 UPC-E；數字系統 1 的 UPC-E 不支援（§3.3）。
+  9. 一般使用者不能替公開食物加條碼（D5）；掃到沒有條碼的公開食物的商品會走「沒命中」，建出來的是私人食物。
+  10. **（既有的，這次 e2e 才撞到）選了有份量的食物之後，份量是另外載入的**：還沒選上預設份量時「份量」是直接輸入的 1 g，這時按「記錄」
+      就記成 1 g。從搜尋選食物也一樣（`portions.spec.ts` 本來就先等它）；掃條碼回來、6 個 worker 的 e2e 時 5／12 次撞到。人手按得到的機會小，
+      但網路慢時有可能——值得在份量載入前停用「記錄」或不畫數量。
 - **編輯自己已送出的提案**：後端沒有這個端點，目前只能等審核結果。
 
 ---
@@ -2517,6 +2555,83 @@ MET 一律用字串建 Decimal（`Decimal("9.8")`，不經 float）。值取自 
 
 **已知限制**在 §8.2「營養素配餐的已知限制」（12 點）。最要緊的三點：「讓 AI 配一餐」沒有對真的 LLM 打過（第 6 點）、解題器不保證最佳（第 1 點）、
 在記一餐重新整理會失去帶進來的項目（第 7 點）。
+
+### 掃條碼／營養標示
+
+食物多一個條碼；記一餐、編輯這一餐的「加一項」、食物庫可以「掃條碼」（相機、手動輸入、從照片讀）選到自己的或公開的那一筆；
+找不到時問 Open Food Facts 要預填建議、帶到新增食物；新增食物可以「拍營養標示」讓 AI 照抄數字
+（規格 `docs/superpowers/specs/2026-10-15-barcode-label-design.md`、計畫 `docs/superpowers/plans/2026-10-15-barcode-label.md`，
+計畫的「執行中發現的差異」記了實作跟計畫不一樣的地方，「與規格的差異」是摘要）。
+**一個 migration（`0022`：`foods.barcode`＋CHECK＋兩個唯一索引、`ai_analyses.kind` 多 `label`，可以退版）、一個新的環境變數 `OFF_ENABLED`（預設開）。**
+
+**端點**（3 個，105 → 108；都要登入）：
+
+| 端點 | 做什麼 | 要記得的 |
+|---|---|---|
+| `GET /api/foods/by-barcode/{code}` | `200 {code, food, prefill}`：`code` 是標準形式；`food` 是看得到的那一筆（**自己的私人食物優先**，再來是公開的）或 null；`prefill` 只在 `food` 是 null、OFF 有資料時有 | **沒找到不是 404**（掃條碼的正常結果；`details` 進 OpenAPI 沒有型別）。格式錯 422 `VALIDATION_ERROR`（`describeBarcodeError` 拿掉「barcode：Value error, 」）。每人每分鐘 30 次，**整個端點都算**、在查資料庫之前（429 `TOO_MANY_BARCODE_LOOKUPS`）。沒有生效版本的食物照樣回（`nutrition: null`） |
+| `PATCH /api/foods/{id}` | body `{barcode: string \| null}`（**鍵必填**，null＝移除）→ `FoodResponse` | 只改條碼（沒有改名稱、品牌的端點）。私人食物擁有者改；公開食物只有管理員（403）。撞到 409 `BARCODE_EXISTS`，`details.food_id` 一定是自己的或公開的那一筆（不洩漏別人的私人食物） |
+| `POST /api/ai/read-label` | body `{image_base64}` → `LabelReadResponse`（`nutrition` 是**每 100**、`serving`、`servings_per_package`、`basis`、`consistency`、`remaining_today`） | 順序同 `/analyze` 的照片：503 → 429 → 照片的 422／413（不記列、不算額度）→ 呼叫。**一次算一次額度**、寫一列 `kind = 'label'`。讀不出來 502 `AI_LABEL_UNREADABLE`（**也算額度**）。回應在 commit 之前組好 |
+
+既有端點的改變：`POST /api/foods` 多收 `barcode?`（409 `BARCODE_EXISTS`；名稱與條碼都撞時名稱優先、回 `FOOD_EXISTS`）；**每一個回
+`FoodResponse` 的端點都多 `barcode: string | null`**（組法收成 `FoodResponse.of(food, revision)`，配餐的路由原本自己組一份）。
+
+**條碼**（`app/barcode.py`，純函式）：去空白與 `-` → 只能是數字 → 13 位原樣、12 位（UPC-A）補 0、8 位 0 開頭先試 UPC-E（展開成 UPC-A 再補 0）、
+其餘 8 位當 EAN-8；**檢查碼只在後端驗**（GS1）。存標準形式（8 或 13 位，CHECK 是第二道防線）。唯一：`uq_foods_owner_id_barcode (owner_id, barcode)`＋
+部分索引 `uq_foods_global_barcode (barcode) WHERE owner_id IS NULL`——撞到靠索引（`IntegrityError` → 409），不做前置查詢。**條碼不進版本、不經審核**。
+前端只去分隔符號、看長度（`lib/barcode.ts` 的 `cleanBarcodeInput`、`BARCODE_LENGTH_HINT`）。
+
+**Open Food Facts**（`app/off.py`）：`httpx`、4 秒、`GET https://world.openfoodfacts.org/api/v2/product/{code}.json`（只要用得到的欄位、帶 `User-Agent`）；
+連不上、非 200、少能量或三大營養素任一、數字超出範圍 → `prefill: null`（只有 kJ 的換成 kcal，`app/nutrition_units.py`）。程序內 LRU 500 筆／24 小時，
+「找到」與「OFF 說沒有」都快取、錯誤不快取，重啟清空。路由用依賴 `get_product_lookup`（測試 `dependency_overrides`）；**conftest 的 autouse fixture
+把真正發請求的 `_http_get` 換成丟 `AssertionError` 的**——忘了覆寫的測試會紅，不會安靜地打出去。`OFF_ENABLED`：`docker-compose.yml` 是
+`${OFF_ENABLED:-true}`（bool 收到空字串整個 app 起不來，預設值寫在 compose），**dev 的 override 與 CI 的 e2e job 是 false**。
+**ODbL**：畫面上出現 OFF 資料的地方一律「資料來源：Open Food Facts（ODbL）」（`BarcodeScanEntry.tsx` 的 `OffAttribution`）。
+**隱私：條碼會從伺服器送到第三方**（只有條碼本身；入口旁那一行「查不到時，條碼可能會送到 Open Food Facts 查詢」）。
+
+**掃描**（前端）：`lib/barcode-detector.ts` 的 `loadDetector()`——原生 `BarcodeDetector` 支援 `ean_13` 就用（Android 的 Chrome、macOS 的 Chrome），
+否則 `import("./barcode-ponyfill")`：`barcode-detector@3.2.2`（MIT）＋`zxing-wasm@3.1.3`（MIT；wasm 裡的 ZXing-C++ 是 Apache-2.0），兩個都釘版本。
+**wasm 自己服務**（`?url`＋`locateFile`，不用套件預設的 jsDelivr）。大小（`npm run build`）：主程式 `index-*.js` 578.20 KB（gzip 176.78，**＋16.86 KB**）、
+延遲載入的 `barcode-ponyfill-*.js` 43.40 KB（gzip 14.95，進預先快取）、`zxing_reader-*.wasm` 1,093.28 KB（gzip 463.82，**不進預先快取**——離線時
+ponyfill 掃不了；Caddy 沒有 `encode`，實際傳的是沒壓縮的）。主程式裡 `zxing` 0 次。`lib/use-barcode-scanner.ts`（相機、每 250 ms 偵測一次、手電筒、
+停掉每一條 track）、`components/BarcodeScanner.tsx`（全螢幕、portal 到 `body`、`role="dialog"`、焦點圈住、Escape、換到背景就取消；「手動輸入條碼」
+「從照片讀條碼」一開就有）。**iOS 與原生偵測器都沒有在實機驗證**。
+
+**營養標示**（`app/ai/label.py`）：模型**只照抄**（每一份量、本包裝幾份、「每份」與「每 100」兩欄、kcal 或 kJ），看不到的填 null、不換算；
+**換算在後端**（每 100 有印就用印的，否則每份 ÷ 一份 × 100，`Decimal` half-up 兩位；只有 kJ 就換成 kcal）。schema 是平的（Gemini 的 `Schema` 是子集）、
+輸出上限 8192。讀不出來（不是標示、用得上的那一欄缺任一項、換算後超出範圍）是 `AI_LABEL_UNREADABLE`，**算一次額度**。一致性用既有的 `check_consistency`
+（只標記）。不讀鈉與糖。兩家 estimator 多 `read_label`。**沒有對真的 LLM 打過；Gemini 收不收這個 schema 沒驗證過**。
+
+**前端：**
+
+| 東西 | 在哪裡 | 要記得的 |
+|---|---|---|
+| API | `api/barcode.ts`（`lookupBarcode`、`updateFoodBarcode`、`describeBarcodeError`）、`api/ai.ts`（`readLabel`） | `FoodResponse.barcode` 必填但**離線快取裡的舊食物沒有這個 key**：畫面一律真值判斷、受控輸入 `?? ""` |
+| 入口 | `components/BarcodeScanEntry.tsx`（`FoodPicker` 與 `FoodLibrary` 掛它） | 「掃條碼」＋那一行提醒；查詢中 `aria-disabled`＋擋（掃描層關掉之後焦點在它身上）。狀態那一行（`role="status"`）一直在、只換字；沒命中是 `region`「找不到這個條碼」，卡片用**後端回的標準形式**。記一餐要 `requireNutrition`，食物庫不要（命中進詳情頁） |
+| 交接 | `lib/new-food-handoff.ts`、`App.tsx` 的 `LogMealRoute`／`NewFoodRoute`、`EditMeal` | **router state**：去 `{barcodeCode, barcodePrefill, returnTo}`、回 `{pickedFood}`；讀一次、`replace` 清掉。`returnTo` 白名單只有 `/meals/new` 與 `/meals/{id}/edit`。從記一餐（編輯這一餐）來的**去與回都用 `replace`**。`LogMeal` 不碰 router（`onCreateFromBarcode` prop，見 §7） |
+| 新增食物 | `screens/NewFood.tsx` | `handoff` prop（只在掛載時讀）：OFF 預填（名稱、品牌、單位、四個數字、一份「份」）＋出處，或只有條碼＋「找不到這個條碼的資料…」。「條碼（選填）」。「拍營養標示」（`capture="environment"`）：名稱是空的才填、條碼與品牌不動、切回每 100；讀的時候焦點移到狀態那一塊。存好走 `finish`（有 `returnTo` 就回去帶著食物，AI 面板存好的也是）；「取消，回到記一餐／這一餐」 |
+| 食物詳情 | `screens/FoodDetail.tsx` 的 `BarcodeSection` | `region`「條碼」：標準形式或「沒有條碼」；能改的（自己的私人食物、管理員看公開食物）有 `form`「修改條碼」、「儲存條碼」「移除條碼」、狀態「已儲存條碼」「已移除條碼」 |
+
+**新的東西在哪裡：**
+
+- 後端：`migrations/versions/0022_add_food_barcode_and_label_kind.py`；`app/barcode.py`、`app/nutrition_units.py`、`app/off.py`、`app/ai/label.py`；
+  `app/models/{food,ai_analysis}.py`、`app/schemas/{food,ai}.py`、`app/api/routes/{foods,ai,planner}.py`、`app/ai/{estimator,anthropic_estimator,gemini_estimator}.py`、
+  `app/ratelimit.py`（`barcode_lookup_rate_limiter`）、`app/config.py`（`off_enabled`）；`pyproject.toml` 把 `httpx` 搬到執行期依賴。測試 `tests/test_barcode.py`、
+  `test_foods_barcode_model.py`、`test_foods_barcode.py`、`test_off.py`、`test_nutrition_units.py`、`test_ai_label.py`、`test_ai_read_label.py`，以及 `conftest.py`
+  （不打網路的守衛）、`test_config.py`、`test_ai_analysis_model.py`、`test_ai_provider_errors.py` 的新增。
+- 前端：上表的檔案，加上 `lib/barcode.ts`、`lib/barcode-ponyfill.ts`、`lib/use-barcode-scanner.ts`、`components/BarcodeScanner.{tsx,module.css}`、
+  `screens/EditMealItems.tsx`（交回的食物給第一次打開的「加一項」）。測試 `tests/barcode-{lib,api,detector,scanner,scan-entry}.test.*`、`new-food-handoff.test.ts`、
+  `new-food-barcode.test.tsx`、`log-meal-barcode.test.tsx`，`makeFood()` 在 `tests/helpers/foods.ts`；`food-detail`、`food-picker`、`food-library`、`edit-meal`、`app`、`ai-api` 的新增。
+  `src/test/setup.ts` 把 ponyfill mock 掉（`vi.fn`）。
+- e2e：`e2e/barcode.spec.ts`（三條，新帳號、手機尺寸；相機那條路不做）：
+  1. **手動輸入，全部是真的**：新增食物帶條碼 `4710088432094` → 詳情頁移除、再用 `4 710088 43209 4` 存回去（回應是標準形式）→ 記一餐「掃條碼」→
+     掃描層量觸控高度、`123` 的提示、`4710088-432094` 查詢的路徑是整理過的 →「已選擇：…」→ 100 g → 飲食頁。
+  2. **OFF 有預填，只假造 `GET /api/foods/by-barcode/…`**：卡片「Open Food Facts 有這個商品：…」＋出處連結 →「用這個條碼建立食物」→ 新增食物已預填
+     （ml、42.00、份 330.00、條碼）→ 真的建立 → 回到記一餐、份量「份」→ 飲食頁 330 ml；假的查詢只被打一次。
+  3. **沒有預填＋拍營養標示，只假造 `POST /api/ai/read-label`**：真的後端回 `{food: null, prefill: null}`（`OFF_ENABLED=false`）→ 新增食物只有條碼與提示 →
+     514.29／6.00／28.00／60.86、份 35.00、「本包裝含 4 份」「今天還能用 17 次」→ 建立 → 記一餐 → 飲食頁 35 g；送出的 body 只有 `image_base64`。
+
+**已知限制**在 §8.2「掃條碼的已知限制」（10 點）。最要緊的三點：相機沒有在真的手機上掃過（第 1 點）、營養標示沒有對真的 LLM 打過（第 2 點）、
+條碼會送到第三方（第 4 點）。
 
 ---
 
