@@ -1,8 +1,10 @@
 import { useState } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { type Food, type FoodScope, useFoodSearch } from "../api/foods";
+import { BarcodeScanEntry } from "../components/BarcodeScanEntry";
 import { FoodResultList } from "../components/FoodResultList";
 import ui from "../components/ui.module.css";
+import { newFoodState } from "../lib/new-food-handoff";
 import { useDebounced } from "../lib/use-debounced";
 
 const SCOPES: ReadonlyArray<{ value: FoodScope; label: string }> = [
@@ -17,6 +19,7 @@ const SCOPES: ReadonlyArray<{ value: FoodScope; label: string }> = [
  *  `/foods/:id` 是 Task 4、5——這裡的連結點過去現在會是空白（`<Routes>`
  *  沒有比對到），那是刻意的，不放佔位畫面。 */
 export function FoodLibrary() {
+	const navigate = useNavigate();
 	const [input, setInput] = useState("");
 	const [scope, setScope] = useState<FoodScope>("all");
 	const debouncedQuery = useDebounced(input, 300);
@@ -27,6 +30,16 @@ export function FoodLibrary() {
 		<section className={ui.screen}>
 			<h1>食物庫</h1>
 			<Link to="/foods/new">新增食物</Link>
+			{/* 掃條碼（規格 §11）：命中進詳情頁——沒有生效版本的也一樣（詳情頁看得到它，不帶
+			    requireNutrition）。沒命中帶到新增食物：一般的 push，存好照舊到詳情頁（沒有 returnTo）。 */}
+			<BarcodeScanEntry
+				onFood={(food) => navigate(`/foods/${food.id}`)}
+				onCreate={(code, prefill) =>
+					navigate("/foods/new", {
+						state: newFoodState(code, prefill, null),
+					})
+				}
+			/>
 
 			<div>
 				<label htmlFor="food-search-input">搜尋食物</label>

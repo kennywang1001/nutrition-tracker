@@ -1,0 +1,108 @@
+/* 「掃條碼」的入口（BarcodeScanEntry.tsx）。
+ *
+ * 外層不用 gap：狀態那一行沒有字時要真的不佔空間（它一直在畫面上，live region 才唸得到），
+ * 間距改由有內容的那幾塊自己的 margin 給。 */
+
+.entry {
+	display: flex;
+	flex-direction: column;
+}
+
+.row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	column-gap: var(--space-3);
+	row-gap: var(--space-1);
+}
+
+/* 高度、虛線框同 AI 面板的入口（AiEstimatePanel.module.css 的 .aiButton），顏色用灰的：
+ * 這是「找食物」的另一條路，不是 AI。 */
+.scan {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	min-height: 44px;
+	padding: 0 var(--space-3);
+	border: 1px dashed var(--color-border);
+	border-radius: var(--radius-button);
+	background: var(--color-surface);
+	color: var(--color-text);
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.scan[aria-disabled="true"] {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
+.note {
+	flex: 1 1 12em;
+	margin: 0;
+	font-size: 13px;
+	color: var(--color-text-muted);
+}
+
+.quiet {
+	margin: 0;
+	padding: 0;
+	background: none;
+}
+
+.status {
+	margin: 0;
+	font-size: 15px;
+}
+
+.quiet .status:not(:empty) {
+	margin-top: var(--space-2);
+	color: var(--color-text-muted);
+}
+
+/* 找不到的那張卡片：跟 AI 面板的結果卡片同一種外框。 */
+.card {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin-top: var(--space-2);
+	padding: var(--space-3) var(--space-4);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-card);
+	background: var(--color-surface);
+}
+
+.card p {
+	margin: 0;
+}
+
+.card .status {
+	font-weight: 700;
+}
+
+.create {
+	align-self: flex-start;
+	min-height: 44px;
+	padding: 0 var(--space-4);
+	border: none;
+	border-radius: var(--radius-button);
+	background: var(--color-action);
+	color: var(--color-on-action);
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.attribution {
+	margin: 0;
+	font-size: 13px;
+	color: var(--color-text-muted);
+}
+
+.attribution a {
+	color: inherit;
+}
+
+.error {
+	margin: var(--space-2) 0 0;
+	color: var(--color-danger);
+}

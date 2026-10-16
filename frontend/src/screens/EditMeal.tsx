@@ -21,6 +21,7 @@ import { queryKeys } from "../api/queries";
 import { PhotoPickerButton } from "../components/PhotoPickerButton";
 import { fromLocalDateTime, localDateTime } from "../lib/dates";
 import { formatMoney } from "../lib/decimal";
+import { pickedFoodFrom } from "../lib/new-food-handoff";
 import { parseResourceId } from "../lib/resource-id";
 import { useConfirmFocus } from "../lib/use-confirm-focus";
 import styles from "./EditMeal.module.css";
@@ -551,6 +552,16 @@ export function EditMeal() {
 	const mealQuery = useMeal(mealId);
 	const navigate = useNavigate();
 	const location = useLocation();
+	// 掃條碼（規格 D21）：新增食物存好交回來的那個食物——「加一項」一開始就打開、選好它。
+	// 讀一次放進自己的 state，再 `replace` 清掉 history 的 state（同 `LogMealRoute`）。
+	const [picked] = useState(() => pickedFoodFrom(location.state));
+	useEffect(() => {
+		if (location.state == null) return;
+		navigate(`${location.pathname}${location.search}`, {
+			replace: true,
+			state: null,
+		});
+	}, [location.state, location.pathname, location.search, navigate]);
 
 	// 直接打開網址（書籤、PWA 重新整理）時沒有上一頁，navigate(-1) 會離開
 	// app 或什麼都不做。react-router 的第一個 history entry 的 key 是
@@ -576,7 +587,7 @@ export function EditMeal() {
 		body = (
 			<>
 				<MealDetailsForm key={meal.id} meal={meal} />
-				<EditMealItems meal={meal} />
+				<EditMealItems meal={meal} initialFood={picked} />
 				<MealPhotoSection meal={meal} />
 				<DeleteMeal meal={meal} onDeleted={close} />
 			</>

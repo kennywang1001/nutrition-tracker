@@ -8,7 +8,13 @@ import {
 	within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router";
+import {
+	MemoryRouter,
+	Route,
+	Routes,
+	useLocation,
+	useNavigate,
+} from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AMOUNT_FORMAT_ERROR } from "../src/api/expenses";
 import { queryKeys } from "../src/api/queries";
@@ -2027,5 +2033,114 @@ describe("編輯這一餐：項目", () => {
 				),
 			).toHaveLength(0);
 		});
+	});
+});
+
+describe("編輯這一餐：掃條碼建立食物再回來（掃條碼規格 D20、D21）", () => {
+	beforeEach(() => {
+		HTMLMediaElement.prototype.play = vi.fn(async () => undefined);
+	});
+
+	function NewFoodProbe() {
+		const location = useLocation();
+		const navigate = useNavigate();
+		return (
+			<>
+				<h1>新增食物頁</h1>
+				<p data-testid="state">{JSON.stringify(location.state)}</p>
+				<button type="button" onClick={() => navigate(-1)}>
+					返回
+				</button>
+			</>
+		);
+	}
+
+	function renderWith(
+		entries: Array<string | { pathname: string; state: unknown }>,
+	) {
+		render(
+			<QueryClientProvider client={newClient()}>
+				<MemoryRouter
+					initialEntries={entries}
+					initialIndex={entries.length - 1}
+				>
+					<Routes>
+						<Route path="/" element={<p>總覽頁</p>} />
+						<Route path="/diet" element={<p>飲食頁</p>} />
+						<Route path="/meals/:id/edit" element={<EditMeal />} />
+						<Route path="/foods/new" element={<NewFoodProbe />} />
+					</Routes>
+				</MemoryRouter>
+			</QueryClientProvider>,
+		);
+	}
+
+	it("帶著 pickedFood 回來：「加一項」已經打開、選好那個食物", async () => {
+		mockApi(routes());
+		renderWith([
+			"/",
+			"/diet",
+			{ pathname: "/meals/5/edit", state: { pickedFood: RICE } },
+		]);
+
+		const form = await screen.findByRole("form", { name: "加一項" });
+		expect(within(form).getByText("已選擇：滷肉飯")).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "＋ 加一項" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("沒有 pickedFood：「加一項」照舊收著", async () => {
+		mockApi(routes());
+		renderWith(["/", "/diet", "/meals/5/edit"]);
+
+		expect(
+			await screen.findByRole("button", { name: "＋ 加一項" }),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByRole("form", { name: "加一項" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("加一項裡掃到沒命中 → 新增食物：returnTo 是這一餐、replace（返回回到進來之前的那一頁）", async () => {
+		mockApi(
+			routes(MEAL, [
+				{
+					method: "GET",
+					path: "/api/foods/by-barcode/",
+					handler: () =>
+						json({ code: "4710088432094", food: null, prefill: null }),
+				},
+			]),
+		);
+		renderWith(["/", "/diet", "/meals/5/edit"]);
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "＋ 加一項" }),
+		);
+		await userEvent.click(screen.getByRole("button", { name: "掃條碼" }));
+		const dialog = screen.getByRole("dialog", { name: "掃條碼" });
+		await userEvent.click(
+			within(dialog).getByRole("button", { name: "手動輸入條碼" }),
+		);
+		await userEvent.type(
+			within(dialog).getByLabelText("條碼"),
+			"4710088432094",
+		);
+		await userEvent.click(within(dialog).getByRole("button", { name: "查詢" }));
+		await userEvent.click(
+			await screen.findByRole("button", { name: "用這個條碼建立食物" }),
+		);
+
+		expect(
+			await screen.findByRole("heading", { name: "新增食物頁" }),
+		).toBeInTheDocument();
+		expect(JSON.parse(screen.getByTestId("state").textContent ?? "")).toEqual({
+			barcodeCode: "4710088432094",
+			barcodePrefill: null,
+			returnTo: "/meals/5/edit",
+		});
+		await userEvent.click(screen.getByRole("button", { name: "返回" }));
+		expect(await screen.findByText("飲食頁")).toBeInTheDocument();
 	});
 });

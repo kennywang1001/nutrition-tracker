@@ -1,8 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { MemoryRouter } from "react-router";
+import {
+	MemoryRouter,
+	Route,
+	Routes,
+	useLocation,
+	useNavigate,
+} from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
@@ -159,5 +165,130 @@ describe("食物庫 /foods", () => {
 			"href",
 			"/foods/new",
 		);
+	});
+});
+
+describe("食物庫：掃條碼（掃條碼規格 §11）", () => {
+	beforeEach(() => {
+		HTMLMediaElement.prototype.play = vi.fn(async () => undefined);
+	});
+
+	/** 食物庫＋兩個看得到網址與 router state 的假頁面。從 `/x` 進來：看得出是 push 還是 replace。 */
+	function renderLibrary() {
+		const client = new QueryClient({
+			defaultOptions: {
+				queries: { retry: false },
+				mutations: { retry: false },
+			},
+		});
+		render(
+			<QueryClientProvider client={client}>
+				<MemoryRouter initialEntries={["/x", "/foods"]} initialIndex={1}>
+					<Routes>
+						<Route path="/x" element={<p>上一頁</p>} />
+						<Route path="/foods" element={<FoodLibrary />} />
+						<Route
+							path="/foods/new"
+							element={<StateProbe title="新增食物頁" />}
+						/>
+						<Route
+							path="/foods/:id"
+							element={<StateProbe title="食物詳情頁" />}
+						/>
+					</Routes>
+				</MemoryRouter>
+			</QueryClientProvider>,
+		);
+	}
+
+	function StateProbe({ title }: { title: string }) {
+		const location = useLocation();
+		const navigate = useNavigate();
+		return (
+			<>
+				<h1>{title}</h1>
+				<p data-testid="path">{location.pathname}</p>
+				<p data-testid="state">{JSON.stringify(location.state)}</p>
+				<button type="button" onClick={() => navigate(-1)}>
+					返回
+				</button>
+			</>
+		);
+	}
+
+	async function scanManually(code: string) {
+		await userEvent.click(screen.getByRole("button", { name: "掃條碼" }));
+		const dialog = screen.getByRole("dialog", { name: "掃條碼" });
+		await userEvent.click(
+			within(dialog).getByRole("button", { name: "手動輸入條碼" }),
+		);
+		await userEvent.type(within(dialog).getByLabelText("條碼"), code);
+		await userEvent.click(within(dialog).getByRole("button", { name: "查詢" }));
+	}
+
+	it("命中 → 那個食物的詳情頁（沒有生效版本的也一樣，詳情頁看得到）", async () => {
+		mockApi([
+			{
+				method: "GET",
+				path: "/api/foods/by-barcode/",
+				handler: () =>
+					json({
+						code: "4710088432094",
+						food: { ...NO_REVISION_FOOD, id: 7, barcode: "4710088432094" },
+						prefill: null,
+					}),
+			},
+		]);
+		renderLibrary();
+
+		await scanManually("4710088432094");
+
+		expect(
+			await screen.findByRole("heading", { name: "食物詳情頁" }),
+		).toBeInTheDocument();
+		expect(screen.getByTestId("path")).toHaveTextContent("/foods/7");
+	});
+
+	it("沒命中 →「用這個條碼建立食物」→ /foods/new，state 帶條碼與預填、沒有 returnTo；一般的 push", async () => {
+		const prefill = {
+			name: "可口可樂",
+			brand: null,
+			base_unit: "ml",
+			per100: {
+				kcal: "42.00",
+				protein_g: "0.00",
+				fat_g: "0.00",
+				carb_g: "10.60",
+			},
+			serving: null,
+			source: "openfoodfacts",
+		};
+		mockApi([
+			{
+				method: "GET",
+				path: "/api/foods/by-barcode/",
+				handler: () => json({ code: "5449000000996", food: null, prefill }),
+			},
+		]);
+		renderLibrary();
+
+		await scanManually("5449000000996");
+		await userEvent.click(
+			await screen.findByRole("button", { name: "用這個條碼建立食物" }),
+		);
+
+		expect(
+			await screen.findByRole("heading", { name: "新增食物頁" }),
+		).toBeInTheDocument();
+		expect(JSON.parse(screen.getByTestId("state").textContent ?? "")).toEqual({
+			barcodeCode: "5449000000996",
+			barcodePrefill: prefill,
+			returnTo: null,
+		});
+		// push：返回回到食物庫（不是食物庫之前的那一頁）。
+		await userEvent.click(screen.getByRole("button", { name: "返回" }));
+		expect(
+			await screen.findByRole("heading", { name: "食物庫" }),
+		).toBeInTheDocument();
 	});
 });

@@ -9,6 +9,7 @@ import type { components } from "../api/schema";
 import { AiEstimatePanel } from "../components/AiEstimatePanel";
 import ui from "../components/ui.module.css";
 import { isPlainPositiveDecimal, perServingToPer100 } from "../lib/decimal";
+import type { NewFoodHandoff } from "../lib/new-food-handoff";
 
 type Food = components["schemas"]["FoodResponse"];
 type BaseUnit = components["schemas"]["BaseUnit"];
@@ -65,7 +66,12 @@ type NutritionBasis = "per100" | "perServing";
  *  不透過 App.tsx 的 route wrapper 傳 callback：新食物的 id 來自 mutation
  *  的回應本體，導去哪裡是這個畫面自己才知道的事，不是像 `LogMeal` 的
  *  `onSaved` 那樣「導回一個固定路徑」。 */
-export function NewFood() {
+type Props = {
+	/** 掃條碼沒命中帶來的交接（掃條碼規格 D20）。Task 10 才讀。 */
+	handoff?: NewFoodHandoff | null;
+};
+
+export function NewFood(_props: Props) {
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 

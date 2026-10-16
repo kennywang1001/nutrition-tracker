@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type ChangeEvent, useEffect, useRef, useState } from "react";
+import type { BarcodePrefill } from "../api/barcode";
 import { apiFetch } from "../api/client";
 import { ApiError, hasFieldError } from "../api/errors";
 import { AMOUNT_FORMAT_ERROR } from "../api/expenses";
@@ -55,15 +56,28 @@ type Props = {
 	initialItems?: readonly HandoffItem[];
 	/** 一開始就打開「讓 AI 配一餐」（規格 D15、D22）；只在掛載時讀。 */
 	startSuggesting?: boolean;
+	/** 一開始就選好的食物：掃條碼沒命中、到新增食物建好之後交回來的（掃條碼規格 D21）。只在掛載時讀。 */
+	initialFood?: Food;
+	/** 掃條碼沒命中的「用這個條碼建立食物」。導頁由 `LogMealRoute` 做（`replace`、帶 `returnTo`，
+	 *  掃條碼規格 D20）：這個元件不碰 router——它的測試不掛 Router。 */
+	onCreateFromBarcode?: (code: string, prefill: BarcodePrefill | null) => void;
 };
 
 /** 餐存好、照片沒傳上去時給總覽顯示的話。補傳走飲食頁 `MealList` 既有的上傳。 */
 export const PHOTO_UPLOAD_FAILED_NOTICE =
 	"這一餐已記錄，照片沒有傳上去，可以到飲食頁的那一餐補傳";
 
-export function LogMeal({ onSaved, initialItems, startSuggesting }: Props) {
+export function LogMeal({
+	onSaved,
+	initialItems,
+	startSuggesting,
+	initialFood,
+	onCreateFromBarcode,
+}: Props) {
 	const queryClient = useQueryClient();
-	const [selectedFood, setSelectedFood] = useState<Food | null>(null);
+	const [selectedFood, setSelectedFood] = useState<Food | null>(
+		initialFood ?? null,
+	);
 	const portion = usePortionQuantity(selectedFood?.id ?? null);
 	// 選填的餐費（P5 規格 §4.1）。有值時 POST /api/meals 會在同一個交易裡
 	// 建一筆 category=food、meal_id 指過來的支出。
@@ -119,8 +133,9 @@ export function LogMeal({ onSaved, initialItems, startSuggesting }: Props) {
 		setPhoto(file);
 	}
 	// 面板交回食物後，確認鈕消失、焦點掉到 body：把焦點移到「已選擇」那一行。
-	// 只在交回那一次移（旗標），不是每次 render。
-	const focusSelectedRef = useRef(false);
+	// 只在交回那一次移（旗標），不是每次 render。新增食物交回來的（initialFood）也一樣：
+	// 一掛上去焦點就在「已選擇」那一行，不是頁面的開頭。
+	const focusSelectedRef = useRef(initialFood !== undefined);
 	const selectedRef = useRef<HTMLParagraphElement>(null);
 	useEffect(() => {
 		if (focusSelectedRef.current && selectedRef.current !== null) {
@@ -336,6 +351,7 @@ export function LogMeal({ onSaved, initialItems, startSuggesting }: Props) {
 
 			<FoodPicker
 				onSelect={setSelectedFood}
+				onCreateFromBarcode={onCreateFromBarcode}
 				renderBelowSearch={(query) => (
 					<AiMealPanel
 						text={query}

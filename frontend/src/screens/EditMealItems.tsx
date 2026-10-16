@@ -4,6 +4,7 @@ import {
 	useQueryClient,
 } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router";
 import { apiFetch } from "../api/client";
 import { ApiError, hasFieldError } from "../api/errors";
 import type { Food } from "../api/foods";
@@ -16,6 +17,7 @@ import {
 	usePortionQuantity,
 } from "../components/PortionQuantityFields";
 import { formatMacro } from "../lib/decimal";
+import { newFoodState } from "../lib/new-food-handoff";
 import { useConfirmFocus } from "../lib/use-confirm-focus";
 import styles from "./EditMeal.module.css";
 
@@ -272,14 +274,24 @@ function ItemRow({
 
 /** 加一項（`POST /api/meals/{id}/items`）：選食物、份量、數量——跟記一餐
  *  同一組元件，搜尋框下面同樣有 AI 估算（AI 與編輯畫面的收尾規格 §2 第 1 項）。 */
-function AddItem({ mealId, onClose }: { mealId: number; onClose: () => void }) {
+function AddItem({
+	mealId,
+	onClose,
+	initialFood,
+}: {
+	mealId: number;
+	onClose: () => void;
+	/** 新增食物存好交回來的（掃條碼規格 D21）。只在掛載時讀。 */
+	initialFood: Food | null;
+}) {
 	const queryClient = useQueryClient();
-	const [food, setFood] = useState<Food | null>(null);
+	const navigate = useNavigate();
+	const [food, setFood] = useState<Food | null>(initialFood);
 	const portion = usePortionQuantity(food?.id ?? null);
 	// 選好食物（清單或 AI 面板交回）之後焦點移到「已選擇」那一行（同記一餐）：
 	// AI 面板的「確認」跟著卡片消失，不移的話焦點掉到 body。只在選的那一次
-	// 移（旗標），不是每次 render。
-	const focusSelectedRef = useRef(false);
+	// 移（旗標），不是每次 render。交回來的食物也一樣：一打開就在那一行。
+	const focusSelectedRef = useRef(initialFood !== null);
 	const selectedRef = useRef<HTMLParagraphElement>(null);
 	useEffect(() => {
 		if (focusSelectedRef.current && selectedRef.current !== null) {
@@ -316,6 +328,14 @@ function AddItem({ mealId, onClose }: { mealId: number; onClose: () => void }) {
 		<div className={styles.editor}>
 			<FoodPicker
 				onSelect={select}
+				// `replace`（規格 D20）：編輯頁這一筆 history 換成新增食物、存好再換回來，
+				// 「關閉」（navigate(-1)）照舊回到進來之前的那一頁。已存的項目不受影響（每一項是立刻存的）。
+				onCreateFromBarcode={(code, prefill) =>
+					navigate("/foods/new", {
+						replace: true,
+						state: newFoodState(code, prefill, `/meals/${mealId}/edit`),
+					})
+				}
 				renderBelowSearch={(query) => (
 					<AiEstimatePanel
 						text={query}
@@ -365,8 +385,22 @@ function AddItem({ mealId, onClose }: { mealId: number; onClose: () => void }) {
 
 /** 編輯畫面的項目區（編輯餐點規格 §4.2 第 3 點）：每一項可以改份量／數量、
  *  刪除；最後可以加一項。每個動作各自立即送出。 */
-export function EditMealItems({ meal }: { meal: Meal }) {
-	const [editor, setEditor] = useState<Editor>(null);
+export function EditMealItems({
+	meal,
+	initialFood = null,
+}: {
+	meal: Meal;
+	/** 新增食物交回來的食物：「加一項」一開始就打開、選好它（掃條碼規格 D21）。只在掛載時讀。 */
+	initialFood?: Food | null;
+}) {
+	const [editor, setEditor] = useState<Editor>(
+		initialFood !== null ? { kind: "add" } : null,
+	);
+	// 交回來的食物只給第一次打開的「加一項」：收起來（放棄、加好、改開別的編輯器）之後再打開是空的。
+	const [pending, setPending] = useState(initialFood);
+	useEffect(() => {
+		if (editor?.kind !== "add") setPending(null);
+	}, [editor]);
 	const close = () => setEditor(null);
 
 	return (
@@ -395,7 +429,7 @@ export function EditMealItems({ meal }: { meal: Meal }) {
 				</ul>
 			)}
 			{editor?.kind === "add" ? (
-				<AddItem mealId={meal.id} onClose={close} />
+				<AddItem mealId={meal.id} onClose={close} initialFood={pending} />
 			) : (
 				<button type="button" onClick={() => setEditor({ kind: "add" })}>
 					＋ 加一項

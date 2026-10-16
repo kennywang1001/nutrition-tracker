@@ -38,7 +38,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
 
-function isFood(value: unknown): value is Food {
+/** router state 裡的食物（配餐的交接、新增食物交回來的 `pickedFood` 共用）。 */
+export function isFood(value: unknown): value is Food {
 	return (
 		isRecord(value) &&
 		typeof value.id === "number" &&

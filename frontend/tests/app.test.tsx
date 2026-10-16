@@ -429,6 +429,77 @@ describe("App", () => {
 			screen.queryByRole("button", { name: "記錄" }),
 		).not.toBeInTheDocument();
 	});
+
+	/** 新增食物存好交回來的那個食物（掃條碼規格 D21）。 */
+	const PICKED = {
+		id: 9,
+		name: "洋芋片",
+		brand: null,
+		barcode: "4710088432094",
+		is_global: false,
+		nutrition: {
+			base_unit: "g",
+			kcal: "514.29",
+			protein_g: "6.00",
+			fat_g: "28.00",
+			carb_g: "60.86",
+		},
+	};
+
+	/** 記一餐的清單、交回來的食物的份量、條碼查詢（沒命中）。`/api/foods/by-barcode/`、
+	 *  `/api/foods/9/portions` 都不包含常吃／最近吃的路徑，順序不影響；照樣具體的在前。 */
+	function barcodeBackend(url: string) {
+		if (url.includes("/api/foods/by-barcode/"))
+			return jsonResponse({ code: "4710088432094", food: null, prefill: null });
+		if (url.includes("/api/foods/9/portions")) return jsonResponse([]);
+		return foodLists(url);
+	}
+
+	it("新增食物交回 pickedFood：記一餐一開始就選好它，history 的 state 清掉", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockBackend(barcodeBackend);
+		openWithState("/meals/new", { pickedFood: PICKED });
+
+		render(<App />);
+
+		expect(await screen.findByText("已選擇：洋芋片")).toBeInTheDocument();
+		await waitFor(() => expect(window.history.state?.usr ?? null).toBeNull());
+		// 清掉 history 之後畫面上照樣選著（讀一次、放進自己的 state）。
+		expect(screen.getByText("已選擇：洋芋片")).toBeInTheDocument();
+	});
+
+	it("記一餐掃到沒命中 →「用這個條碼建立食物」：到新增食物、history 沒有變長（replace，D20）", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		HTMLMediaElement.prototype.play = vi.fn(async () => undefined);
+		mockBackend(barcodeBackend);
+		window.history.replaceState(null, "", "/meals/new");
+		const lengthBefore = window.history.length;
+
+		render(<App />);
+		await userEvent.click(
+			await screen.findByRole("button", { name: "掃條碼" }),
+		);
+		const dialog = screen.getByRole("dialog", { name: "掃條碼" });
+		await userEvent.click(
+			within(dialog).getByRole("button", { name: "手動輸入條碼" }),
+		);
+		await userEvent.type(
+			within(dialog).getByLabelText("條碼"),
+			"4710088432094",
+		);
+		await userEvent.click(within(dialog).getByRole("button", { name: "查詢" }));
+		await userEvent.click(
+			await screen.findByRole("button", { name: "用這個條碼建立食物" }),
+		);
+
+		expect(
+			await screen.findByRole("heading", { level: 1, name: "新增食物" }),
+		).toBeInTheDocument();
+		expect(window.location.pathname).toBe("/foods/new");
+		expect(window.history.length).toBe(lengthBefore);
+		// 新增食物讀一次交接、清掉 history 的 state（重新整理不會再帶一次）。
+		await waitFor(() => expect(window.history.state?.usr ?? null).toBeNull());
+	});
 });
 
 describe("App：被登出（帳號設定審查 I2）", () => {

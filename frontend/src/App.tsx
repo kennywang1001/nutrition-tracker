@@ -27,6 +27,11 @@ import { SideNav } from "./components/SideNav";
 import { TabBar } from "./components/TabBar";
 import { contentWidthFor } from "./lib/layout";
 import { readLinkToken } from "./lib/link-token";
+import {
+	newFoodHandoffFrom,
+	newFoodState,
+	pickedFoodFrom,
+} from "./lib/new-food-handoff";
 import { plannerHandoffFrom } from "./lib/planner";
 import { useIsDesktop } from "./lib/use-is-desktop";
 import { AddExpense } from "./screens/AddExpense";
@@ -72,6 +77,8 @@ function LogMealRoute() {
 	const navigate = useNavigate();
 	const location = useLocation();
 	const [handoff] = useState(() => plannerHandoffFrom(location.state));
+	// 掃條碼（規格 D21）：新增食物存好交回來的那個食物，同一套「讀一次、清掉 history 的 state」。
+	const [picked] = useState(() => pickedFoodFrom(location.state));
 	useEffect(() => {
 		if (location.state == null) return;
 		navigate(`${location.pathname}${location.search}`, {
@@ -83,6 +90,15 @@ function LogMealRoute() {
 		<LogMeal
 			initialItems={handoff?.kind === "items" ? handoff.items : undefined}
 			startSuggesting={handoff?.kind === "suggest"}
+			initialFood={picked ?? undefined}
+			// `replace`（規格 D20）：記一餐這一筆 history 換成新增食物，存好再換回來——history 裡
+			// 不會多出兩個一樣的記一餐。
+			onCreateFromBarcode={(code, prefill) =>
+				navigate("/foods/new", {
+					replace: true,
+					state: newFoodState(code, prefill, "/meals/new"),
+				})
+			}
 			onSaved={({ photoFailed }) =>
 				navigate(
 					"/",
@@ -93,6 +109,23 @@ function LogMealRoute() {
 			}
 		/>
 	);
+}
+
+/** `/foods/new`：掃條碼沒命中帶來的交接（條碼、Open Food Facts 的預填、存好要回去的地方；
+ *  掃條碼規格 D20）。同 `LogMealRoute`：讀一次放進自己的 state、`replace` 清掉 history 的 state——
+ *  重新整理不會再預填一次。 */
+function NewFoodRoute() {
+	const navigate = useNavigate();
+	const location = useLocation();
+	const [handoff] = useState(() => newFoodHandoffFrom(location.state));
+	useEffect(() => {
+		if (location.state == null) return;
+		navigate(`${location.pathname}${location.search}`, {
+			replace: true,
+			state: null,
+		});
+	}, [location.state, location.pathname, location.search, navigate]);
+	return <NewFood handoff={handoff} />;
 }
 
 /** `/expenses/new`：記完或關閉都回總覽。 */
@@ -299,7 +332,7 @@ export function App() {
 								（matchRoutes([{path:"/foods/:id"},{path:"/foods/new"}],
 								"/foods/new") 即使 :id 排在前面，命中的仍然是 "/foods/new"）。
 								兩個路由誰先誰後寫在這裡純粹是可讀性。 */}
-							<Route path="/foods/new" element={<NewFood />} />
+							<Route path="/foods/new" element={<NewFoodRoute />} />
 							<Route path="/foods/:id" element={<FoodDetail />} />
 							{/* 補劑（P3-C Task 2）：新增「我有在使用的」＋「當天有吃就點
 								一份進去」。tab bar 固定是 總覽／報表／＋／飲食／我的，

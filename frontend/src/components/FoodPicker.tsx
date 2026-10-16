@@ -1,10 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
+import type { BarcodePrefill } from "../api/barcode";
 import { apiFetch } from "../api/client";
 import { type Food, useFoodSearch } from "../api/foods";
 import { queryKeys } from "../api/queries";
 import { formatMacro } from "../lib/decimal";
 import { useDebounced } from "../lib/use-debounced";
+import { BarcodeScanEntry } from "./BarcodeScanEntry";
 import styles from "./FoodPicker.module.css";
 import { FoodResultList } from "./FoodResultList";
 
@@ -59,6 +61,9 @@ type Props = {
 	/** 選填：放在搜尋框正下方的東西，拿到目前的搜尋字（trim 過）。記一餐與
 	 *  編輯這一餐的「加一項」用它放 AI 估算面板（AI 估算前端規格 §5.1）。 */
 	renderBelowSearch?: (query: string) => ReactNode;
+	/** 掃條碼沒命中時的「用這個條碼建立食物」（掃條碼規格 §11）：呼叫端決定帶到哪裡、怎麼回來。
+	 *  不給就只說找不到。 */
+	onCreateFromBarcode?: (code: string, prefill: BarcodePrefill | null) => void;
 };
 
 /** 搜尋框＋常吃／最近吃清單（記一餐與編輯餐點的「加一項」共用）。
@@ -68,7 +73,11 @@ type Props = {
  *
  *  食物庫不用這個元件——那邊選完是進詳情頁，而且有 scope 選擇器
  *  （見 `useFoodSearch` 的註解）。 */
-export function FoodPicker({ onSelect, renderBelowSearch }: Props) {
+export function FoodPicker({
+	onSelect,
+	renderBelowSearch,
+	onCreateFromBarcode,
+}: Props) {
 	const [searchInput, setSearchInput] = useState("");
 
 	// P1 規格第 11 節：這兩個端點的索引就是為了這個畫面顧的——
@@ -102,6 +111,12 @@ export function FoodPicker({ onSelect, renderBelowSearch }: Props) {
 					onChange={(event) => setSearchInput(event.target.value)}
 				/>
 			</div>
+			{/* 掃到就跟從清單選一樣；沒有生效版本的記不了，跟清單的按鈕一樣不能選（requireNutrition）。 */}
+			<BarcodeScanEntry
+				onFood={onSelect}
+				onCreate={onCreateFromBarcode}
+				requireNutrition
+			/>
 			{renderBelowSearch?.(searchInput.trim())}
 
 			{hasSearchQuery && (
