@@ -111,6 +111,37 @@ def test_a_missing_or_bad_number_means_no_prefill(broken):
     assert prefill_from_product(product(nutriments=nutriments(**broken))) is None
 
 
+# 審查 I1：大到 `quantize` 放不下（約 1e26 以上）的數字以前丟 InvalidOperation → 端點 500，
+# 而且錯誤不快取、每次掃都重試。現在跟其他壞數字一樣是「沒有預填」。
+ABSURD = [
+    {"proteins_100g": 1e40},
+    {"proteins_100g": "1e30"},
+    {"proteins_100g": 10**30},
+    {"energy-kcal_100g": None, "energy-kj_100g": "1e40"},
+    {"fat_100g": 1_000_001},  # 超過 to_decimal 的上限（1e6），還沒到 quantize 放不下
+]
+
+
+@pytest.mark.parametrize("broken", ABSURD)
+def test_absurd_numbers_mean_no_prefill(broken):
+    assert prefill_from_product(product(nutriments=nutriments(**broken))) is None
+
+
+def test_the_bound_is_inclusive_of_a_million():
+    """上限是 `abs(n) > 1e6` 才拒絕；1e6 本身照樣轉成 Decimal（再交給 NutritionInput 擋範圍）。"""
+    assert off.to_decimal(1_000_000) == Decimal(1_000_000)
+    assert off.to_decimal(-1_000_000) == Decimal(-1_000_000)
+    assert off.to_decimal("1000000.01") is None
+    assert off.to_decimal(-1_000_001) is None
+
+
+def test_prefill_survives_an_invalid_operation_anyway(monkeypatch):
+    """第二道防線：就算哪天有一個沒被上限擋到的值讓 quantize 丟 InvalidOperation，也是 None
+    （規格 D9：每一種失敗都是沒有建議），不是 500。"""
+    monkeypatch.setattr(off, "to_decimal", lambda value: Decimal("1e40"))
+    assert prefill_from_product(product()) is None
+
+
 @pytest.mark.parametrize(
     "payload",
     [

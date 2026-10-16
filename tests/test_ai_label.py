@@ -120,6 +120,23 @@ def test_malformed_replies_are_ai_bad_response(text):
     assert caught.value.code == "AI_BAD_RESPONSE"
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"serving_protein_g": 1e40},
+        {"serving_protein_g": "1e30"},
+        {"per_100_kj": "1e40"},
+        {"serving_size": 10**30},
+    ],
+)
+def test_numbers_too_large_to_quantize_are_ai_bad_response(overrides):
+    """審查 I1 的同一種輸入在營養標示這條路：`_round_to_cents` 的 quantize 丟 InvalidOperation
+    時原樣交回去，由 schema 的上限拒絕——是 502 `AI_BAD_RESPONSE`，不是 500。"""
+    with pytest.raises(BadGatewayError) as caught:
+        parse_raw_label(reply(**overrides))
+    assert caught.value.code == "AI_BAD_RESPONSE"
+
+
 def test_numbers_are_rounded_before_the_range_checks():
     """I2：三位小數不是垃圾回覆。0.004 捨成 0.00、不是負的。"""
     label = parse_raw_label(reply(serving_fat_g=9.8049, serving_protein_g=-0.004))

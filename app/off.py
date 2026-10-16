@@ -19,7 +19,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Literal, Protocol
 
 import httpx
@@ -135,7 +135,18 @@ def prefill_from_product(payload: object) -> ProductPrefill | None:
 
     能量（kcal，或 kJ 換算）與三大營養素**都要有**，而且四捨五入到兩位之後要過 `NutritionInput`
     （跟新增食物同一組範圍）——缺一個就整個不要（規格 D9）：半套的數字比沒有更容易被當成真的存下去。
+
+    **不丟例外**（規格 D9：每一種失敗都是沒有建議）：`to_decimal` 已經擋掉大到 `quantize`
+    放不下的數字（審查 I1），這裡再接住 `InvalidOperation` 當第二道防線——漏掉的話是 500，
+    而且錯誤不快取、每掃一次就重打一次 OFF。
     """
+    try:
+        return _prefill_from_product(payload)
+    except InvalidOperation:
+        return None
+
+
+def _prefill_from_product(payload: object) -> ProductPrefill | None:
     if not isinstance(payload, dict) or payload.get("status") != 1:
         return None
     product = payload.get("product")

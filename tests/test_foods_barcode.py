@@ -7,6 +7,7 @@ OFF 一律是假的：要結果就 `app.dependency_overrides[get_product_lookup]
 
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import select
 
 from app import off
@@ -357,6 +358,46 @@ async def test_a_miss_without_off_data_has_no_prefill(client, db_session):
 
     assert response.json() == {"code": CODE, "food": None, "prefill": None}
     assert fake.codes == [CODE]
+
+
+@pytest.mark.parametrize(
+    "absurd",
+    [
+        {"proteins_100g": 1e40},
+        {"proteins_100g": "1e30"},
+        {"proteins_100g": 10**30},
+        {"energy-kcal_100g": None, "energy-kj_100g": "1e40"},
+    ],
+)
+async def test_absurd_off_numbers_are_200_without_a_prefill(client, db_session, absurd):
+    """審查 I1：真的 `OpenFoodFacts`（只有 fetcher 是假的）收到 quantize 放不下的數字——以前是 500，
+    而且錯誤不快取、每掃一次就重打一次 OFF。現在是 200、沒有預填。"""
+    user = await create_user(db_session)
+    nutriments = {
+        "energy-kcal_100g": 42,
+        "proteins_100g": 0,
+        "fat_100g": 0,
+        "carbohydrates_100g": 10.6,
+        **absurd,
+    }
+    payload = {
+        "status": 1,
+        "product": {
+            "product_name": "x",
+            "nutriments": {k: v for k, v in nutriments.items() if v is not None},
+        },
+    }
+
+    async def fetch(url):
+        return off.FetchResult(200, payload)
+
+    lookup = off.OpenFoodFacts(fetch=fetch)
+    app.dependency_overrides[get_product_lookup] = lambda: lookup
+
+    response = await client.get(f"/api/foods/by-barcode/{CODE}", headers=auth(user))
+
+    assert response.status_code == 200
+    assert response.json() == {"code": CODE, "food": None, "prefill": None}
 
 
 async def test_a_hit_never_asks_off(client, db_session):
