@@ -68,6 +68,81 @@
 13. 突變工具：`$S/bc-be-mutate.py`（JSON 規格、每個突變前備份、還原後逐位元組比對、`touch`、刪 `__pycache__`）。
     每一批之後 `git status`／`git diff` 確認沒有殘留。
 
+### 前端 Task 7–10（2026-10-16）
+
+| Task | commit | 新的測試 | 突變 |
+|---|---|---|---|
+| 7 API 層、`makeFood()` | `b54ff3a` | `barcode-lib.test.ts`、`barcode-api.test.ts`、`ai-api.test.ts` +3 | 計畫的 3 個＋2 個（不拿掉 Pydantic 前綴、不去全形空白），5／5 紅 |
+| 8 偵測器、掃描層 | `081dad7` | `barcode-detector.test.ts`、`barcode-scanner.test.tsx` | 計畫的 8 個＋4 個（沒相機時不接住偵測器的拒絕、Tab 不圈住、手電筒永遠不畫、Escape 不關），12／12 紅 |
+| 9 入口、交接 | `cab4a33` | `barcode-scan-entry.test.tsx`、`new-food-handoff.test.ts`、`log-meal-barcode.test.tsx`；`food-picker`、`food-library`、`edit-meal`、`app` 各加幾條 | 計畫的 6 個＋6 個（用打的字不用標準形式、加一項不帶 replace、initialFood 不移焦點、食物庫用 replace、查詢中不擋、NewFoodRoute 不清 state），12／12 紅 |
+| 10 新增食物、食物詳情 | `df206f4` | `new-food-barcode.test.tsx`、`food-detail.test.tsx` +11 | 計畫的 7 個＋6 個（不驗長度、不認 `BARCODE_EXISTS`、條碼的 422 不說人話、移除不移焦點、讀完不切回每 100、儲存中不擋），13／13 紅 |
+| 截圖之後的樣式 | `d5e8ea9` | — | — |
+
+整套前端：vitest 印的是 `Test Files 204 passed (204)`、`Tests 2978 passed (2978)`（開工前 188／2712——
+`Test Files` 是檔案數的兩倍，handover §7；這次新的測試檔 8 個）；typecheck、lint 乾淨。突變工具 `$S/bc-fe-mutate.py`（JSON 規格、
+改之前存原始位元組、還原後逐位元組比對、標出 `TypeCheckError` 的紅）。**兩個突變第一次寫成型別過不了的樣子**
+（8.10 的 `!== undefined` 沒有交集、10.8 的 `return null` 讓 import 沒用到），被標成 TYPE-ERROR 不算，改成型別
+過得去的寫法重跑才算紅。
+
+**Bundle**（`npm run build`）：
+
+| | 開工前 | Task 8（掃描層還沒有人 import） | Task 9 之後 | 全部做完 |
+|---|---|---|---|---|
+| `index-*.js` | 561.34 KB（gzip 171.07） | 一樣（tree-shake 掉了） | 573.05（175.32） | **578.20（176.78）**，＋16.86 KB |
+| `barcode-ponyfill-*.js` | — | — | 43.40（14.95） | 43.40（14.95） |
+| `zxing_reader-*.wasm` | — | — | 1,093.28（463.82） | 1,093.28（463.82） |
+| 預先快取 | 9 筆、621.83 KiB | — | 10 筆、678.36 KiB | 10 筆、684.87 KiB |
+
+主程式裡 `zxing` 出現 0 次；`dist/sw.js` 的清單有 ponyfill 的 JS、**沒有 `.wasm`**（規格 §7.1）。ponyfill 那一塊參照的是
+雜湊過的 `zxing_reader-<hash>.wasm`（套件內建的 jsDelivr 字串還在、被 `locateFile` 蓋掉，同計畫寫的）。
+`npm audit` 的 4 筆（brace-expansion、fast-uri、serialize-javascript、source-map-js）是開工前就有的開發工具依賴，
+不是這兩個套件帶進來的；`npm ls zxing-wasm` 只有一份 3.1.3（`deduped`）。
+
+**跟計畫不一樣的地方：**
+
+1. **`LogMeal` 不碰 router**（Task 9）：計畫要 `LogMeal` 自己 `useNavigate`，但 `log-meal*.test.tsx` 三個檔案都不掛
+   Router——一加就全紅。改成 `LogMeal` 多一個 `onCreateFromBarcode` prop，`replace` 與 `returnTo` 在 `LogMealRoute`
+   做（跟 `onSaved` 同一種分工）。「history 沒有變長」那一格因此寫在 `app.test.tsx`（真的 `BrowserRouter`、
+   `window.history.length`），`log-meal-barcode.test.tsx` 只斷言 prop 收到條碼與預填。
+2. **hook 多接住偵測器的 Promise**（Task 8）：計畫的 `start()` 在相機那條提早結束（沒有 `mediaDevices`、權限被拒）
+   時沒有人 `await` 偵測器——它被拒絕就是一個 unhandled rejection，而且「從照片讀條碼」照樣畫著、按了一定失敗。
+   現在先 `.catch`：偵測器壞了就說「這台裝置不能用相機掃條碼，請手動輸入。」、不畫照片那顆（新的一格
+   「偵測器載不起來、相機也沒有」，突變 8.9）。
+3. **`no-detector` 那句照計畫**（「…請手動輸入。」）**不照規格 §7.3**（「…請手動輸入或從照片讀。」）：照片用的是同一個
+   偵測器，那顆按鈕這時候不畫，叫人「從照片讀」是錯的指示。規格 §7.3 自己的下一句也是這個意思。
+4. **掃描層掛到 `body`**（`createPortal`，同 `ZoomablePhoto`）、Escape 與 Tab 的焦點圈住掛在 `window`：卡片的祖先建立了
+   疊放範圍時 z-index 蓋不過分頁列；焦點萬一掉到 body，鍵盤照樣關得掉。計畫寫的是外層 `onKeyDown`。外層同時掛
+   `ui.screen`，按鈕、輸入框、表單卡片的樣式照用。
+5. **`aria-hidden` 放在取景框的外層 div**，不放在 `<video>` 上：Biome 的 `noAriaHiddenOnFocusable` 一律擋 video
+   （有 `controls` 的 video 能聚焦）。
+6. **`BarcodeScanEntry` 的狀態行一直在畫面上、只換字**（`role="status"`；一插入就帶著字的 live region 常常不唸），
+   找不到時那一行就是卡片的標題；卡片用**後端回的標準形式**（12 位的 UPC-A 變 13 位，`newFoodHandoffFrom` 只收
+   8／13 位——用打的字的話交接會整個被丟掉，突變 9.7）。查詢中「掃條碼」用 `aria-disabled`＋擋（掃描層關掉之後焦點
+   就在它身上）。
+7. **`EditMealItems` 的交回食物只給第一次打開的「加一項」**：放棄、加好、改開別的編輯器之後再打開是空的
+   （`pending` state＋effect）。計畫只寫了初始的 editor。
+8. **`NewFood` 多兩件計畫沒寫的**：「已帶入包裝上的一份，不要的話清掉」（規格 D29 有、計畫的 Step 2 漏了；帶進來的
+   量還在時才顯示）；讀營養標示的時候照片的選擇是原生停用（同 AI 面板的「拍照估算」），焦點會掉到 body——所以一選
+   照片就把焦點移到狀態那一塊（`tabIndex=-1`，先「AI 讀取中…」、讀完換成結果或錯誤，都在同一塊）。
+   建立的導頁從 `useMutation({ onSuccess })` 移到 `mutate` 的第二個參數（handover §7）。
+9. **`FoodDetail` 多了 `useMe()`**：`tests/food-detail.test.tsx` 的 `foodRoutes` 預設回一般使用者的 `/api/me`
+   （既有的測試原本沒有這條，請求會丟「沒有準備回應」、靜靜變成 query 錯誤）。「移除條碼」成功之後那顆按鈕不見了，
+   焦點移到輸入框；`handleSubmit` 的 busy 守衛拿掉（`save` 已經擋了，多一份殺不死——突變 10.13 守 `save` 那一份）。
+10. **`BARCODE_LENGTH_HINT` 在 `lib/barcode.ts`**（掃描層、新增食物、食物詳情共用），不在掃描層的元件裡——
+    新增食物 import 元件只為了一個字串，會把掃描層綁在它身上。
+11. **setup 的 ponyfill mock 是 `vi.fn`**：`barcode-detector.test.ts` 斷言「走到 ponyfill」時順便證明 setupFiles 裡的
+    `vi.mock` 在 vitest 5 有生效（計畫擔心的那件事沒有發生）。
+12. **截圖看出來改的**（`d5e8ea9`）：掃描層在電腦上整欄置中（640）；「從照片讀條碼」被 `.screen` 的 label 規則縮成
+    13px；找不到的卡片內文比標題大；「找不到這個條碼的資料」原本是裸字；一致性那一句用危險色；食物詳情的條碼值與表單
+    分開。截圖在 `$S/barcode/`（`m-*` 390×844、`d-*` 1280×800，`*-06b-dark-*`、`*-13-dark-*` 是深色）。
+13. **dev 伺服器的依賴預先打包**：開著的 `npm run dev` 是在裝 `barcode-detector` 之前起的，第一次打開掃描層時 Vite
+    才發現 `barcode-detector/ponyfill`、重新打包、**整頁重新載入**（第一次截圖的腳本因此找不到掃描層）。重新起的
+    dev 伺服器在啟動時就會掃到它（`node_modules/.vite/deps/` 現在有 `barcode-detector_ponyfill.js`）。Task 11 的 e2e
+    若在 CI 第一次打開掃描層時看到重新載入，在 `vite.config.ts` 加 `optimizeDeps.include: ["barcode-detector/ponyfill"]`。
+14. **截圖時掃描層用的是 ponyfill**：Windows 的 headless Chromium 沒有原生 `BarcodeDetector`；Playwright 的假相機
+    （`--use-fake-device-for-media-stream`）讓狀態從「正在開啟相機…」走到「把條碼對準框框」，dev 伺服器服務的 wasm
+    載得起來、沒有 pageerror。手機（390）上掃描層的按鈕量到 46／46，手動輸入框與「查詢」44。
+
 ## 與規格的差異
 
 （執行完填摘要。）
