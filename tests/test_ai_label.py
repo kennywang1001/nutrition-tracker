@@ -91,6 +91,12 @@ def test_an_incomplete_per_100_column_falls_back_to_per_serving():
         {key: None for key in PER_SERVING if key not in ("name", "base_unit", "confidence")},
         {"serving_size": 0.05},  # 換算後熱量 360000 → 超出新增食物的範圍
         {"serving_size": 3.5, "serving_kcal": 900},  # 每 100：25714 kcal
+        # 審查 M3：35 讀成 3.5——每 100 是 5142.86 kcal、三大營養素合計 948.57 g。每一項都在
+        # NutritionInput 的範圍裡（kcal ≤ 10000、各 ≤ 1000），以前會過。
+        {"serving_size": 3.5},
+        # 印著的每 100 那一欄也一樣：熱量超過純脂肪、或三大營養素加起來超過 100 g。
+        {"per_100_kcal": 945.01, "per_100_protein_g": 0, "per_100_fat_g": 99, "per_100_carb_g": 0},
+        {"per_100_kcal": 400, "per_100_protein_g": 50, "per_100_fat_g": 5, "per_100_carb_g": 50.01},
     ],
 )
 def test_unreadable_labels(overrides):
@@ -98,6 +104,26 @@ def test_unreadable_labels(overrides):
         parse_raw_label(reply(**overrides))
     assert caught.value.code == "AI_LABEL_UNREADABLE"
     assert "這一次也算在今天的次數裡" in caught.value.message
+
+
+@pytest.mark.parametrize(
+    ("kcal", "protein", "fat", "carb"),
+    [
+        (945, 0, 100, 5),  # 兩個上限剛好（各多 5% 給四捨五入）
+        (884, 0, 100, 0),  # 純油
+        (900, 0, 0, 0),
+    ],
+)
+def test_physically_possible_extremes_are_accepted(kcal, protein, fat, carb):
+    label = parse_raw_label(
+        reply(
+            per_100_kcal=kcal,
+            per_100_protein_g=protein,
+            per_100_fat_g=fat,
+            per_100_carb_g=carb,
+        )
+    )
+    assert (label.basis, label.kcal) == ("per_100", Decimal(kcal).quantize(Decimal("0.01")))
 
 
 @pytest.mark.parametrize(

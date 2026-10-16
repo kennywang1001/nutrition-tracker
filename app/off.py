@@ -26,7 +26,7 @@ import httpx
 from pydantic import ValidationError
 
 from app.models.food import BaseUnit
-from app.nutrition_units import kj_to_kcal, round_cents, to_decimal
+from app.nutrition_units import is_physically_plausible, kj_to_kcal, round_cents, to_decimal
 from app.schemas.food import NutritionInput
 from app.schemas.validators import single_line
 
@@ -134,7 +134,8 @@ def prefill_from_product(payload: object) -> ProductPrefill | None:
     """OFF 的回應（已經 `json.loads`）→ 預填建議；用不上就 None。純函式。
 
     能量（kcal，或 kJ 換算）與三大營養素**都要有**，而且四捨五入到兩位之後要過 `NutritionInput`
-    （跟新增食物同一組範圍）——缺一個就整個不要（規格 D9）：半套的數字比沒有更容易被當成真的存下去。
+    （跟新增食物同一組範圍）與物理上限（`is_physically_plausible`：熱量 ≤ 945、三大營養素合計
+    ≤ 105，審查 M3）——缺一個就整個不要（規格 D9）：半套的數字比沒有更容易被當成真的存下去。
 
     **不丟例外**（規格 D9：每一種失敗都是沒有建議）：`to_decimal` 已經擋掉大到 `quantize`
     放不下的數字（審查 I1），這裡再接住 `InvalidOperation` 當第二道防線——漏掉的話是 500，
@@ -173,8 +174,12 @@ def _prefill_from_product(payload: object) -> ProductPrefill | None:
         )
     except ValidationError:
         return None
+    # 範圍內但物理上不可能（例如 kJ 填進 kcal 的欄位）：OFF 是人工輸入的資料庫，
+    # 這種錯不少（審查 M3）。
+    if not is_physically_plausible(checked.kcal, checked.protein_g, checked.fat_g, checked.carb_g):
+        return None
 
-    name = _clean_text(product.get("product_name_zh")) or _clean_text(product.get("product_name"))
+    name =_clean_text(product.get("product_name_zh")) or _clean_text(product.get("product_name"))
     return ProductPrefill(
         name=name,
         brand=_first_brand(product.get("brands")),

@@ -34,6 +34,25 @@ def per_100_from_serving(value: Decimal, serving_size: Decimal) -> Decimal:
     return round_cents(value * _HUNDRED / serving_size)
 
 
+# 物理上限（審查 M3）：每 100 g（或 ml）裡蛋白質＋脂肪＋碳水不會超過 100 g；熱量不會超過純脂肪
+# 的 900 kcal（9 kcal/g × 100 g）。兩個都多 5% 給四捨五入（標示本身的進位、每份換算每 100）。
+MAX_MACROS_PER_100 = Decimal(105)
+MAX_KCAL_PER_100 = Decimal(945)
+
+
+def is_physically_plausible(
+    kcal: Decimal, protein_g: Decimal, fat_g: Decimal, carb_g: Decimal
+) -> bool:
+    """每 100 的四個數字在物理上可不可能。`NutritionInput` 的範圍（kcal ≤ 10000、各 ≤ 1000）是給人
+    手打的寬鬆上限；外部讀來的數字（AI 讀的標示、OFF）要再過這一關——每一份量 35 讀成 3.5 的
+    標示換算出 5142.86 kcal，每一項都在 `NutritionInput` 裡（審查 M3）。
+
+    只用在預填的來源上，不限制使用者自己填的食物。每 100 ml 的密度超過 1 的極端液體（蜂蜜、
+    糖漿以 ml 標示）可能超過 105 g，會被當成讀錯——那種標示幾乎都是每 100 g。
+    """
+    return protein_g + fat_g + carb_g <= MAX_MACROS_PER_100 and kcal <= MAX_KCAL_PER_100
+
+
 def to_decimal(value: object) -> Decimal | None:
     """外部來的數字（JSON 的 int／float／字串）→ 有限、`abs(n) ≤ 1e6` 的 `Decimal`；不是就 None。
 

@@ -127,6 +127,32 @@ def test_absurd_numbers_mean_no_prefill(broken):
     assert prefill_from_product(product(nutriments=nutriments(**broken))) is None
 
 
+@pytest.mark.parametrize(
+    "impossible",
+    [
+        # 審查 M3：每一項都在 NutritionInput 的範圍裡，但物理上不可能——熱量超過純脂肪（945 是
+        # 900 多 5% 給四捨五入）、或每 100 g 裡三大營養素加起來超過 105 g。
+        # OFF 常見的是 kJ 填進 kcal。
+        {"energy-kcal_100g": 945.01},
+        {"energy-kcal_100g": 2000},
+        {"proteins_100g": 50, "fat_100g": 5, "carbohydrates_100g": 50.01},
+    ],
+)
+def test_physically_impossible_numbers_mean_no_prefill(impossible):
+    assert prefill_from_product(product(nutriments=nutriments(**impossible))) is None
+
+
+@pytest.mark.parametrize(
+    "extreme",
+    [
+        {"energy-kcal_100g": 945, "fat_100g": 100, "carbohydrates_100g": 5},
+        {"energy-kcal_100g": 884, "fat_100g": 100, "carbohydrates_100g": 0},
+    ],
+)
+def test_physically_possible_extremes_are_a_prefill(extreme):
+    assert prefill_from_product(product(nutriments=nutriments(**extreme))) is not None
+
+
 def test_the_bound_is_inclusive_of_a_million():
     """上限是 `abs(n) > 1e6` 才拒絕；1e6 本身照樣轉成 Decimal（再交給 NutritionInput 擋範圍）。"""
     assert off.to_decimal(1_000_000) == Decimal(1_000_000)

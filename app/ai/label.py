@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from app.ai.estimator import _round_to_cents
 from app.errors import BadGatewayError
 from app.models.food import BaseUnit
-from app.nutrition_units import kj_to_kcal, per_100_from_serving
+from app.nutrition_units import is_physically_plausible, kj_to_kcal, per_100_from_serving
 from app.schemas.food import NutritionInput
 from app.schemas.validators import single_line
 
@@ -165,8 +165,10 @@ def parse_raw_label(response_text: str) -> RawLabel:
     - 不是 JSON、不是物件、欄位不合 schema → `AI_BAD_RESPONSE`（同其他 AI 端點）。
     - 每 100 那一欄齊全 → 用它；否則每份那一欄齊全＋有每一份量 → 換算（規格 §8.3）；
       都不行 → `AI_LABEL_UNREADABLE`。
-    - 換算出來的每 100 過不了 `NutritionInput`（例如每一份量讀成 3.5 而不是 35）→
-      `AI_LABEL_UNREADABLE`。
+    - 每 100 的四個數字過不了 `NutritionInput`、或物理上不可能（`is_physically_plausible`：
+      熱量 > 945 kcal、或蛋白質＋脂肪＋碳水 > 105 g）→ `AI_LABEL_UNREADABLE`。例如每一份量
+      35 讀成 3.5：每份 180 kcal 換算成 5142.86 kcal／100 g——在 `NutritionInput` 的範圍
+      （≤ 10000）裡，是物理上限擋下的（審查 M3）。印著的每 100 那一欄也過同一關。
     """
     try:
         parsed_json = json.loads(response_text)
@@ -225,6 +227,8 @@ def parse_raw_label(response_text: str) -> RawLabel:
         )
     except ValidationError as exc:
         raise BadGatewayError(*_UNREADABLE) from exc
+    if not is_physically_plausible(checked.kcal, checked.protein_g, checked.fat_g, checked.carb_g):
+        raise BadGatewayError(*_UNREADABLE)
 
     return RawLabel(
         name=label.name,
