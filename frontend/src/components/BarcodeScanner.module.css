@@ -1,0 +1,97 @@
+/* 全螢幕的掃描層（BarcodeScanner.tsx）。外層同時掛 ui.module.css 的 .screen（按鈕、輸入框、
+ * 表單卡片的樣式照用）；這裡的 class 是一般權重（0,1,0），穩穩贏過 .screen 的零權重規則。 */
+
+/* z-index 同 ZoomablePhoto 的檢視層：蓋過分頁列與側欄。 */
+.overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 100;
+	box-sizing: border-box;
+	padding: var(--space-4);
+	padding-top: calc(var(--space-4) + env(safe-area-inset-top, 0px));
+	padding-bottom: calc(var(--space-4) + var(--safe-bottom));
+	background: var(--color-bg);
+	color: var(--color-text);
+	overflow-y: auto;
+}
+
+.title {
+	margin: 0;
+	font-size: 20px;
+	font-weight: 700;
+	color: var(--color-text);
+}
+
+/* .screen 讓直接底下的 div 變成卡片；取景框自己決定內距與底色。 */
+.viewfinder {
+	position: relative;
+	flex-shrink: 0;
+	width: 100%;
+	max-width: 640px;
+	align-self: center;
+	aspect-ratio: 4 / 3;
+	padding: 0;
+	border-radius: var(--radius-card);
+	background: var(--viewer-scrim);
+	overflow: hidden;
+}
+
+.video {
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+/* 對準用的框線：只是提示，偵測讀的是整個畫面。 */
+.frame {
+	position: absolute;
+	top: 30%;
+	left: 10%;
+	width: 80%;
+	height: 40%;
+	box-sizing: border-box;
+	border: 2px solid var(--color-accent);
+	border-radius: var(--radius-button);
+	pointer-events: none;
+}
+
+.status {
+	font-size: 15px;
+	color: var(--color-text-muted);
+}
+
+.problem {
+	font-size: 15px;
+	color: var(--color-text);
+}
+
+/* .screen 的卡片規則也選得到它：這一列不是卡片，拿掉底色與內距。 */
+.actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+	padding: 0;
+	background: none;
+}
+
+.actions button {
+	min-height: 44px;
+}
+
+.manualRow {
+	display: flex;
+	gap: var(--space-2);
+}
+
+.manualRow input {
+	flex: 1;
+	min-width: 0;
+	min-height: 44px;
+	font-size: 16px;
+}
+
+.manualRow button {
+	flex-shrink: 0;
+	min-height: 44px;
+}

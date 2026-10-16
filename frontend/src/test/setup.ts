@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { beforeEach } from "vitest";
+import { beforeEach, vi } from "vitest";
 import { resetDesktopQueryForTests } from "../lib/use-is-desktop";
 import { installMatchMedia, resetDesktop } from "./media";
 
@@ -25,6 +25,14 @@ if (typeof URL.revokeObjectURL !== "function") {
 		// 沒有真的物件 URL 註冊表可以清——見上面的說明。
 	};
 }
+
+// 掃條碼（規格 D15）：沒有原生 BarcodeDetector 時 `lib/barcode-detector.ts` 會 import() ponyfill，
+// 它會去抓 zxing 的 wasm——jsdom 抓不到，而且測試不該依賴它。每個測試檔都換成一個永遠讀不到
+// 東西的假偵測器；要測「讀到了」的測試自己注入偵測器（`BarcodeScanner` 的 `loadDetector`）。
+// `vi.fn`：`tests/barcode-detector.test.ts` 斷言「沒有原生 → 走到這裡」，也順便證明這個 mock 有生效。
+vi.mock("../lib/barcode-ponyfill", () => ({
+	createPonyfillDetector: vi.fn(() => ({ detect: async () => [] })),
+}));
 
 // 電腦版版面（規格 §6）：jsdom 沒有 matchMedia；預設是手機版。
 // useIsDesktop 快取它的 MediaQueryList，每個測試前丟掉，從乾淨的狀態開始。
