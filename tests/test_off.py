@@ -1,7 +1,9 @@
 """Open Food Facts：回應 → 預填建議（純函式）、用戶端的快取與失敗（假 fetcher）、真的 httpx 那一層
 （`httpx.MockTransport`，不打網路）。掃條碼規格 §6。"""
 
+import asyncio
 import logging
+import time
 from decimal import Decimal
 
 import httpx
@@ -338,3 +340,85 @@ async def test_a_too_large_or_non_json_body_has_no_body(monkeypatch):
     )
     assert (await off._real_http_get("https://example.invalid/x")).body is None
     assert (await off._real_http_get("https://example.invalid/x")).body is None
+
+
+def _mock_client(monkeypatch, handler):
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        off.httpx,
+        "AsyncClient",
+        lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw),
+    )
+
+
+async def test_an_oversized_body_stops_reading_at_the_cap(monkeypatch):
+    """審查 M4：以前 `client.get` 先把整個回應讀進記憶體，才看有沒有超過 1 MB。現在邊讀邊數，
+    超過就停——後面的 chunk 不會被要。50 個 100 KB 的 chunk（5 MB）只讀到第 11 個左右。"""
+    produced = [0]
+
+    async def endless():
+        for _ in range(50):
+            produced[0] += 1
+            yield b"x" * 100_000
+
+    _mock_client(monkeypatch, lambda request: httpx.Response(200, content=endless()))
+
+    result = await off._real_http_get("https://example.invalid/x")
+
+    assert (result.status, result.body) == (200, None)
+    assert produced[0] <= 12
+
+
+async def test_a_body_of_exactly_the_cap_is_read(monkeypatch):
+    head, tail = b'{"status": 0, "pad": "', b'"}'
+    body = head + b"x" * (off.MAX_RESPONSE_BYTES - len(head) - len(tail)) + tail
+    assert len(body) == off.MAX_RESPONSE_BYTES
+
+    async def chunks():
+        for start in range(0, len(body), 64_000):
+            yield body[start : start + 64_000]
+
+    _mock_client(monkeypatch, lambda request: httpx.Response(200, content=chunks()))
+
+    assert (await off._real_http_get("https://example.invalid/x")).body["status"] == 0
+
+
+async def test_a_slow_body_times_out_as_a_whole(monkeypatch):
+    """審查 M4：`httpx.Timeout(4)` 是每一個階段各 4 秒——一個每 3 秒滴一個位元組的回應永遠不會
+    逾時。現在整個請求包在一個總的期限裡（`asyncio.timeout`）。測試把期限縮成 0.2 秒；
+    MockTransport 不管 httpx 的逾時，擋下來的只會是總期限。"""
+    monkeypatch.setattr(off, "TIMEOUT_SECONDS", 0.2)
+
+    async def trickle():
+        for _ in range(100):
+            yield b" "
+            await asyncio.sleep(0.05)
+        yield b'{"status": 0}'
+
+    _mock_client(monkeypatch, lambda request: httpx.Response(200, content=trickle()))
+
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        await off._real_http_get("https://example.invalid/x")
+    assert time.monotonic() - started < 2
+
+
+async def test_a_timeout_through_the_client_is_no_prefill_and_not_cached(monkeypatch):
+    """總期限到了 → `lookup` 回 None（使用者只看到「找不到」）、不快取（下一次再問）。"""
+    monkeypatch.setattr(off, "TIMEOUT_SECONDS", 0.2)
+    calls = [0]
+
+    async def stall():
+        await asyncio.sleep(5)
+        yield b"{}"
+
+    def handler(request):
+        calls[0] += 1
+        return httpx.Response(200, content=stall())
+
+    _mock_client(monkeypatch, handler)
+    client = OpenFoodFacts(fetch=off._real_http_get)
+
+    assert await client.lookup(CODE) is None
+    assert await client.lookup(CODE) is None
+    assert calls[0] == 2

@@ -12,6 +12,7 @@
   `AssertionError` 的（漏了覆寫的測試會紅，不會安靜地打出去）。
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -195,20 +196,37 @@ def _prefill_from_product(payload: object) -> ProductPrefill | None:
 
 
 async def _http_get(url: str) -> FetchResult:
-    """真的打 OFF 的那一個函式。**測試不會走到這裡**：conftest 的 autouse fixture 把它換掉。"""
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(TIMEOUT_SECONDS),
-        headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
-        follow_redirects=False,
-    ) as client:
-        response = await client.get(url, params={"fields": OFF_FIELDS})
-    if len(response.content) > MAX_RESPONSE_BYTES:
-        return FetchResult(status=response.status_code, body=None)
+    """真的打 OFF 的那一個函式。**測試不會走到這裡**：conftest 的 autouse fixture 把它換掉。
+
+    兩個界線（審查 M4）：
+
+    - **總期限** `TIMEOUT_SECONDS`（`asyncio.timeout`，到了丟 `TimeoutError`）。`httpx.Timeout`
+      是連線、讀取、寫入、等連線池**各自**的期限——每 3 秒滴一個位元組的回應永遠不會觸發讀取逾時。
+      `httpx.Timeout` 留著：連不上時不用等到總期限。
+    - **邊讀邊數** `MAX_RESPONSE_BYTES`：`client.get` 會先把整個回應讀進記憶體才能看長度。
+    """
+    async with asyncio.timeout(TIMEOUT_SECONDS):
+        async with (
+            httpx.AsyncClient(
+                timeout=httpx.Timeout(TIMEOUT_SECONDS),
+                headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+                follow_redirects=False,
+            ) as client,
+            client.stream("GET", url, params={"fields": OFF_FIELDS}) as response,
+        ):
+            status = response.status_code
+            chunks: list[bytes] = []
+            size = 0
+            async for chunk in response.aiter_bytes():
+                size += len(chunk)
+                if size > MAX_RESPONSE_BYTES:
+                    return FetchResult(status=status, body=None)
+                chunks.append(chunk)
     try:
-        body: object = json.loads(response.content)
+        body: object = json.loads(b"".join(chunks))
     except ValueError:
         body = None
-    return FetchResult(status=response.status_code, body=body)
+    return FetchResult(status=status, body=body)
 
 
 # 給 tests/test_off.py 測真的 httpx 那一層用（conftest 換掉的是 `_http_get` 這個名字）。
@@ -257,7 +275,8 @@ class OpenFoodFacts:
 
         try:
             result = await self._fetch(OFF_PRODUCT_URL.format(code=code))
-        except (httpx.HTTPError, OSError) as exc:
+        # `TimeoutError` 是總期限（`_http_get`）；它本來就是 OSError 的子類別，寫出來是給讀的人看。
+        except (httpx.HTTPError, TimeoutError, OSError) as exc:
             # 只記種類，不記條碼（規格 §6.6）：例外的訊息可能帶著網址。
             logger.warning("Open Food Facts 查詢失敗：%s", type(exc).__name__)
             return None
