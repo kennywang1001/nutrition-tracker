@@ -67,6 +67,17 @@ export function suggestMeal(preference: string): Promise<AnalyzeMealResponse> {
 	return post(SUGGEST_MEAL, trimmed === "" ? {} : { preference: trimmed });
 }
 
+export type LabelReadResponse = components["schemas"]["LabelReadResponse"];
+
+/** 營養標示的照片 → 每 100 的營養素、一份多少（掃條碼規格 §8）。前處理同 `analyzeImage`。
+ *  算一次 AI 額度；照片只拿來讀，後端不存。 */
+export async function readLabel(file: File): Promise<LabelReadResponse> {
+	const resized = await preparePhoto(file);
+	return post("/api/ai/read-label", {
+		image_base64: await fileToBase64(resized),
+	});
+}
+
 /** 估算失敗時給人看的話。兩個端點的錯誤碼是同一組（後端是同一批函式丟的），
  *  單樣面板與多樣面板共用這一份。 */
 export function describeAnalyzeError(error: unknown): string {
@@ -87,8 +98,9 @@ export function describeAnalyzeError(error: unknown): string {
 				// 該做的事不同，通用的「再試一次」對前者是錯的指示。
 				return error.message;
 			case "AI_NO_FOOD_FOUND":
-				// 模型看不出任何食物（多半是一張不是食物的照片）。後端的訊息說的是
-				// 「換一張照片或換個說法」——下面那句「可以再試一次」對它是錯的指示：
+			case "AI_LABEL_UNREADABLE":
+				// 模型看不出任何食物（多半是一張不是食物的照片）、或讀不出營養標示的數字。
+				// 後端的訊息說的是「換一張照片」——下面那句「可以再試一次」對它是錯的指示：
 				// 原樣再按一次，結果一樣，而且再吃一次額度。
 				return error.message;
 			case "AI_NO_SUGGESTION":

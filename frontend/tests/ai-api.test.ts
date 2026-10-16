@@ -5,6 +5,7 @@ import {
 	analyzeMealText,
 	analyzeText,
 	describeAnalyzeError,
+	readLabel,
 	suggestMeal,
 } from "../src/api/ai";
 import { ApiError } from "../src/api/errors";
@@ -185,6 +186,44 @@ describe("AI 配一餐（營養素配餐規格 §5）", () => {
 		expect(describeAnalyzeError(new ApiError(status, code, message))).toBe(
 			message,
 		);
+	});
+});
+
+describe("讀營養標示（掃條碼規格 §8）", () => {
+	it("POST /api/ai/read-label，body 只有 image_base64（同一套前處理）", async () => {
+		vi.mocked(shrinkToLongestEdge).mockClear();
+		const fetchMock = mockApi([
+			{
+				method: "POST",
+				path: "/api/ai/read-label",
+				handler: () => json({ analysis_id: 1 }),
+			},
+		]);
+		const file = new File(["fake-jpeg"], "label.jpg", { type: "image/jpeg" });
+
+		await readLabel(file);
+
+		expect(sentUrl(fetchMock)).toBe("/api/ai/read-label");
+		expect(sentBody(fetchMock)).toEqual({ image_base64: btoa("fake-jpeg") });
+		expect(vi.mocked(shrinkToLongestEdge)).toHaveBeenCalledWith(file, 1280);
+	});
+
+	it("照片太大：送出前就擋，不打網路", async () => {
+		const fetchMock = mockApi([]);
+		const file = new File(["x"], "big.jpg", { type: "image/jpeg" });
+		Object.defineProperty(file, "size", { value: MAX_PHOTO_BYTES + 1 });
+
+		await expect(readLabel(file)).rejects.toBeInstanceOf(PhotoTooLargeError);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("502 AI_LABEL_UNREADABLE：原樣顯示後端那一句（不是「再試一次」）", () => {
+		const message =
+			"AI 讀不出這張營養標示的數字，換一張清楚一點、整個表格都在畫面裡的照片再試（這一次也算在今天的次數裡）";
+
+		expect(
+			describeAnalyzeError(new ApiError(502, "AI_LABEL_UNREADABLE", message)),
+		).toBe(message);
 	});
 });
 
