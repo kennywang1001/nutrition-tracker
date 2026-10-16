@@ -151,6 +151,20 @@ function foodRoutes(
 			handler: () => json(portions),
 		},
 		{ method: "GET", path: `/api/foods/${id}`, handler: () => json(food) },
+		// 條碼一節看角色（公開食物只有管理員能改，掃條碼規格 D5）。預設一般使用者；要管理員的
+		// 測試在 `extra` 放自己的 `/api/me`（排在前面先比對到）。
+		{
+			method: "GET",
+			path: "/api/me",
+			handler: () =>
+				json({
+					id: 1,
+					email: "kenny@example.com",
+					display_name: "Kenny",
+					role: "user",
+					timezone: "Asia/Taipei",
+				}),
+		},
 	];
 }
 
@@ -825,5 +839,268 @@ describe("食物詳情：份量的修改與刪除", () => {
 		// 後端把用過這個份量的餐點項目 portion_id 設成 null（ON DELETE SET
 		// NULL）——快取裡的餐點還帶著舊的 id，要一起失效。
 		expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.meals });
+	});
+});
+
+describe("食物詳情：條碼（掃條碼規格 §11、D5）", () => {
+	function me(role: "user" | "admin"): MockRoute {
+		return {
+			method: "GET",
+			path: "/api/me",
+			handler: () =>
+				json({
+					id: 1,
+					email: "kenny@example.com",
+					display_name: "Kenny",
+					role,
+					timezone: "Asia/Taipei",
+				}),
+		};
+	}
+
+	function patchRoute(id: number, response: () => Response): MockRoute {
+		return { method: "PATCH", path: `/api/foods/${id}`, handler: response };
+	}
+
+	function patchBody(fetchMock: ReturnType<typeof mockApi>): string | null {
+		const call = fetchMock.mock.calls.find(
+			([, init]) => (init?.method ?? "GET").toUpperCase() === "PATCH",
+		);
+		return call === undefined ? null : String(call[1]?.body);
+	}
+
+	const WITH_BARCODE = { ...PRIVATE_FOOD, barcode: "4710088432094" };
+
+	it("有條碼：顯示標準形式", async () => {
+		mockApi(foodRoutes(WITH_BARCODE, [], [], [me("user")]));
+		render(wrap(<FoodDetail />, "/foods/1"));
+
+		const section = await screen.findByRole("region", { name: "條碼" });
+		expect(within(section).getByText("4710088432094")).toBeInTheDocument();
+	});
+
+	it("沒有條碼（null）：「沒有條碼」", async () => {
+		mockApi(
+			foodRoutes({ ...PRIVATE_FOOD, barcode: null }, [], [], [me("user")]),
+		);
+		render(wrap(<FoodDetail />, "/foods/1"));
+
+		const section = await screen.findByRole("region", { name: "條碼" });
+		expect(within(section).getByText("沒有條碼")).toBeInTheDocument();
+	});
+
+	it("離線快取的舊食物（沒有 barcode 這個 key）：「沒有條碼」、輸入框是空的（不是 undefined）", async () => {
+		// PRIVATE_FOOD 沒有 barcode——正好是快取裡舊食物的樣子（規格 §10.3）。
+		expect(PRIVATE_FOOD).not.toHaveProperty("barcode");
+		mockApi(foodRoutes(PRIVATE_FOOD, [], [], [me("user")]));
+		render(wrap(<FoodDetail />, "/foods/1"));
+
+		const section = await screen.findByRole("region", { name: "條碼" });
+		expect(within(section).getByText("沒有條碼")).toBeInTheDocument();
+		expect(within(section).getByLabelText("條碼")).toHaveValue("");
+		expect(section).not.toHaveTextContent("undefined");
+		expect(
+			within(section).queryByRole("button", { name: "移除條碼" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("自己的私人食物：可以改（數字鍵盤）", async () => {
+		mockApi(foodRoutes(WITH_BARCODE, [], [], [me("user")]));
+		render(wrap(<FoodDetail />, "/foods/1"));
+
+		const form = await screen.findByRole("form", { name: "修改條碼" });
+		const input = within(form).getByLabelText("條碼");
+		expect(input).toHaveValue("4710088432094");
+		expect(input).toHaveAttribute("inputmode", "numeric");
+		expect(
+			within(form).getByRole("button", { name: "移除條碼" }),
+		).toBeInTheDocument();
+	});
+
+	it("公開食物＋一般使用者：只顯示、不能改", async () => {
+		mockApi(
+			foodRoutes(
+				{ ...GLOBAL_FOOD, barcode: "4710088432094" },
+				[],
+				[],
+				[me("user")],
+			),
+		);
+		render(wrap(<FoodDetail />, "/foods/2"));
+
+		const section = await screen.findByRole("region", { name: "條碼" });
+		expect(within(section).getByText("4710088432094")).toBeInTheDocument();
+		// 角色回來之後也一樣（不是因為還沒載入才沒有表單）。
+		await waitFor(() =>
+			expect(
+				screen.queryByRole("form", { name: "修改條碼" }),
+			).not.toBeInTheDocument(),
+		);
+	});
+
+	it("公開食物＋管理員：可以改", async () => {
+		mockApi(
+			foodRoutes(
+				{ ...GLOBAL_FOOD, barcode: "4710088432094" },
+				[],
+				[],
+				[me("admin")],
+			),
+		);
+		render(wrap(<FoodDetail />, "/foods/2"));
+
+		expect(
+			await screen.findByRole("form", { name: "修改條碼" }),
+		).toBeInTheDocument();
+	});
+
+	it("儲存條碼：PATCH 帶條碼、畫面換成後端回的標準形式", async () => {
+		const fetchMock = mockApi(
+			foodRoutes(
+				{ ...PRIVATE_FOOD, barcode: null },
+				[],
+				[],
+				[
+					me("user"),
+					patchRoute(1, () =>
+						json({ ...PRIVATE_FOOD, barcode: "0036000291452" }),
+					),
+				],
+			),
+		);
+		render(wrap(<FoodDetail />, "/foods/1"));
+
+		const form = await screen.findByRole("form", { name: "修改條碼" });
+		await userEvent.type(within(form).getByLabelText("條碼"), "036000-291452");
+		await userEvent.click(
+			within(form).getByRole("button", { name: "儲存條碼" }),
+		);
+
+		const section = screen.getByRole("region", { name: "條碼" });
+		expect(
+			await within(section).findByText("0036000291452"),
+		).toBeInTheDocument();
+		expect(patchBody(fetchMock)).toBe('{"barcode":"036000291452"}');
+		expect(within(form).getByLabelText("條碼")).toHaveValue("0036000291452");
+		expect(within(section).getByRole("status")).toHaveTextContent("已儲存條碼");
+	});
+
+	it("移除條碼：body 是 {barcode: null}、變「沒有條碼」、焦點到輸入框（按鈕不見了）", async () => {
+		const fetchMock = mockApi(
+			foodRoutes(
+				WITH_BARCODE,
+				[],
+				[],
+				[
+					me("user"),
+					patchRoute(1, () => json({ ...PRIVATE_FOOD, barcode: null })),
+				],
+			),
+		);
+		render(wrap(<FoodDetail />, "/foods/1"));
+
+		const form = await screen.findByRole("form", { name: "修改條碼" });
+		await userEvent.click(
+			within(form).getByRole("button", { name: "移除條碼" }),
+		);
+
+		const section = screen.getByRole("region", { name: "條碼" });
+		expect(await within(section).findByText("沒有條碼")).toBeInTheDocument();
+		expect(patchBody(fetchMock)).toBe('{"barcode":null}');
+		expect(
+			within(form).queryByRole("button", { name: "移除條碼" }),
+		).not.toBeInTheDocument();
+		expect(within(form).getByLabelText("條碼")).toHaveFocus();
+		expect(within(section).getByRole("status")).toHaveTextContent("已移除條碼");
+	});
+
+	it("409：後端那一句", async () => {
+		mockApi(
+			foodRoutes(
+				{ ...PRIVATE_FOOD, barcode: null },
+				[],
+				[],
+				[
+					me("user"),
+					patchRoute(1, () =>
+						json(
+							{
+								error: {
+									code: "BARCODE_EXISTS",
+									message: "你已經有一個用這個條碼的食物了",
+									details: { food_id: 9 },
+								},
+							},
+							409,
+						),
+					),
+				],
+			),
+		);
+		render(wrap(<FoodDetail />, "/foods/1"));
+
+		const form = await screen.findByRole("form", { name: "修改條碼" });
+		await userEvent.type(within(form).getByLabelText("條碼"), "96385074");
+		await userEvent.click(
+			within(form).getByRole("button", { name: "儲存條碼" }),
+		);
+
+		expect(await within(form).findByRole("alert")).toHaveTextContent(
+			"你已經有一個用這個條碼的食物了",
+		);
+	});
+
+	it("不像條碼：擋下來、不送", async () => {
+		const fetchMock = mockApi(
+			foodRoutes({ ...PRIVATE_FOOD, barcode: null }, [], [], [me("user")]),
+		);
+		render(wrap(<FoodDetail />, "/foods/1"));
+
+		const form = await screen.findByRole("form", { name: "修改條碼" });
+		await userEvent.type(within(form).getByLabelText("條碼"), "123");
+		await userEvent.click(
+			within(form).getByRole("button", { name: "儲存條碼" }),
+		);
+
+		expect(within(form).getByRole("alert")).toHaveTextContent(
+			"條碼要是 8、12 或 13 位數字",
+		);
+		expect(patchBody(fetchMock)).toBeNull();
+	});
+
+	it("儲存中：「儲存條碼」用 aria-disabled（焦點還在它身上），再按不會多送一次", async () => {
+		let release: (response: Response) => void = () => {};
+		const fetchMock = mockApi(
+			foodRoutes(
+				{ ...PRIVATE_FOOD, barcode: null },
+				[],
+				[],
+				[
+					me("user"),
+					patchRoute(
+						1,
+						() =>
+							new Promise<Response>((done) => {
+								release = done;
+							}) as unknown as Response,
+					),
+				],
+			),
+		);
+		render(wrap(<FoodDetail />, "/foods/1"));
+
+		const form = await screen.findByRole("form", { name: "修改條碼" });
+		await userEvent.type(within(form).getByLabelText("條碼"), "96385074");
+		const save = within(form).getByRole("button", { name: "儲存條碼" });
+		await userEvent.click(save);
+		await waitFor(() => expect(save).toHaveAttribute("aria-disabled", "true"));
+		await userEvent.click(save);
+
+		const patches = fetchMock.mock.calls.filter(
+			([, init]) => (init?.method ?? "GET").toUpperCase() === "PATCH",
+		);
+		expect(patches).toHaveLength(1);
+		release(json({ ...PRIVATE_FOOD, barcode: "96385074" }));
+		await waitFor(() => expect(save).toHaveAttribute("aria-disabled", "false"));
 	});
 });

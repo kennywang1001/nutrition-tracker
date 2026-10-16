@@ -7,7 +7,7 @@ import {
 	useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { cleanBarcodeInput } from "../lib/barcode";
+import { BARCODE_LENGTH_HINT, cleanBarcodeInput } from "../lib/barcode";
 import type { Detector } from "../lib/barcode-detector";
 import { useBarcodeScanner } from "../lib/use-barcode-scanner";
 import styles from "./BarcodeScanner.module.css";
@@ -34,8 +34,6 @@ const STATUS_TEXT = {
 	"no-detector": "這台裝置不能用相機掃條碼，請手動輸入。",
 	failed: "相機打不開。可以手動輸入條碼，或從照片讀。",
 } as const;
-
-export const BARCODE_LENGTH_HINT = "條碼要是 8、12 或 13 位數字";
 
 const FOCUSABLE =
 	'button:not([disabled]), input:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';

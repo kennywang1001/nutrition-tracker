@@ -1,16 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useRef, useState } from "react";
 import { useParams } from "react-router";
+import { describeBarcodeError, updateFoodBarcode } from "../api/barcode";
 import { apiFetch } from "../api/client";
 import { ApiError, describeFieldErrors } from "../api/errors";
-import { useFood, useFoodRevisions } from "../api/foods";
+import { type Food, useFood, useFoodRevisions } from "../api/foods";
+import { useMe } from "../api/me";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
 import { AddPortionForm } from "../components/AddPortionForm";
 import { PortionRow } from "../components/PortionRow";
 import ui from "../components/ui.module.css";
+import { BARCODE_LENGTH_HINT, cleanBarcodeInput } from "../lib/barcode";
 import { formatDateTime } from "../lib/dates";
 import { formatMacro } from "../lib/decimal";
+import styles from "./FoodDetail.module.css";
 import { BASE_UNITS, NUMERIC_FIELDS, type NumericField } from "./NewFood";
 
 type Revision = components["schemas"]["RevisionResponse"];
@@ -23,6 +27,99 @@ const STATUS_LABEL: Record<RevisionStatus, string> = {
 	approved: "已通過",
 	rejected: "已駁回",
 };
+
+/** 食物詳情的「條碼」一節（掃條碼規格 §11、D5）。條碼不進版本、不經審核：改了立刻生效。
+ *
+ *  - 顯示一律用真值判斷：**離線快取裡的舊食物沒有 `barcode` 這個 key**（`undefined`），輸入框 `?? ""`。
+ *  - 「儲存條碼」「移除條碼」送出中用 `aria-disabled`＋擋在 handler：按下去的那一刻焦點就在它身上，
+ *    原生停用會把焦點丟到 body。「移除條碼」移除成功之後就不見了——焦點移到輸入框。
+ *  - 回應直接寫進這個食物的快取（不等重抓），搜尋結果失效（搜尋列出的食物也帶條碼）。 */
+function BarcodeSection({ food, canEdit }: { food: Food; canEdit: boolean }) {
+	const queryClient = useQueryClient();
+	const [input, setInput] = useState(food.barcode ?? "");
+	const [error, setError] = useState<string | null>(null);
+	const [message, setMessage] = useState<string | null>(null);
+	const inputRef = useRef<HTMLInputElement>(null);
+	const update = useMutation({
+		mutationFn: ({ id, barcode }: { id: number; barcode: string | null }) =>
+			updateFoodBarcode(id, barcode),
+	});
+	const busy = update.isPending;
+
+	function save(barcode: string | null) {
+		if (busy) return;
+		setError(null);
+		setMessage(null);
+		// 回應放在 mutate 的第二個參數：元件卸載之後不跑（handover §7）。
+		update.mutate(
+			{ id: food.id, barcode },
+			{
+				onSuccess: (updated) => {
+					queryClient.setQueryData(queryKeys.food(food.id), updated);
+					queryClient.invalidateQueries({ queryKey: queryKeys.foodSearchAll });
+					// 後端存的是標準形式（12 位的 UPC-A 會補成 13 位）：輸入框換成存下來的樣子。
+					setInput(updated.barcode ?? "");
+					setMessage(updated.barcode ? "已儲存條碼" : "已移除條碼");
+					if (barcode === null) inputRef.current?.focus();
+				},
+				onError: (caught) => setError(describeBarcodeError(caught)),
+			},
+		);
+	}
+
+	function handleSubmit(event: FormEvent) {
+		event.preventDefault();
+		const cleaned = cleanBarcodeInput(input);
+		if (cleaned === null) {
+			setMessage(null);
+			setError(BARCODE_LENGTH_HINT);
+			return;
+		}
+		save(cleaned);
+	}
+
+	return (
+		<>
+			<p>{food.barcode ? food.barcode : "沒有條碼"}</p>
+			{canEdit && (
+				<form aria-label="修改條碼" onSubmit={handleSubmit}>
+					<label htmlFor="food-barcode-edit">條碼</label>
+					<input
+						ref={inputRef}
+						id="food-barcode-edit"
+						type="text"
+						inputMode="numeric"
+						autoComplete="off"
+						maxLength={32}
+						value={input}
+						onChange={(event) => {
+							setInput(event.target.value);
+							setError(null);
+						}}
+					/>
+					<div className={styles.barcodeActions}>
+						<button type="submit" aria-disabled={busy}>
+							儲存條碼
+						</button>
+						{food.barcode ? (
+							<button
+								type="button"
+								aria-disabled={busy}
+								onClick={() => save(null)}
+							>
+								移除條碼
+							</button>
+						) : null}
+					</div>
+					{error !== null && <p role="alert">{error}</p>}
+				</form>
+			)}
+			<p role="status" className={styles.barcodeStatus}>
+				{message}
+			</p>
+		</>
+	);
+}
 
 /** 食物詳情、編輯歷史、提議修改（規格 §5.3）。
  *
@@ -50,6 +147,7 @@ export function FoodDetail() {
 
 	const queryClient = useQueryClient();
 	const food = foodQuery.data ?? null;
+	const isAdmin = useMe().data?.role === "admin";
 
 	const [editingPortionId, setEditingPortionId] = useState<number | null>(null);
 	const [baseUnit, setBaseUnit] = useState<BaseUnit>("g");
@@ -200,6 +298,17 @@ export function FoodDetail() {
 								</div>
 							</dl>
 						)}
+					</section>
+
+					<section aria-labelledby="food-barcode-heading">
+						<h2 id="food-barcode-heading">條碼</h2>
+						{/* key：換了一個食物（同一個元件、不同的 id）就重來，輸入框不留上一個的字。
+						    公開食物只有管理員能改（規格 D5；後端也擋，這裡只是不畫給一般使用者）。 */}
+						<BarcodeSection
+							key={food.id}
+							food={food}
+							canEdit={!food.is_global || isAdmin}
+						/>
 					</section>
 
 					<section>

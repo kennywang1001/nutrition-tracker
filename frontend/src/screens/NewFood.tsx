@@ -1,15 +1,35 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { type FormEvent, useState } from "react";
+import {
+	type ChangeEvent,
+	type FormEvent,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import { useNavigate } from "react-router";
+import {
+	describeAnalyzeError,
+	type LabelReadResponse,
+	readLabel,
+} from "../api/ai";
+import { describeBarcodeError } from "../api/barcode";
 import { apiFetch } from "../api/client";
-import { ApiError, describeFieldErrors } from "../api/errors";
+import { ApiError, describeFieldErrors, hasFieldError } from "../api/errors";
 import { useMe } from "../api/me";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
 import { AiEstimatePanel } from "../components/AiEstimatePanel";
+import { OffAttribution } from "../components/BarcodeScanEntry";
+import { PhotoPickerButton } from "../components/PhotoPickerButton";
 import ui from "../components/ui.module.css";
-import { isPlainPositiveDecimal, perServingToPer100 } from "../lib/decimal";
+import { BARCODE_LENGTH_HINT, cleanBarcodeInput } from "../lib/barcode";
+import {
+	formatMacro,
+	isPlainPositiveDecimal,
+	perServingToPer100,
+} from "../lib/decimal";
 import type { NewFoodHandoff } from "../lib/new-food-handoff";
+import styles from "./NewFood.module.css";
 
 type Food = components["schemas"]["FoodResponse"];
 type BaseUnit = components["schemas"]["BaseUnit"];
@@ -67,30 +87,49 @@ type NutritionBasis = "per100" | "perServing";
  *  的回應本體，導去哪裡是這個畫面自己才知道的事，不是像 `LogMeal` 的
  *  `onSaved` 那樣「導回一個固定路徑」。 */
 type Props = {
-	/** 掃條碼沒命中帶來的交接（掃條碼規格 D20）。Task 10 才讀。 */
+	/** 掃條碼沒命中帶來的交接（掃條碼規格 D20）：條碼、Open Food Facts 的預填、存好要回去的地方。
+	 *  **只在掛載時讀**（`NewFoodRoute` 讀一次 router state 就清掉）。 */
 	handoff?: NewFoodHandoff | null;
 };
 
-export function NewFood(_props: Props) {
+/** 預填「一份」時的份量名稱（掃條碼規格 D29：包裝上的一份）。 */
+const SERVING_LABEL = "份";
+
+export function NewFood({ handoff = null }: Props) {
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
+	const prefill = handoff?.prefill ?? null;
+	const returnTo = handoff?.returnTo ?? null;
 
 	const [aiText, setAiText] = useState("");
-	const [name, setName] = useState("");
-	const [brand, setBrand] = useState("");
-	const [baseUnit, setBaseUnit] = useState<BaseUnit>("g");
+	const [name, setName] = useState(prefill?.name ?? "");
+	const [brand, setBrand] = useState(prefill?.brand ?? "");
+	// 送出前才去分隔符號（cleanBarcodeInput）；輸入框裡留使用者打的樣子。
+	const [barcode, setBarcode] = useState(handoff?.barcode ?? "");
+	const [baseUnit, setBaseUnit] = useState<BaseUnit>(prefill?.base_unit ?? "g");
 	const isAdmin = useMe().data?.role === "admin";
 	const [isGlobal, setIsGlobal] = useState(false);
-	const [values, setValues] = useState<Record<NumericField, string>>({
-		kcal: "",
-		protein_g: "",
-		fat_g: "",
-		carb_g: "",
-	});
+	const [values, setValues] = useState<Record<NumericField, string>>(
+		prefill === null
+			? { kcal: "", protein_g: "", fat_g: "", carb_g: "" }
+			: { ...prefill.per100 },
+	);
 
-	// 「一份」（選填，食物份量規格 §4.1）。兩個要一起填。
-	const [portionLabel, setPortionLabel] = useState("");
-	const [portionGrams, setPortionGrams] = useState("");
+	// 「一份」（選填，食物份量規格 §4.1）。兩個要一起填。OFF 的一份（單位跟食物一樣才有，後端擋過）
+	// 預填成「份」＋那個量。
+	const prefillServing = prefill?.serving?.amount ?? null;
+	const [portionLabel, setPortionLabel] = useState(
+		prefillServing === null ? "" : SERVING_LABEL,
+	);
+	const [portionGrams, setPortionGrams] = useState(prefillServing ?? "");
+	// 帶進來的那一份的量（OFF 或營養標示）：還是那個值時提醒「不要的話清掉」，改了就不提醒。
+	const [filledServing, setFilledServing] = useState<string | null>(
+		prefillServing,
+	);
+	const showServingHint =
+		filledServing !== null &&
+		portionLabel === SERVING_LABEL &&
+		portionGrams === filledServing;
 	const [basisChoice, setBasisChoice] = useState<NutritionBasis>("per100");
 	// 重量合法與否用跟換算同一條嚴格規則（isPlainPositiveDecimal：會 trim、
 	// 只收一般小數、要大於 0）。
@@ -131,6 +170,11 @@ export function NewFood(_props: Props) {
 					// 是兩個不同的值，留空不轉成 null 的話，使用者會建出兩筆
 					// 看起來一模一樣的食物（開工前查證過的事實）。
 					brand: brand.trim() === "" ? null : brand.trim(),
+					// 條碼（掃條碼規格 D22）：空的就不帶。validate() 已經保證有字時整理得出來；
+					// 檢查碼由後端驗（D3）。
+					...(barcode.trim() !== ""
+						? { barcode: cleanBarcodeInput(barcode) }
+						: {}),
 					nutrition: {
 						base_unit: baseUnit,
 						// 四個數值一律以字串送出（規格 §5.1）。「每一份」模式送的是
@@ -154,21 +198,25 @@ export function NewFood(_props: Props) {
 						: {}),
 				}),
 			}),
-		onSuccess: (created) => {
+		onSuccess: () => {
 			// 新食物要搜得到（queryKeys.foodSearchAll 的註解就是這麼說的）。
 			queryClient.invalidateQueries({ queryKey: queryKeys.foodSearchAll });
-			// apiFetch<T> 回的是 T | null（204 → null），201 不會是 null，
-			// 但型別上仍要 narrow——truthy 判斷，不是 === undefined。
-			if (created) {
-				navigate(`/foods/${created.id}`);
-			}
 		},
 		onError: (caught: unknown) => {
 			setConflictError(null);
 			setFieldErrors([]);
 			if (caught instanceof ApiError) {
-				if (caught.code === "FOOD_EXISTS") {
+				// 名稱與條碼都撞到時後端回 FOOD_EXISTS（名稱優先）；兩種都是後端那一句。
+				if (caught.code === "FOOD_EXISTS" || caught.code === "BARCODE_EXISTS") {
 					setConflictError(caught.message);
+					return;
+				}
+				// 出在條碼的 422 說人話（拿掉「barcode：Value error, 」）；其他欄位照舊列出來。
+				if (
+					caught.code === "VALIDATION_ERROR" &&
+					hasFieldError(caught, "barcode")
+				) {
+					setClientError(describeBarcodeError(caught));
 					return;
 				}
 				if (caught.code === "VALIDATION_ERROR") {
@@ -180,8 +228,22 @@ export function NewFood(_props: Props) {
 		},
 	});
 
+	/** 存好之後去哪裡（掃條碼規格 D20）：從記一餐（或編輯這一餐）來的回去、交出這個食物——
+	 *  去與回都用 `replace`，history 裡不會多出兩個一樣的記一餐；其餘照舊到詳情頁。
+	 *  手動建立與 AI 面板存好的都走這裡（同一個「存好」）。 */
+	function finish(food: Food) {
+		if (returnTo !== null) {
+			navigate(returnTo, { replace: true, state: { pickedFood: food } });
+		} else {
+			navigate(`/foods/${food.id}`);
+		}
+	}
+
 	function validate(): string | null {
 		if (name.trim() === "") return "請輸入名稱";
+		if (barcode.trim() !== "" && cleanBarcodeInput(barcode) === null) {
+			return BARCODE_LENGTH_HINT;
+		}
 
 		const labelFilled = portionLabel.trim() !== "";
 		const gramsFilled = portionGrams.trim() !== "";
@@ -223,15 +285,76 @@ export function NewFood(_props: Props) {
 			setClientError(validationError);
 			return;
 		}
-		createFood.mutate();
+		// 導頁放在 mutate 的第二個參數：元件卸載之後（使用者已經離開）不跑（handover §7）。
+		createFood.mutate(undefined, {
+			// apiFetch<T> 回的是 T | null（204 → null），201 不會是 null，
+			// 但型別上仍要 narrow——truthy 判斷，不是 === undefined。
+			onSuccess: (created) => {
+				if (created) finish(created);
+			},
+		});
+	}
+
+	// 拍營養標示（掃條碼規格 §8.5）：AI 照抄、後端換算成每 100。
+	const readLabelMutation = useMutation({ mutationFn: readLabel });
+	const [labelResult, setLabelResult] = useState<LabelReadResponse | null>(
+		null,
+	);
+	// 讀的時候照片的選擇是停用的（同 AI 面板的「拍照估算」）——焦點本來在它身上，停用就掉到 body。
+	// 所以一開始讀就把焦點移到狀態那一段（先寫「AI 讀取中…」、讀完換成結果或錯誤，都在同一塊裡）。
+	// 旗標只在選了照片那一次移，同記一餐的「已選擇」。
+	const labelResultRef = useRef<HTMLDivElement>(null);
+	const focusLabelResultRef = useRef(false);
+	useEffect(() => {
+		if (focusLabelResultRef.current && labelResultRef.current !== null) {
+			focusLabelResultRef.current = false;
+			labelResultRef.current.focus();
+		}
+	});
+
+	/** 讀到的東西填進表單。**名稱是空的才填**（使用者打的字不蓋掉）；品牌、條碼不動（標示上通常
+	 *  沒有品牌、條碼是掃來的）。讀到的是每 100 那一組，所以「營養標示是」切回每 100。 */
+	function applyLabel(result: LabelReadResponse) {
+		setName((current) =>
+			current.trim() === "" ? (result.name ?? "") : current,
+		);
+		setBaseUnit(result.nutrition.base_unit);
+		setValues({
+			kcal: result.nutrition.kcal,
+			protein_g: result.nutrition.protein_g,
+			fat_g: result.nutrition.fat_g,
+			carb_g: result.nutrition.carb_g,
+		});
+		setBasisChoice("per100");
+		if (result.serving !== null) {
+			setPortionLabel(SERVING_LABEL);
+			setPortionGrams(result.serving.amount);
+			setFilledServing(result.serving.amount);
+		}
+		setLabelResult(result);
+	}
+
+	function handleLabelPhoto(event: ChangeEvent<HTMLInputElement>) {
+		const file = event.target.files?.[0] ?? null;
+		// 清掉：同一張照片再選一次也要觸發 change。
+		event.target.value = "";
+		if (file === null) return;
+		setLabelResult(null);
+		focusLabelResultRef.current = true;
+		// 填表單放在 mutate 的第二個參數：元件卸載之後不跑（handover §7）。
+		readLabelMutation.mutate(file, { onSuccess: applyLabel });
 	}
 
 	return (
 		<section className={ui.screen}>
 			<h1>新增食物</h1>
+			{/* 掃到的條碼查不到任何資料（掃條碼規格 §11）：放在「用 AI 填」上面，指出下一步。 */}
+			{handoff !== null && prefill === null && (
+				<p>找不到這個條碼的資料。拍營養標示讓 AI 讀數字，或自己填。</p>
+			)}
 			{/* 用 AI 填（AI 估算前端規格 §5.2）：跟記一餐同一個面板。存好之後跟
-			    手動建立成功一樣導到詳情頁。放在表單外面——面板自己的修改模式
-			    也是一個 <form>，巢狀 form 不合法。 */}
+			    手動建立成功一樣走 finish（詳情頁，或回到記一餐）。放在表單外面——
+			    面板自己的修改模式也是一個 <form>，巢狀 form 不合法。 */}
 			<section aria-labelledby="new-food-ai">
 				<h2 id="new-food-ai">用 AI 填</h2>
 				<label htmlFor="ai-describe">描述這個食物</label>
@@ -244,10 +367,53 @@ export function NewFood(_props: Props) {
 				<AiEstimatePanel
 					text={aiText}
 					textButtonLabel={() => "估算"}
-					onFoodReady={(food) => navigate(`/foods/${food.id}`)}
+					onFoodReady={finish}
 				/>
+				{/* 拍包裝背面的營養標示（掃條碼規格 §8.5）：要拍，所以帶 capture（掃描層的「從照片讀
+				    條碼」不帶——那一顆要能選相簿）。讀到的填進下面的表單，不直接建食物。 */}
+				<div className={styles.labelRow}>
+					<PhotoPickerButton
+						id="label-photo"
+						label="拍營養標示"
+						accept="image/*"
+						capture="environment"
+						variant="accent"
+						disabled={readLabelMutation.isPending}
+						onChange={handleLabelPhoto}
+					/>
+				</div>
+				<div ref={labelResultRef} tabIndex={-1} className={styles.labelResult}>
+					<div role="status">
+						{readLabelMutation.isPending && <p>AI 讀取中…</p>}
+						{labelResult !== null && !readLabelMutation.isPending && (
+							<>
+								<p className={styles.labelCheck}>AI 讀的數字，請對照包裝確認</p>
+								{labelResult.consistency.flagged && (
+									<p>熱量跟三大營養素算起來對不太上，請特別確認</p>
+								)}
+								{labelResult.servings_per_package !== null && (
+									<p>
+										本包裝含 {formatMacro(labelResult.servings_per_package)} 份
+									</p>
+								)}
+								<p className={styles.muted}>
+									今天還能用 {labelResult.remaining_today} 次
+								</p>
+							</>
+						)}
+					</div>
+					{readLabelMutation.isError && (
+						<p role="alert">{describeAnalyzeError(readLabelMutation.error)}</p>
+					)}
+				</div>
 			</section>
 			<form onSubmit={handleSubmit}>
+				{prefill !== null && (
+					<div className={styles.prefilled}>
+						<p>已從 Open Food Facts 帶入，請對照包裝確認</p>
+						<OffAttribution />
+					</div>
+				)}
 				<label htmlFor="food-name">名稱</label>
 				<input
 					id="food-name"
@@ -267,6 +433,17 @@ export function NewFood(_props: Props) {
 					onChange={(event) => setBrand(event.target.value)}
 				/>
 
+				<label htmlFor="food-barcode">條碼（選填）</label>
+				<input
+					id="food-barcode"
+					type="text"
+					inputMode="numeric"
+					autoComplete="off"
+					maxLength={32}
+					value={barcode}
+					onChange={(event) => setBarcode(event.target.value)}
+				/>
+
 				<label htmlFor="food-base-unit">單位</label>
 				<select
 					id="food-base-unit"
@@ -282,6 +459,7 @@ export function NewFood(_props: Props) {
 
 				<fieldset>
 					<legend>一份（選填）</legend>
+					{showServingHint && <span>已帶入包裝上的一份，不要的話清掉</span>}
 					<label htmlFor="portion-label">份量名稱</label>
 					<input
 						id="portion-label"
@@ -379,6 +557,18 @@ export function NewFood(_props: Props) {
 				<button type="submit" disabled={createFood.isPending}>
 					建立食物
 				</button>
+				{/* 從記一餐（或編輯這一餐）來的：不建了也要回得去（規格 D20）。瀏覽器的上一頁會回到
+				    記一餐**之前**的那一頁（那一筆 history 被換掉了，§14 第 3 點）。同樣 replace、不帶食物。 */}
+				{returnTo !== null && (
+					<button
+						type="button"
+						onClick={() => navigate(returnTo, { replace: true })}
+					>
+						{returnTo === "/meals/new"
+							? "取消，回到記一餐"
+							: "取消，回到這一餐"}
+					</button>
+				)}
 			</form>
 		</section>
 	);

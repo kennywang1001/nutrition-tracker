@@ -1,0 +1,62 @@
+/* 新增食物裡掃條碼／營養標示多出來的幾塊（NewFood.tsx）。其餘照 ui.module.css 的 .screen。
+ * 一般權重（0,1,0）：贏過 .screen 的零權重規則（卡片、p 的 margin）。 */
+
+/* 「拍營養標示」單獨一列（AI 面板的兩顆在上面一列）。 */
+.labelRow {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+	margin-top: var(--space-2);
+}
+
+/* 讀的狀態與結果：焦點會移到這一塊（tabindex=-1），外框跟著對焦的慣例畫。 */
+.labelResult {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	margin-top: var(--space-2);
+	border-radius: var(--radius-button);
+}
+
+/* 狀態那一塊一直在（live region 才唸得到），沒有字的時候不佔空間。 */
+.labelResult:has(> [role="status"]:empty:only-child) {
+	margin-top: 0;
+}
+
+.labelResult:focus-visible {
+	outline: 2px solid var(--color-action);
+	outline-offset: 2px;
+}
+
+.labelResult:focus:not(:focus-visible) {
+	outline: none;
+}
+
+.labelResult [role="status"] {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+}
+
+.labelCheck {
+	font-weight: 700;
+}
+
+.muted {
+	font-size: 13px;
+	color: var(--color-text-muted);
+}
+
+/* 表單最上面的「已從 Open Food Facts 帶入」：跟後面的欄位分得出來。 */
+.prefilled {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	padding: var(--space-2) var(--space-3);
+	border-radius: var(--radius-button);
+	background: var(--color-accent-soft);
+}
+
+.prefilled p {
+	margin: 0;
+}
