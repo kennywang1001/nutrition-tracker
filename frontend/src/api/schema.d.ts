@@ -1741,6 +1741,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/ai/read-label": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read Label
+         * @description 營養標示的照片 → 每 100 的營養素、一份多少（掃條碼規格 §8）。模型只照抄，換算在後端。
+         *
+         *     一次呼叫算一次額度（跟估算共用每日上限）、寫一列 `kind = 'label'`；讀不出來是
+         *     `502 AI_LABEL_UNREADABLE`，**照樣記一列、算額度**。照片不存，只存 SHA-256。
+         */
+        post: operations["read_label_api_ai_read_label_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/expenses": {
         parameters: {
             query?: never;
@@ -2770,6 +2793,31 @@ export interface components {
          */
         KcalSource: "estimated" | "manual";
         /**
+         * LabelReadResponse
+         * @description 營養標示讀出來的東西（掃條碼規格 §8.4）。`nutrition` 是**每 100**（g 或 ml），後端換算過、
+         *     驗過範圍，直接餵得進 `FoodCreateRequest.nutrition`。前端不重算。
+         */
+        LabelReadResponse: {
+            /** Analysis Id */
+            analysis_id: number;
+            /** Name */
+            name: string | null;
+            nutrition: components["schemas"]["NutritionResponse"];
+            serving: components["schemas"]["ServingSize"] | null;
+            /** Servings Per Package */
+            servings_per_package: string | null;
+            /**
+             * Basis
+             * @enum {string}
+             */
+            basis: "per_100" | "per_serving";
+            /** Confidence */
+            confidence: string;
+            consistency: components["schemas"]["ConsistencyResult"];
+            /** Remaining Today */
+            remaining_today: number;
+        };
+        /**
          * LibraryFoodMatch
          * @description 食物庫裡跟這一樣**名稱完全相同**的食物（看得到的、有生效版本的；AI 多樣估算規格 D4、D5）。
          *
@@ -3286,6 +3334,11 @@ export interface components {
         ReadAllRequest: {
             /** Up To */
             up_to: number;
+        };
+        /** ReadLabelRequest */
+        ReadLabelRequest: {
+            /** Image Base64 */
+            image_base64: string;
         };
         /** RefreshRequest */
         RefreshRequest: {
@@ -6752,6 +6805,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AnalyzeMealResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_label_api_ai_read_label_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReadLabelRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabelReadResponse"];
                 };
             };
             /** @description Validation Error */

@@ -20,6 +20,10 @@
 `/suggest-meal`（營養素配餐規格 §5）：輸入不是一餐，是「今天剩下的額度＋偏好」。②③⑤ 同
 `/analyze-meal`（額度共用、記成 `kind = 'suggest'`、回同一個形狀），前面多一道：沒有熱量目標
 或剩不到 50 kcal 時先 422（不建 AI 實作、不算額度）。沒有①：建議不是查得到的東西。
+
+`/read-label`（掃條碼規格 §8.4）：營養標示的照片 → 每 100 的營養素、一份多少。②③④ 同照片的
+`/analyze`（額度共用、記成 `kind = 'label'`、`input_hash` 是圖片的 SHA-256）；沒有①：要的是
+包裝上印的數字，不是食物庫裡的。讀不出來是 `502 AI_LABEL_UNREADABLE`，照樣記一列、算額度。
 """
 
 import base64
@@ -71,9 +75,12 @@ from app.schemas.ai import (
     AnalyzeResponse,
     AnalyzeTextRequest,
     ConsistencyResult,
+    LabelReadResponse,
     LibraryFoodMatch,
+    ReadLabelRequest,
     SuggestMealRequest,
 )
+from app.schemas.food import NutritionResponse, ServingSize
 from app.storage.photos import MAX_IMAGE_PIXELS
 
 logger = logging.getLogger(__name__)
@@ -268,7 +275,7 @@ async def _call_estimator_or_record_failure[T](
             ) from exc
         if isinstance(exc, BadGatewayError):
             # 連上了、也回了，但回的東西沒過把關（AI_BAD_RESPONSE／AI_NO_FOOD_FOUND／
-            # AI_NO_SUGGESTION）。
+            # AI_NO_SUGGESTION／AI_LABEL_UNREADABLE）。
             # 使用者只看得到一句「看不懂」；這一行是管理員唯一查得到「哪裡不對」的地方。
             logger.warning(
                 "AI 的回覆沒有通過檢查（model=%s）：%s %s",
@@ -639,6 +646,72 @@ async def suggest_meal(
         analysis_id=analysis.id,
         description=raw.description,
         items=[await _to_meal_item(db, user, item) for item in raw.items],
+        remaining_today=_remaining(used_today + 1),
+    )
+    await db.commit()
+    return response
+
+
+@router.post("/read-label", response_model=LabelReadResponse)
+async def read_label(
+    payload: ReadLabelRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    make_estimator: EstimatorFactory = Depends(get_estimator_factory),
+) -> LabelReadResponse:
+    """營養標示的照片 → 每 100 的營養素、一份多少（掃條碼規格 §8）。模型只照抄，換算在後端。
+
+    一次呼叫算一次額度（跟估算共用每日上限）、寫一列 `kind = 'label'`；讀不出來是
+    `502 AI_LABEL_UNREADABLE`，**照樣記一列、算額度**。照片不存，只存 SHA-256。
+    """
+    user_id = user.id
+    # 順序同 /analyze 的照片：先建實作（沒設定 → 503）、再看額度、再解照片（壞照片不算額度）。
+    estimator = make_estimator()
+    used_today = await _assert_quota_available(db, user)
+    content, media_type = _decode_photo(payload.image_base64)
+    input_hash = hashlib.sha256(content).hexdigest()
+    raw = await _call_estimator_or_record_failure(
+        db,
+        user_id=user_id,
+        kind=AnalysisKind.LABEL,
+        input_hash=input_hash,
+        model=estimator.model,
+        call=lambda: estimator.read_label(content, media_type),
+    )
+
+    analysis = AiAnalysis(
+        user_id=user_id,
+        kind=AnalysisKind.LABEL,
+        model=estimator.model,
+        input_hash=input_hash,
+        succeeded=True,
+    )
+    db.add(analysis)
+    # 回應在 commit 之前組好（同 suggest_meal，身體資料審查 M6）：flush 拿到 id，commit 之後
+    # 不碰 ORM 物件、不送 SQL。
+    await db.flush()
+    consistency = check_consistency(
+        kcal=raw.kcal, protein_g=raw.protein_g, fat_g=raw.fat_g, carb_g=raw.carb_g
+    )
+    response = LabelReadResponse(
+        analysis_id=analysis.id,
+        name=raw.name,
+        nutrition=NutritionResponse(
+            base_unit=raw.base_unit,
+            kcal=raw.kcal,
+            protein_g=raw.protein_g,
+            fat_g=raw.fat_g,
+            carb_g=raw.carb_g,
+        ),
+        serving=(
+            None
+            if raw.serving_size is None
+            else ServingSize(amount=raw.serving_size, unit=raw.base_unit)
+        ),
+        servings_per_package=raw.servings_per_package,
+        basis=raw.basis,
+        confidence=raw.confidence,
+        consistency=ConsistencyResult.model_validate(consistency),
         remaining_today=_remaining(used_today + 1),
     )
     await db.commit()

@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.food import BaseUnit
+from app.schemas.food import NutritionResponse, ServingSize
 from app.schemas.validators import OptionalSingleLine
 
 
@@ -132,4 +133,28 @@ class AnalyzeMealResponse(BaseModel):
     # 1 到 8 樣。
     items: list[AnalyzedMealItem]
     # 一次呼叫只扣一次，不管估出幾樣。
+    remaining_today: int
+
+
+class ReadLabelRequest(BaseModel):
+    # 同 AnalyzeImageRequest 的照片：base64，10 MB、像素上限、四種格式由 _decode_photo 把關。
+    image_base64: str = Field(min_length=1)
+
+
+class LabelReadResponse(BaseModel):
+    """營養標示讀出來的東西（掃條碼規格 §8.4）。`nutrition` 是**每 100**（g 或 ml），後端換算過、
+    驗過範圍，直接餵得進 `FoodCreateRequest.nutrition`。前端不重算。"""
+
+    analysis_id: int
+    # 照片裡看得到的商品名稱；看不到是 null。
+    name: str | None
+    nutrition: NutritionResponse
+    # 包裝上的「一份」（每一份量）。讀不到是 null。
+    serving: ServingSize | None
+    servings_per_package: Decimal | None
+    # 用的是哪一欄：印著的每 100，或每份換算的。
+    basis: Literal["per_100", "per_serving"]
+    # ⚠️ 模型自己說的，不顯示給使用者（同 AnalyzeResponse.confidence）。
+    confidence: Decimal
+    consistency: ConsistencyResult
     remaining_today: int
