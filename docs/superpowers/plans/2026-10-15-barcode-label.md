@@ -16,6 +16,58 @@
 
 （執行時填：每個 task 的 commit、跟計畫不一樣的地方、突變的結果。）
 
+### 後端 Task 1–6（2026-10-15～16）
+
+| Task | commit | 測試 | 突變 |
+|---|---|---|---|
+| 1 migration 0022 | `73bb0d0` | `test_foods_barcode_model.py` 10 條、`test_ai_analysis_model.py` +1 | 計畫的 5 個全紅，紅的就是預期那幾條 |
+| 2 `app/barcode.py` | `b43ae1d` | `test_barcode.py` 40 條 | 計畫的 7 個全紅 |
+| 3 建立／PATCH／by-barcode | `9769bc4` | `test_foods_barcode.py` 21 條 | 計畫的 8 個＋1 個全紅 |
+| 4 OFF、限速、`OFF_ENABLED` | `b56bdf4` | `test_off.py` 43、`test_nutrition_units.py` 27、`test_foods_barcode.py` +5、`test_config.py` +7 | 計畫的 11 個（10 拆成 10a／10b）＋1 個全紅 |
+| 5 營養標示的解析 | `0cbfe74` | `test_ai_label.py` 25、`test_ai_provider_errors.py` +27 | 計畫的 8 個＋1 個全紅 |
+| 6 `/api/ai/read-label` | `8fbb157` | `test_ai_read_label.py` 12 條 | 計畫的 6 個：2a 照預期存活、其餘紅；多一個「commit 移到組回應之前」存活（見下） |
+
+整套後端 2071 passed（`-W error`）；`ruff`、`mypy app` 乾淨；前端 typecheck、2712 個測試、lint 都綠。
+
+**跟計畫不一樣的地方：**
+
+1. **migration 0022 的來回**照 Step 4 在測試資料庫跑過（seed 一列 `label`、一個帶條碼的食物 → downgrade：
+   `label` 變 `image`、列數不變、`barcode` 欄位不見 → upgrade → `alembic check` 乾淨 → `current` 0022）。
+   退版安全的結論不變：**不進 `ROLLBACK_UNSAFE_REVISIONS`**——重查過 `app/` 裡碰 `ai_analyses` 的地方：
+   只有額度的 `count(*)` 與自己剛寫的列，沒有整列載入 `kind`；`foods` 沒有任何 raw SQL 的 INSERT。dev 資料庫沒動。
+2. **Task 2 的測試多 5 格真實商品的例子**（計畫 35 → 40）：`5449000000996`（可口可樂，檢查碼 6）、
+   `4710088430014`（檢查碼 4）各進「檢查碼」「正規化」兩張表，`5449000000995` 進「不合格」。全形數字改用
+   `chr(0xFF14)` 組（原始碼裡不放全形數字）。
+3. **Task 3 多一條測試 `test_the_409_never_points_at_someone_elses_food`**：別人先建的私人食物、公開食物都用同一個
+   條碼時，409 附的一定是自己的那一筆。對應多的突變「`_find_same_barcode` 不看範圍」——計畫原本的測試裡每次只有一筆
+   同條碼的食物，這個突變會存活（`scalar()` 剛好拿到唯一那一筆），而它是一個洩漏別人私人食物 id 的洞。
+4. **Task 3 前端只有 `tests/helpers/planner-routes.ts` 的 `CHICKEN`／`RICE` 要補 `barcode: null`**（typecheck
+   紅的只有它們；`log-meal-planner.test.tsx` 的錯是用了這兩個）。`makeFood()`（`tests/helpers/foods.ts`）照計畫留給 Task 7。
+5. **Task 4：`test_lookup_cannot_see_someone_elses_private_food`（Task 3 寫的）要加 `FakeLookup()` 覆寫**——接上 OFF
+   之後，沒命中會問 OFF，不覆寫就撞上 conftest 的守衛（500）。計畫沒寫到這一條。測試設定的 `off_enabled` 照舊是
+   預設的 true（跟 production 一樣），靠守衛擋網路，不在 conftest 把它關掉。
+6. **Task 4 多一條 `test_the_default_test_setup_cannot_reach_the_network`**（`tests/test_off.py`）：斷言
+   `off._http_get` 已經被換掉，而且 `off._default_fetch` 與正式的 `off.product_lookup.lookup()` 都丟守衛的
+   `AssertionError`。突變 10（守衛拿掉 `autouse`）：`test_off_disabled_never_asks` 照計畫的預期存活，**這一條紅**；
+   10b（拿掉 `test_a_miss_returns_the_prefill` 的覆寫）紅在守衛的 `AssertionError`。
+7. **Task 4 的 `test_config.py` 加了 7 條**（計畫列了要測什麼、沒給程式）：預設 true、`false`／`0`／`true` 三種讀法、
+   空字串 `ValidationError`、`docker-compose.yml` 的那一行是 `true` 而且等於 `Settings` 的預設值、override 是 `false`
+   且 CI 的 e2e job 有 `OFF_ENABLED: "false"`。`docker compose config`（dev）看得到 `OFF_ENABLED: "false"`，只用
+   `docker-compose.yml` 是 `"true"`。
+8. **`docker-compose.override.yml` 的工作目錄副本是 CRLF**（版控裡是 LF、`.gitattributes` 是 `eol=lf`，舊的 checkout
+   留下來的）。改它時順手換回 LF——commit 的內容本來就會是 LF，`bc-scan.py` 也不收 CR。
+9. **Task 4 的 `test_nutrition_units.py` 是 27 條**（計畫寫 23；參數化的格數加起來就是 27）。`test_off.py` 43 條。
+10. **Task 4 的突變 0（計畫外）**：路由的 OFF 與限速是跟測試同一步寫的，所以另外跑一個「`found = None`＋拿掉
+    `hit()`」的突變，證明那五條測試在沒有實作時會紅（三條紅；另外兩條本來就斷言「不問 OFF」）。
+11. **Task 5 多一個突變**（gemini 的 `read_label` 用錯指示）→ `[gemini]` 那格紅。計畫說「再各加一條 SDK 錯誤的分類」
+    ——實作成跟 suggestion 一樣的參數化（兩家各跑全部的 SDK 錯誤案例），所以是 +27 格。
+12. **Task 6 多一條 `test_the_response_is_built_before_the_commit`**（照 `tests/test_exercises.py` 的
+    `_statements_after_commit`：commit 之後沒有 SQL）。對應的突變「commit 移到組回應之前」**存活，而且是等價突變**：
+    `expire_on_commit=False`、回應只用記憶體裡的值（`analysis.id` 在 flush 就有了），順序在外面看不出來。測試留著，
+    守的是以後有人在組回應時加查詢。
+13. 突變工具：`$S/bc-be-mutate.py`（JSON 規格、每個突變前備份、還原後逐位元組比對、`touch`、刪 `__pycache__`）。
+    每一批之後 `git status`／`git diff` 確認沒有殘留。
+
 ## 與規格的差異
 
 （執行完填摘要。）
