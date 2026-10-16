@@ -350,7 +350,9 @@ export function NewFood({ handoff = null }: Props) {
 			<h1>新增食物</h1>
 			{/* 掃到的條碼查不到任何資料（掃條碼規格 §11）：放在「用 AI 填」上面，指出下一步。 */}
 			{handoff !== null && prefill === null && (
-				<p>找不到這個條碼的資料。拍營養標示讓 AI 讀數字，或自己填。</p>
+				<p className={styles.notice}>
+					找不到這個條碼的資料。拍營養標示讓 AI 讀數字，或自己填。
+				</p>
 			)}
 			{/* 用 AI 填（AI 估算前端規格 §5.2）：跟記一餐同一個面板。存好之後跟
 			    手動建立成功一樣走 finish（詳情頁，或回到記一餐）。放在表單外面——
@@ -389,7 +391,9 @@ export function NewFood({ handoff = null }: Props) {
 							<>
 								<p className={styles.labelCheck}>AI 讀的數字，請對照包裝確認</p>
 								{labelResult.consistency.flagged && (
-									<p>熱量跟三大營養素算起來對不太上，請特別確認</p>
+									<p className={styles.warning}>
+										熱量跟三大營養素算起來對不太上，請特別確認
+									</p>
 								)}
 								{labelResult.servings_per_package !== null && (
 									<p>

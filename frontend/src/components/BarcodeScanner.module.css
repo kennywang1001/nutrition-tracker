@@ -15,6 +15,14 @@
 	overflow-y: auto;
 }
 
+/* 電腦的寬螢幕：整欄置中、最寬 640（取景框的寬），標題、按鈕不會黏在最左邊。 */
+.overlay > * {
+	box-sizing: border-box;
+	width: 100%;
+	max-width: 640px;
+	align-self: center;
+}
+
 .title {
 	margin: 0;
 	font-size: 20px;
@@ -26,9 +34,6 @@
 .viewfinder {
 	position: relative;
 	flex-shrink: 0;
-	width: 100%;
-	max-width: 640px;
-	align-self: center;
 	aspect-ratio: 4 / 3;
 	padding: 0;
 	border-radius: var(--radius-card);
@@ -77,6 +82,13 @@
 
 .actions button {
 	min-height: 44px;
+}
+
+/* 「從照片讀條碼」是 PhotoPickerButton 的標籤：.screen 的 label 規則會把它變成 13px，
+ * 跟旁邊兩顆按鈕的字對不齊。只設字級與粗細（顏色、框線是 PhotoPickerButton 自己的）。 */
+.photo {
+	font-size: 15px;
+	font-weight: 600;
 }
 
 .manualRow {

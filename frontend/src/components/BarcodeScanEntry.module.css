@@ -74,6 +74,7 @@
 
 .card p {
 	margin: 0;
+	font-size: 15px;
 }
 
 .card .status {
@@ -92,7 +93,9 @@
 	font-weight: 600;
 }
 
-.attribution {
+/* 卡片裡也是 13px：寫成兩個 class 的權重（0,2,0），贏過上面的 .card p。 */
+.attribution,
+.card .attribution {
 	margin: 0;
 	font-size: 13px;
 	color: var(--color-text-muted);

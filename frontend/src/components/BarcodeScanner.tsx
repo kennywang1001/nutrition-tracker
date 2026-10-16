@@ -216,6 +216,7 @@ export function BarcodeScanner({
 						id="barcode-photo"
 						label="從照片讀條碼"
 						accept="image/*"
+						className={styles.photo}
 						onChange={(event) => void readPhoto(event)}
 					/>
 				)}

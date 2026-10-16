@@ -1,12 +1,23 @@
 /* 新增食物裡掃條碼／營養標示多出來的幾塊（NewFood.tsx）。其餘照 ui.module.css 的 .screen。
  * 一般權重（0,1,0）：贏過 .screen 的零權重規則（卡片、p 的 margin）。 */
 
-/* 「拍營養標示」單獨一列（AI 面板的兩顆在上面一列）。 */
+/* 「拍營養標示」單獨一列（AI 面板的兩顆在上面一列）。面板底下本來就留了間距，這裡不再加。 */
 .labelRow {
 	display: flex;
 	flex-wrap: wrap;
 	gap: var(--space-2);
-	margin-top: var(--space-2);
+}
+
+/* 掃到的條碼查不到資料時的提示：畫面直接底下的 p 不是卡片，給它一個淡底，跟預填的提醒同一種。 */
+.notice {
+	padding: var(--space-2) var(--space-3);
+	border-radius: var(--radius-card);
+	background: var(--color-accent-soft);
+}
+
+/* 一致性被標記（同 AI 估算面板的 .warning，字大一點：這一句是要人停下來看的）。 */
+.warning {
+	color: var(--color-danger);
 }
 
 /* 讀的狀態與結果：焦點會移到這一塊（tabindex=-1），外框跟著對焦的慣例畫。 */

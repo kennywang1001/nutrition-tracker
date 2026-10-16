@@ -80,9 +80,15 @@ function BarcodeSection({ food, canEdit }: { food: Food; canEdit: boolean }) {
 
 	return (
 		<>
-			<p>{food.barcode ? food.barcode : "沒有條碼"}</p>
+			<p className={styles.barcodeValue}>
+				{food.barcode ? food.barcode : "沒有條碼"}
+			</p>
 			{canEdit && (
-				<form aria-label="修改條碼" onSubmit={handleSubmit}>
+				<form
+					aria-label="修改條碼"
+					className={styles.barcodeForm}
+					onSubmit={handleSubmit}
+				>
 					<label htmlFor="food-barcode-edit">條碼</label>
 					<input
 						ref={inputRef}

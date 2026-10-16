@@ -1,5 +1,16 @@
 /* 食物詳情的「條碼」一節（FoodDetail.tsx 的 BarcodeSection）。其餘照 ui.module.css 的 .screen。 */
 
+.barcodeValue {
+	font-size: 17px;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+/* 跟上面顯示的值分開：不然輸入框的標籤「條碼」看起來像在說明上面那一行。 */
+.barcodeForm {
+	margin-top: var(--space-3);
+}
+
 /* 「儲存條碼」「移除條碼」同一列，窄的時候換行。尺寸照 .screen 的按鈕（44px）。 */
 .barcodeActions {
 	display: flex;
