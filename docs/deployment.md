@@ -504,8 +504,9 @@ sudo docker compose --env-file .env.production \
 
   **新的環境變數 `OFF_ENABLED`**（`.env.production.example` 有說明）：**預設開**——`.env.production` 留白或不寫＝開（compose 是
   `${OFF_ENABLED:-true}`），填 `false` 就關。開著的時候，食物庫裡找不到的條碼會**從伺服器**送到 Open Food Facts
-  （`https://world.openfoodfacts.org/api/v2/product/{條碼}.json`，4 秒逾時、記憶體裡的快取 500 筆／24 小時、重啟就清空；
-  整個條碼查詢端點每人每分鐘 30 次），拿名稱與營養素給
+  （`https://world.openfoodfacts.org/api/v2/product/{條碼}.json`，整個請求 4 秒的總期限、回應邊讀邊數超過 1 MB 就放棄、
+  記憶體裡的快取 500 筆／24 小時、重啟就清空；整個條碼查詢端點每人每分鐘 30 次，真的打到 OFF 的次數**全部使用者加起來**
+  每分鐘最多 60 次——用完了那一分鐘的查詢只是沒有預填，不是錯誤），拿名稱與營養素給
   「新增食物」預填。**送出去的只有條碼本身**，但那等於告訴第三方「這台伺服器有人掃了這個商品」——不想要就填 `false`（掃條碼照樣能用，
   只是沒有預填）。**NAS 要能連出去 `world.openfoodfacts.org:443`**（防火牆、DNS）；不通也不會壞，只是每次查詢等到逾時、沒有預填
   （`docker compose logs api` 會看到 OFF 的警告）。OFF 的資料是 ODbL，畫面上一律標出處。
@@ -513,9 +514,28 @@ sudo docker compose --env-file .env.production \
   **相機**：`getUserMedia` 只在安全連線可用——`tailscale serve` 的 HTTPS 已經是，不用改。**Caddy 不用改**（實測過：用
   `caddy:2-alpine`＋這份 `caddy/Caddyfile`＋build 出來的 `dist` 起一個暫時的容器，首頁的回應**沒有** `Permissions-Policy`，同源的頁面
   預設就能要相機；`zxing_reader-*.wasm` 回 `Content-Type: application/wasm`）。之後要是有人在 Caddy 加了 `Permissions-Policy`，要包含
-  `camera=(self)`。`tailscale serve` 會不會加標頭沒有在 NAS 上驗證過——上線後在手機上掃一次就知道。Caddyfile 沒有 `encode`，
-  沒有原生偵測器的裝置（iPhone、桌機）第一次掃條碼時要下載 **1.09 MB 的 wasm**（不在 PWA 的預先快取裡，**離線時這些裝置掃不了**；
-  手動輸入與查詢本來就要連線）。
+  `camera=(self)`。`tailscale serve` 會不會加標頭沒有在 NAS 上驗證過——上線後在手機上掃一次就知道。沒有原生偵測器的裝置
+  （iPhone、桌機）第一次掃條碼時要下載 **1.09 MB 的 wasm**（Caddy 壓縮之後約 470 KB，見下面的「壓縮」；不在 PWA 的預先快取裡，
+  **離線時這些裝置掃不了**；手動輸入與查詢本來就要連線）。
+
+  **壓縮（審查後加的）**：`caddy/Caddyfile` 的**靜態檔那一塊**多了 `encode zstd gzip`（JS、CSS、HTML、wasm）；**`/api/*` 刻意不壓**
+  ——帶 token 的 JSON 壓縮之後的長度可能洩漏內容（BREACH 一類），匯出的 CSV 是串流的。Caddyfile 在 caddy 的映像裡
+  （`frontend/Dockerfile` 的 `COPY caddy/Caddyfile`），照常部署新版就生效，不用另外改 NAS 上的東西。部署完在 NAS 上確認：
+
+  ```bash
+  # 檔名每次 build 都不一樣：先從首頁找出 JS 的路徑
+  JS=$(curl -s http://127.0.0.1:8080/ | grep -o '/assets/index-[^"]*\.js' | head -1)
+  curl -sI -H 'Accept-Encoding: gzip' "http://127.0.0.1:8080$JS" | grep -i content-encoding     # → Content-Encoding: gzip
+  # /api 不壓：就算要求了 gzip 也沒有 Content-Encoding。Caddy 本來就不壓 512 bytes 以下的回應，所以要拿一個
+  # 夠大的 API 回應來看——用一個帳號的 access token（同「五、緊急處置」拿 token 的方法）查公開的食物庫：
+  curl -s -D - -o /dev/null -H 'Accept-Encoding: gzip' -H "Authorization: Bearer $TOKEN" \
+    'http://127.0.0.1:8080/api/foods?scope=all' | grep -iE 'content-encoding|content-length'   # → 只有 content-length
+  ```
+
+  wasm 的檔名在 `/assets/barcode-ponyfill-*.js` 裡（`grep -o 'zxing_reader-[^"]*\.wasm'`），同樣應該是 `Content-Encoding: gzip`、
+  `Content-Type: application/wasm`。開發機上用暫時的 `caddy:2-alpine` 容器＋這份 Caddyfile＋build 出來的 `dist` 實測過：JS、wasm、
+  SPA 的 fallback 都有 `Content-Encoding`（gzip 或 zstd，看 `Accept-Encoding`），wasm 在線上是 483,889 bytes（原本 1,093,289）；
+  `/api/*` 轉給一個假的 api（3 KB 的 JSON）照樣沒有壓縮。
 
   **部署完請手動試兩件事**——兩條路都**沒有任何自動測試在真的裝置或真的 LLM 上跑過**：
   1. **用手機真的掃一次條碼**：Android 的 Chrome（原生 `BarcodeDetector`）與 iPhone（Safari 或加到主畫面的 PWA，走 wasm；

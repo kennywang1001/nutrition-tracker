@@ -16,6 +16,13 @@
 	# 回 HTML 而不是 HTTP_ERROR 的錯誤信封。放在 caddy 就沒這個問題 ——
 	# 上面的 handle /api/* 先比對到，根本走不到這裡。
 	handle {
+		# 壓縮**只在這一塊**（靜態檔：JS、CSS、HTML、zxing 的 .wasm——1.09 MB，gzip 之後約
+		# 464 KB）。刻意不放在 handle /api/* 或整個站台：
+		# - BREACH 一類的攻擊靠「壓縮後的長度」猜出回應裡的祕密；/api 的 JSON 帶著 token
+		#   （登入、換票的回應）又會反射使用者送的字，不壓就沒有這條路。
+		# - /api 的匯出是串流的 CSV：壓縮要緩衝、多花 CPU，而且那幾個回應本來就不常有。
+		# 部署後怎麼確認：docs/deployment.md 的「壓縮」。
+		encode zstd gzip
 		root * /srv
 		try_files {path} /index.html
 		file_server
