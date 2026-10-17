@@ -12,7 +12,7 @@ import {
 	type LabelReadResponse,
 	readLabel,
 } from "../api/ai";
-import { describeBarcodeError } from "../api/barcode";
+import { describeBarcodeError, updateFoodBarcode } from "../api/barcode";
 import { apiFetch } from "../api/client";
 import { ApiError, describeFieldErrors, hasFieldError } from "../api/errors";
 import { useMe } from "../api/me";
@@ -239,6 +239,30 @@ export function NewFood({ handoff = null }: Props) {
 		}
 	}
 
+	// AI 面板（文字估算）自己 POST /api/foods、或交回食物庫裡現有的食物，都不知道交接來的條碼
+	// （審查 M2）。交回之後補上：只補**自己的、還沒有條碼的**食物——公開的一般使用者改不了（403），
+	// 已經有條碼的不蓋掉。PATCH 失敗（例如 409）照樣交出去：食物已經建好了，條碼可以在詳情頁再設。
+	const attachBarcode = useMutation({
+		mutationFn: ({ food, code }: { food: Food; code: string }) =>
+			updateFoodBarcode(food.id, code),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: queryKeys.foodSearchAll });
+		},
+	});
+
+	function finishFromAiPanel(food: Food) {
+		const code = barcode.trim() === "" ? null : cleanBarcodeInput(barcode);
+		if (code === null || food.is_global || food.barcode) {
+			finish(food);
+			return;
+		}
+		// 交出去放在 mutate 的第二個參數：元件卸載之後不跑（handover §7）。
+		attachBarcode.mutate(
+			{ food, code },
+			{ onSuccess: (updated) => finish(updated), onError: () => finish(food) },
+		);
+	}
+
 	function validate(): string | null {
 		if (name.trim() === "") return "請輸入名稱";
 		if (barcode.trim() !== "" && cleanBarcodeInput(barcode) === null) {
@@ -369,7 +393,7 @@ export function NewFood({ handoff = null }: Props) {
 				<AiEstimatePanel
 					text={aiText}
 					textButtonLabel={() => "估算"}
-					onFoodReady={finish}
+					onFoodReady={finishFromAiPanel}
 				/>
 				{/* 拍包裝背面的營養標示（掃條碼規格 §8.5）：要拍，所以帶 capture（掃描層的「從照片讀
 				    條碼」不帶——那一顆要能選相簿）。讀到的填進下面的表單，不直接建食物。 */}

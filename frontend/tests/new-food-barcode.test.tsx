@@ -59,6 +59,47 @@ const CREATED = makeFood({
 	barcode: "5449000000996",
 });
 
+const AI_ESTIMATE = {
+	analysis_id: 12,
+	food_id: null,
+	name: "牛肉麵",
+	brand: null,
+	nutrition: {
+		base_unit: "g",
+		serving_grams: "550.00",
+		kcal: "112.73",
+		protein_g: "5.82",
+		fat_g: "3.27",
+		carb_g: "14.55",
+		serving_kcal: "620.00",
+		serving_protein_g: "32.00",
+		serving_fat_g: "18.00",
+		serving_carb_g: "80.00",
+	},
+	confidence: "0.37",
+	consistency: {
+		atwater_kcal: "610.00",
+		deviation: "10.00",
+		flagged: false,
+	},
+	remaining_today: 19,
+};
+
+/** 「描述這個食物」→「估算」→「確認」。回傳結果卡片。 */
+async function confirmAiEstimate() {
+	await userEvent.type(screen.getByLabelText("描述這個食物"), "一碗牛肉麵");
+	await userEvent.click(screen.getByRole("button", { name: "估算" }));
+	const card = await screen.findByRole("region", { name: "AI 估算結果" });
+	await userEvent.click(within(card).getByRole("button", { name: "確認" }));
+	return card;
+}
+
+function patchBodies(fetchMock: ReturnType<typeof mockApi>): unknown[] {
+	return fetchMock.mock.calls
+		.filter(([, init]) => (init?.method ?? "GET").toUpperCase() === "PATCH")
+		.map(([, init]) => JSON.parse(String(init?.body)));
+}
+
 function handoff(overrides: Partial<NewFoodHandoff> = {}): NewFoodHandoff {
 	return {
 		barcode: "4710088432094",
@@ -417,55 +458,128 @@ describe("新增食物：存好之後回去（掃條碼規格 D20）", () => {
 		).not.toBeInTheDocument();
 	});
 
-	it("有 returnTo 時，AI 面板存好的食物也交回去", async () => {
-		const estimate = {
-			analysis_id: 12,
-			food_id: null,
-			name: "牛肉麵",
-			brand: null,
-			nutrition: {
-				base_unit: "g",
-				serving_grams: "550.00",
-				kcal: "112.73",
-				protein_g: "5.82",
-				fat_g: "3.27",
-				carb_g: "14.55",
-				serving_kcal: "620.00",
-				serving_protein_g: "32.00",
-				serving_fat_g: "18.00",
-				serving_carb_g: "80.00",
-			},
-			confidence: "0.37",
-			consistency: {
-				atwater_kcal: "610.00",
-				deviation: "10.00",
-				flagged: false,
-			},
-			remaining_today: 19,
-		};
+	it("有 returnTo 時，AI 面板存好的食物也交回去——帶著條碼（審查 M2）", async () => {
+		// AI 面板自己 POST /api/foods、不知道交接來的條碼：存好之後 PATCH 上去（自己的食物）。
 		const saved = makeFood({ id: 31, name: "牛肉麵" });
-		mockApi([
+		const patched = { ...saved, barcode: "4710088432094" };
+		const fetchMock = mockApi([
 			{
 				method: "POST",
 				path: "/api/ai/analyze",
-				handler: () => json(estimate),
+				handler: () => json(AI_ESTIMATE),
 			},
 			{ method: "GET", path: "/api/foods?", handler: () => json([]) },
+			{ method: "PATCH", path: "/api/foods/31", handler: () => json(patched) },
 			{ method: "POST", path: "/api/foods", handler: () => json(saved, 201) },
 		]);
 		render(wrap(<NewFood handoff={handoff({ returnTo: "/meals/new" })} />));
 
-		await userEvent.type(screen.getByLabelText("描述這個食物"), "一碗牛肉麵");
-		await userEvent.click(screen.getByRole("button", { name: "估算" }));
-		const card = await screen.findByRole("region", { name: "AI 估算結果" });
-		await userEvent.click(within(card).getByRole("button", { name: "確認" }));
+		await confirmAiEstimate();
 
 		expect(
 			await screen.findByRole("heading", { name: "記一餐頁" }),
 		).toBeInTheDocument();
 		expect(JSON.parse(screen.getByTestId("state").textContent ?? "")).toEqual({
-			pickedFood: saved,
+			pickedFood: patched,
 		});
+		expect(patchBodies(fetchMock)).toEqual([{ barcode: "4710088432094" }]);
+	});
+
+	it("AI 面板交回食物庫裡的公開食物：不 PATCH（一般使用者會 403），原樣交回", async () => {
+		const library = makeFood({ id: 40, name: "牛肉麵", is_global: true });
+		const fetchMock = mockApi([
+			{
+				method: "POST",
+				path: "/api/ai/analyze",
+				handler: () => json(AI_ESTIMATE),
+			},
+			{ method: "GET", path: "/api/foods?", handler: () => json([library]) },
+			{ method: "GET", path: "/api/foods/40", handler: () => json(library) },
+		]);
+		render(wrap(<NewFood handoff={handoff()} />));
+
+		const card = await confirmAiEstimate();
+		await userEvent.click(
+			await within(card).findByRole("button", { name: "用食物庫的" }),
+		);
+
+		expect(await screen.findByText("food-detail:40")).toBeInTheDocument();
+		expect(patchBodies(fetchMock)).toEqual([]);
+	});
+
+	it("AI 面板交回自己已經有條碼的食物：不蓋掉那個條碼", async () => {
+		const mine = makeFood({ id: 41, name: "牛肉麵", barcode: "96385074" });
+		const fetchMock = mockApi([
+			{
+				method: "POST",
+				path: "/api/ai/analyze",
+				handler: () => json(AI_ESTIMATE),
+			},
+			{ method: "GET", path: "/api/foods?", handler: () => json([mine]) },
+			{ method: "GET", path: "/api/foods/41", handler: () => json(mine) },
+		]);
+		render(wrap(<NewFood handoff={handoff()} />));
+
+		const card = await confirmAiEstimate();
+		await userEvent.click(
+			await within(card).findByRole("button", { name: "用食物庫的" }),
+		);
+
+		expect(await screen.findByText("food-detail:41")).toBeInTheDocument();
+		expect(patchBodies(fetchMock)).toEqual([]);
+	});
+
+	it("條碼欄位清空了：不 PATCH", async () => {
+		const saved = makeFood({ id: 31, name: "牛肉麵" });
+		const fetchMock = mockApi([
+			{
+				method: "POST",
+				path: "/api/ai/analyze",
+				handler: () => json(AI_ESTIMATE),
+			},
+			{ method: "GET", path: "/api/foods?", handler: () => json([]) },
+			{ method: "POST", path: "/api/foods", handler: () => json(saved, 201) },
+		]);
+		render(wrap(<NewFood handoff={handoff()} />));
+		await userEvent.clear(screen.getByLabelText("條碼（選填）"));
+
+		await confirmAiEstimate();
+
+		expect(await screen.findByText("food-detail:31")).toBeInTheDocument();
+		expect(patchBodies(fetchMock)).toEqual([]);
+	});
+
+	it("PATCH 失敗（例如 409）：食物已經建好了，照樣交出去（條碼可以在詳情頁再設）", async () => {
+		const saved = makeFood({ id: 31, name: "牛肉麵" });
+		mockApi([
+			{
+				method: "POST",
+				path: "/api/ai/analyze",
+				handler: () => json(AI_ESTIMATE),
+			},
+			{ method: "GET", path: "/api/foods?", handler: () => json([]) },
+			{
+				method: "PATCH",
+				path: "/api/foods/31",
+				handler: () =>
+					json(
+						{
+							error: {
+								code: "BARCODE_EXISTS",
+								message: "x",
+								details: { food_id: 9 },
+							},
+						},
+						409,
+					),
+			},
+			{ method: "POST", path: "/api/foods", handler: () => json(saved, 201) },
+		]);
+		render(wrap(<NewFood handoff={handoff()} />));
+
+		await confirmAiEstimate();
+
+		expect(await screen.findByText("food-detail:31")).toBeInTheDocument();
 	});
 });
 
