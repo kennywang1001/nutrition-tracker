@@ -355,6 +355,8 @@ function AddItem({
 					aria-label="加一項"
 					onSubmit={(event) => {
 						event.preventDefault();
+						// 份量清單還沒到就送＝「1 g」（審查 I2；同記一餐）。
+						if (portion.loading) return;
 						add.mutate(food, { onSuccess: onClose });
 					}}
 				>
@@ -367,10 +369,12 @@ function AddItem({
 						idPrefix="add-"
 					/>
 					{add.isError && <p role="alert">{describeItemError(add.error)}</p>}
+					{portion.loading && <p role="status">載入份量中…</p>}
 					<button
 						type="submit"
 						className={styles.primary}
 						disabled={add.isPending}
+						aria-disabled={portion.loading}
 					>
 						{add.isPending ? "加入中…" : "加入"}
 					</button>

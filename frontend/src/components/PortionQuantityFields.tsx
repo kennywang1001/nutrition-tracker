@@ -61,6 +61,15 @@ export function usePortionQuantity(
 	return {
 		portions,
 		portionId,
+		/** 份量清單還在抓、而且使用者還沒選過（審查 I2）：這時的 `portionId` 是 null 只因為清單
+		 *  還沒到——送出去是「1 g」，不是使用者看到的那一份。呼叫端在這段時間不送（按鈕
+		 *  `aria-disabled`、送出直接 return、狀態列「載入份量中…」）。
+		 *
+		 *  - 選過的（編輯已記的項目的初始值、或使用者已經動過數量而鎖住的單位）不算載入中：
+		 *    送出的東西不依賴清單。
+		 *  - 清單抓不到（錯誤）不是載入中：照舊退回直接輸入（g），不能讓人卡住。 */
+		loading:
+			foodId !== null && portionChoice === null && portionsQuery.isPending,
 		quantity,
 		setQuantity(value: string) {
 			// 使用者一動數量，就把「此刻看到的單位」鎖住：份量清單可能晚到

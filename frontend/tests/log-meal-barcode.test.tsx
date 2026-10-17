@@ -66,6 +66,63 @@ describe("記一餐與掃條碼（掃條碼規格 D19–D21）", () => {
 		await waitFor(() => expect(selected).toHaveFocus());
 	});
 
+	it("initialFood 的份量還在載入時按「記錄」什麼都不送；載入好選上預設份量再送（審查 I2）", async () => {
+		// 掃條碼回來的路徑最容易撞到：LogMeal 帶著 initialFood 掛載、份量清單是冷的、焦點就在
+		// 「已選擇」旁邊。以前這時按「記錄」送的是 quantity 1、沒有 portion_id＝1 g。
+		let releasePortions: (response: Response) => void = () => {};
+		const portionsPending = new Promise<Response>((resolve) => {
+			releasePortions = resolve;
+		});
+		const fetchMock = mockApi([
+			{
+				method: "POST",
+				path: "/api/meals",
+				handler: () => json({ id: 1 }, 201),
+			},
+			{ path: "/api/foods/9/portions", handler: () => portionsPending },
+			{ path: "/api/foods/frequent", handler: () => json([]) },
+			{ path: "/api/foods/recent", handler: () => json([]) },
+		]);
+		const onSaved = vi.fn();
+		render(
+			wrap(
+				<LogMeal
+					onSaved={onSaved}
+					initialFood={makeFood({ id: 9, name: "洋芋片" })}
+				/>,
+			),
+		);
+		const posts = () =>
+			fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
+
+		const submit = await screen.findByRole("button", { name: "記錄" });
+		expect(submit).toHaveAttribute("aria-disabled", "true");
+		expect(screen.getByText("載入份量中…")).toHaveAttribute("role", "status");
+		await userEvent.click(submit);
+		expect(posts()).toHaveLength(0);
+
+		releasePortions(
+			json([
+				{
+					id: 4,
+					label: "一包",
+					grams: "35.00",
+					is_default: true,
+					is_global: false,
+				},
+			]),
+		);
+		await screen.findByRole("option", { name: "一包" });
+		expect(submit).toHaveAttribute("aria-disabled", "false");
+		expect(screen.queryByText("載入份量中…")).toBeNull();
+		await userEvent.click(submit);
+
+		await waitFor(() => expect(onSaved).toHaveBeenCalled());
+		expect(posts()).toHaveLength(1);
+		const body = JSON.parse(String(posts()[0]?.[1]?.body));
+		expect(body.items).toEqual([{ food_id: 9, quantity: "1", portion_id: 4 }]);
+	});
+
 	it("掃條碼的入口在搜尋框下面", async () => {
 		routes();
 		render(wrap(<LogMeal onSaved={vi.fn()} />));

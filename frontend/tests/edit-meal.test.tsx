@@ -1833,6 +1833,87 @@ describe("編輯這一餐：項目", () => {
 		);
 	});
 
+	it("加一項：份量還在載入時按「加入」什麼都不送；載入好選上預設份量再送（審查 I2）", async () => {
+		let releasePortions: (response: Response) => void = () => {};
+		const portionsPending = new Promise<Response>((resolve) => {
+			releasePortions = resolve;
+		});
+		const fetchMock = mockApi(
+			routes(MEAL, [
+				{
+					method: "POST",
+					path: "/api/meals/5/items",
+					handler: () => json(MEAL, 201),
+				},
+				{ path: "/api/foods/frequent", handler: () => json([WHITE_RICE]) },
+				{ path: "/api/foods/3/portions", handler: () => portionsPending },
+			]),
+		);
+		renderEditMeal();
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "＋ 加一項" }),
+		);
+		await userEvent.click(await screen.findByRole("button", { name: "白飯" }));
+		const form = screen.getByRole("form", { name: "加一項" });
+		const submit = within(form).getByRole("button", { name: "加入" });
+		expect(submit).toHaveAttribute("aria-disabled", "true");
+		expect(within(form).getByRole("status")).toHaveTextContent("載入份量中…");
+		await userEvent.click(submit);
+		expect(calls(fetchMock, "POST", "/api/meals/5/items")).toHaveLength(0);
+
+		releasePortions(json([BOWL]));
+		await within(form).findByRole("option", { name: "碗" });
+		expect(submit).toHaveAttribute("aria-disabled", "false");
+		expect(within(form).queryByRole("status")).toBeNull();
+		await userEvent.click(submit);
+
+		await waitFor(() =>
+			expect(bodyOf(fetchMock, "POST", "/api/meals/5/items")).toEqual({
+				food_id: 3,
+				quantity: "1",
+				portion_id: 8,
+			}),
+		);
+	});
+
+	it("加一項：份量清單抓不到時照舊退回直接輸入（g），可以送", async () => {
+		const fetchMock = mockApi(
+			routes(MEAL, [
+				{
+					method: "POST",
+					path: "/api/meals/5/items",
+					handler: () => json(MEAL, 201),
+				},
+				{ path: "/api/foods/frequent", handler: () => json([WHITE_RICE]) },
+				{
+					path: "/api/foods/3/portions",
+					handler: () =>
+						json({ error: { code: "X", message: "x", details: {} } }, 500),
+				},
+			]),
+		);
+		renderEditMeal();
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "＋ 加一項" }),
+		);
+		await userEvent.click(await screen.findByRole("button", { name: "白飯" }));
+		const form = screen.getByRole("form", { name: "加一項" });
+		const submit = within(form).getByRole("button", { name: "加入" });
+		await waitFor(() =>
+			expect(submit).toHaveAttribute("aria-disabled", "false"),
+		);
+		await userEvent.click(submit);
+
+		await waitFor(() =>
+			expect(bodyOf(fetchMock, "POST", "/api/meals/5/items")).toEqual({
+				food_id: 3,
+				quantity: "1",
+			}),
+		);
+	});
+
 	it("加一項：食物有預設份量時，送預設份量的 id 與 quantity 1", async () => {
 		const fetchMock = mockApi(
 			routes(MEAL, [

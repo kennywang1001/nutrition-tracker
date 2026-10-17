@@ -404,6 +404,9 @@ export function LogMeal({
 					className={styles.form}
 					onSubmit={(event) => {
 						event.preventDefault();
+						// 份量清單還沒到：這時送出去的是「1 g」（審查 I2）。按鈕是 aria-disabled（不是
+						// disabled：焦點留在按鈕上、螢幕閱讀器唸得到），所以這裡要自己擋。
+						if (portion.loading) return;
 						const bad = extraItems.find(
 							(item) => !isPlainPositiveDecimal(item.quantity),
 						);
@@ -543,10 +546,12 @@ export function LogMeal({
 					{photoError !== null && <p role="alert">{photoError}</p>}
 
 					{error !== null && <p role="alert">{error}</p>}
+					{portion.loading && <p role="status">載入份量中…</p>}
 					<button
 						type="submit"
 						className={styles.save}
 						disabled={saveMeal.isPending}
+						aria-disabled={portion.loading}
 					>
 						{saveMeal.isPending ? "儲存中…" : "記錄"}
 					</button>

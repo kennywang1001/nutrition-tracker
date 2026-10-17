@@ -440,7 +440,10 @@ test("沒有預填＋拍營養標示（只假造讀標示）：真的後端說�
 	await expect(
 		page.getByText(`已選擇：${productName}`, { exact: true }),
 	).toBeVisible();
-	// 份量是另外載入的：選上「份」之前按「記錄」會記成直接輸入的 1 g（6 個 worker 時真的發生過）。
+	// 份量是另外載入的。以前選上「份」之前按「記錄」會記成直接輸入的 1 g（6 個 worker 時真的
+	// 發生過）；審查 I2 之後畫面在載入時不送（按鈕 aria-disabled、送出直接 return），但 Playwright
+	// 照樣點得到 aria-disabled 的按鈕——那一下是空的，`saveMeal` 會等不到存好。所以這個等待
+	// 留著：它同時確認預設份量選上了。
 	await expect(page.locator("#portion option:checked")).toHaveText("份");
 	await expect(page.getByLabel("份量", { exact: true })).toHaveValue("1");
 	await saveMeal(page);

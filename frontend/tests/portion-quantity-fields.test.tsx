@@ -10,7 +10,11 @@ import {
 	PortionQuantityFields,
 	usePortionQuantity,
 } from "../src/components/PortionQuantityFields";
-import { json, mockApiByPath as mockApi } from "./helpers/mock-api";
+import {
+	json,
+	mockApiByPath as mockApi,
+	mockApi as mockRoutes,
+} from "./helpers/mock-api";
 
 function wrap(children: ReactNode) {
 	const client = new QueryClient({
@@ -56,6 +60,7 @@ function Harness({
 		<>
 			<PortionQuantityFields state={state} unit="ml" idPrefix={idPrefix} />
 			<output data-testid="portion-id">{String(state.portionId)}</output>
+			<output data-testid="loading">{String(state.loading)}</output>
 		</>
 	);
 }
@@ -73,6 +78,59 @@ beforeEach(() => {
 });
 
 describe("usePortionQuantity／PortionQuantityFields", () => {
+	describe("loading（審查 I2）", () => {
+		function pendingPortions() {
+			vi.restoreAllMocks();
+			mockRoutes([
+				{
+					path: "/api/foods/1/portions",
+					handler: () => new Promise<Response>(() => {}),
+				},
+			]);
+		}
+
+		it("清單還沒到、也還沒選過：loading", async () => {
+			pendingPortions();
+			render(wrap(<Harness />));
+			expect(screen.getByTestId("loading")).toHaveTextContent("true");
+			expect(screen.getByTestId("portion-id")).toHaveTextContent("null");
+		});
+
+		it("清單到了：不是 loading，預設份量選上", async () => {
+			render(wrap(<Harness />));
+			await waitFor(() =>
+				expect(screen.getByTestId("portion-id")).toHaveTextContent("7"),
+			);
+			expect(screen.getByTestId("loading")).toHaveTextContent("false");
+		});
+
+		it("有初始的選擇（編輯已記的項目）：清單還沒到也不是 loading——送出的東西不靠清單", async () => {
+			pendingPortions();
+			render(wrap(<Harness initial={{ choice: 9, quantity: "2" }} />));
+			expect(screen.getByTestId("loading")).toHaveTextContent("false");
+		});
+
+		it("載入中動了數量：單位鎖成當下看到的（g／ml），不再是 loading", async () => {
+			pendingPortions();
+			render(wrap(<Harness />));
+			await userEvent.type(screen.getByLabelText("份量"), "0");
+			expect(screen.getByTestId("loading")).toHaveTextContent("false");
+			expect(screen.getByTestId("portion-id")).toHaveTextContent("null");
+		});
+
+		it("清單抓不到：不是 loading（退回直接輸入，不能讓人卡住）", async () => {
+			vi.restoreAllMocks();
+			mockApi({
+				"/api/foods/1/portions": () =>
+					json({ error: { code: "X", message: "x", details: {} } }, 500),
+			});
+			render(wrap(<Harness />));
+			await waitFor(() =>
+				expect(screen.getByTestId("loading")).toHaveTextContent("false"),
+			);
+		});
+	});
+
 	it("沒有給初始值：用預設份量、數量 1", async () => {
 		render(wrap(<Harness />));
 
