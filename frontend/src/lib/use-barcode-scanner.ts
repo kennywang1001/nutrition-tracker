@@ -84,6 +84,15 @@ export function useBarcodeScanner({
 	const loadDetectorRef = useRef(loadDetector);
 	const streamRef = useRef<MediaStream | null>(null);
 	const stopRef = useRef<() => void>(() => {});
+	// 換到背景／回來（審查 I3）。`finishedRef`：`stop()` 或掃到之後，回來也不再開相機。
+	// `pausedRef`：這一次換到背景時停掉的是一台正在開（或開著）的相機——回來才重開。
+	// `statusRef`：visibilitychange 的監聽器只掛一次，要讀現在的狀態。
+	const finishedRef = useRef(false);
+	const pausedRef = useRef(false);
+	const statusRef = useRef(status);
+	statusRef.current = status;
+	// 每加一就重跑一次開相機的 effect（回到前景）。
+	const [session, setSession] = useState(0);
 
 	const detector = useCallback((): Promise<Detector> => {
 		detectorRef.current ??= loadDetectorRef.current();
@@ -91,8 +100,12 @@ export function useBarcodeScanner({
 	}, []);
 
 	useEffect(() => {
+		// `stop()` 或掃到之後回到前景（session 加一）：不再開相機。
+		if (finishedRef.current) return;
 		let cancelled = false;
 		let timer: ReturnType<typeof setTimeout> | undefined;
+		// 回到前景的那一次：狀態列回到「正在開啟相機…」。
+		if (session > 0) setStatus({ kind: "starting" });
 		const stop = () => {
 			cancelled = true;
 			if (timer !== undefined) clearTimeout(timer);
@@ -180,6 +193,7 @@ export function useBarcodeScanner({
 				}
 				if (cancelled) return;
 				if (code !== null) {
+					finishedRef.current = true;
 					stop();
 					onCodeRef.current(code);
 					return;
@@ -191,7 +205,30 @@ export function useBarcodeScanner({
 
 		void start();
 		return stop;
-	}, [detector, getUserMedia, intervalMs, videoRef]);
+	}, [detector, getUserMedia, intervalMs, videoRef, session]);
+
+	// 換到背景：**只停相機，不關掃描層**（審查 I3）。Android 的檔案選擇器或相機 app 會讓這一頁
+	// 變成 hidden——以前這時當作取消，掃描層和它的 <input type=file> 在 change 之前就卸載了，
+	// 選好的照片被安靜地丟掉。相機在背景照樣不開著（規格 D16）；回到前景時，換到背景之前
+	// 相機是好的（不是錯誤的說明）才重開。
+	//
+	// 不用「按了從照片讀才不取消」的旗標：選擇器可以用鍵盤打開、可以被取消而沒有 change、
+	// 換到別的 app 也是同一個 hidden——旗標要猜什麼時候清，這裡不用猜。
+	useEffect(() => {
+		function onVisibilityChange() {
+			if (document.visibilityState === "hidden") {
+				if (statusRef.current.kind === "error") return;
+				pausedRef.current = true;
+				stopRef.current();
+			} else if (pausedRef.current) {
+				pausedRef.current = false;
+				setSession((value) => value + 1);
+			}
+		}
+		document.addEventListener("visibilitychange", onVisibilityChange);
+		return () =>
+			document.removeEventListener("visibilitychange", onVisibilityChange);
+	}, []);
 
 	const setTorch = useCallback(async (on: boolean) => {
 		const [track] = streamRef.current?.getVideoTracks() ?? [];
@@ -214,7 +251,10 @@ export function useBarcodeScanner({
 		[detector],
 	);
 
-	const stop = useCallback(() => stopRef.current(), []);
+	const stop = useCallback(() => {
+		finishedRef.current = true;
+		stopRef.current();
+	}, []);
 
 	return { status, setTorch, detectFile, stop };
 }

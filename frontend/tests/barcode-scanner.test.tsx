@@ -1,4 +1,10 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import {
+	act,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BarcodeScanner } from "../src/components/BarcodeScanner";
@@ -62,6 +68,17 @@ beforeEach(() => {
 	// jsdom 沒有實作 play()。
 	HTMLMediaElement.prototype.play = vi.fn(async () => undefined);
 });
+
+/** 換到背景／回到前景（jsdom 的 visibilityState 是唯讀的 getter：蓋一個自己的屬性）。 */
+function setVisibility(state: "hidden" | "visible") {
+	Object.defineProperty(document, "visibilityState", {
+		configurable: true,
+		value: state,
+	});
+	act(() => {
+		document.dispatchEvent(new Event("visibilitychange"));
+	});
+}
 
 afterEach(() => {
 	// 「換到背景」那一條改過 visibilityState；刪掉自己的屬性，回到 jsdom 原型上的那個。
@@ -157,19 +174,67 @@ describe("BarcodeScanner：相機", () => {
 		await waitFor(() => expect(camera.track.stop).toHaveBeenCalled());
 	});
 
-	it("換到背景：當作取消（相機在背景不該開著）", async () => {
-		const camera = fakeCamera();
-		const { onCancel } = renderScanner({ getUserMedia: camera.getUserMedia });
+	it("換到背景：只停相機、掃描層留著；回來再開相機（審查 I3）", async () => {
+		const first = fakeCamera();
+		const second = fakeCamera();
+		let giveSecond: (stream: MediaStream) => void = () => {};
+		const getUserMedia = vi
+			.fn()
+			.mockImplementationOnce(first.getUserMedia)
+			.mockImplementationOnce(
+				() =>
+					new Promise<MediaStream>((resolve) => {
+						giveSecond = resolve;
+					}),
+			);
+		const { onCancel, unmount } = renderScanner({ getUserMedia });
 		await screen.findByText("把條碼對準框框");
 
-		Object.defineProperty(document, "visibilityState", {
-			configurable: true,
-			value: "hidden",
-		});
-		document.dispatchEvent(new Event("visibilitychange"));
+		setVisibility("hidden");
 
-		expect(onCancel).toHaveBeenCalledTimes(1);
-		expect(camera.track.stop).toHaveBeenCalled();
+		expect(first.track.stop).toHaveBeenCalled();
+		expect(onCancel).not.toHaveBeenCalled();
+		expect(screen.getByRole("dialog", { name: "掃條碼" })).toBeInTheDocument();
+
+		setVisibility("visible");
+
+		await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+		// 重開的那一段：狀態列回到「正在開啟相機…」，不是停在「把條碼對準框框」。
+		expect(screen.getByRole("status")).toHaveTextContent("正在開啟相機…");
+		giveSecond(second.stream);
+		expect(await screen.findByText("把條碼對準框框")).toBeInTheDocument();
+		unmount();
+		expect(second.track.stop).toHaveBeenCalled();
+	});
+
+	it("相機本來就打不開：回來不再重試（說明留著）", async () => {
+		const getUserMedia = vi.fn(async () => {
+			throw new DOMException("x", "NotAllowedError");
+		});
+		renderScanner({ getUserMedia });
+		await screen.findByText(/沒有相機權限/);
+
+		setVisibility("hidden");
+		setVisibility("visible");
+
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(getUserMedia).toHaveBeenCalledTimes(1);
+		expect(screen.getByText(/沒有相機權限/)).toBeInTheDocument();
+	});
+
+	it("已經交出條碼（相機停了）之後換到背景再回來：不再開相機", async () => {
+		const camera = fakeCamera();
+		const { onCode } = renderScanner({ getUserMedia: camera.getUserMedia });
+		await screen.findByText("把條碼對準框框");
+		await userEvent.click(screen.getByRole("button", { name: "手動輸入條碼" }));
+		await userEvent.type(screen.getByLabelText("條碼"), "4710088432094{Enter}");
+		expect(onCode).toHaveBeenCalledWith("4710088432094");
+
+		setVisibility("hidden");
+		setVisibility("visible");
+
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(camera.getUserMedia).toHaveBeenCalledTimes(1);
 	});
 });
 
@@ -332,6 +397,37 @@ describe("BarcodeScanner：從照片讀", () => {
 
 		await waitFor(() => expect(onCode).toHaveBeenCalledWith("4710088432094"));
 		expect(detector.detect).toHaveBeenCalledWith(file);
+	});
+
+	it("Android：選照片時頁面換到背景（檔案選擇器、相機）——掃描層不關、照片照樣讀（審查 I3）", async () => {
+		// 以前 hidden＝取消：掃描層與它的 <input type=file> 在 change 之前就卸載了，照片被安靜地丟掉。
+		const camera = fakeCamera();
+		const detector = {
+			detect: vi.fn(async (source: ImageBitmapSource) =>
+				source instanceof Blob ? [CODE] : [],
+			),
+		};
+		const { onCode, onCancel } = renderScanner({
+			detector,
+			getUserMedia: camera.getUserMedia,
+		});
+		await screen.findByText("把條碼對準框框");
+		const input = screen.getByLabelText<HTMLInputElement>("從照片讀條碼");
+		const file = new File(["jpeg"], "box.jpg", { type: "image/jpeg" });
+
+		await userEvent.click(input);
+		setVisibility("hidden");
+		expect(camera.track.stop).toHaveBeenCalled();
+		Object.defineProperty(input, "files", {
+			configurable: true,
+			value: [file],
+		});
+		fireEvent.change(input);
+		setVisibility("visible");
+
+		await waitFor(() => expect(onCode).toHaveBeenCalledWith("4710088432094"));
+		expect(detector.detect).toHaveBeenCalledWith(file);
+		expect(onCancel).not.toHaveBeenCalled();
 	});
 
 	it("讀不到：說明，不交出東西；同一張可以再選一次（value 清掉）", async () => {

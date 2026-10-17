@@ -44,7 +44,8 @@ const FOCUSABLE =
  *    z-index 再大也蓋不過分頁列。
  *  - 「手動輸入條碼」「從照片讀條碼」**一開就有**：相機在 iOS 的已安裝 PWA、桌機、權限被拒時都可能不能用。
  *  - Escape、Tab 的焦點圈住都掛在 `window`：焦點萬一掉到 body（按鈕消失的那一刻），鍵盤照樣關得掉。
- *  - 換到背景就當作取消：相機在背景不該開著（回來再按一次「掃條碼」）。 */
+ *  - 換到背景只停相機、掃描層留著，回來再開（`useBarcodeScanner`；審查 I3）：Android 選照片時
+ *    頁面會變成 hidden，以前當作取消會把選好的照片丟掉。 */
 export function BarcodeScanner({
 	onCode,
 	onCancel,
@@ -107,15 +108,8 @@ export function BarcodeScanner({
 				first.focus();
 			}
 		}
-		function onVisibilityChange() {
-			if (document.visibilityState === "hidden") cancelLatest.current();
-		}
 		window.addEventListener("keydown", onKeyDown);
-		document.addEventListener("visibilitychange", onVisibilityChange);
-		return () => {
-			window.removeEventListener("keydown", onKeyDown);
-			document.removeEventListener("visibilitychange", onVisibilityChange);
-		};
+		return () => window.removeEventListener("keydown", onKeyDown);
 	}, []);
 
 	useEffect(() => {
