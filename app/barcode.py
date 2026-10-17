@@ -8,10 +8,12 @@
 """
 
 import re
+import unicodedata
 
 # 空白（含全形空白，`\s` 認 Unicode 的空白）與「-」。
 _SEPARATORS = re.compile(r"[\s\-]+")
-# 只收 ASCII 數字：`str.isdigit()` 也認全形數字與上標，那些不是條碼。
+# NFKC 之後只收 ASCII 數字：`str.isdigit()` 還認其他文字的數字，那些不是條碼。
+# （上標數字 NFKC 會折成一般數字——沒有人會那樣打條碼，折了也無害。）
 _DIGITS = re.compile(r"[0-9]+")
 
 
@@ -67,7 +69,9 @@ def normalize_barcode(raw: str) -> str:
     同樣 8 位永遠得到同樣的結果——掃描器回報 `upc_e` 或 `ean_8`、手動輸入，存的跟查的一定一致。
     不合格丟 `InvalidBarcodeError`。
     """
-    code = _SEPARATORS.sub("", raw)
+    # NFKC 先把全形數字（「５９０１…」，中文輸入法常見）與全形的「－」折成 ASCII（審查 M6）。
+    # 其他文字的數字（例如阿拉伯－印度數字）NFKC 不折，照舊被下面的 `_DIGITS` 拒絕。
+    code = _SEPARATORS.sub("", unicodedata.normalize("NFKC", raw))
     if not _DIGITS.fullmatch(code):
         raise InvalidBarcodeError("條碼只能是數字")
     if len(code) == 13:

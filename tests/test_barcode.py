@@ -107,10 +107,31 @@ def test_an_eight_digit_code_valid_both_ways_is_upc_e():
         ("47100884320941", "8、12 或 13"),
         ("", "只能是數字"),
         ("abc", "只能是數字"),
-        ("4710088" + FULL_WIDTH_FOUR + "32094", "只能是數字"),  # 混了一個全形數字
         ("4710088.432094", "只能是數字"),
+        # NFKC 不會把其他文字的數字（阿拉伯－印度數字 ٣，U+0663）折成 ASCII：照舊拒絕。
+        ("4710088" + chr(0x0663) + "32094", "只能是數字"),
     ],
 )
 def test_invalid_codes_are_rejected_with_a_readable_message(raw, message):
     with pytest.raises(InvalidBarcodeError, match=message):
         normalize_barcode(raw)
+
+
+def _full_width(text):
+    """ASCII 數字與「-」→ 全形（U+FF10～U+FF19、U+FF0D）。用 chr() 組：原始碼裡不放全形字。"""
+    return "".join(chr(ord(ch) - 0x30 + 0xFF10) if ch.isdigit() else chr(0xFF0D) for ch in text)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # 審查 M6：中文輸入法打出來的全形數字（「５９０１２３４１２３４５７」）
+        # 先用 NFKC 折成 ASCII。
+        (_full_width("5901234123457"), "5901234123457"),
+        ("4710088" + FULL_WIDTH_FOUR + "32094", "4710088432094"),  # 混了一個全形數字
+        (_full_width("036000-291452"), "0036000291452"),  # 全形的「－」也是分隔符號
+        (FULL_WIDTH_SPACE + _full_width("96385074"), "96385074"),
+    ],
+)
+def test_full_width_digits_are_folded(raw, expected):
+    assert normalize_barcode(raw) == expected

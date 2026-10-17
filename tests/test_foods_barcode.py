@@ -313,6 +313,20 @@ async def test_lookup_returns_a_food_without_a_current_revision(client, db_sessi
     assert response.json()["food"]["nutrition"] is None
 
 
+async def test_full_width_digits_work_for_create_and_lookup(client, db_session):
+    """審查 M6：全形數字（中文輸入法）在建立與查詢都折成 ASCII（NFKC）。用 chr() 組。"""
+    user = await create_user(db_session)
+    full_width = "".join(chr(ord(ch) - 0x30 + 0xFF10) for ch in CODE)
+
+    created = await _create(client, auth(user), barcode=full_width)
+    found = await client.get(f"/api/foods/by-barcode/{full_width}", headers=auth(user))
+
+    assert created.status_code == 201
+    assert created.json()["barcode"] == CODE
+    assert found.json()["code"] == CODE
+    assert found.json()["food"]["id"] == created.json()["id"]
+
+
 async def test_lookup_rejects_a_malformed_code(client, db_session):
     user = await create_user(db_session)
     response = await client.get("/api/foods/by-barcode/12345", headers=auth(user))
