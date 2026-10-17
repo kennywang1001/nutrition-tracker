@@ -311,6 +311,87 @@ describe("BarcodeScanner：相機不能用的說明", () => {
 	});
 });
 
+describe("BarcodeScanner：偵測一直失敗（審查 M1）", () => {
+	/** jsdom 的 video 永遠是 HAVE_NOTHING（0）；有畫面了是 HAVE_CURRENT_DATA（2）以上。 */
+	function videoHasFrames(has: boolean) {
+		Object.defineProperty(HTMLMediaElement.prototype, "readyState", {
+			configurable: true,
+			get: () => (has ? 4 : 0),
+		});
+	}
+
+	afterEach(() => {
+		Reflect.deleteProperty(HTMLMediaElement.prototype, "readyState");
+	});
+
+	it("有畫面時連續 3 次 detect() 被拒絕：停相機、停迴圈、說明（照片與手動輸入還在）", async () => {
+		videoHasFrames(true);
+		const camera = fakeCamera();
+		const detector = {
+			detect: vi.fn(async () => {
+				throw new Error("wasm 壞了");
+			}),
+		};
+		renderScanner({ detector, getUserMedia: camera.getUserMedia });
+
+		expect(
+			await screen.findByText(
+				"讀不了相機的畫面。可以手動輸入條碼，或從照片讀。",
+			),
+		).toBeInTheDocument();
+		expect(camera.track.stop).toHaveBeenCalled();
+		const calls = detector.detect.mock.calls.length;
+		expect(calls).toBe(3);
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		expect(detector.detect).toHaveBeenCalledTimes(calls);
+		expect(screen.getByLabelText("從照片讀條碼")).toBeInTheDocument();
+	});
+
+	it("失敗之間有一次成功（空的結果）：重新數，不停", async () => {
+		videoHasFrames(true);
+		const camera = fakeCamera();
+		const boom = new Error("x");
+		const detector = {
+			detect: vi
+				.fn()
+				.mockRejectedValueOnce(boom)
+				.mockRejectedValueOnce(boom)
+				.mockResolvedValueOnce([])
+				.mockRejectedValueOnce(boom)
+				.mockRejectedValueOnce(boom)
+				.mockResolvedValue([CODE]),
+		};
+		const { onCode } = renderScanner({
+			detector,
+			getUserMedia: camera.getUserMedia,
+		});
+
+		await waitFor(() => expect(onCode).toHaveBeenCalledWith("4710088432094"));
+	});
+
+	it("影片還沒有畫面時的拒絕不算（相機剛開、還在暖機）", async () => {
+		videoHasFrames(false);
+		const camera = fakeCamera();
+		let rejected = 0;
+		const detector = {
+			detect: vi.fn(async () => {
+				if (rejected < 5) {
+					rejected += 1;
+					if (rejected === 5) videoHasFrames(true);
+					throw new DOMException("x", "InvalidStateError");
+				}
+				return [CODE];
+			}),
+		};
+		const { onCode } = renderScanner({
+			detector,
+			getUserMedia: camera.getUserMedia,
+		});
+
+		await waitFor(() => expect(onCode).toHaveBeenCalledWith("4710088432094"));
+	});
+});
+
 describe("BarcodeScanner：手電筒", () => {
 	it("相機有手電筒：開、關", async () => {
 		const camera = fakeCamera({ torch: true });

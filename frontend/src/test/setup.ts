@@ -31,7 +31,7 @@ if (typeof URL.revokeObjectURL !== "function") {
 // 東西的假偵測器；要測「讀到了」的測試自己注入偵測器（`BarcodeScanner` 的 `loadDetector`）。
 // `vi.fn`：`tests/barcode-detector.test.ts` 斷言「沒有原生 → 走到這裡」，也順便證明這個 mock 有生效。
 vi.mock("../lib/barcode-ponyfill", () => ({
-	createPonyfillDetector: vi.fn(() => ({ detect: async () => [] })),
+	createPonyfillDetector: vi.fn(async () => ({ detect: async () => [] })),
 }));
 
 // 電腦版版面（規格 §6）：jsdom 沒有 matchMedia；預設是手機版。

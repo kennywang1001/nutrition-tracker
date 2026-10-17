@@ -42,7 +42,8 @@ export async function loadDetector(): Promise<Detector> {
 		}
 	}
 	const { createPonyfillDetector } = await import("./barcode-ponyfill");
-	return createPonyfillDetector(PRODUCT_FORMATS);
+	// 會等 wasm 真的載起來（審查 M1）：載不起來在這裡丟，不是之後每一次 detect() 才丟。
+	return await createPonyfillDetector(PRODUCT_FORMATS);
 }
 
 /** 偵測結果裡第一個「看起來像商品條碼」的值（8／12／13 位數字）。檢查碼不在這裡驗（規格 D3）。 */

@@ -33,6 +33,7 @@ const STATUS_TEXT = {
 	// 照片那條用的是同一個偵測器，所以不叫人「從照片讀」——那顆按鈕這時候也不畫。
 	"no-detector": "這台裝置不能用相機掃條碼，請手動輸入。",
 	failed: "相機打不開。可以手動輸入條碼，或從照片讀。",
+	"detect-failed": "讀不了相機的畫面。可以手動輸入條碼，或從照片讀。",
 } as const;
 
 const FOCUSABLE =

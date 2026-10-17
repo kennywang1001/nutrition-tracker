@@ -20,8 +20,15 @@ export type ScannerStatus =
 /** - `denied`：使用者（或瀏覽器設定）不給相機權限。
  *  - `no-camera`：沒有相機、沒有 `mediaDevices`（不是安全連線也是這個）、約束滿足不了。
  *  - `no-detector`：偵測器載不起來（ponyfill 的 wasm 抓不到）——照片那條也不能用。
+ *  - `detect-failed`：相機開著、影片有畫面，`detect()` 卻連續被拒絕 `MAX_DETECT_FAILURES` 次
+ *    （審查 M1）——停相機、停迴圈，不要開著相機一直轉。照片那條還留著（靜止的圖可能讀得了）。
  *  - `failed`：其他。 */
-export type CameraProblem = "denied" | "no-camera" | "no-detector" | "failed";
+export type CameraProblem =
+	| "denied"
+	| "no-camera"
+	| "no-detector"
+	| "detect-failed"
+	| "failed";
 
 type GetUserMedia = (
 	constraints: MediaStreamConstraints,
@@ -40,6 +47,10 @@ export type ScannerOptions = {
 };
 
 const DEFAULT_INTERVAL_MS = 250;
+/** 有畫面時連續幾次 `detect()` 被拒絕就放棄（審查 M1）。250 ms 一次＝不到一秒。 */
+export const MAX_DETECT_FAILURES = 3;
+// HTMLMediaElement.HAVE_CURRENT_DATA：影片至少有一格畫面。之前的拒絕（相機還在暖機）不算失敗。
+const HAVE_CURRENT_DATA = 2;
 
 function defaultGetUserMedia(): GetUserMedia | null {
 	const devices = globalThis.navigator?.mediaDevices;
@@ -183,15 +194,24 @@ export function useBarcodeScanner({
 				torch: capabilities?.torch === true ? false : null,
 			});
 
+			let failures = 0;
 			const tick = async () => {
 				if (cancelled) return;
 				let code: string | null = null;
 				try {
 					code = firstProductCode(await found.detect(video));
+					failures = 0;
 				} catch {
-					// 影片還沒有畫面（InvalidStateError）之類：下一次再試。
+					// 影片還沒有畫面（InvalidStateError）之類：下一次再試，不算。有畫面還被拒絕才數——
+					// 連續 MAX_DETECT_FAILURES 次就是偵測器壞了（例如 wasm 執行期出錯）。
+					if (video.readyState >= HAVE_CURRENT_DATA) failures += 1;
 				}
 				if (cancelled) return;
+				if (failures >= MAX_DETECT_FAILURES) {
+					stop();
+					setStatus({ kind: "error", reason: "detect-failed" });
+					return;
+				}
 				if (code !== null) {
 					finishedRef.current = true;
 					stop();

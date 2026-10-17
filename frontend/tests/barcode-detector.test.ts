@@ -87,6 +87,15 @@ describe("loadDetector：原生的優先，沒有就 ponyfill（掃條碼規格 
 	});
 });
 
+describe("loadDetector：ponyfill 的 wasm 載不起來（審查 M1）", () => {
+	it("丟出去：掃描層顯示「只剩手動輸入」，不是開著相機一直轉", async () => {
+		vi.stubGlobal("BarcodeDetector", undefined);
+		ponyfill.mockRejectedValueOnce(new Error("wasm 抓不到"));
+
+		await expect(loadDetector()).rejects.toThrow("wasm 抓不到");
+	});
+});
+
 describe("firstProductCode：第一個看起來像商品條碼的值", () => {
 	it("略過不是商品條碼的結果", () => {
 		expect(
