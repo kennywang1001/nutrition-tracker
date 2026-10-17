@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from app import off
 from app.api.routes.foods import get_product_lookup
+from app.barcode import gtin_check_digit
 from app.config import settings
 from app.main import app
 from app.models.food import BaseUnit, Food, FoodRevision
@@ -398,6 +399,52 @@ async def test_absurd_off_numbers_are_200_without_a_prefill(client, db_session, 
 
     assert response.status_code == 200
     assert response.json() == {"code": CODE, "food": None, "prefill": None}
+
+
+def _valid_codes(count):
+    """`count` 個檢查碼正確、彼此不同的 EAN-13。"""
+    bodies = (f"200000{index:06d}" for index in range(count))
+    return [body + str(gtin_check_digit(body)) for body in bodies]
+
+
+async def test_the_global_off_limit_spans_users_and_is_not_an_error(client, db_session):
+    """審查 M5：每人 30 次／分（D11）擋不住三個人一起掃——全域 60 次／分只算真的問 OFF 的那幾次。
+    第 61 次：200、`prefill: null`，不問 OFF、不是 429。"""
+    users = [await create_user(db_session) for _ in range(3)]
+    asked: list[str] = []
+
+    async def fetch(url):
+        asked.append(url)
+        return off.FetchResult(
+            200,
+            {
+                "status": 1,
+                "product": {
+                    "nutriments": {
+                        "energy-kcal_100g": 42,
+                        "proteins_100g": 0,
+                        "fat_100g": 0,
+                        "carbohydrates_100g": 10.6,
+                    }
+                },
+            },
+        )
+
+    lookup = off.OpenFoodFacts(fetch=fetch)
+    app.dependency_overrides[get_product_lookup] = lambda: lookup
+    codes = _valid_codes(61)
+
+    for index, code in enumerate(codes[:60]):
+        response = await client.get(
+            f"/api/foods/by-barcode/{code}", headers=auth(users[index // 30])
+        )
+        assert response.status_code == 200
+        assert response.json()["prefill"] is not None
+    last = await client.get(f"/api/foods/by-barcode/{codes[60]}", headers=auth(users[2]))
+
+    assert last.status_code == 200
+    assert last.json() == {"code": codes[60], "food": None, "prefill": None}
+    assert len(asked) == 60
 
 
 async def test_a_hit_never_asks_off(client, db_session):

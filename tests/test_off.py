@@ -12,6 +12,7 @@ import pytest
 from app import off
 from app.models.food import BaseUnit
 from app.off import FetchResult, OpenFoodFacts, prefill_from_product
+from app.ratelimit import KeyedRateLimiter, off_global_rate_limiter
 
 CODE = "5449000000996"
 
@@ -286,6 +287,45 @@ async def test_the_least_recently_used_entry_is_evicted():
     assert [url.split("/")[-1] for url in fetch.urls] == ["1.json", "2.json", "3.json"]
     await client.lookup("2")
     assert len(fetch.urls) == 4
+
+
+def _limiter(limit):
+    return KeyedRateLimiter(limit=limit, window_seconds=60, code="X", message="x")
+
+
+async def test_the_global_limit_skips_off_without_an_error():
+    """審查 M5：全部使用者加起來每分鐘最多問 OFF 幾次（正式的是 60，低於 OFF 的每 IP
+    每分鐘約 100）。用完了 → 這一次不問、回 None（使用者看到「找不到」，不是錯誤）、
+    **不快取**（下一分鐘再問）。"""
+    fetch = Recorder(*[FetchResult(200, product()) for _ in range(3)])
+    client = OpenFoodFacts(fetch=fetch, limiter=_limiter(2))
+
+    assert await client.lookup("1") is not None
+    assert await client.lookup("2") is not None
+    assert await client.lookup("3") is None
+    assert [url.split("/")[-1] for url in fetch.urls] == ["1.json", "2.json"]
+
+
+async def test_cache_hits_do_not_use_the_global_limit():
+    """只算真的要打出去的那幾次：快取命中不算。"""
+    fetch = Recorder(FetchResult(200, product()), FetchResult(200, product()))
+    client = OpenFoodFacts(fetch=fetch, limiter=_limiter(2))
+
+    for _ in range(5):
+        assert await client.lookup("1") is not None
+    assert await client.lookup("2") is not None
+    assert len(fetch.urls) == 2
+
+
+async def test_the_default_global_limit_is_60_a_minute():
+    fetch = Recorder(*[FetchResult(404, None) for _ in range(61)])
+    client = OpenFoodFacts(fetch=fetch)  # 正式的那一個全域限速器（conftest 每個測試重置）
+
+    for index in range(61):
+        await client.lookup(str(index))
+
+    assert len(fetch.urls) == 60
+    assert off_global_rate_limiter is client._limiter
 
 
 async def test_the_failure_log_does_not_contain_the_barcode(caplog):

@@ -422,3 +422,19 @@ barcode_lookup_rate_limiter = KeyedRateLimiter(
     code="TOO_MANY_BARCODE_LOOKUPS",
     message="查得太頻繁了，請稍後再試",
 )
+
+OFF_GLOBAL_LIMIT = 60
+# `OpenFoodFacts.lookup` 共用的鍵：整台伺服器一份。
+OFF_GLOBAL_KEY = "openfoodfacts"
+
+# 真的打到 Open Food Facts 的次數，**全部使用者加起來**（審查 M5）。每人 30 次／分（上面那個）
+# 擋不住三四個人一起掃；OFF 對商品查詢的上限是每個 IP 每分鐘約 100 次，用完了是這台伺服器的
+# 每一個人都查不到。**60** 留了餘裕。只算快取沒命中、真的要打出去的那幾次（`app/off.py`）；
+# 用完了那一次就不問、回「沒有預填」——不是錯誤，使用者看到的是「找不到這個條碼」，下一分鐘再問。
+# `code`／`message` 不會到使用者面前（`lookup` 接住例外）。
+off_global_rate_limiter = KeyedRateLimiter(
+    limit=OFF_GLOBAL_LIMIT,
+    window_seconds=SOCIAL_WINDOW_SECONDS,
+    code="OFF_GLOBAL_LIMIT",
+    message="Open Food Facts 的查詢次數這一分鐘用完了",
+)

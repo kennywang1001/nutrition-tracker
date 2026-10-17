@@ -26,8 +26,10 @@ from typing import Literal, Protocol
 import httpx
 from pydantic import ValidationError
 
+from app.errors import TooManyRequestsError
 from app.models.food import BaseUnit
 from app.nutrition_units import is_physically_plausible, kj_to_kcal, round_cents, to_decimal
+from app.ratelimit import OFF_GLOBAL_KEY, KeyedRateLimiter, off_global_rate_limiter
 from app.schemas.food import NutritionInput
 from app.schemas.validators import single_line
 
@@ -180,7 +182,7 @@ def _prefill_from_product(payload: object) -> ProductPrefill | None:
     if not is_physically_plausible(checked.kcal, checked.protein_g, checked.fat_g, checked.carb_g):
         return None
 
-    name =_clean_text(product.get("product_name_zh")) or _clean_text(product.get("product_name"))
+    name = _clean_text(product.get("product_name_zh")) or _clean_text(product.get("product_name"))
     return ProductPrefill(
         name=name,
         brand=_first_brand(product.get("brands")),
@@ -246,6 +248,8 @@ class OpenFoodFacts:
     - 存「預填建議」與「OFF 說沒有」（404，或 200 但用不上）；**錯誤不存**（連不上、逾時、5xx、
       不是 JSON）——下一次再問。
     - 最多 `max_entries` 筆、每筆 `ttl_seconds`；時鐘可以換（測試用）。
+    - 快取沒命中、真的要打出去之前，過一次全域限速（`off_global_rate_limiter`，全部使用者加起來
+      每分鐘 60 次，審查 M5）；用完了 → 這一次不問、回 None、不快取。
     """
 
     def __init__(
@@ -255,8 +259,10 @@ class OpenFoodFacts:
         max_entries: int = CACHE_SIZE,
         ttl_seconds: float = CACHE_TTL_SECONDS,
         clock: Callable[[], float] = time.monotonic,
+        limiter: KeyedRateLimiter = off_global_rate_limiter,
     ) -> None:
         self._fetch = fetch
+        self._limiter = limiter
         self._max_entries = max_entries
         self._ttl_seconds = ttl_seconds
         self._clock = clock
@@ -272,6 +278,12 @@ class OpenFoodFacts:
                 self._cache.move_to_end(code)
                 return value
             del self._cache[code]
+
+        try:
+            self._limiter.hit(OFF_GLOBAL_KEY)
+        except TooManyRequestsError:
+            logger.warning("Open Food Facts 的全域上限這一分鐘用完了，這次不問")
+            return None
 
         try:
             result = await self._fetch(OFF_PRODUCT_URL.format(code=code))
