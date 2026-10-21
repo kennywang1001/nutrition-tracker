@@ -8,6 +8,9 @@
 import base64
 import logging
 from dataclasses import dataclass
+
+# 模組上的名字（不是 time.perf_counter）：測試換掉它，量出來的秒數才是固定的。
+from time import perf_counter
 from typing import Literal, cast
 
 from anthropic import (
@@ -61,6 +64,7 @@ from app.ai.label import (
     RawLabel,
     parse_raw_label,
 )
+from app.ai.timing import Source, log_provider_call, outcome_of
 from app.config import AiEffort
 from app.errors import BadGatewayError, UnprocessableEntityError
 
@@ -91,20 +95,23 @@ _MEAL_OUTPUT_CONFIG: OutputConfigParam = {
 
 @dataclass(frozen=True)
 class _Call:
-    """一種呼叫的三個參數：單樣與多樣只差這三個，其餘（模型、分類例外）是同一條路。"""
+    """一種呼叫的參數：單樣與多樣只差這幾個，其餘（模型、分類例外）是同一條路。
+    `kind` 只給計時的 log 用（照片說明規格 §7.1）。"""
 
+    kind: str
     system: str
     max_tokens: int
     output_config: OutputConfigParam
 
 
-_SINGLE = _Call(SYSTEM_PROMPT, MAX_OUTPUT_TOKENS, _OUTPUT_CONFIG)
-_MEAL = _Call(MEAL_SYSTEM_PROMPT, MAX_MEAL_OUTPUT_TOKENS, _MEAL_OUTPUT_CONFIG)
+_SINGLE = _Call("single", SYSTEM_PROMPT, MAX_OUTPUT_TOKENS, _OUTPUT_CONFIG)
+_MEAL = _Call("meal", MEAL_SYSTEM_PROMPT, MAX_MEAL_OUTPUT_TOKENS, _MEAL_OUTPUT_CONFIG)
 # 配餐：多樣的 schema 與輸出上限，換 system prompt（營養素配餐規格 D19）。
-_SUGGEST = _Call(SUGGEST_SYSTEM_PROMPT, MAX_MEAL_OUTPUT_TOKENS, _MEAL_OUTPUT_CONFIG)
+_SUGGEST = _Call("suggest", SUGGEST_SYSTEM_PROMPT, MAX_MEAL_OUTPUT_TOKENS, _MEAL_OUTPUT_CONFIG)
 # 營養標示：平的 schema（掃條碼規格 D28）。寫計畫時實測 transform_schema() 對它的輸出：
 # `Decimal | None` → anyOf [number, string, null]、`Literal` → enum（同 LLMEstimateSchema）。
 _LABEL = _Call(
+    "label",
     LABEL_SYSTEM_PROMPT,
     MAX_LABEL_OUTPUT_TOKENS,
     {"format": {"type": "json_schema", "schema": transform_schema(LLMLabelSchema)}},
@@ -119,6 +126,18 @@ def _with_effort(output_config: OutputConfigParam, effort: AiEffort | None) -> O
     if effort is None:
         return output_config
     return {**output_config, "effort": effort}
+
+
+def _usage_fields(message: Message) -> dict[str, object]:
+    """計時那一行要的用量（名稱同 `_warn_if_abnormal`）。`output_tokens` **含**思考；
+    `thinking_tokens` 是其中多少（SDK 沒給是 None）。"""
+    details = message.usage.output_tokens_details
+    return {
+        "stop_reason": message.stop_reason,
+        "input_tokens": message.usage.input_tokens,
+        "output_tokens": message.usage.output_tokens,
+        "thinking_tokens": details.thinking_tokens if details is not None else None,
+    }
 
 
 def _first_text(message: Message) -> str | None:
@@ -220,44 +239,84 @@ class AnthropicEstimator:
 
     async def estimate_text(self, text: str) -> RawEstimate:
         message = _text_message(TEXT_ESTIMATE_INSTRUCTION, text)
-        return parse_raw_estimate(await self._complete(message, _SINGLE))
+        return parse_raw_estimate(await self._complete(message, _SINGLE, source="text"))
 
     async def estimate_image(
         self, image: bytes, media_type: str, hint: str | None = None
     ) -> RawEstimate:
         # 說明接在指示後面、同一個文字區塊（照片說明規格 D3）；沒有說明時指示原樣。
         message = _image_message(with_hint(IMAGE_ESTIMATE_INSTRUCTION, hint), image, media_type)
-        return parse_raw_estimate(await self._complete(message, _SINGLE))
+        return parse_raw_estimate(await self._complete(message, _SINGLE, source="image"))
 
     async def estimate_meal_text(self, text: str) -> RawMealEstimate:
         message = _text_message(MEAL_TEXT_INSTRUCTION, text)
-        return parse_raw_meal_estimate(await self._complete(message, _MEAL))
+        return parse_raw_meal_estimate(
+            await self._complete(message, _MEAL, source="text")
+        )
 
     async def estimate_meal_image(
         self, image: bytes, media_type: str, hint: str | None = None
     ) -> RawMealEstimate:
         message = _image_message(with_hint(MEAL_IMAGE_INSTRUCTION, hint), image, media_type)
-        return parse_raw_meal_estimate(await self._complete(message, _MEAL))
+        return parse_raw_meal_estimate(
+            await self._complete(message, _MEAL, source="image")
+        )
 
     async def suggest_meal(self, request: str) -> RawMealEstimate:
         # 訊息原樣送出：剩下的額度與偏好已經由 suggestion_request() 組好，不再套樣板。
         message: MessageParam = {"role": "user", "content": request}
-        return parse_raw_meal_suggestion(await self._complete(message, _SUGGEST))
+        return parse_raw_meal_suggestion(
+            await self._complete(message, _SUGGEST, source="text")
+        )
 
     async def read_label(
         self, image: bytes, media_type: str, hint: str | None = None
     ) -> RawLabel:
         message = _image_message(with_hint(LABEL_IMAGE_INSTRUCTION, hint), image, media_type)
-        return parse_raw_label(await self._complete(message, _LABEL))
+        return parse_raw_label(await self._complete(message, _LABEL, source="image"))
 
-    async def _complete(self, message: MessageParam, call: _Call) -> str:
-        """打一次 API，回模型說的那段文字。**分類例外的地方只有這裡**——單樣與多樣共用。
+    async def _complete(self, message: MessageParam, call: _Call, *, source: Source) -> str:
+        """打一次 API，回模型說的那段文字；前後量時間、留一行 INFO（照片說明規格 §7.1）。
+        四種呼叫共用。"""
+        # 兩次 perf_counter 之間只有 SDK 那一次呼叫——含 SDK 自己的重試（預設兩次），所以
+        # 「被限流、退避重試」也算在這裡面。
+        started = perf_counter()
+        try:
+            response = await self._create(message, call)
+        except Exception as exc:
+            # 失敗也要一行：「30 秒後逾時」跟「馬上被拒」是兩件事。沒有用量可記。
+            log_provider_call(
+                logger,
+                kind=call.kind,
+                source=source,
+                model=self.model,
+                effort=self.effort,
+                elapsed=perf_counter() - started,
+                outcome=outcome_of(exc),
+            )
+            raise
+        log_provider_call(
+            logger,
+            kind=call.kind,
+            source=source,
+            model=self.model,
+            effort=self.effort,
+            elapsed=perf_counter() - started,
+            outcome="ok",
+            usage=_usage_fields(response),
+        )
+        # 在取出文字**之前**：沒有文字時下一行就丟例外了。
+        _warn_if_abnormal(response, model=self.model, max_tokens=call.max_tokens)
+        return _extract_text(response)
+
+    async def _create(self, message: MessageParam, call: _Call) -> Message:
+        """打一次 API。**分類例外的地方只有這裡**（從 `_complete` 拆出來，計時包在外面）。
 
         只包 SDK 那一次呼叫：回應解析失敗是 AI_BAD_RESPONSE（兩個 parse 函式），
         不是上游錯誤。
         """
         try:
-            response = await self._client.messages.create(
+            return await self._client.messages.create(
                 model=self.model,
                 max_tokens=call.max_tokens,
                 system=call.system,
@@ -270,6 +329,3 @@ class AnthropicEstimator:
             if _is_misconfiguration(exc):
                 raise EstimatorMisconfiguredError(str(exc)) from exc
             raise EstimatorUpstreamError(str(exc)) from exc
-        # 在取出文字**之前**：沒有文字時下一行就丟例外了。
-        _warn_if_abnormal(response, model=self.model, max_tokens=call.max_tokens)
-        return _extract_text(response)

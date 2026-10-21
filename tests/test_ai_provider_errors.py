@@ -15,8 +15,10 @@
 照樣全綠，綠的理由卻完全不是這裡的程式碼（handover §6 規矩 8：紅燈／綠燈要問為什麼）。
 """
 
+import itertools
 import json
 import logging
+import re
 from collections.abc import Callable
 from decimal import Decimal
 from typing import Any
@@ -31,6 +33,7 @@ from google.genai import errors as genai_errors
 from google.genai import types
 from sqlalchemy import select
 
+from app.ai import anthropic_estimator, gemini_estimator
 from app.ai.anthropic_estimator import AnthropicEstimator
 from app.ai.estimator import (
     IMAGE_ESTIMATE_INSTRUCTION,
@@ -1427,3 +1430,208 @@ async def test_the_effort_does_not_leak_into_the_shared_output_config(provider):
     else:
         assert "thinkingConfig" in first_upstream.bodies[0]["generationConfig"]
         assert "thinkingConfig" not in later["generationConfig"]
+
+
+# ---------------------------------------------------------------------------
+# 計時（照片說明規格 §7.1）：每一次呼叫一行 INFO，成功、失敗都有；只有數字與列舉
+# ---------------------------------------------------------------------------
+
+
+def _timing_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [
+        record
+        for record in caplog.records
+        if record.name in _ESTIMATOR_LOGGERS
+        and record.levelno == logging.INFO
+        and record.getMessage().startswith("AI 呼叫")
+    ]
+
+
+# 每個數字都不一樣、也不是別處會出現的值（同 _TRUNCATED_BODIES 的理由）。`_anthropic_body` 的
+# usage 只有兩個欄位，這裡再蓋回含 output_tokens_details（思考用了多少）的版本。
+_TIMED_BODIES: dict[str, object] = {
+    "anthropic": {
+        **_anthropic_body(
+            text=_VALID_MEAL_JSON, stop_reason="end_turn", input_tokens=1391, output_tokens=2911
+        ),
+        "usage": {
+            "input_tokens": 1391,
+            "output_tokens": 2911,
+            "output_tokens_details": {"thinking_tokens": 2677},
+        },
+    },
+    "gemini": _gemini_body(
+        text=_VALID_MEAL_JSON,
+        finish_reason="STOP",
+        usage={
+            "promptTokenCount": 1391,
+            "candidatesTokenCount": 236,
+            "thoughtsTokenCount": 2874,
+            "totalTokenCount": 4501,
+        },
+    ),
+}
+_TIMED_EXPECTED = {
+    "anthropic": [
+        "stop_reason=end_turn",
+        "input_tokens=1391",
+        "output_tokens=2911",
+        "thinking_tokens=2677",
+    ],
+    "gemini": [
+        "finish_reason=STOP",
+        "prompt_tokens=1391",
+        "candidates_tokens=236",
+        "thoughts_tokens=2874",
+        "total_tokens=4501",
+    ],
+}
+
+
+def _fake_clock(monkeypatch: pytest.MonkeyPatch, provider: str) -> None:
+    """第一次 10.0、第二次 12.5 → 2.50s：斷言的是量出來的差，不是寫死的格式。"""
+    module = anthropic_estimator if provider == "anthropic" else gemini_estimator
+    monkeypatch.setattr(module, "perf_counter", itertools.count(10.0, 2.5).__next__)
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+async def test_every_call_logs_one_timing_line(provider, caplog, monkeypatch):
+    # INFO，不是 DEBUG：anthropic SDK 自己的 DEBUG（`anthropic._base_client` 的「Request options」）
+    # 會印出整個請求，照片與說明都在裡面——那是 SDK 的行為、不是這裡的程式碼，production 也印
+    # 不出來（`anthropic.*` 沒有 handler，只有 WARNING 以上會落到 lastResort）。這裡守的是
+    # 我們自己在 INFO 以上記的每一行。
+    caplog.set_level(logging.INFO)
+    upstream, estimator = _estimator_with_body(provider, _TIMED_BODIES[provider])
+    _fake_clock(monkeypatch, provider)
+    _set_effort(estimator, "low")
+
+    await estimator.estimate_meal_image(_PNG, "image/png", hint="雞皮沒吃不要進log")
+
+    assert upstream.requests == 1
+    (record,) = _timing_records(caplog)
+    message = record.getMessage()
+    for expected in [
+        "kind=meal",
+        "input=image",
+        f"model={estimator.model}",
+        "effort=low",
+        "outcome=ok",
+        "elapsed=2.50s",
+        *_TIMED_EXPECTED[provider],
+    ]:
+        assert expected in message
+    # 內容一個字都不能有：說明、指示、system prompt、模型的回覆、照片。
+    for record in caplog.records:
+        text = record.getMessage()
+        assert "雞皮沒吃" not in text
+        assert "白飯" not in text
+        assert "請估算" not in text
+        assert "營養分析助手" not in text
+        assert "iVBOR" not in text
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+async def test_no_effort_logs_a_dash(provider, caplog):
+    caplog.set_level(logging.INFO)
+    upstream, estimator = _estimator_for(provider, _VALID_ESTIMATE_JSON)
+
+    await estimator.estimate_text("一碗滷肉飯")
+
+    (record,) = _timing_records(caplog)
+    message = record.getMessage()
+    assert "kind=single" in message
+    assert "input=text" in message
+    assert "effort=-" in message
+    assert "outcome=ok" in message
+    assert "滷肉飯" not in message
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+async def test_a_failed_call_still_logs_its_time_and_outcome(provider, caplog, monkeypatch):
+    caplog.set_level(logging.INFO)
+    upstream, estimator = _upstream_failure(provider)
+    _fake_clock(monkeypatch, provider)
+
+    with pytest.raises(EstimatorUpstreamError):
+        await estimator.estimate_meal_text("雞腿便當")
+
+    assert upstream.requests == 1
+    (record,) = _timing_records(caplog)
+    message = record.getMessage()
+    assert "kind=meal" in message
+    assert "input=text" in message
+    assert "outcome=upstream" in message
+    assert "elapsed=2.50s" in message
+    # 失敗沒有用量可記，也不帶供應商的錯誤訊息（那一句由路由的 WARNING 記）。
+    assert "tokens=" not in message
+    assert "Overloaded" not in message and "overloaded" not in message
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+async def test_a_misconfigured_call_logs_its_outcome(provider, caplog):
+    caplog.set_level(logging.INFO)
+    upstream, estimator = _misconfigured(provider)
+
+    with pytest.raises(EstimatorMisconfiguredError):
+        await estimator.read_label(_PNG, "image/png")
+
+    (record,) = _timing_records(caplog)
+    message = record.getMessage()
+    assert "kind=label" in message
+    assert "outcome=misconfigured" in message
+    assert re.search(r"elapsed=\d+\.\d{2}s", message)
+    assert "tokens=" not in message
+
+
+async def test_an_unclassified_exception_logs_outcome_error(caplog, monkeypatch):
+    """沒分類的例外（這裡是 SDK 丟的別的 ValueError）照樣往外拋，計時那一行是 outcome=error。"""
+    caplog.set_level(logging.INFO)
+    upstream = FakeUpstream(body=_gemini_ok_body(_VALID_ESTIMATE_JSON))
+    estimator = _gemini_estimator(upstream)
+
+    async def boom(**kwargs: object) -> None:
+        raise ValueError("something else")
+
+    monkeypatch.setattr(estimator._client.aio.models, "generate_content", boom)
+
+    with pytest.raises(ValueError, match="something else"):
+        await estimator.estimate_text("一碗滷肉飯")
+
+    (record,) = _timing_records(caplog)
+    assert "outcome=error" in record.getMessage()
+    assert "something else" not in record.getMessage()
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+async def test_the_suggest_and_label_kinds_are_named(provider, caplog):
+    caplog.set_level(logging.INFO)
+    _, suggester = _estimator_for(provider, _VALID_MEAL_JSON)
+    _, reader = _estimator_for(provider, _VALID_LABEL_JSON)
+
+    await suggester.suggest_meal(_SUGGEST_REQUEST)
+    await reader.read_label(_PNG, "image/png")
+
+    suggest_line, label_line = (record.getMessage() for record in _timing_records(caplog))
+    assert "kind=suggest" in suggest_line and "input=text" in suggest_line
+    assert "kind=label" in label_line and "input=image" in label_line
+    # 配餐的使用者訊息（剩下的額度、偏好）不進 log。
+    assert "650" not in suggest_line
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+async def test_an_abnormal_stop_logs_the_warning_and_the_timing_line(provider, caplog):
+    """既有的 WARNING 照舊另外一行（不是合併成一行）；計時那一行的 outcome 照樣是 ok——
+    回覆看不懂是路由那一行的 status=502。"""
+    caplog.set_level(logging.INFO)
+    upstream, estimator = _estimator_with_body(provider, _TRUNCATED_BODIES[provider])
+
+    with pytest.raises(BadGatewayError):
+        await estimator.estimate_meal_text(_PROMPT_TEXT)
+
+    assert len(_estimator_warnings(caplog)) == 1
+    (record,) = _timing_records(caplog)
+    message = record.getMessage()
+    assert "outcome=ok" in message
+    for expected in _TRUNCATED_EXPECTED[provider]:
+        assert expected in message
+    assert "白飯截斷" not in message

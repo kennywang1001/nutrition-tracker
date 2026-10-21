@@ -35,15 +35,22 @@ import binascii
 import hashlib
 import io
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 
-from fastapi import APIRouter, Depends
+# 模組上的名字（不是 time.perf_counter）：測試要換掉它的話換這裡。
+from time import perf_counter
+
+from fastapi import APIRouter, Depends, Request
+from fastapi.exceptions import RequestValidationError
 from PIL import Image
 from pydantic import ValidationError
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.ai.consistency import check_consistency
 from app.ai.estimator import (
@@ -60,6 +67,7 @@ from app.day_budget import load_day_budget
 from app.days import day_bounds, today_in_timezone
 from app.db import get_db
 from app.errors import (
+    AppError,
     BadGatewayError,
     PayloadTooLargeError,
     ServiceUnavailableError,
@@ -74,6 +82,7 @@ from app.planner_data import remaining_of
 from app.schemas.ai import (
     AnalyzedMealItem,
     AnalyzedNutrition,
+    AnalyzeImageRequest,
     AnalyzeMealResponse,
     AnalyzeRequest,
     AnalyzeResponse,
@@ -102,6 +111,72 @@ _MEDIA_TYPE_BY_PIL_FORMAT = {
     "GIF": "image/gif",
     "WEBP": "image/webp",
 }
+
+
+@dataclass
+class RouteTimer:
+    """一個 AI 端點請求的計時（照片說明規格 §7.2）。端點填 `source`、`hint`（只記有沒有，
+    內容不記）；照片的解碼包在 `decoding()` 裡。還沒填就失敗的請求是 `-`。"""
+
+    # lambda：測試換模組上的 perf_counter 時這裡也要跟著換（直接寫 perf_counter 會在定義時綁死）。
+    started: float = field(default_factory=lambda: perf_counter())
+    source: str = "-"
+    hint: str = "-"
+    decode_seconds: float | None = None
+
+    @contextmanager
+    def decoding(self) -> Iterator[None]:
+        # finally：壞照片在解碼時丟例外（422），花了多久照樣記——那也是這個請求的一部分。
+        start = perf_counter()
+        try:
+            yield
+        finally:
+            self.decode_seconds = perf_counter() - start
+
+
+def _status_of(exc: Exception) -> int:
+    """端點丟出去的例外 → 回應的狀態碼（跟 `app/errors.py` 的 exception handler 同一套）。"""
+    if isinstance(exc, (AppError, StarletteHTTPException)):
+        return exc.status_code
+    if isinstance(exc, RequestValidationError):
+        return 422
+    return 500
+
+
+async def ai_route_timer(request: Request) -> AsyncIterator[RouteTimer]:
+    """四個 AI 端點都掛：結束時留一行 INFO（照片說明規格 D13、§7.2）。
+
+    有 `yield` 的依賴收得到端點丟的例外——寫計畫時用 FastAPI 0.141.1 實測：`AppError`（由
+    exception handler 轉成回應的那種）、`HTTPException`、`RequestValidationError` 都會，
+    `finally` 在回應送出前跑完。掛在每個端點的**第一個**參數：登入失敗（401）也有一行，
+    `total` 含驗證身分與資料庫；不含讀 request body（依賴在那之後才建）。
+
+    `total` 減掉供應商那一行的 `elapsed` ≈ 解碼＋資料庫；手機的上傳與 base64 不在這裡，
+    前端顯示的秒數減掉 `total` 才是。說明的**內容**不記，只記有沒有。"""
+    timer = RouteTimer()
+    status = "200"
+    try:
+        yield timer
+    except Exception as exc:
+        status = str(_status_of(exc))
+        raise
+    except BaseException:
+        # 用戶端斷線、關機：請求被取消。
+        status = "cancelled"
+        raise
+    finally:
+        decode = "-" if timer.decode_seconds is None else f"{timer.decode_seconds:.2f}s"
+        logger.info(
+            "AI 端點（route=%s, input=%s, hint=%s, status=%s, decode=%s, total=%.2fs）",
+            # 網址最後一段（analyze、analyze-meal、suggest-meal、read-label）：我們自己的路由，
+            # 不是使用者的字。
+            request.url.path.rsplit("/", 1)[-1],
+            timer.source,
+            timer.hint,
+            status,
+            decode,
+            perf_counter() - timer.started,
+        )
 
 
 async def _find_in_food_library(
@@ -407,10 +482,15 @@ def _to_analyzed_nutrition(raw: RawEstimate) -> AnalyzedNutrition:
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(
     payload: AnalyzeRequest,
+    # 第一個依賴：登入失敗也有計時那一行（見 ai_route_timer）。
+    timer: RouteTimer = Depends(ai_route_timer),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     make_estimator: EstimatorFactory = Depends(get_estimator_factory),
 ) -> AnalyzeResponse:
+    timer.source = payload.kind
+    if isinstance(payload, AnalyzeImageRequest):
+        timer.hint = "yes" if payload.hint else "no"
     if isinstance(payload, AnalyzeTextRequest):
         hit = await _find_in_food_library(db, user, payload.text)
         if hit is not None:
@@ -441,7 +521,8 @@ async def analyze(
         )
     else:
         kind = AnalysisKind.IMAGE
-        content, media_type = _decode_photo(payload.image_base64)
+        with timer.decoding():
+            content, media_type = _decode_photo(payload.image_base64)
         hint = payload.hint
         input_hash = _photo_input_hash(content, hint)
         raw = await _call_estimator_or_record_failure(
@@ -518,11 +599,15 @@ async def _to_meal_item(db: AsyncSession, user: User, raw: RawEstimate) -> Analy
 @router.post("/analyze-meal", response_model=AnalyzeMealResponse)
 async def analyze_meal(
     payload: AnalyzeRequest,
+    timer: RouteTimer = Depends(ai_route_timer),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     make_estimator: EstimatorFactory = Depends(get_estimator_factory),
 ) -> AnalyzeMealResponse:
     """文字或照片 → 這一餐的每一樣食物（最多 8 樣）＋一句描述。算一次額度。"""
+    timer.source = payload.kind
+    if isinstance(payload, AnalyzeImageRequest):
+        timer.hint = "yes" if payload.hint else "no"
     if isinstance(payload, AnalyzeTextRequest):
         hit = await _find_in_food_library(db, user, payload.text)
         if hit is not None:
@@ -570,7 +655,8 @@ async def analyze_meal(
         )
     else:
         kind = AnalysisKind.IMAGE
-        content, media_type = _decode_photo(payload.image_base64)
+        with timer.decoding():
+            content, media_type = _decode_photo(payload.image_base64)
         hint = payload.hint
         input_hash = _photo_input_hash(content, hint)
         raw = await _call_estimator_or_record_failure(
@@ -606,6 +692,8 @@ async def analyze_meal(
 @router.post("/suggest-meal", response_model=AnalyzeMealResponse)
 async def suggest_meal(
     payload: SuggestMealRequest,
+    # 配餐沒有照片也沒有說明：input、hint 留 `-`（偏好不記，同 D21）。
+    timer: RouteTimer = Depends(ai_route_timer),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     make_estimator: EstimatorFactory = Depends(get_estimator_factory),
@@ -672,6 +760,7 @@ async def suggest_meal(
 @router.post("/read-label", response_model=LabelReadResponse)
 async def read_label(
     payload: ReadLabelRequest,
+    timer: RouteTimer = Depends(ai_route_timer),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     make_estimator: EstimatorFactory = Depends(get_estimator_factory),
@@ -682,10 +771,13 @@ async def read_label(
     `502 AI_LABEL_UNREADABLE`，**照樣記一列、算額度**。照片不存，只存 SHA-256。
     """
     user_id = user.id
+    timer.source = "image"
+    timer.hint = "yes" if payload.hint else "no"
     # 順序同 /analyze 的照片：先建實作（沒設定 → 503）、再看額度、再解照片（壞照片不算額度）。
     estimator = make_estimator()
     used_today = await _assert_quota_available(db, user)
-    content, media_type = _decode_photo(payload.image_base64)
+    with timer.decoding():
+        content, media_type = _decode_photo(payload.image_base64)
     hint = payload.hint
     input_hash = _photo_input_hash(content, hint)
     raw = await _call_estimator_or_record_failure(

@@ -9,6 +9,9 @@
 import logging
 from dataclasses import dataclass
 
+# 模組上的名字（不是 time.perf_counter）：測試換掉它，量出來的秒數才是固定的。
+from time import perf_counter
+
 import httpx
 from google import genai
 from google.genai import errors, types
@@ -40,6 +43,7 @@ from app.ai.label import (
     RawLabel,
     parse_raw_label,
 )
+from app.ai.timing import Source, log_provider_call, outcome_of
 from app.config import AiEffort
 from app.errors import BadGatewayError, UnprocessableEntityError
 
@@ -103,17 +107,18 @@ _MEAL_RESPONSE_SCHEMA: dict[str, object] = {
 
 @dataclass(frozen=True)
 class _Call:
-    """一種呼叫的三個參數（同 anthropic_estimator.py 的 `_Call`）。"""
+    """一種呼叫的參數（同 anthropic_estimator.py 的 `_Call`）。`kind` 只給計時的 log 用。"""
 
+    kind: str
     system: str
     max_output_tokens: int
     response_schema: dict[str, object]
 
 
-_SINGLE = _Call(SYSTEM_PROMPT, MAX_OUTPUT_TOKENS, _RESPONSE_SCHEMA)
-_MEAL = _Call(MEAL_SYSTEM_PROMPT, MAX_MEAL_OUTPUT_TOKENS, _MEAL_RESPONSE_SCHEMA)
+_SINGLE = _Call("single", SYSTEM_PROMPT, MAX_OUTPUT_TOKENS, _RESPONSE_SCHEMA)
+_MEAL = _Call("meal", MEAL_SYSTEM_PROMPT, MAX_MEAL_OUTPUT_TOKENS, _MEAL_RESPONSE_SCHEMA)
 # 配餐：多樣的 schema 與輸出上限，換 system prompt（營養素配餐規格 D19）。
-_SUGGEST = _Call(SUGGEST_SYSTEM_PROMPT, MAX_MEAL_OUTPUT_TOKENS, _MEAL_RESPONSE_SCHEMA)
+_SUGGEST = _Call("suggest", SUGGEST_SYSTEM_PROMPT, MAX_MEAL_OUTPUT_TOKENS, _MEAL_RESPONSE_SCHEMA)
 
 _NULLABLE_NUMBER: dict[str, object] = {"type": "NUMBER", "nullable": True}
 _LABEL_NUMBER_FIELDS = (
@@ -143,7 +148,7 @@ _LABEL_RESPONSE_SCHEMA: dict[str, object] = {
     },
     "required": ["name", "base_unit", *_LABEL_NUMBER_FIELDS, "confidence"],
 }
-_LABEL = _Call(LABEL_SYSTEM_PROMPT, MAX_LABEL_OUTPUT_TOKENS, _LABEL_RESPONSE_SCHEMA)
+_LABEL = _Call("label", LABEL_SYSTEM_PROMPT, MAX_LABEL_OUTPUT_TOKENS, _LABEL_RESPONSE_SCHEMA)
 
 
 logger = logging.getLogger(__name__)
@@ -166,6 +171,21 @@ def _thinking_config(effort: AiEffort | None) -> types.ThinkingConfig | None:
     if effort is None:
         return None
     return types.ThinkingConfig(thinking_level=_THINKING_LEVELS[effort])
+
+
+def _usage_fields(response: types.GenerateContentResponse) -> dict[str, object]:
+    """計時那一行要的用量：列舉名稱與整數，名稱同 `_warn_if_abnormal`。`candidates_tokens`
+    **不含**思考，思考是 `thoughts_tokens`——「20 秒裡思考佔多少」看的就是它。"""
+    candidate = response.candidates[0] if response.candidates else None
+    finish_reason = candidate.finish_reason if candidate is not None else None
+    usage = response.usage_metadata
+    return {
+        "finish_reason": finish_reason.name if finish_reason is not None else None,
+        "prompt_tokens": usage.prompt_token_count if usage is not None else None,
+        "candidates_tokens": usage.candidates_token_count if usage is not None else None,
+        "thoughts_tokens": usage.thoughts_token_count if usage is not None else None,
+        "total_tokens": usage.total_token_count if usage is not None else None,
+    }
 
 
 def _extract_text(response: types.GenerateContentResponse) -> str:
@@ -270,37 +290,45 @@ class GeminiEstimator:
 
     async def estimate_text(self, text: str) -> RawEstimate:
         contents = TEXT_ESTIMATE_INSTRUCTION.format(text=text)
-        return parse_raw_estimate(await self._complete(contents, _SINGLE))
+        return parse_raw_estimate(await self._complete(contents, _SINGLE, source="text"))
 
     async def estimate_image(
         self, image: bytes, media_type: str, hint: str | None = None
     ) -> RawEstimate:
         # 說明接在指示後面、同一個文字部分（照片說明規格 D3）；沒有說明時指示原樣。
         contents = _image_contents(with_hint(IMAGE_ESTIMATE_INSTRUCTION, hint), image, media_type)
-        return parse_raw_estimate(await self._complete(contents, _SINGLE))
+        return parse_raw_estimate(await self._complete(contents, _SINGLE, source="image"))
 
     async def estimate_meal_text(self, text: str) -> RawMealEstimate:
         contents = MEAL_TEXT_INSTRUCTION.format(text=text)
-        return parse_raw_meal_estimate(await self._complete(contents, _MEAL))
+        return parse_raw_meal_estimate(
+            await self._complete(contents, _MEAL, source="text")
+        )
 
     async def estimate_meal_image(
         self, image: bytes, media_type: str, hint: str | None = None
     ) -> RawMealEstimate:
         contents = _image_contents(with_hint(MEAL_IMAGE_INSTRUCTION, hint), image, media_type)
-        return parse_raw_meal_estimate(await self._complete(contents, _MEAL))
+        return parse_raw_meal_estimate(
+            await self._complete(contents, _MEAL, source="image")
+        )
 
     async def suggest_meal(self, request: str) -> RawMealEstimate:
         # 訊息原樣送出：剩下的額度與偏好已經由 suggestion_request() 組好，不再套樣板。
-        return parse_raw_meal_suggestion(await self._complete(request, _SUGGEST))
+        return parse_raw_meal_suggestion(
+            await self._complete(request, _SUGGEST, source="text")
+        )
 
     async def read_label(
         self, image: bytes, media_type: str, hint: str | None = None
     ) -> RawLabel:
         contents = _image_contents(with_hint(LABEL_IMAGE_INSTRUCTION, hint), image, media_type)
-        return parse_raw_label(await self._complete(contents, _LABEL))
+        return parse_raw_label(await self._complete(contents, _LABEL, source="image"))
 
-    async def _complete(self, contents: types.ContentListUnionDict, call: _Call) -> str:
-        """打一次 API，回模型說的那段文字。分類例外的地方只有這裡。"""
+    async def _complete(
+        self, contents: types.ContentListUnionDict, call: _Call, *, source: Source
+    ) -> str:
+        """打一次 API，回模型說的那段文字；前後量時間、留一行 INFO（照片說明規格 §7.1）。"""
         config = types.GenerateContentConfig(
             system_instruction=call.system,
             max_output_tokens=call.max_output_tokens,
@@ -308,9 +336,46 @@ class GeminiEstimator:
             response_schema=call.response_schema,
             thinking_config=_thinking_config(self.effort),
         )
-        # 只包 SDK 那一次呼叫：回應解析失敗是 AI_BAD_RESPONSE，不是上游錯誤。
+        # 兩次 perf_counter 之間只有 SDK 那一次呼叫（含它自己的重試）：組 config、解析回覆不算。
+        started = perf_counter()
         try:
-            response = await self._client.aio.models.generate_content(
+            response = await self._generate(contents, config)
+        except Exception as exc:
+            # 失敗也要一行：「30 秒後逾時」跟「馬上被拒」是兩件事。沒有用量可記。
+            log_provider_call(
+                logger,
+                kind=call.kind,
+                source=source,
+                model=self.model,
+                effort=self.effort,
+                elapsed=perf_counter() - started,
+                outcome=outcome_of(exc),
+            )
+            raise
+        log_provider_call(
+            logger,
+            kind=call.kind,
+            source=source,
+            model=self.model,
+            effort=self.effort,
+            elapsed=perf_counter() - started,
+            outcome="ok",
+            usage=_usage_fields(response),
+        )
+        # 在取出文字**之前**：沒有文字時下一行就丟例外了。
+        _warn_if_abnormal(
+            response, model=self.model, max_output_tokens=call.max_output_tokens
+        )
+        return _extract_text(response)
+
+    async def _generate(
+        self, contents: types.ContentListUnionDict, config: types.GenerateContentConfig
+    ) -> types.GenerateContentResponse:
+        """打一次 API。**分類例外的地方只有這裡**（從 `_complete` 拆出來，計時包在外面）。
+
+        只包 SDK 那一次呼叫：回應解析失敗是 AI_BAD_RESPONSE，不是上游錯誤。"""
+        try:
+            return await self._client.aio.models.generate_content(
                 model=self.model,
                 contents=contents,
                 config=config,
@@ -328,8 +393,3 @@ class GeminiEstimator:
             # 連不上、逾時：google-genai 沒有包自己的例外，httpx 的直接穿出來
             # （沒裝 aiohttp 時非同步走 httpx，見 `google/genai/_api_client.py`）。
             raise EstimatorUpstreamError(str(exc) or type(exc).__name__) from exc
-        # 在取出文字**之前**：沒有文字時下一行就丟例外了。
-        _warn_if_abnormal(
-            response, model=self.model, max_output_tokens=call.max_output_tokens
-        )
-        return _extract_text(response)
