@@ -8,6 +8,7 @@ LLM 一律是假的（`FakeMealEstimator`，注入 `get_estimator_factory`）。
 import base64
 import hashlib
 import io
+import logging
 from decimal import Decimal
 from pathlib import Path
 
@@ -77,12 +78,16 @@ class FakeMealEstimator:
         self.single_calls = 0
         self.texts: list[str] = []
         self.images: list[tuple[bytes, str]] = []
+        # 照片收到的補充說明，另一個清單：`images` 的形狀不變（既有的斷言比的是它）。
+        self.hints: list[str | None] = []
 
     async def estimate_text(self, text: str) -> RawEstimate:
         self.single_calls += 1
         return RICE
 
-    async def estimate_image(self, image: bytes, media_type: str) -> RawEstimate:
+    async def estimate_image(
+        self, image: bytes, media_type: str, hint: str | None = None
+    ) -> RawEstimate:
         self.single_calls += 1
         return RICE
 
@@ -92,8 +97,11 @@ class FakeMealEstimator:
             raise self._error
         return self._meal
 
-    async def estimate_meal_image(self, image: bytes, media_type: str) -> RawMealEstimate:
+    async def estimate_meal_image(
+        self, image: bytes, media_type: str, hint: str | None = None
+    ) -> RawMealEstimate:
         self.images.append((image, media_type))
+        self.hints.append(hint)
         if self._error is not None:
             raise self._error
         return self._meal
@@ -599,3 +607,140 @@ async def test_no_food_found_is_logged_by_its_own_code(client, db_session, caplo
         await client.post(URL, headers=auth(user), json=TEXT)
 
     assert any("AI_NO_FOOD_FOUND" in r.getMessage() for r in caplog.records)
+
+
+# ── 照片＋補充說明（照片說明規格 D1、D5、D7）────────────────────────────────────
+
+# 一個不會在別處出現的字串：斷言它不在 log 裡才有鑑別力。
+_HINT = "飯半碗、雞皮沒吃不要進log"
+
+
+def _photo_body(photo: bytes, **extra: object) -> dict[str, object]:
+    return {"kind": "image", "image_base64": base64.b64encode(photo).decode(), **extra}
+
+
+async def test_a_photo_with_a_hint_passes_the_cleaned_hint(client, db_session):
+    user = await create_user(db_session)
+    fake = FakeMealEstimator()
+    _inject(fake)
+    photo = _png()
+
+    response = await client.post(
+        URL,
+        headers=auth(user),
+        # 換行與頭尾空白：schema 清成一行（OptionalSingleLine）。
+        json=_photo_body(photo, hint="  飯半碗、\n雞皮沒吃不要進log  "),
+    )
+
+    assert response.status_code == 200
+    assert fake.hints == ["飯半碗、 雞皮沒吃不要進log"]
+    # 照片照樣送到；單樣的方法沒被碰到。
+    assert fake.images == [(photo, "image/png")]
+    assert fake.single_calls == 0
+
+
+async def test_a_photo_without_a_hint_is_unchanged(client, db_session):
+    user = await create_user(db_session)
+    user_id = user.id
+    fake = FakeMealEstimator()
+    _inject(fake)
+    photo = _png()
+
+    response = await client.post(URL, headers=auth(user), json=_photo_body(photo))
+
+    assert response.status_code == 200
+    assert fake.hints == [None]
+    [row] = await _rows(db_session, user_id)
+    assert row.input_hash == hashlib.sha256(photo).hexdigest()
+
+
+async def test_a_blank_hint_means_no_hint(client, db_session):
+    user = await create_user(db_session)
+    user_id = user.id
+    fake = FakeMealEstimator()
+    _inject(fake)
+    photo = _png()
+
+    response = await client.post(URL, headers=auth(user), json=_photo_body(photo, hint=" \n "))
+
+    assert response.status_code == 200
+    assert fake.hints == [None]
+    [row] = await _rows(db_session, user_id)
+    assert row.input_hash == hashlib.sha256(photo).hexdigest()
+
+
+async def test_the_hash_covers_the_photo_and_the_hint(client, db_session):
+    user = await create_user(db_session)
+    user_id, headers = user.id, auth(user)
+    fake = FakeMealEstimator()
+    _inject(fake)
+    photo = _png()
+
+    first = await client.post(URL, headers=headers, json=_photo_body(photo, hint=_HINT))
+    second = await client.post(URL, headers=headers, json=_photo_body(photo, hint="整碗都吃完"))
+
+    assert first.status_code == second.status_code == 200
+    # 有說明也是一次呼叫一次額度（規格 D6）。
+    limit = settings.ai_daily_limit
+    assert [first.json()["remaining_today"], second.json()["remaining_today"]] == [
+        limit - 1,
+        limit - 2,
+    ]
+    rows = await _rows(db_session, user_id)
+    assert [row.input_hash for row in rows] == [
+        hashlib.sha256(photo + b"\x00" + _HINT.encode()).hexdigest(),
+        hashlib.sha256(photo + b"\x00" + "整碗都吃完".encode()).hexdigest(),
+    ]
+
+
+async def test_a_hint_over_200_characters_is_422_and_uses_no_quota(client, db_session):
+    user = await create_user(db_session)
+    user_id, headers = user.id, auth(user)
+    fake = FakeMealEstimator()
+    _inject(fake)
+    photo = _png()
+
+    too_long = await client.post(URL, headers=headers, json=_photo_body(photo, hint="飯" * 201))
+
+    assert too_long.status_code == 422
+    assert fake.hints == []
+    assert await _rows(db_session, user_id) == []
+
+    just_fits = await client.post(URL, headers=headers, json=_photo_body(photo, hint="飯" * 200))
+
+    assert just_fits.status_code == 200
+    assert fake.hints == ["飯" * 200]
+
+
+async def test_a_text_estimate_ignores_a_hint(client, db_session):
+    """文字本身就是說明（規格 D2）：多帶的 `hint` 照 Pydantic 預設忽略，不是 422。"""
+    user = await create_user(db_session)
+    fake = FakeMealEstimator()
+    _inject(fake)
+
+    response = await client.post(URL, headers=auth(user), json={**TEXT, "hint": _HINT})
+
+    assert response.status_code == 200
+    assert fake.texts == ["今天中午的雞腿便當"]
+    assert fake.hints == []
+
+
+async def test_the_hint_never_reaches_the_log(client, db_session, caplog):
+    # root 設成 DEBUG、掃每一個 record：不是只看某一個 logger。
+    caplog.set_level(logging.DEBUG)
+    user = await create_user(db_session)
+    headers = auth(user)
+    photo = _png()
+
+    _inject(FakeMealEstimator())
+    ok = await client.post(URL, headers=headers, json=_photo_body(photo, hint=_HINT))
+    # 上游錯誤會留一行 WARNING（帶例外訊息）：說明也不能跟著進去。
+    _inject(FakeMealEstimator(error=EstimatorUpstreamError("x")))
+    failed = await client.post(URL, headers=headers, json=_photo_body(photo, hint=_HINT))
+    rejected = await client.post(URL, headers=headers, json=_photo_body(photo, hint=_HINT * 20))
+
+    assert ok.status_code == 200
+    assert failed.status_code == 502
+    assert rejected.status_code == 422
+    assert any(record.levelno >= logging.WARNING for record in caplog.records)
+    assert not any("雞皮沒吃" in record.getMessage() for record in caplog.records)

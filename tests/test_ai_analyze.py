@@ -8,14 +8,16 @@ estimator——`FakeEstimator` 就是為了讓 §8.3 那條「斷言結果沒有
 """
 
 import base64
+import hashlib
 import io
+import logging
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 from PIL import Image
 from sqlalchemy import func, select
 
-from app.ai.estimator import NutritionEstimator, RawEstimate
+from app.ai.estimator import EstimatorUpstreamError, NutritionEstimator, RawEstimate
 from app.api.deps import get_estimator_factory
 from app.config import settings
 from app.errors import BadGatewayError
@@ -58,6 +60,8 @@ class FakeEstimator:
         self._error = error
         self.text_calls = 0
         self.image_calls = 0
+        # 照片收到的補充說明（照片說明規格 D1），一次呼叫一個；文字不會記到這裡。
+        self.hints: list[str | None] = []
 
     async def estimate_text(self, text: str) -> RawEstimate:
         self.text_calls += 1
@@ -65,8 +69,11 @@ class FakeEstimator:
             raise self._error
         return self._estimate
 
-    async def estimate_image(self, image: bytes, media_type: str) -> RawEstimate:
+    async def estimate_image(
+        self, image: bytes, media_type: str, hint: str | None = None
+    ) -> RawEstimate:
         self.image_calls += 1
+        self.hints.append(hint)
         if self._error is not None:
             raise self._error
         return self._estimate
@@ -645,3 +652,171 @@ async def test_someone_elses_private_food_is_not_a_library_hit(client, db_sessio
     assert fake.text_calls == 1
     assert response.json()["food_id"] is None
     assert response.json()["analysis_id"] is not None
+
+
+# ---------------------------------------------------------------------------
+# 照片＋補充說明（照片說明規格 D1、D5、D7）
+# ---------------------------------------------------------------------------
+
+# 一個不會在別處出現的字串：斷言它不在 log 裡才有鑑別力。
+_HINT = "飯半碗、雞皮沒吃不要進log"
+
+
+def _photo_body(photo: bytes, **extra: object) -> dict[str, object]:
+    return {"kind": "image", "image_base64": base64.b64encode(photo).decode(), **extra}
+
+
+async def _hashes(db_session, user_id: int) -> list[str]:
+    """真的 commit 過的列的雜湊（先 rollback，選欄位不拿物件；同上面「行為 3」）。"""
+    await db_session.rollback()
+    return list(
+        (
+            await db_session.execute(
+                select(AiAnalysis.input_hash)
+                .where(AiAnalysis.user_id == user_id)
+                .order_by(AiAnalysis.id)
+            )
+        ).scalars()
+    )
+
+
+async def test_a_photo_with_a_hint_passes_the_cleaned_hint(client, db_session):
+    user = await create_user(db_session)
+    fake = FakeEstimator()
+    _inject(fake)
+
+    response = await client.post(
+        "/api/ai/analyze",
+        headers=auth(user),
+        # 換行與頭尾空白：schema 清成一行（OptionalSingleLine）。
+        json=_photo_body(_tiny_png_bytes(), hint="  飯半碗、\n雞皮沒吃不要進log  "),
+    )
+
+    assert response.status_code == 200
+    assert fake.hints == ["飯半碗、 雞皮沒吃不要進log"]
+
+
+async def test_a_photo_without_a_hint_is_unchanged(client, db_session):
+    user = await create_user(db_session)
+    user_id = user.id
+    fake = FakeEstimator()
+    _inject(fake)
+    photo = _tiny_png_bytes()
+
+    response = await client.post("/api/ai/analyze", headers=auth(user), json=_photo_body(photo))
+
+    assert response.status_code == 200
+    assert fake.hints == [None]
+    # 沒有說明時雜湊照舊只是照片：跟加這個欄位之前的列可以直接比（規格 D5）。
+    assert await _hashes(db_session, user_id) == [hashlib.sha256(photo).hexdigest()]
+
+
+async def test_a_blank_hint_means_no_hint(client, db_session):
+    user = await create_user(db_session)
+    user_id = user.id
+    fake = FakeEstimator()
+    _inject(fake)
+    photo = _tiny_png_bytes()
+
+    response = await client.post(
+        "/api/ai/analyze", headers=auth(user), json=_photo_body(photo, hint=" \n ")
+    )
+
+    assert response.status_code == 200
+    assert fake.hints == [None]
+    assert await _hashes(db_session, user_id) == [hashlib.sha256(photo).hexdigest()]
+
+
+async def test_the_hash_covers_the_photo_and_the_hint(client, db_session):
+    user = await create_user(db_session)
+    user_id, headers = user.id, auth(user)
+    fake = FakeEstimator()
+    _inject(fake)
+    photo = _tiny_png_bytes()
+
+    first = await client.post(
+        "/api/ai/analyze", headers=headers, json=_photo_body(photo, hint=_HINT)
+    )
+    second = await client.post(
+        "/api/ai/analyze", headers=headers, json=_photo_body(photo, hint="整碗都吃完")
+    )
+
+    assert first.status_code == second.status_code == 200
+    # 有說明也是一次呼叫一次額度（規格 D6）。
+    limit = settings.ai_daily_limit
+    assert [first.json()["remaining_today"], second.json()["remaining_today"]] == [
+        limit - 1,
+        limit - 2,
+    ]
+    hashes = await _hashes(db_session, user_id)
+    assert hashes[0] == hashlib.sha256(photo + b"\x00" + _HINT.encode()).hexdigest()
+    # 同一張照片、不同說明：不同的輸入。
+    assert hashes[1] == hashlib.sha256(photo + b"\x00" + "整碗都吃完".encode()).hexdigest()
+
+
+async def test_a_hint_over_200_characters_is_422_and_uses_no_quota(client, db_session):
+    user = await create_user(db_session)
+    user_id, headers = user.id, auth(user)
+    fake = FakeEstimator()
+    _inject(fake)
+    photo = _tiny_png_bytes()
+
+    too_long = await client.post(
+        "/api/ai/analyze", headers=headers, json=_photo_body(photo, hint="飯" * 201)
+    )
+
+    assert too_long.status_code == 422
+    assert fake.hints == []
+    assert await _hashes(db_session, user_id) == []
+
+    just_fits = await client.post(
+        "/api/ai/analyze", headers=headers, json=_photo_body(photo, hint="飯" * 200)
+    )
+
+    assert just_fits.status_code == 200
+    assert fake.hints == ["飯" * 200]
+
+
+async def test_a_text_estimate_ignores_a_hint(client, db_session):
+    """文字本身就是說明（規格 D2）：多帶的 `hint` 照 Pydantic 預設忽略，不是 422。"""
+    user = await create_user(db_session)
+    fake = FakeEstimator()
+    _inject(fake)
+
+    response = await client.post(
+        "/api/ai/analyze",
+        headers=auth(user),
+        json={"kind": "text", "text": "食物庫裡找不到的一段描述", "hint": _HINT},
+    )
+
+    assert response.status_code == 200
+    assert fake.text_calls == 1
+    assert fake.hints == []
+
+
+async def test_the_hint_never_reaches_the_log(client, db_session, caplog):
+    # root 設成 DEBUG、掃每一個 record：不是只看某一個 logger（計畫「開工前必讀」第 4 點）。
+    caplog.set_level(logging.DEBUG)
+    user = await create_user(db_session)
+    headers = auth(user)
+    photo = _tiny_png_bytes()
+
+    _inject(FakeEstimator())
+    ok = await client.post("/api/ai/analyze", headers=headers, json=_photo_body(photo, hint=_HINT))
+    # 上游錯誤會留一行 WARNING（帶例外訊息）：說明也不能跟著進去。
+    _inject(FakeEstimator(error=EstimatorUpstreamError("x")))
+    failed = await client.post(
+        "/api/ai/analyze", headers=headers, json=_photo_body(photo, hint=_HINT)
+    )
+
+    # 太長的說明是 422：回應照 FastAPI 的格式帶回 input（回給本人），log 不能有。
+    rejected = await client.post(
+        "/api/ai/analyze", headers=headers, json=_photo_body(photo, hint=_HINT * 20)
+    )
+
+    assert ok.status_code == 200
+    assert failed.status_code == 502
+    assert rejected.status_code == 422
+    # 真的有 log（不是因為什麼都沒記才乾淨）。
+    assert any(record.levelno >= logging.WARNING for record in caplog.records)
+    assert not any("雞皮沒吃" in record.getMessage() for record in caplog.records)

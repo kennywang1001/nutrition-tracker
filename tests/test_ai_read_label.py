@@ -8,6 +8,7 @@ LLM 一律是假的（`FakeLabelEstimator`）。額度、記錄、錯誤分類�
 import base64
 import hashlib
 import io
+import logging
 from decimal import Decimal
 
 from PIL import Image
@@ -71,9 +72,14 @@ class FakeLabelEstimator:
     def __init__(self, result: RawLabel | Exception):
         self.result = result
         self.calls: list[tuple[bytes, str]] = []
+        # 補充說明另一個清單：`calls` 的形狀不變（既有的斷言比的是它）。
+        self.hints: list[str | None] = []
 
-    async def read_label(self, image: bytes, media_type: str) -> RawLabel:
+    async def read_label(
+        self, image: bytes, media_type: str, hint: str | None = None
+    ) -> RawLabel:
         self.calls.append((image, media_type))
+        self.hints.append(hint)
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
@@ -290,3 +296,114 @@ async def test_the_response_is_built_before_the_commit(client, db_session, db_co
     assert response.status_code == 200
     assert committed
     assert [sql for after, sql in statements if after] == []
+
+
+# 照片＋補充說明（照片說明規格 D1、D5、D7）：營養標示的說明是「這一欄是每 100 ml」之類。
+# 一個不會在別處出現的字串：斷言它不在 log 裡才有鑑別力。
+_HINT = "這是每 100 ml雞皮沒吃不要進log"
+
+
+async def test_a_photo_with_a_hint_passes_the_cleaned_hint(client, db_session):
+    user = await create_user(db_session)
+    fake = FakeLabelEstimator(_label())
+    _inject(fake)
+
+    response = await client.post(
+        URL,
+        headers=auth(user),
+        # 換行與頭尾空白：schema 清成一行（OptionalSingleLine）。
+        json={**BODY, "hint": "  這是每 100 ml、\n一包 2 份  "},
+    )
+
+    assert response.status_code == 200
+    assert fake.hints == ["這是每 100 ml、 一包 2 份"]
+    assert fake.calls == [(PNG, "image/png")]
+
+
+async def test_a_photo_without_a_hint_is_unchanged(client, db_session):
+    user = await create_user(db_session)
+    user_id = user.id
+    fake = FakeLabelEstimator(_label())
+    _inject(fake)
+
+    response = await client.post(URL, headers=auth(user), json=BODY)
+
+    assert response.status_code == 200
+    assert fake.hints == [None]
+    [row] = await _rows(db_session, user_id)
+    assert row.input_hash == hashlib.sha256(PNG).hexdigest()
+
+
+async def test_a_blank_hint_means_no_hint(client, db_session):
+    user = await create_user(db_session)
+    user_id = user.id
+    fake = FakeLabelEstimator(_label())
+    _inject(fake)
+
+    response = await client.post(URL, headers=auth(user), json={**BODY, "hint": " \n "})
+
+    assert response.status_code == 200
+    assert fake.hints == [None]
+    [row] = await _rows(db_session, user_id)
+    assert row.input_hash == hashlib.sha256(PNG).hexdigest()
+
+
+async def test_the_hash_covers_the_photo_and_the_hint(client, db_session):
+    user = await create_user(db_session)
+    user_id, headers = user.id, auth(user)
+    fake = FakeLabelEstimator(_label())
+    _inject(fake)
+
+    first = await client.post(URL, headers=headers, json={**BODY, "hint": _HINT})
+    second = await client.post(URL, headers=headers, json={**BODY, "hint": "一包 2 份"})
+
+    assert first.status_code == second.status_code == 200
+    # 有說明也是一次呼叫一次額度（規格 D6）。
+    limit = settings.ai_daily_limit
+    assert [first.json()["remaining_today"], second.json()["remaining_today"]] == [
+        limit - 1,
+        limit - 2,
+    ]
+    rows = await _rows(db_session, user_id)
+    assert [row.input_hash for row in rows] == [
+        hashlib.sha256(PNG + b"\x00" + _HINT.encode()).hexdigest(),
+        hashlib.sha256(PNG + b"\x00" + "一包 2 份".encode()).hexdigest(),
+    ]
+
+
+async def test_a_hint_over_200_characters_is_422_and_uses_no_quota(client, db_session):
+    user = await create_user(db_session)
+    user_id, headers = user.id, auth(user)
+    fake = FakeLabelEstimator(_label())
+    _inject(fake)
+
+    too_long = await client.post(URL, headers=headers, json={**BODY, "hint": "份" * 201})
+
+    assert too_long.status_code == 422
+    assert fake.hints == []
+    assert await _rows(db_session, user_id) == []
+
+    just_fits = await client.post(URL, headers=headers, json={**BODY, "hint": "份" * 200})
+
+    assert just_fits.status_code == 200
+    assert fake.hints == ["份" * 200]
+
+
+async def test_the_hint_never_reaches_the_log(client, db_session, caplog):
+    # root 設成 DEBUG、掃每一個 record：不是只看某一個 logger。
+    caplog.set_level(logging.DEBUG)
+    user = await create_user(db_session)
+    headers = auth(user)
+
+    _inject(FakeLabelEstimator(_label()))
+    ok = await client.post(URL, headers=headers, json={**BODY, "hint": _HINT})
+    # 上游錯誤會留一行 WARNING（帶例外訊息）：說明也不能跟著進去。
+    _inject(FakeLabelEstimator(EstimatorUpstreamError("x")))
+    failed = await client.post(URL, headers=headers, json={**BODY, "hint": _HINT})
+    rejected = await client.post(URL, headers=headers, json={**BODY, "hint": _HINT * 11})
+
+    assert ok.status_code == 200
+    assert failed.status_code == 502
+    assert rejected.status_code == 422
+    assert any(record.levelno >= logging.WARNING for record in caplog.records)
+    assert not any("雞皮沒吃" in record.getMessage() for record in caplog.records)

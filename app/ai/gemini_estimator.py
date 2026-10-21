@@ -31,6 +31,7 @@ from app.ai.estimator import (
     parse_raw_estimate,
     parse_raw_meal_estimate,
     parse_raw_meal_suggestion,
+    with_hint,
 )
 from app.ai.label import (
     LABEL_IMAGE_INSTRUCTION,
@@ -248,24 +249,31 @@ class GeminiEstimator:
         contents = TEXT_ESTIMATE_INSTRUCTION.format(text=text)
         return parse_raw_estimate(await self._complete(contents, _SINGLE))
 
-    async def estimate_image(self, image: bytes, media_type: str) -> RawEstimate:
-        contents = _image_contents(IMAGE_ESTIMATE_INSTRUCTION, image, media_type)
+    async def estimate_image(
+        self, image: bytes, media_type: str, hint: str | None = None
+    ) -> RawEstimate:
+        # 說明接在指示後面、同一個文字部分（照片說明規格 D3）；沒有說明時指示原樣。
+        contents = _image_contents(with_hint(IMAGE_ESTIMATE_INSTRUCTION, hint), image, media_type)
         return parse_raw_estimate(await self._complete(contents, _SINGLE))
 
     async def estimate_meal_text(self, text: str) -> RawMealEstimate:
         contents = MEAL_TEXT_INSTRUCTION.format(text=text)
         return parse_raw_meal_estimate(await self._complete(contents, _MEAL))
 
-    async def estimate_meal_image(self, image: bytes, media_type: str) -> RawMealEstimate:
-        contents = _image_contents(MEAL_IMAGE_INSTRUCTION, image, media_type)
+    async def estimate_meal_image(
+        self, image: bytes, media_type: str, hint: str | None = None
+    ) -> RawMealEstimate:
+        contents = _image_contents(with_hint(MEAL_IMAGE_INSTRUCTION, hint), image, media_type)
         return parse_raw_meal_estimate(await self._complete(contents, _MEAL))
 
     async def suggest_meal(self, request: str) -> RawMealEstimate:
         # 訊息原樣送出：剩下的額度與偏好已經由 suggestion_request() 組好，不再套樣板。
         return parse_raw_meal_suggestion(await self._complete(request, _SUGGEST))
 
-    async def read_label(self, image: bytes, media_type: str) -> RawLabel:
-        contents = _image_contents(LABEL_IMAGE_INSTRUCTION, image, media_type)
+    async def read_label(
+        self, image: bytes, media_type: str, hint: str | None = None
+    ) -> RawLabel:
+        contents = _image_contents(with_hint(LABEL_IMAGE_INSTRUCTION, hint), image, media_type)
         return parse_raw_label(await self._complete(contents, _LABEL))
 
     async def _complete(self, contents: types.ContentListUnionDict, call: _Call) -> str:

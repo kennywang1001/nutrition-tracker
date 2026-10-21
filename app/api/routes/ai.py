@@ -24,6 +24,10 @@
 `/read-label`（掃條碼規格 §8.4）：營養標示的照片 → 每 100 的營養素、一份多少。②③④ 同照片的
 `/analyze`（額度共用、記成 `kind = 'label'`、`input_hash` 是圖片的 SHA-256）；沒有①：要的是
 包裝上印的數字，不是食物庫裡的。讀不出來是 `502 AI_LABEL_UNREADABLE`，照樣記一列、算額度。
+
+三個照片端點（`/analyze`、`/analyze-meal` 的照片，`/read-label`）可以帶補充說明（`hint`，照片說明
+規格 §3）：傳給 estimator 接在照片指示後面，雜湊含它（`_photo_input_hash`）；說明本身不存、
+不寫 log。
 """
 
 import base64
@@ -348,6 +352,17 @@ def _decode_photo(image_base64: str) -> tuple[bytes, str]:
     return content, media_type
 
 
+def _photo_input_hash(content: bytes, hint: str | None) -> str:
+    """照片（＋補充說明）的 SHA-256（照片說明規格 D5）。
+
+    沒有說明時照舊只雜湊照片——跟加這個欄位之前的列可以直接比。有說明時接一個 NUL 再接說明的
+    UTF-8：同一張照片配不同說明是不同的輸入。說明本身不存。"""
+    digest = hashlib.sha256(content)
+    if hint is not None:
+        digest.update(b"\x00" + hint.encode())
+    return digest.hexdigest()
+
+
 def _per_100g(serving_value: Decimal, serving_grams: Decimal) -> Decimal:
     return (serving_value * _BASE_AMOUNT / serving_grams).quantize(
         _CENTS, rounding=ROUND_HALF_UP
@@ -427,14 +442,15 @@ async def analyze(
     else:
         kind = AnalysisKind.IMAGE
         content, media_type = _decode_photo(payload.image_base64)
-        input_hash = hashlib.sha256(content).hexdigest()
+        hint = payload.hint
+        input_hash = _photo_input_hash(content, hint)
         raw = await _call_estimator_or_record_failure(
             db,
             user_id=user.id,
             kind=kind,
             input_hash=input_hash,
             model=estimator.model,
-            call=lambda: estimator.estimate_image(content, media_type),
+            call=lambda: estimator.estimate_image(content, media_type, hint=hint),
         )
 
     analysis = AiAnalysis(
@@ -555,14 +571,15 @@ async def analyze_meal(
     else:
         kind = AnalysisKind.IMAGE
         content, media_type = _decode_photo(payload.image_base64)
-        input_hash = hashlib.sha256(content).hexdigest()
+        hint = payload.hint
+        input_hash = _photo_input_hash(content, hint)
         raw = await _call_estimator_or_record_failure(
             db,
             user_id=user.id,
             kind=kind,
             input_hash=input_hash,
             model=estimator.model,
-            call=lambda: estimator.estimate_meal_image(content, media_type),
+            call=lambda: estimator.estimate_meal_image(content, media_type, hint=hint),
         )
 
     # **一列**：一次呼叫就是一次計費，跟估出幾樣無關（規格 D7）。
@@ -669,14 +686,15 @@ async def read_label(
     estimator = make_estimator()
     used_today = await _assert_quota_available(db, user)
     content, media_type = _decode_photo(payload.image_base64)
-    input_hash = hashlib.sha256(content).hexdigest()
+    hint = payload.hint
+    input_hash = _photo_input_hash(content, hint)
     raw = await _call_estimator_or_record_failure(
         db,
         user_id=user_id,
         kind=AnalysisKind.LABEL,
         input_hash=input_hash,
         model=estimator.model,
-        call=lambda: estimator.read_label(content, media_type),
+        call=lambda: estimator.read_label(content, media_type, hint=hint),
     )
 
     analysis = AiAnalysis(

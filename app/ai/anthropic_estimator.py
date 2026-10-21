@@ -51,6 +51,7 @@ from app.ai.estimator import (
     parse_raw_estimate,
     parse_raw_meal_estimate,
     parse_raw_meal_suggestion,
+    with_hint,
 )
 from app.ai.label import (
     LABEL_IMAGE_INSTRUCTION,
@@ -204,16 +205,21 @@ class AnthropicEstimator:
         message = _text_message(TEXT_ESTIMATE_INSTRUCTION, text)
         return parse_raw_estimate(await self._complete(message, _SINGLE))
 
-    async def estimate_image(self, image: bytes, media_type: str) -> RawEstimate:
-        message = _image_message(IMAGE_ESTIMATE_INSTRUCTION, image, media_type)
+    async def estimate_image(
+        self, image: bytes, media_type: str, hint: str | None = None
+    ) -> RawEstimate:
+        # 說明接在指示後面、同一個文字區塊（照片說明規格 D3）；沒有說明時指示原樣。
+        message = _image_message(with_hint(IMAGE_ESTIMATE_INSTRUCTION, hint), image, media_type)
         return parse_raw_estimate(await self._complete(message, _SINGLE))
 
     async def estimate_meal_text(self, text: str) -> RawMealEstimate:
         message = _text_message(MEAL_TEXT_INSTRUCTION, text)
         return parse_raw_meal_estimate(await self._complete(message, _MEAL))
 
-    async def estimate_meal_image(self, image: bytes, media_type: str) -> RawMealEstimate:
-        message = _image_message(MEAL_IMAGE_INSTRUCTION, image, media_type)
+    async def estimate_meal_image(
+        self, image: bytes, media_type: str, hint: str | None = None
+    ) -> RawMealEstimate:
+        message = _image_message(with_hint(MEAL_IMAGE_INSTRUCTION, hint), image, media_type)
         return parse_raw_meal_estimate(await self._complete(message, _MEAL))
 
     async def suggest_meal(self, request: str) -> RawMealEstimate:
@@ -221,8 +227,10 @@ class AnthropicEstimator:
         message: MessageParam = {"role": "user", "content": request}
         return parse_raw_meal_suggestion(await self._complete(message, _SUGGEST))
 
-    async def read_label(self, image: bytes, media_type: str) -> RawLabel:
-        message = _image_message(LABEL_IMAGE_INSTRUCTION, image, media_type)
+    async def read_label(
+        self, image: bytes, media_type: str, hint: str | None = None
+    ) -> RawLabel:
+        message = _image_message(with_hint(LABEL_IMAGE_INSTRUCTION, hint), image, media_type)
         return parse_raw_label(await self._complete(message, _LABEL))
 
     async def _complete(self, message: MessageParam, call: _Call) -> str:

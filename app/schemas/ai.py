@@ -18,6 +18,10 @@ class AnalyzeTextRequest(BaseModel):
 class AnalyzeImageRequest(BaseModel):
     kind: Literal["image"] = "image"
     image_base64: str = Field(min_length=1)
+    # 照片＋補充說明（照片說明規格 D1）：使用者知道、照片看不出來的事
+    # （「飯半碗」「雞皮沒吃」「7-11 的」）。`single_line` 清成一行，清完是空的＝沒有。
+    # 200 是清理**之前**的長度（同 preference）。不寫 log、不存。
+    hint: OptionalSingleLine = Field(default=None, max_length=200)
 
 
 class SuggestMealRequest(BaseModel):
@@ -139,6 +143,8 @@ class AnalyzeMealResponse(BaseModel):
 class ReadLabelRequest(BaseModel):
     # 同 AnalyzeImageRequest 的照片：base64，10 MB、像素上限、四種格式由 _decode_photo 把關。
     image_base64: str = Field(min_length=1)
+    # 例如「這一欄是每 100 ml」「一包 2 份」。規則同 AnalyzeImageRequest.hint。
+    hint: OptionalSingleLine = Field(default=None, max_length=200)
 
 
 class LabelReadResponse(BaseModel):

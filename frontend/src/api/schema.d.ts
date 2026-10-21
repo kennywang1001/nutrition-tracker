@@ -2022,6 +2022,8 @@ export interface components {
             kind: "image";
             /** Image Base64 */
             image_base64: string;
+            /** Hint */
+            hint?: string | null;
         };
         /** AnalyzeMealResponse */
         AnalyzeMealResponse: {
@@ -3339,6 +3341,8 @@ export interface components {
         ReadLabelRequest: {
             /** Image Base64 */
             image_base64: string;
+            /** Hint */
+            hint?: string | null;
         };
         /** RefreshRequest */
         RefreshRequest: {

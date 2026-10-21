@@ -33,6 +33,7 @@ from sqlalchemy import select
 
 from app.ai.anthropic_estimator import AnthropicEstimator
 from app.ai.estimator import (
+    IMAGE_ESTIMATE_INSTRUCTION,
     MAX_MEAL_OUTPUT_TOKENS,
     MAX_OUTPUT_TOKENS,
     MEAL_IMAGE_INSTRUCTION,
@@ -43,6 +44,7 @@ from app.ai.estimator import (
     EstimatorMisconfiguredError,
     EstimatorUpstreamError,
     NutritionEstimator,
+    with_hint,
 )
 from app.ai.gemini_estimator import GeminiEstimator
 from app.ai.label import (
@@ -1158,7 +1160,8 @@ class _ExplodingEstimator:
     async def estimate_text(self, text: str):
         raise RuntimeError("沒有分類的例外")
 
-    async def estimate_image(self, image: bytes, media_type: str):
+    # 收 `hint`：路由照片分支會帶它，少了這個參數丟的是 TypeError，測的就不是「沒分類的例外」。
+    async def estimate_image(self, image: bytes, media_type: str, hint: str | None = None):
         raise RuntimeError("沒有分類的例外")
 
 
@@ -1277,3 +1280,49 @@ async def test_an_unsupported_media_type_for_a_label_is_invalid_photo(provider):
     assert excinfo.value.code == "INVALID_PHOTO"
     # 沒送出去：格式在打 API 之前就擋了。
     assert upstream.requests == 0
+
+
+# ---------------------------------------------------------------------------
+# 照片＋補充說明（照片說明規格 §5）：說明接在照片指示後面，照片照樣在
+# ---------------------------------------------------------------------------
+# 放在檔案最後：`_VALID_LABEL_JSON` 定義在營養標示那一節。
+
+_HINT = "飯半碗、雞皮沒吃"
+
+# (方法名稱, 照片指示, 給假供應商回的 JSON)
+_PHOTO_METHODS = [
+    ("estimate_image", IMAGE_ESTIMATE_INSTRUCTION, _VALID_ESTIMATE_JSON),
+    ("estimate_meal_image", MEAL_IMAGE_INSTRUCTION, _VALID_MEAL_JSON),
+    ("read_label", LABEL_IMAGE_INSTRUCTION, _VALID_LABEL_JSON),
+]
+_PHOTO_IDS = [case[0] for case in _PHOTO_METHODS]
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+@pytest.mark.parametrize(("method", "instruction", "reply"), _PHOTO_METHODS, ids=_PHOTO_IDS)
+async def test_a_photo_with_a_hint_sends_the_hint_after_the_instruction(
+    provider, method, instruction, reply
+):
+    upstream, estimator = _estimator_for(provider, reply)
+
+    await getattr(estimator, method)(_PNG, "image/png", hint=_HINT)
+
+    sent = _sent(provider, upstream.bodies[0])
+    # 同一則使用者訊息、同一個文字區塊：照片在前、指示＋說明在後。
+    assert sent["text"] == [with_hint(instruction, _HINT)]
+    assert _HINT in sent["text"][0]
+    assert sent["has_image"] is True
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+@pytest.mark.parametrize(("method", "instruction", "reply"), _PHOTO_METHODS, ids=_PHOTO_IDS)
+async def test_a_photo_without_a_hint_sends_exactly_the_old_instruction(
+    provider, method, instruction, reply
+):
+    upstream, estimator = _estimator_for(provider, reply)
+
+    await getattr(estimator, method)(_PNG, "image/png")
+
+    sent = _sent(provider, upstream.bodies[0])
+    assert sent["text"] == [instruction]
+    assert sent["has_image"] is True
