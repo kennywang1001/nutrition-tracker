@@ -320,7 +320,11 @@ export function NewFood({ handoff = null }: Props) {
 	}
 
 	// 拍營養標示（掃條碼規格 §8.5）：AI 照抄、後端換算成每 100。
-	const readLabelMutation = useMutation({ mutationFn: readLabel });
+	// 包一層：TanStack Query 會把 mutation 的 context 當第二個參數傳進來，直接傳 readLabel 的話
+	// 那個物件會被當成補充說明。
+	const readLabelMutation = useMutation({
+		mutationFn: (file: File) => readLabel(file),
+	});
 	const [labelResult, setLabelResult] = useState<LabelReadResponse | null>(
 		null,
 	);

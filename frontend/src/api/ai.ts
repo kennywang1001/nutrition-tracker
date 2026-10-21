@@ -30,13 +30,25 @@ export function analyzeText(text: string): Promise<AnalyzeResponse> {
 	return post(ANALYZE, { kind: "text", text });
 }
 
+/** 照片＋補充說明（照片說明規格 §3）：說明 trim 之後是空的就不帶這個 key——舊的後端也收得下，
+ *  送出去的跟以前一模一樣。上限 200 字由輸入框擋（`PhotoHintStep`），後端再擋一次。 */
+function hintField(hint: string | undefined): { hint?: string } {
+	const trimmed = hint?.trim() ?? "";
+	return trimmed === "" ? {} : { hint: trimmed };
+}
+
 /** 照片估算（一樣食物）。**前處理跟上傳餐點照片同一套**（`preparePhoto`：先擋大小，
- *  再把長邊縮到 1280），最後轉 base64。照片只拿來估算，後端不存（P2 規格 §6）。 */
-export async function analyzeImage(file: File): Promise<AnalyzeResponse> {
+ *  再把長邊縮到 1280），最後轉 base64。照片只拿來估算，後端不存（P2 規格 §6）。
+ *  `hint`：補充說明（選填）。 */
+export async function analyzeImage(
+	file: File,
+	hint?: string,
+): Promise<AnalyzeResponse> {
 	const resized = await preparePhoto(file);
 	return post(ANALYZE, {
 		kind: "image",
 		image_base64: await fileToBase64(resized),
+		...hintField(hint),
 	});
 }
 
@@ -47,14 +59,16 @@ export function analyzeMealText(text: string): Promise<AnalyzeMealResponse> {
 	return post(ANALYZE_MEAL, { kind: "text", text });
 }
 
-/** 一餐的照片估算。照片的前處理同 `analyzeImage`。 */
+/** 一餐的照片估算。照片的前處理同 `analyzeImage`。`hint`：補充說明（選填）。 */
 export async function analyzeMealImage(
 	file: File,
+	hint?: string,
 ): Promise<AnalyzeMealResponse> {
 	const resized = await preparePhoto(file);
 	return post(ANALYZE_MEAL, {
 		kind: "image",
 		image_base64: await fileToBase64(resized),
+		...hintField(hint),
 	});
 }
 
@@ -70,11 +84,15 @@ export function suggestMeal(preference: string): Promise<AnalyzeMealResponse> {
 export type LabelReadResponse = components["schemas"]["LabelReadResponse"];
 
 /** 營養標示的照片 → 每 100 的營養素、一份多少（掃條碼規格 §8）。前處理同 `analyzeImage`。
- *  算一次 AI 額度；照片只拿來讀，後端不存。 */
-export async function readLabel(file: File): Promise<LabelReadResponse> {
+ *  算一次 AI 額度；照片只拿來讀，後端不存。`hint`：補充說明（選填，例如「這是每 100 ml」）。 */
+export async function readLabel(
+	file: File,
+	hint?: string,
+): Promise<LabelReadResponse> {
 	const resized = await preparePhoto(file);
 	return post("/api/ai/read-label", {
 		image_base64: await fileToBase64(resized),
+		...hintField(hint),
 	});
 }
 

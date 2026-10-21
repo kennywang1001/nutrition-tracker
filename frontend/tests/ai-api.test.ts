@@ -227,6 +227,106 @@ describe("讀營養標示（掃條碼規格 §8）", () => {
 	});
 });
 
+describe("照片＋補充說明（照片說明規格 §3）", () => {
+	const PHOTO = new File(["fake-jpeg"], "lunch.jpg", { type: "image/jpeg" });
+
+	// 每一條只給自己那一支路由：打錯端點就是 mockApi 的「沒有對應的路由」，不會被別支接住。
+	it.each([
+		[
+			"analyzeImage",
+			(hint?: string) => analyzeImage(PHOTO, hint),
+			"/api/ai/analyze",
+			"  飯半碗  ",
+			"飯半碗",
+		],
+		[
+			"analyzeMealImage",
+			(hint?: string) => analyzeMealImage(PHOTO, hint),
+			"/api/ai/analyze-meal",
+			"\n雞皮沒吃 ",
+			"雞皮沒吃",
+		],
+		[
+			"readLabel",
+			(hint?: string) => readLabel(PHOTO, hint),
+			"/api/ai/read-label",
+			" 一包 2 份",
+			"一包 2 份",
+		],
+	])(
+		"%s：說明 trim 過放進 body 的 hint",
+		async (_name, call, path, typed, sent) => {
+			const fetchMock = mockApi([
+				{ method: "POST", path, handler: () => json({}) },
+			]);
+
+			await call(typed);
+
+			expect(sentUrl(fetchMock)).toBe(path);
+			const body = sentBody(fetchMock) as Record<string, unknown>;
+			expect(body.hint).toBe(sent);
+			expect(body.image_base64).toBe(btoa("fake-jpeg"));
+		},
+	);
+
+	it.each([
+		[
+			"analyzeImage",
+			"   ",
+			(h?: string) => analyzeImage(PHOTO, h),
+			"/api/ai/analyze",
+			["kind", "image_base64"],
+		],
+		[
+			"analyzeImage",
+			undefined,
+			(h?: string) => analyzeImage(PHOTO, h),
+			"/api/ai/analyze",
+			["kind", "image_base64"],
+		],
+		[
+			"analyzeMealImage",
+			"   ",
+			(h?: string) => analyzeMealImage(PHOTO, h),
+			"/api/ai/analyze-meal",
+			["kind", "image_base64"],
+		],
+		[
+			"analyzeMealImage",
+			undefined,
+			(h?: string) => analyzeMealImage(PHOTO, h),
+			"/api/ai/analyze-meal",
+			["kind", "image_base64"],
+		],
+		// e2e 也這樣斷言：沒打說明時 read-label 的 body 只有照片。
+		[
+			"readLabel",
+			"   ",
+			(h?: string) => readLabel(PHOTO, h),
+			"/api/ai/read-label",
+			["image_base64"],
+		],
+		[
+			"readLabel",
+			undefined,
+			(h?: string) => readLabel(PHOTO, h),
+			"/api/ai/read-label",
+			["image_base64"],
+		],
+	])(
+		"%s：說明是 %j 就沒有 hint 這個 key",
+		async (_name, hint, call, path, keys) => {
+			const fetchMock = mockApi([
+				{ method: "POST", path, handler: () => json({}) },
+			]);
+
+			await call(hint);
+
+			expect(Object.keys(sentBody(fetchMock) as object)).toEqual(keys);
+		},
+	);
+});
+
 describe("preparePhoto：先擋大小，再縮到 1280", () => {
 	it("太大：丟跟今天一樣的 PhotoTooLargeError，不花 CPU 縮圖", async () => {
 		vi.mocked(shrinkToLongestEdge).mockClear();
