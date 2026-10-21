@@ -1,5 +1,5 @@
 import { Camera } from "lucide-react";
-import type { ChangeEvent, InputHTMLAttributes, ReactNode } from "react";
+import type { ChangeEvent, InputHTMLAttributes, ReactNode, Ref } from "react";
 import styles from "./PhotoPickerButton.module.css";
 
 type Props = {
@@ -16,6 +16,9 @@ type Props = {
 	variant?: "muted" | "accent";
 	/** 加在標籤上的額外 class：各畫面自己的字級等小差異。 */
 	className?: string;
+	/** 指到真的 `<input type=file>`：估算面板在確認照片的卡片收起來（成功、取消）時，
+	 *  把焦點移回這裡——按下去的那顆按鈕跟著卡片消失了。 */
+	inputRef?: Ref<HTMLInputElement>;
 };
 
 /** 「選一張照片」的按鈕：虛線框的標籤＋相機圖示，真的 `<input type=file>`
@@ -38,6 +41,7 @@ export function PhotoPickerButton({
 	onChange,
 	variant = "muted",
 	className,
+	inputRef,
 }: Props) {
 	const labelClass = [
 		styles.button,
@@ -54,6 +58,7 @@ export function PhotoPickerButton({
 				{label}
 			</label>
 			<input
+				ref={inputRef}
 				id={id}
 				type="file"
 				accept={accept}

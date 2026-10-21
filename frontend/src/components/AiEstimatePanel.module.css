@@ -87,8 +87,11 @@
 	color: var(--color-action);
 }
 
+/* aria-disabled：確認照片卡片的「開始估算」「取消」送出中停用時焦點還在上面（PhotoHintStep.tsx）。 */
 .primary:disabled,
-.secondary:disabled {
+.secondary:disabled,
+.primary[aria-disabled="true"],
+.secondary[aria-disabled="true"] {
 	opacity: 0.4;
 }
 

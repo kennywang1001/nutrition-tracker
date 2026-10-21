@@ -1,0 +1,40 @@
+/* 焦點在選了照片時移到這張卡片（tabIndex=-1）：外框要看得到，鍵盤使用者才知道跳到哪裡。 */
+.step:focus {
+	outline: 2px solid var(--color-action);
+	outline-offset: 2px;
+}
+
+/* 縮圖最高 160px：手機上卡片、按鈕與「AI 估算中」都還在同一個畫面裡。 */
+.preview {
+	display: block;
+	align-self: flex-start;
+	max-width: 100%;
+	max-height: 160px;
+	object-fit: contain;
+	border-radius: var(--radius-button);
+	background: var(--color-bg);
+}
+
+/* 自己給完整的樣式，不靠 ui.module.css 的 :where(.screen …)：這張卡片也出現在
+   沒有 .screen 的記一餐裡，兩邊要長得一樣。 */
+.label {
+	display: block;
+	margin-top: var(--space-2);
+	font-size: 13px;
+	color: var(--color-text-muted);
+}
+
+/* 16px：iOS 在小於 16px 的輸入框聚焦時會放大整頁（mobile-form-zoom.spec.ts 量的那一條）。 */
+.hint {
+	box-sizing: border-box;
+	width: 100%;
+	min-height: 44px;
+	padding: var(--space-2) var(--space-3);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-button);
+	background: var(--color-bg);
+	color: var(--color-text);
+	font-size: 16px;
+	font-family: inherit;
+	resize: vertical;
+}
