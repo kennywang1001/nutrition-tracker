@@ -1346,7 +1346,7 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
        食物的照片）。一樣記一列失敗、算一次額度，但畫面顯示後端那一句「AI 看不出這一餐有什麼食物，換一張照片或
        換個說法再試（這一次也算在今天的次數裡）」，不是 `AI_BAD_RESPONSE` 的「可以再試一次」。
     3. **會把思考算進輸出上限的模型仍然可能寫不完** → JSON 被截斷 → `AI_BAD_RESPONSE`。上限從 4096 提到 **8192**
-       （`app/ai/estimator.py` 的 `MAX_MEAL_OUTPUT_TOKENS`；單樣仍是 1024；答案本身只有 600～800 token，其餘是留給
+       （`app/ai/estimator.py` 的 `MAX_MEAL_OUTPUT_TOKENS`；單樣的 `MAX_OUTPUT_TOKENS` 2026-10-21 也從 1024 提到 8192，理由相同；答案本身只有 600～800 token，其餘是留給
        思考的），沒有環境變數可以調，要改程式或換模型。症狀是「AI 這次的回答看不懂」而且**每次都是**、每次都吃一次額度。
        **現在有 log 可以對**：兩家 estimator 的 `_complete`（單樣與多樣共用）在回覆不是正常結束、或沒有文字時記一行
        WARNING「AI 回覆不是正常結束（…）」——Anthropic 帶 `stop_reason`（`max_tokens`、`refusal`…）與

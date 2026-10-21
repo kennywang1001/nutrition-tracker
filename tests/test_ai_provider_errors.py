@@ -527,9 +527,9 @@ async def test_a_meal_text_call_sends_the_meal_prompt_schema_and_limit(provider)
     assert [item.name for item in result.items] == ["滷肉飯", "滷雞腿"]
     assert upstream.requests == 1
     sent = _sent(provider, upstream.bodies[0])
-    # 8192 寫死（第 10 種）；下一行確認常數就是它，而且跟單樣的不同。
+    # 8192 寫死（第 10 種）；下一行確認兩個常數都是它——單樣也會思考，1024 會被思考吃光。
     assert sent["max_tokens"] == 8192
-    assert (MAX_MEAL_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS) == (8192, 1024)
+    assert (MAX_MEAL_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS) == (8192, 8192)
     assert sent["system"] == MEAL_SYSTEM_PROMPT
     assert sent["system"] != SYSTEM_PROMPT
     assert sent["schema_fields"] == {"description", "items"}
@@ -567,7 +567,8 @@ async def test_a_meal_image_call_sends_the_image_and_the_meal_instruction(provid
 
 @pytest.mark.parametrize("provider", ["anthropic", "gemini"])
 async def test_the_single_call_still_sends_the_single_prompt_schema_and_limit(provider):
-    """抽出共用的 `_complete` 之後，單樣那一條送出去的東西一個字都沒變。"""
+    """單樣那一條送出去的 prompt 與 schema 跟抽出 `_complete` 之前一樣；上限是 8192
+    （以前是 1024——預設就會思考的模型把思考算進上限，1024 常常寫不完 JSON）。"""
     upstream, estimator = _estimator_for(provider, _VALID_ESTIMATE_JSON)
 
     await estimator.estimate_text("一碗滷肉飯")
@@ -575,7 +576,7 @@ async def test_the_single_call_still_sends_the_single_prompt_schema_and_limit(pr
 
     text_call, image_call = (_sent(provider, body) for body in upstream.bodies)
     for sent in (text_call, image_call):
-        assert sent["max_tokens"] == 1024
+        assert sent["max_tokens"] == 8192
         assert sent["system"] == SYSTEM_PROMPT
         assert "serving_grams" in sent["schema_fields"]
         assert "items" not in sent["schema_fields"]
@@ -841,7 +842,7 @@ async def test_a_truncated_reply_logs_the_stop_reason_and_the_token_counts(
         assert expected in message
     # 哪個模型、上限設多少：看 log 的人要拿這兩個去對。
     assert estimator.model in message
-    assert ("8192" if method == "estimate_meal_text" else "1024") in message
+    assert "8192" in message
 
 
 @pytest.mark.parametrize("provider", ["anthropic", "gemini"])

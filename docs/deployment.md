@@ -493,6 +493,10 @@ sudo docker compose --env-file .env.production \
 > 跨過 `0012` 時腳本會印退版警告（見「退版」）：這次如果新版起不來、被自動退回到 NAS 上原本那一版，
 > 舊版**無法建立新帳號**——修好新版再部署一次就好，不用還原。`0015` 有重複餐費時會停在第 5 步。
 
+- **單樣估算的輸出上限 1024 → 8192（2026-10-21，沒有 migration）**：拍照估算、文字估算（新增食物、編輯這一餐的加一項）
+  以前上限 1024 token；目前的 Claude 與 Gemini Flash 預設會先思考、思考算在上限裡，1024 常常寫不完 JSON（畫面是
+  「AI 這次的回答看不懂」、每次吃一次額度）。現在跟多樣估算、營養標示一樣 8192。計費看實際輸出，正常的一次不會變貴。
+
 - **`0022_add_food_barcode_and_label_kind`（掃條碼／營養標示）**：`foods` 多一個可以是空的 `barcode`（`TEXT`，既有的食物全部是
   NULL，加欄位不重寫表）＋CHECK `ck_foods_barcode_digits`（8 或 13 位數字）＋兩個唯一索引：`uq_foods_owner_id_barcode (owner_id, barcode)`
   （同一個人的私人食物不重複）與部分索引 `uq_foods_global_barcode (barcode) WHERE owner_id IS NULL`（公開食物之間不重複）。

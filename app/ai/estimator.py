@@ -122,10 +122,12 @@ ALLOWED_IMAGE_MEDIA_TYPES: frozenset[str] = frozenset(
     {"image/jpeg", "image/png", "image/gif", "image/webp"}
 )
 
-# 一份估算的 JSON 很短（8 個欄位），這個上限只是防止模型跑題輸出一大段文字
-# 還是被硬截斷在 JSON 中間，那種半成品一樣會在 parse_raw_estimate() 被擋下來，
-# 但不需要讓它有機會輸出到幾千 token 才被擋。
-MAX_OUTPUT_TOKENS = 1024
+# 一份估算的 JSON 很短（8 個欄位，一兩百 token），但上限給 8192，跟多樣估算一樣：
+# **預設就會思考的模型（目前的 Claude 與 Gemini Flash）把思考的 token 也算在這個上限裡**。
+# 以前是 1024——思考就可能用掉，輪到寫 JSON 時被截斷，畫面是「AI 這次的回答看不懂」、
+# 每按一次吃一次額度。上限只是「最多」：計費看實際輸出，調高不會讓正常的那一次變貴。
+# 被截斷時兩家的 `_complete` 會留一行 WARNING（停下來的原因＋用了多少 token）。
+MAX_OUTPUT_TOKENS = 8192
 
 # 一餐最多幾樣（AI 多樣估算規格 D9、D11）。超過的回覆整個拒絕——不默默丟掉幾樣。
 MAX_MEAL_ITEMS = 8
