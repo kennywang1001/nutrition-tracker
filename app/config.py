@@ -9,6 +9,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # 差別只在後者至少會在啟動時大聲失敗，前者會安靜地跑起來看起來正常。
 _KNOWN_PUBLIC_PLACEHOLDER_SECRET = "dev-secret-change-me-in-production"
 
+# 思考／推理的力道（照片說明規格 D14、§8）。值只開放兩家都有的三個：Anthropic 的 `xhigh`、`max`，
+# Gemini 的 `minimal` 先不開放——先用這三個量出差別再說。
+AiEffort = Literal["low", "medium", "high"]
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -40,6 +44,10 @@ class Settings(BaseSettings):
     # **不給預設值。** 猜一個看起來合理的模型名稱，猜錯時要到第一次真的呼叫
     # 才失敗，而且錯在更難查的地方（feat/p2-gemini 分支的教訓）。
     ai_model: str | None = None
+    # 留白＝供應商預設（現在的行為）。Anthropic → `output_config.effort`；Gemini →
+    # `thinking_config.thinking_level`（Gemini 3 系列；2.5 系列不收，會是 503 AI_MISCONFIGURED，
+    # 留白再部署就回來）。打錯字（`Low`、`fast`）讓啟動失敗，同 ai_provider。
+    ai_effort: AiEffort | None = None
     # 規格 §7：只算真的呼叫 LLM 的次數，失敗的也算（一樣花了錢）。
     ai_daily_limit: int = Field(20, gt=0)
     # Open Food Facts（掃條碼規格 D8、D12）：條碼在看得到的食物裡找不到時，問公開的食品資料庫
@@ -49,7 +57,7 @@ class Settings(BaseSettings):
     off_enabled: bool = True
 
     @field_validator(
-        "ai_provider", "anthropic_api_key", "gemini_api_key", "ai_model", mode="before"
+        "ai_provider", "anthropic_api_key", "gemini_api_key", "ai_model", "ai_effort", mode="before"
     )
     @classmethod
     def _empty_means_unset(cls, value: object) -> object:

@@ -216,6 +216,24 @@ _ANTHROPIC_CASES = [
         anthropic.BadRequestError,
     ),
     (
+        # AI_EFFORT 不被這個模型接受（照片說明規格 D16）：訊息不提 model，舊的判斷會當成上游錯誤
+        # ——502、記一列、算額度，而且每按一次都一樣。
+        "400-effort-rejected",
+        lambda: _anthropic_error(
+            400, "invalid_request_error", "output_config.effort: Extra inputs are not permitted"
+        ),
+        EstimatorMisconfiguredError,
+        anthropic.BadRequestError,
+    ),
+    (
+        "400-thinking-rejected",
+        lambda: _anthropic_error(
+            400, "invalid_request_error", "thinking: Extra inputs are not permitted"
+        ),
+        EstimatorMisconfiguredError,
+        anthropic.BadRequestError,
+    ),
+    (
         "429-rate-limit",
         lambda: _anthropic_error(429, "rate_limit_error", "Number of requests has exceeded"),
         EstimatorUpstreamError,
@@ -309,6 +327,14 @@ _GEMINI_CASES = [
         "400-other",
         lambda: _gemini_error(400, "INVALID_ARGUMENT", "Request contains an invalid argument."),
         EstimatorUpstreamError,
+        genai_errors.ClientError,
+    ),
+    (
+        # AI_EFFORT 的思考層級不被這個模型接受（照片說明規格 D16）：2.5 系列沒有 thinking_level、
+        # 某些 3.x 不收 MEDIUM。訊息不提 model，舊的判斷會當成上游錯誤。
+        "400-thinking-level-rejected",
+        lambda: _gemini_error(400, "INVALID_ARGUMENT", "Unsupported thinking_level: MEDIUM"),
+        EstimatorMisconfiguredError,
         genai_errors.ClientError,
     ),
     (
@@ -1326,3 +1352,78 @@ async def test_a_photo_without_a_hint_sends_exactly_the_old_instruction(
     sent = _sent(provider, upstream.bodies[0])
     assert sent["text"] == [instruction]
     assert sent["has_image"] is True
+
+
+# ---------------------------------------------------------------------------
+# AI_EFFORT（照片說明規格 §8）：沒設什麼都不送；設了送到每一種呼叫
+# ---------------------------------------------------------------------------
+
+
+def _set_effort(estimator: NutritionEstimator, effort: str | None) -> NutritionEstimator:
+    # 實作的公開屬性（build_estimator 從 settings.ai_effort 帶進來）；Protocol 沒有它。
+    estimator.effort = effort  # type: ignore[attr-defined]
+    return estimator
+
+
+# 四種呼叫各一個：(名稱, 呼叫, 回的 JSON)
+_EVERY_CALL = [
+    ("single", lambda e: e.estimate_text("一碗滷肉飯"), _VALID_ESTIMATE_JSON),
+    ("meal", lambda e: e.estimate_meal_image(_PNG, "image/png"), _VALID_MEAL_JSON),
+    ("suggest", lambda e: e.suggest_meal(_SUGGEST_REQUEST), _VALID_MEAL_JSON),
+    ("label", lambda e: e.read_label(_PNG, "image/png"), _VALID_LABEL_JSON),
+]
+_EVERY_CALL_IDS = [case[0] for case in _EVERY_CALL]
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+@pytest.mark.parametrize(("kind", "call", "reply"), _EVERY_CALL, ids=_EVERY_CALL_IDS)
+async def test_no_effort_sends_nothing_new(provider, kind, call, reply):
+    upstream, estimator = _estimator_for(provider, reply)
+
+    await call(estimator)
+
+    body = upstream.bodies[0]
+    if provider == "anthropic":
+        assert "effort" not in body["output_config"]
+        # schema 照舊在（不是整個 output_config 不見了才「沒有 effort」）。
+        assert body["output_config"]["format"]["type"] == "json_schema"
+    else:
+        assert "thinkingConfig" not in body["generationConfig"]
+        assert "responseSchema" in body["generationConfig"]
+
+
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+@pytest.mark.parametrize(("kind", "call", "reply"), _EVERY_CALL, ids=_EVERY_CALL_IDS)
+async def test_the_effort_goes_to_every_call(provider, effort, kind, call, reply):
+    upstream, estimator = _estimator_for(provider, reply)
+
+    await call(_set_effort(estimator, effort))
+
+    body = upstream.bodies[0]
+    if provider == "anthropic":
+        assert body["output_config"]["effort"] == effort
+        assert body["output_config"]["format"]["type"] == "json_schema"  # schema 沒被蓋掉
+    else:
+        # 實測（google-genai 2.25.0）：外層駝峰、裡面的 key 是蛇形。
+        assert body["generationConfig"]["thinkingConfig"] == {"thinking_level": effort.upper()}
+        assert "responseSchema" in body["generationConfig"]
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+async def test_the_effort_does_not_leak_into_the_shared_output_config(provider):
+    """Anthropic 的 `_Call.output_config` 是模組層級的常數，幾個實例共用：effort 要另外組一份，
+    不能寫回常數——不然設過 effort 的那一個之後，沒設的也會帶著它。"""
+    first_upstream, with_effort = _estimator_for(provider, _VALID_ESTIMATE_JSON)
+    second_upstream, without = _estimator_for(provider, _VALID_ESTIMATE_JSON)
+
+    await _set_effort(with_effort, "high").estimate_text("一碗滷肉飯")
+    await without.estimate_text("一碗滷肉飯")
+
+    later = second_upstream.bodies[0]
+    if provider == "anthropic":
+        assert first_upstream.bodies[0]["output_config"]["effort"] == "high"
+        assert "effort" not in later["output_config"]
+    else:
+        assert "thinkingConfig" in first_upstream.bodies[0]["generationConfig"]
+        assert "thinkingConfig" not in later["generationConfig"]

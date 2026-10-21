@@ -94,7 +94,7 @@ def test_a_real_anthropic_key_survives_normalisation(monkeypatch):
     assert Settings(jwt_secret="x" * 32).anthropic_api_key == "sk-ant-not-a-real-key"
 
 
-_AI_ENV_VARS = ("AI_PROVIDER", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "AI_MODEL")
+_AI_ENV_VARS = ("AI_PROVIDER", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "AI_MODEL", "AI_EFFORT")
 
 
 def _clear_ai_env(monkeypatch):
@@ -115,12 +115,15 @@ def test_ai_is_off_by_default(monkeypatch):
     assert settings.gemini_api_key is None
     # 不猜模型名稱：猜錯的名字要到第一次真的呼叫才失敗，而且錯在更難查的地方。
     assert settings.ai_model is None
+    # 沒設＝供應商預設的思考力道（照片說明規格 D14），送出去的請求跟以前一樣。
+    assert settings.ai_effort is None
     assert settings.ai_daily_limit == 20
 
 
 def test_empty_ai_settings_mean_unset(monkeypatch):
     """docker-compose 用 `${VAR:-}` 傳選配變數，沒設時容器收到的是空字串——
-    四個 AI 變數都要把空字串（含空白）當成沒設。"""
+    五個 AI 字串變數都要把空字串（含空白）當成沒設。`AI_EFFORT` 是 Literal：
+    空字串沒有先變成 None 的話，整個 app 起不來（同 AI_PROVIDER）。"""
     for value in ("", "   "):
         for name in _AI_ENV_VARS:
             monkeypatch.setenv(name, value)
@@ -131,6 +134,7 @@ def test_empty_ai_settings_mean_unset(monkeypatch):
         assert settings.anthropic_api_key is None
         assert settings.gemini_api_key is None
         assert settings.ai_model is None
+        assert settings.ai_effort is None
 
 
 def test_real_ai_settings_survive_normalisation(monkeypatch):
@@ -153,6 +157,23 @@ def test_unknown_ai_provider_fails_at_startup(monkeypatch, value):
     _clear_ai_env(monkeypatch)
     monkeypatch.setenv("AI_PROVIDER", value)
 
+    with pytest.raises(ValidationError):
+        Settings(jwt_secret="x" * 32, _env_file=None)
+
+
+@pytest.mark.parametrize("value", ["low", "medium", "high"])
+def test_ai_effort_is_read_from_the_environment(monkeypatch, value):
+    _clear_ai_env(monkeypatch)
+    monkeypatch.setenv("AI_EFFORT", value)
+    assert Settings(jwt_secret="x" * 32, _env_file=None).ai_effort == value
+
+
+@pytest.mark.parametrize("value", ["LOW", "Low", "fast", "xhigh", "minimal"])
+def test_an_unknown_ai_effort_fails_at_startup(monkeypatch, value):
+    """同 AI_PROVIDER：打錯字是設定錯誤，啟動時大聲說出來（照片說明規格 D14）。`xhigh`、`minimal` 是
+    某一家才有的值，這次不開放（規格 §8.2）。"""
+    _clear_ai_env(monkeypatch)
+    monkeypatch.setenv("AI_EFFORT", value)
     with pytest.raises(ValidationError):
         Settings(jwt_secret="x" * 32, _env_file=None)
 
@@ -182,10 +203,17 @@ def test_compose_forwards_ai_daily_limit_to_the_api_container():
     assert int(matches[0]) == Settings.model_fields["ai_daily_limit"].default
 
 
+def test_compose_forwards_ai_effort_as_an_optional_string():
+    """`${AI_EFFORT:-}`：沒設與留白都是空字串，`_empty_means_unset` 把它變成 None（同 AI_MODEL）。
+    寫成 `${AI_EFFORT:-low}` 之類會讓「留白＝供應商預設」不成立。"""
+    text = _COMPOSE_FILE.read_text(encoding="utf-8")
+    assert re.findall(r'^\s+AI_EFFORT:\s*(".*")\s*$', text, re.MULTILINE) == ['"${AI_EFFORT:-}"']
+
+
 def test_an_empty_ai_daily_limit_would_stop_the_app_from_starting(monkeypatch):
-    """為什麼 compose 那一行**不能**照另外四個 AI 變數寫成 `${AI_DAILY_LIMIT:-}`：
+    """為什麼 compose 那一行**不能**照另外五個 AI 變數寫成 `${AI_DAILY_LIMIT:-}`：
     沒設時容器收到的是空字串，而 `ai_daily_limit` 是 int——空字串不是「沒設」，
-    是解析失敗，整個 app 起不來（`_empty_means_unset` 只管那四個字串欄位）。
+    是解析失敗，整個 app 起不來（`_empty_means_unset` 只管那五個字串欄位）。
     所以預設值寫在 compose 裡。"""
     monkeypatch.setenv("AI_DAILY_LIMIT", "")
 

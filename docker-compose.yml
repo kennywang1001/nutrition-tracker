@@ -36,7 +36,7 @@ services:
       # 不像 JWT_SECRET 那樣中止。所以它可以寫在這個共用檔案裡，
       # 不需要像 JWT_SECRET 一樣拆到兩個 override。
       #
-      # ⚠️ 沒設時容器收到的是**空字串**，不是「沒有這個變數」。下面四個都是
+      # ⚠️ 沒設時容器收到的是**空字串**，不是「沒有這個變數」。下面五個都是
       # 選配，`app/config.py` 的 `_empty_means_unset` 把空字串正規化成沒設。
       # 少了那一步：金鑰會是空字串而不是 None，程式會拿它去打供應商的 API，
       # 使用者看到的是供應商的認證錯誤，不是「AI 分析未設定」；
@@ -45,7 +45,10 @@ services:
       AI_MODEL: "${AI_MODEL:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
-      # 每人每天最多呼叫幾次 AI（單樣與多樣估算共用）。**這一個不能照上面四個寫成
+      # 思考力道（照片說明規格 D14）：選配字串，同上面四個寫 `:-}`——空字串由 _empty_means_unset
+      # 變成沒設（＝供應商預設）。不能寫成 `:-low` 之類：留白就不再是「跟以前一樣」。
+      AI_EFFORT: "${AI_EFFORT:-}"
+      # 每人每天最多呼叫幾次 AI（單樣與多樣估算共用）。**這一個不能照上面五個寫成
       # `:-}`**：`app/config.py` 的 `ai_daily_limit` 是 int，空字串不是「沒設」，是解析
       # 失敗——整個 app 起不來。所以預設值寫在這裡；`:-` 讓「沒設」與「設成空的」
       # （`.env.production` 裡留白的 `AI_DAILY_LIMIT=`）都落到 20。

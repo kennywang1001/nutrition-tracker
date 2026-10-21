@@ -61,6 +61,7 @@ from app.ai.label import (
     RawLabel,
     parse_raw_label,
 )
+from app.config import AiEffort
 from app.errors import BadGatewayError, UnprocessableEntityError
 
 # Anthropic 的 Base64ImageSourceParam.media_type 是一個 Literal，只接受這四種；
@@ -108,6 +109,16 @@ _LABEL = _Call(
     MAX_LABEL_OUTPUT_TOKENS,
     {"format": {"type": "json_schema", "schema": transform_schema(LLMLabelSchema)}},
 )
+
+
+def _with_effort(output_config: OutputConfigParam, effort: AiEffort | None) -> OutputConfigParam:
+    """`AI_EFFORT` 放進 `output_config`（照片說明規格 §8.2）。沒設 → 原樣，送出去的跟以前一樣。
+
+    另外組一份新的字典：`_Call.output_config` 是模組層級的常數、每個實例共用，寫回去的話設過
+    effort 的那一次之後，沒設的也會帶著它。"""
+    if effort is None:
+        return output_config
+    return {**output_config, "effort": effort}
 
 
 def _first_text(message: Message) -> str | None:
@@ -165,14 +176,18 @@ def _provider_message(error: APIStatusError) -> str:
 
 def _is_misconfiguration(error: APIError | CredentialsError) -> bool:
     """金鑰錯（401）、沒權限（403）、模型不存在（404）、模型名稱不合法（400，
-    訊息指向 `model`）——都是設定的問題，重試不會好。
+    訊息指向 `model`）、這個模型不收 `AI_EFFORT`（400，訊息指向 `effort` 或 `thinking`）
+    ——都是設定的問題，重試不會好。
 
     其他的 400 不算：那是這次請求的內容被拒（例如照片太大），不是設定錯。
     """
     if isinstance(error, (AuthenticationError, PermissionDeniedError, NotFoundError)):
         return True
     if isinstance(error, BadRequestError):
-        return "model" in _provider_message(error).lower()
+        # model：模型名稱不合法。effort／thinking：這個模型不收 AI_EFFORT（照片說明規格 D16）——
+        # 重試不會好，而且不該每按一次就算一次額度。
+        message = _provider_message(error).lower()
+        return any(word in message for word in ("model", "effort", "thinking"))
     # 讀不到憑證（設定檔、環境變數）——跟金鑰錯是同一件事。它不是 `APIError` 的
     # 子類別（是 `AnthropicError` 底下的另一支），所以 `_complete` 要另外接。
     return isinstance(error, CredentialsError)
@@ -197,9 +212,11 @@ def _image_message(instruction: str, image: bytes, media_type: str) -> MessagePa
 
 
 class AnthropicEstimator:
-    def __init__(self, *, api_key: str, model: str) -> None:
+    def __init__(self, *, api_key: str, model: str, effort: AiEffort | None = None) -> None:
         self._client = AsyncAnthropic(api_key=api_key)
         self.model = model
+        # AI_EFFORT（照片說明規格 D14）：四種呼叫都套用；None＝不送，供應商預設。
+        self.effort = effort
 
     async def estimate_text(self, text: str) -> RawEstimate:
         message = _text_message(TEXT_ESTIMATE_INSTRUCTION, text)
@@ -245,7 +262,7 @@ class AnthropicEstimator:
                 max_tokens=call.max_tokens,
                 system=call.system,
                 messages=[message],
-                output_config=call.output_config,
+                output_config=_with_effort(call.output_config, self.effort),
             )
         except (APIError, CredentialsError) as exc:
             # APIError 涵蓋連線錯誤、逾時（APIConnectionError／APITimeoutError）、

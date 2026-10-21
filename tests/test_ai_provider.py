@@ -13,11 +13,14 @@ from app.config import settings
 from app.errors import ServiceUnavailableError
 
 
-def _configure(monkeypatch, *, provider, anthropic=None, gemini=None, model="some-model"):
+def _configure(
+    monkeypatch, *, provider, anthropic=None, gemini=None, model="some-model", effort=None
+):
     monkeypatch.setattr(settings, "ai_provider", provider)
     monkeypatch.setattr(settings, "anthropic_api_key", anthropic)
     monkeypatch.setattr(settings, "gemini_api_key", gemini)
     monkeypatch.setattr(settings, "ai_model", model)
+    monkeypatch.setattr(settings, "ai_effort", effort)
 
 
 def test_anthropic_provider_builds_the_anthropic_estimator(monkeypatch):
@@ -27,6 +30,7 @@ def test_anthropic_provider_builds_the_anthropic_estimator(monkeypatch):
 
     assert isinstance(estimator, AnthropicEstimator)
     assert estimator.model == "some-model"
+    assert estimator.effort is None
 
 
 def test_gemini_provider_builds_the_gemini_estimator(monkeypatch):
@@ -36,6 +40,26 @@ def test_gemini_provider_builds_the_gemini_estimator(monkeypatch):
 
     assert isinstance(estimator, GeminiEstimator)
     assert estimator.model == "some-model"
+    assert estimator.effort is None
+
+
+def test_anthropic_gets_the_ai_effort(monkeypatch):
+    # AI_EFFORT 交給實作（照片說明規格 D14）；送出去長什麼樣由 test_ai_provider_errors.py 看。
+    _configure(monkeypatch, provider="anthropic", anthropic="sk-ant-not-real", effort="low")
+
+    estimator = build_estimator()
+
+    assert isinstance(estimator, AnthropicEstimator)
+    assert estimator.effort == "low"
+
+
+def test_gemini_gets_the_ai_effort(monkeypatch):
+    _configure(monkeypatch, provider="gemini", gemini="not-real", effort="medium")
+
+    estimator = build_estimator()
+
+    assert isinstance(estimator, GeminiEstimator)
+    assert estimator.effort == "medium"
 
 
 def test_no_provider_means_ai_is_off_even_with_keys(monkeypatch):

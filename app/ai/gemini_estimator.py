@@ -40,6 +40,7 @@ from app.ai.label import (
     RawLabel,
     parse_raw_label,
 )
+from app.config import AiEffort
 from app.errors import BadGatewayError, UnprocessableEntityError
 
 # **不能直接把 `LLMEstimateSchema` 這個 pydantic model 傳給
@@ -147,6 +148,25 @@ _LABEL = _Call(LABEL_SYSTEM_PROMPT, MAX_LABEL_OUTPUT_TOKENS, _LABEL_RESPONSE_SCH
 
 logger = logging.getLogger(__name__)
 
+# AI_EFFORT → Gemini 的思考層級（照片說明規格 §8.2）。寫成表、不靠 SDK 把小寫字串轉成大寫：
+# 送出去的是哪一個列舉值，看這裡就知道。
+_THINKING_LEVELS: dict[AiEffort, types.ThinkingLevel] = {
+    "low": types.ThinkingLevel.LOW,
+    "medium": types.ThinkingLevel.MEDIUM,
+    "high": types.ThinkingLevel.HIGH,
+}
+
+
+def _thinking_config(effort: AiEffort | None) -> types.ThinkingConfig | None:
+    """`AI_EFFORT` → `thinking_config`（照片說明規格 §8.2）。沒設 → None：不送 thinkingConfig，
+    跟以前一樣（Gemini 3 預設是動態、偏高的思考）。
+
+    用 `thinking_level`（Gemini 3 系列）。2.5 系列只認 `thinking_budget`——配 2.5 的模型會被拒，
+    `_is_misconfiguration` 接成 AI_MISCONFIGURED（規格 D16）。**沒有對真的 API 驗過。**"""
+    if effort is None:
+        return None
+    return types.ThinkingConfig(thinking_level=_THINKING_LEVELS[effort])
+
 
 def _extract_text(response: types.GenerateContentResponse) -> str:
     """`GenerateContentResponse.text` 是 `str | None`——`None` 或空字串本身
@@ -216,7 +236,8 @@ _INVALID_MODEL_MESSAGE = "invalid model parameter."
 def _is_misconfiguration(error: errors.APIError) -> bool:
     """設定的問題（重試不會好）：401／403／404，或是 400 而內容指向金鑰或模型
     （`API_KEY_INVALID`、「API key not valid」、「GenerateContentRequest.model:
-    unexpected model name format」）。
+    unexpected model name format」），或指向 `thinking`：這個模型不收 AI_EFFORT 的
+    思考層級（照片說明規格 D16）——不然每按一次都是 502、記一列、算額度。
 
     其他的 400 不算：那是這次請求的內容被拒，不是設定錯。
     """
@@ -225,7 +246,7 @@ def _is_misconfiguration(error: errors.APIError) -> bool:
     if error.code != 400:
         return False
     text = f"{error.message or ''} {error.details}".lower()
-    return "api_key_invalid" in text or "api key" in text or "model" in text
+    return "api_key_invalid" in text or "api key" in text or "model" in text or "thinking" in text
 
 
 def _image_contents(
@@ -239,11 +260,13 @@ def _image_contents(
 
 
 class GeminiEstimator:
-    def __init__(self, *, api_key: str, model: str) -> None:
+    def __init__(self, *, api_key: str, model: str, effort: AiEffort | None = None) -> None:
         # 非同步走 `client.aio`——`genai.Client` 是同一個物件底下切出同步／
         # 非同步兩組介面，不需要另外 import 一個 Async 版本。
         self._client = genai.Client(api_key=api_key)
         self.model = model
+        # AI_EFFORT（照片說明規格 D14）：四種呼叫都套用；None＝不送，供應商預設。
+        self.effort = effort
 
     async def estimate_text(self, text: str) -> RawEstimate:
         contents = TEXT_ESTIMATE_INSTRUCTION.format(text=text)
@@ -283,6 +306,7 @@ class GeminiEstimator:
             max_output_tokens=call.max_output_tokens,
             response_mime_type="application/json",
             response_schema=call.response_schema,
+            thinking_config=_thinking_config(self.effort),
         )
         # 只包 SDK 那一次呼叫：回應解析失敗是 AI_BAD_RESPONSE，不是上游錯誤。
         try:

@@ -62,10 +62,17 @@ def build_estimator() -> NutritionEstimator:
             raise ServiceUnavailableError(
                 "AI_NOT_CONFIGURED", "AI 分析未設定：缺 ANTHROPIC_API_KEY"
             )
-        return AnthropicEstimator(api_key=settings.anthropic_api_key, model=settings.ai_model)
+        # effort：AI_EFFORT（照片說明規格 D14），None＝供應商預設，送出去的跟以前一樣。
+        return AnthropicEstimator(
+            api_key=settings.anthropic_api_key,
+            model=settings.ai_model,
+            effort=settings.ai_effort,
+        )
     if settings.gemini_api_key is None:
         raise ServiceUnavailableError("AI_NOT_CONFIGURED", "AI 分析未設定：缺 GEMINI_API_KEY")
-    return GeminiEstimator(api_key=settings.gemini_api_key, model=settings.ai_model)
+    return GeminiEstimator(
+        api_key=settings.gemini_api_key, model=settings.ai_model, effort=settings.ai_effort
+    )
 
 
 EstimatorFactory = Callable[[], NutritionEstimator]
