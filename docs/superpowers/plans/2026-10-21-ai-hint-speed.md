@@ -14,13 +14,59 @@
 
 ## 執行中發現的差異
 
-（執行時填：每個 task 的 commit、跟計畫不一樣的地方、突變的結果。）
+### Task 1（`c6b5ca1`）
+
+- 條數：`test_ai_hint` **12**（計畫寫 10：第一條 parametrize 成 3 格）、兩家假傳輸層 12、`/analyze` 7、
+  `/analyze-meal` **7**（也加了「文字忽略 hint」那一條）、`/read-label` 6。整套後端 2154 passed。
+- 兩家假傳輸層那一節放在**檔案最後**（`_VALID_LABEL_JSON` 之後），沒有搬常數。
+- `tests/test_ai_analyze.py` 沒有 `_rows`：新加 `_hashes()`（先 rollback、選欄位）。
+- 「說明不進 log」的三條多送一次超過 200 字的說明（422）：驗證失敗那條路也不能把說明寫進 log。
+- 突變 11 個全部被抓到：計畫的 9 個，加 `analyze_meal` 傳 `hint=None`、`with_hint` 拿掉 `if not hint`。
+
+### Task 2（`e25bb8b`）
+
+- Anthropic 的分類多一個 `400-thinking-rejected`（`thinking: Extra inputs are not permitted`）：
+  `_is_misconfiguration` 認 `effort` 與 `thinking` 兩個字，各有一格守著。案例名稱照既有的寫法加 `400-` 前綴。
+- 多一條 `test_the_effort_does_not_leak_into_the_shared_output_config`：Anthropic 的 `_Call.output_config`
+  是模組常數、實例共用，`_with_effort` 要另外組一份（突變 3b：改成原地寫入 → 紅）。
+- `test_no_effort_sends_nothing_new` 實作之前就是綠的——它守的是現在的行為，不是新功能。
+- compose 那段註解的「下面四個」改「下面五個」之外，`AI_DAILY_LIMIT` 那段的「上面四個」、`test_config.py`
+  兩處「四個」也跟著改。`.env.production.example` 多一行「填了 low／medium／high 以外的值，api 啟動失敗」。
+- `docker compose config`（沒設 `AI_EFFORT`）：`AI_EFFORT: ""`。
+- 突變 12 個全部被抓到：計畫的 8 個，加 deps 的 anthropic 不帶 effort、`_with_effort` 原地寫入共用常數、
+  anthropic 拿掉 `"thinking"`、anthropic 的 400 一律算設定錯（`400-other` 那幾格紅）。整套 2211 passed。
+
+### Task 3（`d4a2f7a`）
+
+- **anthropic SDK 自己的 DEBUG log 會印出整個請求。** `caplog.set_level(logging.DEBUG)` 時，
+  `anthropic._base_client` 的「Request options: …」帶著照片的 base64 與說明。那是 SDK 的行為、不是這裡的
+  程式碼，production 也印不出來（`anthropic.*` 沒有 handler，只有 WARNING 以上落到 lastResort）。所以供應商
+  那幾條掃 **INFO 以上**（同計畫的片段）；路由那幾條（假 estimator）照樣掃 DEBUG。**Task 8：
+  `docs/deployment.md` 要寫「不要在 production 開 DEBUG log 或 `ANTHROPIC_LOG=debug`」——會把照片與說明
+  寫進 log。**
+- `ai_route_timer` 放在四個端點的**第一個**依賴（計畫沒指定位置）：登入失敗也有一行（`status=401`、
+  `input=-`），`total` 含驗證身分與資料庫。多一條 401 的測試。
+- 供應商計時那一節放在**檔案最後**（AI_EFFORT 那一節之後），不是「不正常結束」那一節後面——要用 `_set_effort`。
+  多三條：`misconfigured`（兩家）、沒分類的例外是 `outcome=error`（gemini）；`suggest`／`label` 兩家都測。
+  路由那一份 11 條（計畫列的 10 種＋401）。
+- `_status_of` 把 `AppError` 與 `HTTPException` 併成一個 `isinstance`。
+- `schema.d.ts` 重新產生：**沒有 diff**，沒有加進 commit。
+- 突變 13 個全部被抓到：計畫的 9 個，加 `decoding()` 拿掉 `finally`、anthropic 的 elapsed 寫成絕對值、
+  `read_label` 的解碼沒包、`analyze_meal` 不設 `timer.source`。整套 2235 passed；前端 3022 passed、
+  typecheck、lint 綠。
 
 ## 與規格的差異
 
 （執行時填。）寫計畫時已經知道的：
 
 1. **task 的順序**：`AI_EFFORT`（Task 2）排在計時（Task 3）前面——計時那一行要記 `effort=`，先有欄位比較不用改兩次。
+
+執行時發現的：
+
+2. **路由那一行從第一個依賴開始量**（規格 §7.2 寫「依賴建好到端點結束」）：計時是第一個依賴，`total` 含
+   驗證身分與資料庫；登入失敗（401）也有一行。
+3. **anthropic SDK 的 DEBUG log 帶著整個請求**（見上面 Task 3）：規格 §9.1「後端不寫 log」在 production 的
+   log 等級下成立；開了 DEBUG 就不成立。寫進部署文件（Task 8）。
 
 ## 執行環境
 
