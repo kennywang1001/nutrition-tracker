@@ -558,6 +558,32 @@ describe("App", () => {
 		expect(screen.getByRole("dialog", { name: "掃條碼" })).toBe(dialog);
 	});
 
+	it("從「＋」點「記體重」：到 /weight、焦點在體重欄位（首頁改版規格 §7）", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockBackend();
+		render(<App />);
+		expect(
+			await screen.findByRole("heading", { level: 1, name: "總覽" }),
+		).toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
+		// 限定在對話框裡（D18）：總覽的快速記錄也有一個「記體重」。
+		await userEvent.click(
+			within(screen.getByRole("dialog", { name: "新增紀錄" })).getByRole(
+				"link",
+				{ name: "記體重" },
+			),
+		);
+
+		expect(
+			await screen.findByRole("heading", { level: 1, name: "體重" }),
+		).toBeInTheDocument();
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+		await waitFor(() =>
+			expect(screen.getByLabelText("體重（公斤）")).toHaveFocus(),
+		);
+	});
+
 	it("從總覽的記體重：到 /weight、焦點在體重欄位，history 的 state 清掉（首頁改版規格 D11）", async () => {
 		setTokens({ access_token: "a", refresh_token: "r" });
 		mockBackend();

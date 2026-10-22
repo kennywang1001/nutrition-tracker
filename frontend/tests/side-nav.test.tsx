@@ -103,6 +103,22 @@ describe("SideNav", () => {
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 	});
 
+	it("選單裡有「記體重」，連到 /weight；四個入口依序是記帳、記一餐、記運動、記體重；點了選單關掉（首頁改版規格 §7）", async () => {
+		renderAt("/");
+		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
+
+		const dialog = screen.getByRole("dialog", { name: "新增紀錄" });
+		expect(
+			within(dialog)
+				.getAllByRole("link")
+				.map((link) => link.textContent),
+		).toEqual(["記帳", "記一餐", "記運動", "記體重"]);
+		const weight = within(dialog).getByRole("link", { name: "記體重" });
+		expect(weight).toHaveAttribute("href", "/weight");
+		await userEvent.click(weight);
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+
 	it("點選單裡的「記帳」：換頁，選單關掉", async () => {
 		renderAt("/");
 		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));

@@ -1,6 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, useNavigate } from "react-router";
+import { MemoryRouter, useLocation, useNavigate } from "react-router";
 import { describe, expect, it } from "vitest";
 import { TabBar } from "../src/components/TabBar";
 
@@ -80,12 +80,39 @@ describe("TabBar", () => {
 			within(sheet)
 				.getAllByRole("link")
 				.map((link) => link.textContent),
-		).toEqual(["記帳", "記一餐", "記運動"]);
+		).toEqual(["記帳", "記一餐", "記運動", "記體重"]);
 		const exercise = within(sheet).getByRole("link", { name: "記運動" });
 		expect(exercise).toHaveAttribute("href", "/exercises/new");
 
 		await userEvent.click(exercise);
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+
+	it("面板裡有「記體重」，連到 /weight、帶著焦點放在體重欄位的 state；點了面板關掉（首頁改版規格 §7）", async () => {
+		function LocationState() {
+			return (
+				<pre data-testid="location-state">
+					{JSON.stringify(useLocation().state)}
+				</pre>
+			);
+		}
+		render(
+			<MemoryRouter initialEntries={["/"]}>
+				<TabBar />
+				<LocationState />
+			</MemoryRouter>,
+		);
+		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
+
+		const sheet = screen.getByRole("dialog", { name: "新增紀錄" });
+		const weight = within(sheet).getByRole("link", { name: "記體重" });
+		expect(weight).toHaveAttribute("href", "/weight");
+
+		await userEvent.click(weight);
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+		expect(screen.getByTestId("location-state")).toHaveTextContent(
+			'{"weightForm":true}',
+		);
 	});
 
 	it("「新增紀錄」打開面板，裡面有記帳與記一餐兩個入口", async () => {
