@@ -16,6 +16,52 @@
 
 （實作時每個 task 寫一小節：commit、條數、突變結果、跟計畫不一樣的地方。）
 
+### Task 1（`1c1390f`）
+
+- 條數照計畫：decimal 多 8 格、calorie-ring 10、budget-summary 8。整套 `Test Files 214 passed`、`Tests 3148 passed`。
+- 突變 11/11。兩條跟計畫寫的不一樣：
+  - **第 6 條**（`tone === "over" ? 1 : ratio` → `ratio`）**不會**紅 budget-summary 的「超過」：那一條是 2500 / 2343 > 1，
+    `ringDasharray` 本來就夾到 1，對那份資料是等價突變。殺掉它的是 calorie-ring 的「超過：畫滿」（比例 0.2）。
+  - **第 8 條**照寫（`stats.target?.kcal ?? null`）會讓 `kcalBudgetOf` 的 import 沒人用，tsc 的 `noUnusedLocals` 紅、工具標成 TYPE-ERROR。
+    改成 `kcalBudgetOf({ ...stats, kcal_budget: null })`（同樣退回目標，型別乾淨）。第 9 條用 `exerciseInBudgetOf(stats) ?? "0"`。
+- `.noTarget` 的 `margin-top: var(--space-2)` 直接寫進那一條（計畫 Step 9 的補充）。
+
+### Task 1B（`4e236f9`）
+
+- **重構那一步單獨跑過**：`WeightChart` 改用 `weightScale`／`polylinePoints` 之後、加線之前，`weight-chart.test.tsx` 沒改一個字就全綠；
+  整個 task 結束時那個檔案的 diff 是 50 加、0 刪（只有新的 4 條）。
+- 條數：weight-plot **6**（計畫 5）——多一條「y 從 `area.top` 開始算」：`WeightChart` 的 `top` 是 0，沒有它的話 `area.top +` 拿掉也不會紅
+  （突變 3b 證明）。weight-chart 多 4、weight 多 2。整套 `216 passed`、`3172 passed`。
+- **圖例的寫法改了**：計畫的 `getByText("每天的紀錄")` 對計畫的 markup 對不上——testing-library 把**同一個元素自己的文字節點**接起來比，
+  `<p>` 的文字是「每天的紀錄7 天平均」。每一項（色塊＋字）包成一個 `.legendItem`（`inline-flex`、`nowrap`）：測試對得上，換行時色塊也不會跟字分開。
+  `.swatchAverage` 的 `margin-left` 拿掉，兩項的距離由 `.legend` 的 `gap`（橫向改 `--space-4`）管。測試斷言 `daily.querySelector("span")` 是 `aria-hidden`。
+- 「只有一筆：沒有線」在加線之前就是綠的（那時根本沒有線）——它守的是 `>= 2`，突變 5 證明。
+- 「切期間」的資料用 7/1、9/1、10/1、10/10 四筆：30 天內要有兩筆以上才有線。
+- 突變 9/9（計畫的 7 條＋3b `area.top`＋8 每天的線的 `aria-hidden`）。第 1 條（y 上下顛倒）**也紅了 weight-chart 既有的**
+  「x 照日期（不是照第幾筆）、y 照體重（重的在上面）」——`WeightChart` 真的接上了共用的幾何。
+
+### Task 2（`fb63395`、截圖修正 `9e8a9e9`）
+
+- 條數：weight-sparkline **4**（計畫 3；多一條「x 照日期：中間那一筆在天數的比例上」）；overview 既有的照 Step 1 逐條改、新的 **10** 條
+  （計畫 9；「體重」拆成「兩筆以上有迷你折線」與「只有一筆沒有」兩條）。整套 `218 passed`、`3200 passed`。
+- **連結名稱的空白**：小卡片的標籤與數字之間加 `{" "}`。jsdom（dom-accessibility-api）把行內的 `<span>` 直接接起來，名稱會是「體重79 公斤比 7 天前…」；
+  有空白才是「體重 79 公斤 比 7 天前 -1 公斤」「本月支出 $12480.00」「體重 記錄體重」。欄排版（flex column）裡空白不佔位置，畫面不變。
+- `.label` 的 margin 改 0（`.glance` 的 `gap` 接手）；`.unit`、`.progress`、`.budgetNote` 拿掉。
+- 測試檔：react-router 的 `Route` 跟 `mock-api` 的 `type Route` 撞名 → `Route as RouterRoute`；比順序的小函式叫 `precedes`
+  （叫 `before` 會被 Biome 的 `noDuplicateTestHooks` 當成 vitest 的 hook）。
+- 沒有體重時的 state 先寫死 `{ weightForm: true }`（註解寫明 Task 3 換成 `WEIGHT_FORM_STATE`）。
+- 突變 12/12。型別過不了的寫法換掉（工具會把 tsc 的紅標成 TYPE-ERROR，不算）：第 2 條 → `weekChange([])`；第 3 條 `state={undefined}` 會讓 `empty`
+  沒人用 → `!empty`；第 4 條拿掉 `weightsQuery` 也是沒人用 → `...[weightsQuery].filter(() => false)`；第 8 條 `31` 不在 `WeightSpan`（30 | 90 | "all"）
+  → `90`；第 9 條 `shiftDays` 沒 import → `entriesInSpan(entries, today, SPARKLINE_DAYS).start`（就是今天 − 29）。另外多兩條：6b 拿掉名稱裡的空白、
+  11 `aria-labelledby` 指到不存在的 id。
+- **截圖抓到的**（`9e8a9e9`）：兩張小卡片並排時 grid 把矮的本月支出拉成跟體重一樣高，連結卻只有 44px（390 寬實測 145×44，卡片約 103 高），
+  下半張點了沒反應。`.glance` 加 `box-sizing: border-box; height: 100%`，之後兩個連結都是整張（1280 寬 164×103）。
+- 量到的：圓環 132×132；「設定每日目標」96×44；迷你折線 145×32（390 寬）、164×32（1280 寬）；兩種寬度都沒有水平捲動。
+- **深色模式**：`--color-accent` 與 `--color-action` 在深色是同一個色（`#ff8a6b`），`/weight` 的 7 天平均跟每天的線只差虛線與 `opacity`。
+  看截圖分得出來；規格 D24 是「顏色不變」，沒有加新的變數。
+- 截圖（不進 repo）：`$S/home/{m,d}-*.png`（`m` 390×844、`d` 1280×800；1 一般、1-full 整頁、2 體重小卡片、3／3b `/weight`、4 超過、5 沒有目標、
+  6 深色總覽〔a 一般、c 超過〕、7 深色 `/weight`），腳本 `$S/home-fe1-shots.cjs`。
+
 ## 與規格的差異（寫計畫時決定的）
 
 1. **體重小卡片放在 `Overview.tsx` 裡**（`WeightGlanceCard`），不是規格 §10 寫的 `components/WeightGlanceCard.tsx`：它跟本月支出共用
