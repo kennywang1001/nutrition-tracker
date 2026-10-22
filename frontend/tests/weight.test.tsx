@@ -283,6 +283,52 @@ describe("/weight", () => {
 		expect(screen.getByTestId("weight-target")).toBeInTheDocument();
 	});
 
+	it("圖例：每天的紀錄、7 天平均，色塊是裝飾", async () => {
+		renderScreen(bodyRoutes({ weights: TWO }));
+
+		const card = await screen.findByTestId("weight-chart-card");
+		const daily = within(card).getByText("每天的紀錄");
+		const average = within(card).getByText("7 天平均");
+		// 每一項是「色塊＋字」：色塊是 aria-hidden 的 span，字本身就說了。
+		expect(daily.querySelector("span")).toHaveAttribute("aria-hidden", "true");
+		expect(average.querySelector("span")).toHaveAttribute(
+			"aria-hidden",
+			"true",
+		);
+	});
+
+	it("切期間：線只連範圍內的點", async () => {
+		renderScreen(
+			bodyRoutes({
+				weights: {
+					today: "2026-10-14",
+					entries: [
+						e("2026-07-01", "82"),
+						e("2026-09-01", "80"),
+						e("2026-10-01", "79"),
+						e("2026-10-10", "78.4"),
+					],
+				},
+			}),
+		);
+		const linePairs = () =>
+			(screen.getByTestId("weight-line").getAttribute("points") ?? "").split(
+				" ",
+			);
+
+		const period = await screen.findByRole("group", { name: "期間" });
+		expect(dots()).toHaveLength(2);
+		expect(linePairs()).toHaveLength(2);
+
+		await userEvent.click(within(period).getByRole("radio", { name: "全部" }));
+		expect(dots()).toHaveLength(4);
+		expect(linePairs()).toHaveLength(4);
+
+		await userEvent.click(within(period).getByRole("radio", { name: "30 天" }));
+		expect(dots()).toHaveLength(2);
+		expect(linePairs()).toHaveLength(2);
+	});
+
 	it("讀不到：「無法載入體重」", async () => {
 		renderScreen([
 			{

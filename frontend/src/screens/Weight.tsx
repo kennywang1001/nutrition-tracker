@@ -137,10 +137,16 @@ function WeightBody({
 								目標 {formatMacro(targetKg)} 公斤
 							</p>
 						)}
+						{/* 每一項是「色塊＋字」包成一段：換行時色塊不會跟它的字分開。 */}
 						<p className={styles.legend}>
-							<span className={styles.swatchPoint} aria-hidden="true" />
-							每天的紀錄
-							<span className={styles.swatchLine} aria-hidden="true" />7 天平均
+							<span className={styles.legendItem}>
+								<span className={styles.swatchDaily} aria-hidden="true" />
+								每天的紀錄
+							</span>
+							<span className={styles.legendItem}>
+								<span className={styles.swatchAverage} aria-hidden="true" />7
+								天平均
+							</span>
 						</p>
 					</div>
 				</>

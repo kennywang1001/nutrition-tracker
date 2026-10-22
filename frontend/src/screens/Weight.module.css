@@ -5,31 +5,52 @@
 	font-size: 14px;
 }
 
-/* 圖例：點與線各是什麼。色塊是裝飾，字本身就說了。 */
+/* 圖例：實線與虛線各是什麼。色塊是裝飾，字本身就說了。 */
 .legend {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
-	gap: var(--space-1) var(--space-2);
+	gap: var(--space-1) var(--space-4);
 	margin-top: var(--space-2);
 	font-size: 12px;
 	color: var(--color-text-muted);
 }
 
-.swatchPoint {
+/* 一項：色塊＋字，不在中間換行。 */
+.legendItem {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	white-space: nowrap;
+}
+
+/* 「每天的紀錄」：實線＋中間一個點（同圖上的樣子）。 */
+.swatchDaily {
+	position: relative;
 	display: inline-block;
+	width: 16px;
+	height: 2px;
+	background: var(--color-accent);
+}
+
+.swatchDaily::after {
+	content: "";
+	position: absolute;
+	top: 50%;
+	left: 50%;
 	width: 8px;
 	height: 8px;
+	margin: -4px 0 0 -4px;
 	border-radius: 50%;
 	background: var(--color-accent);
 }
 
-.swatchLine {
+/* 「7 天平均」：淡色虛線（同 index.css 的 .weight-average）。 */
+.swatchAverage {
 	display: inline-block;
 	width: 16px;
-	height: 2px;
-	margin-left: var(--space-2);
-	background: var(--color-action);
+	border-top: 2px dashed var(--color-action);
+	opacity: 0.6;
 }
 
 .empty {
