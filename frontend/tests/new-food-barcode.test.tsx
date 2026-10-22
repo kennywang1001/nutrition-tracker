@@ -847,6 +847,51 @@ describe("新增食物：拍營養標示＋補充說明（照片說明規格 §6
 		expect(labelBodies(fetchMock)).toEqual([]);
 	});
 
+	it("卡片開著時選到太大的照片：卡片、原來那張、說明都留著，說太大；「開始讀取」送原來那張、錯誤清掉", async () => {
+		const fetchMock = mockLabel(() => json(LABEL));
+		const created = vi.spyOn(URL, "createObjectURL");
+		render(wrap(<NewFood />));
+		const big = new File(["x"], "big.jpg", { type: "image/jpeg" });
+		Object.defineProperty(big, "size", { value: 10 * 1024 * 1024 + 1 });
+
+		await userEvent.upload(screen.getByLabelText("拍營養標示"), JPEG());
+		await userEvent.type(
+			within(step()).getByLabelText("補充說明（選填）"),
+			"一包 2 份",
+		);
+		await userEvent.upload(screen.getByLabelText("拍營養標示"), big);
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("照片超過");
+		expect(within(step()).getByLabelText("補充說明（選填）")).toHaveValue(
+			"一包 2 份",
+		);
+		// 用 toBe 比：兩個 File 用 toEqual 比永遠相等（沒有可列舉的欄位）。
+		expect(created.mock.calls.some(([arg]) => arg === big)).toBe(false);
+
+		await userEvent.click(
+			within(step()).getByRole("button", { name: "開始讀取" }),
+		);
+		await screen.findByText("AI 讀的數字，請對照包裝確認");
+		expect(labelBodies(fetchMock)).toEqual([
+			{ image_base64: btoa("fake-jpeg"), hint: "一包 2 份" },
+		]);
+		expect(screen.queryByText(/照片超過/)).not.toBeInTheDocument();
+	});
+
+	it("照片太大的錯誤：按「取消」就清掉", async () => {
+		mockLabel(() => json(LABEL));
+		render(wrap(<NewFood />));
+		const big = new File(["x"], "big.jpg", { type: "image/jpeg" });
+		Object.defineProperty(big, "size", { value: 10 * 1024 * 1024 + 1 });
+
+		await userEvent.upload(screen.getByLabelText("拍營養標示"), JPEG());
+		await userEvent.upload(screen.getByLabelText("拍營養標示"), big);
+		expect(await screen.findByText(/照片超過/)).toBeInTheDocument();
+		await userEvent.click(within(step()).getByRole("button", { name: "取消" }));
+
+		expect(screen.queryByText(/照片超過/)).not.toBeInTheDocument();
+	});
+
 	it("取消：卡片收起、沒打網路，焦點回到「拍營養標示」", async () => {
 		const fetchMock = mockLabel(() => json(LABEL));
 		render(wrap(<NewFood />));

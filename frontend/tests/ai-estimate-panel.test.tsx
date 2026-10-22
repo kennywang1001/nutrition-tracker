@@ -1137,6 +1137,57 @@ describe("AI 估算面板：照片＋補充說明（照片說明規格 §6）", 
 		expect(created).toHaveBeenLastCalledWith(other);
 	});
 
+	it("卡片開著時選到太大的照片：卡片、原來那張、說明都留著，說太大；「開始估算」送原來那張、錯誤清掉", async () => {
+		const fetchMock = mockApi(routes());
+		const created = vi.spyOn(URL, "createObjectURL");
+		renderPanel();
+		const big = new File(["x"], "big.jpg", { type: "image/jpeg" });
+		Object.defineProperty(big, "size", { value: MAX_PHOTO_BYTES + 1 });
+
+		await userEvent.upload(screen.getByLabelText("拍照估算"), PHOTO);
+		await userEvent.type(
+			within(step()).getByLabelText("補充說明（選填）"),
+			"飯半碗",
+		);
+		await userEvent.upload(screen.getByLabelText("拍照估算"), big);
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("照片超過");
+		expect(within(step()).getByLabelText("補充說明（選填）")).toHaveValue(
+			"飯半碗",
+		);
+		// 用 toBe 比：兩個 File 用 toEqual 比永遠相等（沒有可列舉的欄位）。
+		expect(created.mock.calls.some(([arg]) => arg === big)).toBe(false);
+
+		await userEvent.click(
+			within(step()).getByRole("button", { name: "開始估算" }),
+		);
+		await screen.findByRole("region", { name: "AI 估算結果" });
+		expect(bodyOf(fetchMock, "POST", "/api/ai/analyze")).toEqual({
+			kind: "image",
+			image_base64: btoa("fake-jpeg"),
+			hint: "飯半碗",
+		});
+		expect(screen.queryByText(/照片超過/)).not.toBeInTheDocument();
+	});
+
+	it("照片太大的錯誤：改按文字估算、或按「取消」就清掉", async () => {
+		mockApi(routes());
+		renderPanel();
+		const big = new File(["x"], "big.jpg", { type: "image/jpeg" });
+		Object.defineProperty(big, "size", { value: MAX_PHOTO_BYTES + 1 });
+
+		await userEvent.upload(screen.getByLabelText("拍照估算"), big);
+		expect(await screen.findByRole("alert")).toHaveTextContent("照片超過");
+		await estimateByText();
+		expect(screen.queryByText(/照片超過/)).not.toBeInTheDocument();
+
+		await userEvent.upload(screen.getByLabelText("拍照估算"), PHOTO);
+		await userEvent.upload(screen.getByLabelText("拍照估算"), big);
+		expect(await screen.findByText(/照片超過/)).toBeInTheDocument();
+		await userEvent.click(within(step()).getByRole("button", { name: "取消" }));
+		expect(screen.queryByText(/照片超過/)).not.toBeInTheDocument();
+	});
+
 	it("卡片開著時改按文字估算：卡片收起，照片那一次沒有送", async () => {
 		const fetchMock = mockApi(routes());
 		renderPanel();

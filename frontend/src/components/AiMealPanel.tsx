@@ -314,6 +314,8 @@ export function AiMealPanel({
 					: analyzeMealImage(input.file, input.hint),
 		onMutate: (input) => {
 			clearResult();
+			// 開始別的事了（估算、配餐）：「照片太大」不能一直掛在新的結果旁邊（審查 M2）。
+			setPickError(null);
 			// 卡片開著時改按文字估算或配餐：那張照片不送了。
 			if (input.kind !== "image") setPending(null);
 		},
@@ -353,8 +355,8 @@ export function AiMealPanel({
 		event.target.value = "";
 		if (file === undefined) return;
 		// 太大在選的當下就擋（規格 D9）：不要讓人打完說明才知道白打。preparePhoto 送出前照樣再擋一次。
+		// 卡片開著時不動它：原來那張照片與打好的說明都留著，只說這一張太大（審查 M2）。
 		if (file.size > MAX_PHOTO_BYTES) {
-			setPending(null);
 			setPickError(new PhotoTooLargeError().message);
 			return;
 		}
@@ -535,6 +537,7 @@ export function AiMealPanel({
 					}
 					onCancel={() => {
 						setPending(null);
+						setPickError(null);
 						analyze.reset();
 						focusNextRef.current = "picker";
 					}}

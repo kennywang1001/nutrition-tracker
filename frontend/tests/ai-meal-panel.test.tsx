@@ -1577,6 +1577,65 @@ describe("AI 多樣估算面板：照片＋補充說明（照片說明規格 §6
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
+	it("卡片開著時選到太大的照片：卡片、原來那張、說明都留著，說太大；「開始估算」照樣送、錯誤清掉", async () => {
+		const fetchMock = mockPanel();
+		const created = vi.spyOn(URL, "createObjectURL");
+		renderPanel("");
+		const big = new File(["x"], "big.jpg", { type: "image/jpeg" });
+		Object.defineProperty(big, "size", { value: 10 * 1024 * 1024 + 1 });
+
+		await userEvent.upload(screen.getByLabelText("拍照估算"), PHOTO);
+		await userEvent.type(
+			within(step()).getByLabelText("補充說明（選填）"),
+			"雞皮沒吃",
+		);
+		await userEvent.upload(screen.getByLabelText("拍照估算"), big);
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("照片超過");
+		expect(within(step()).getByLabelText("補充說明（選填）")).toHaveValue(
+			"雞皮沒吃",
+		);
+		// 用 toBe 比：兩個 File 用 toEqual 比永遠相等（沒有可列舉的欄位）。
+		expect(created.mock.calls.some(([arg]) => arg === big)).toBe(false);
+
+		await userEvent.click(
+			within(step()).getByRole("button", { name: "開始估算" }),
+		);
+		await screen.findByRole("region", { name: "AI 估算結果" });
+		expect(mealBodies(fetchMock)).toEqual([
+			{ kind: "image", image_base64: btoa("shrunk"), hint: "雞皮沒吃" },
+		]);
+		expect(screen.queryByText(/照片超過/)).not.toBeInTheDocument();
+	});
+
+	it("照片太大的錯誤：改按文字估算、讓 AI 建議、或按「取消」就清掉", async () => {
+		mockPanel();
+		renderPanel();
+		const big = new File(["x"], "big.jpg", { type: "image/jpeg" });
+		Object.defineProperty(big, "size", { value: 10 * 1024 * 1024 + 1 });
+
+		await userEvent.upload(screen.getByLabelText("拍照估算"), big);
+		expect(await screen.findByRole("alert")).toHaveTextContent("照片超過");
+		await estimate();
+		expect(screen.queryByText(/照片超過/)).not.toBeInTheDocument();
+
+		await userEvent.upload(screen.getByLabelText("拍照估算"), big);
+		expect(await screen.findByText(/照片超過/)).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "讓 AI 配一餐" }));
+		const form = screen.getByRole("form", { name: "讓 AI 配一餐" });
+		await userEvent.click(
+			within(form).getByRole("button", { name: "讓 AI 建議" }),
+		);
+		await screen.findByRole("region", { name: "AI 建議的一餐" });
+		expect(screen.queryByText(/照片超過/)).not.toBeInTheDocument();
+
+		await userEvent.upload(screen.getByLabelText("拍照估算"), PHOTO);
+		await userEvent.upload(screen.getByLabelText("拍照估算"), big);
+		expect(await screen.findByText(/照片超過/)).toBeInTheDocument();
+		await userEvent.click(within(step()).getByRole("button", { name: "取消" }));
+		expect(screen.queryByText(/照片超過/)).not.toBeInTheDocument();
+	});
+
 	it("送出中：「開始估算」aria-disabled、旁邊數秒；status 只念「AI 估算中…」不含秒數", async () => {
 		let release: (response: Response) => void = () => {};
 		mockPanel({

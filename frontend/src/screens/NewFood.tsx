@@ -393,8 +393,8 @@ export function NewFood({ handoff = null }: Props) {
 		event.target.value = "";
 		if (file === null) return;
 		// 太大在選的當下就擋（規格 D9）：不要讓人打完說明才知道白打。preparePhoto 送出前照樣再擋一次。
+		// 卡片開著時不動它：原來那張照片與打好的說明都留著，只說這一張太大（審查 M2）。
 		if (file.size > MAX_PHOTO_BYTES) {
-			setLabelPending(null);
 			setLabelPickError(new PhotoTooLargeError().message);
 			return;
 		}
@@ -407,6 +407,8 @@ export function NewFood({ handoff = null }: Props) {
 
 	function startLabel(pending: LabelPhoto) {
 		setLabelResult(null);
+		// 開始讀了：「照片太大」不能一直掛在讀到的結果旁邊（審查 M2）。
+		setLabelPickError(null);
 		// 填表單放在 mutate 的第二個參數：元件卸載之後不跑（handover §7）。
 		// 失敗時卡片留著（規格 D10）：再按一次「開始讀取」就是重試。
 		readLabelMutation.mutate(pending, {
@@ -471,6 +473,7 @@ export function NewFood({ handoff = null }: Props) {
 						onStart={() => startLabel(labelPending)}
 						onCancel={() => {
 							setLabelPending(null);
+							setLabelPickError(null);
 							readLabelMutation.reset();
 							focusLabelNextRef.current = "picker";
 						}}
