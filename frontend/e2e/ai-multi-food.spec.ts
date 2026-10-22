@@ -249,6 +249,11 @@ test("AI 多樣估算（估算的回應是假的，其餘是真的）：勾選�
 		mimeType: "image/jpeg",
 		buffer: await generateJpegBuffer(page),
 	});
+	// 選了照片先出「確認照片」卡片（照片說明規格 §6）；不打說明，直接開始。
+	await page
+		.getByRole("region", { name: "確認照片", exact: true })
+		.getByRole("button", { name: "開始估算", exact: true })
+		.click();
 	const card = page.getByRole("region", { name: "AI 估算結果", exact: true });
 	await expect(card).toContainText(description);
 	await expect(card).toContainText("今天還能用 19 次");
@@ -256,6 +261,8 @@ test("AI 多樣估算（估算的回應是假的，其餘是真的）：勾選�
 	expect(sent).toHaveLength(1);
 	expect(sent[0]?.kind).toBe("image");
 	expect(sent[0]?.image_base64?.length ?? 0).toBeGreaterThan(100);
+	// 沒打說明就沒有 hint 這個 key（送出去的跟以前一模一樣）。
+	expect(sent[0]).not.toHaveProperty("hint");
 	const rice = card.getByRole("checkbox", {
 		name: `${riceName} 200 g · 260 kcal`,
 		exact: true,

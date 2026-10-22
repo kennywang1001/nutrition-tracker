@@ -397,6 +397,12 @@ test("沒有預填＋拍營養標示（只假造讀標示）：真的後端說�
 		mimeType: "image/jpeg",
 		buffer: await generateJpegBuffer(page),
 	});
+	// 選了照片先出「確認照片」卡片（照片說明規格 §6）；不打說明，直接開始讀。
+	// 下面的 Object.keys 斷言正好守著「沒打說明就沒有 hint」。
+	await page
+		.getByRole("region", { name: "確認照片", exact: true })
+		.getByRole("button", { name: "開始讀取", exact: true })
+		.click();
 	await expect(
 		page.getByText("AI 讀的數字，請對照包裝確認", { exact: true }),
 	).toBeVisible();
