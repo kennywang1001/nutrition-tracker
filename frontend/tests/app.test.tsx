@@ -81,7 +81,7 @@ function mockBackend(
 				typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
 			);
 			if (custom !== undefined) return custom;
-			// 「我的」的身體資料、體重卡片與每日目標卡片的重算提示（身體資料規格 §6.2）。
+			// 身體與目標的身體資料、體重卡片與每日目標卡片的重算提示（身體資料規格 §6.2）；「我的」的入口摘要也讀體重。
 			// **要在 `/api/me` 之前**：`/api/me/body-profile` 也包含 "/api/me"。
 			if (url.includes("/api/me/body-profile"))
 				return jsonResponse(EMPTY_PROFILE);
@@ -1251,9 +1251,16 @@ describe("App 的電腦版外框（電腦版版面規格 §3）", () => {
 	it("「我的」的「身體與目標」：到 /me/health，三張卡片都在，內容寬度是 narrow，導覽的「我的」亮著（首頁改版規格 D1）", async () => {
 		setDesktop(true);
 		mockBackend();
-		// Task 5 之前「我的」還沒有入口卡片：直接打開。
-		window.history.replaceState(null, "", "/me/health");
 		render(<App />);
+		await screen.findByRole("heading", { level: 1, name: "總覽" });
+		const nav = screen.getByRole("navigation", { name: "主要導覽" });
+		await userEvent.click(within(nav).getByRole("link", { name: "我的" }));
+		await screen.findByRole("heading", { level: 1, name: "我的" });
+		await userEvent.click(
+			within(screen.getByTestId("body-hub-entry")).getByRole("link", {
+				name: "身體與目標",
+			}),
+		);
 
 		expect(
 			await screen.findByRole("heading", { level: 1, name: "身體與目標" }),
@@ -1265,7 +1272,6 @@ describe("App 的電腦版外框（電腦版版面規格 §3）", () => {
 		expect(
 			screen.getByRole("main").querySelector(".app-content-narrow"),
 		).not.toBeNull();
-		const nav = screen.getByRole("navigation", { name: "主要導覽" });
 		expect(within(nav).getByRole("link", { name: "我的" })).toHaveAttribute(
 			"aria-current",
 			"page",
