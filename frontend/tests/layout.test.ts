@@ -17,6 +17,9 @@ describe("contentWidthFor", () => {
 		["/weight", "narrow"],
 		["/me/password", "form"],
 		["/me", "narrow"],
+		// 身體與目標（首頁改版規格 D1）：一欄卡片，預設的 narrow——不是 /me/targets、/me/body 那種表單。
+		["/me/health", "narrow"],
+		["/me/health/", "narrow"],
 		["/foods", "narrow"],
 		["/foods/12", "narrow"],
 		["/trend", "narrow"],

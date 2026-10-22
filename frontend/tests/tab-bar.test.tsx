@@ -41,6 +41,19 @@ describe("TabBar", () => {
 		);
 	});
 
+	it("在 /me/health（身體與目標）時亮的是「我的」：它是「我的」的子頁（首頁改版規格 D1）", () => {
+		// 守的是「我的」那一格沒有 `end`：加了 end，/me/health 就沒有任何一格亮。
+		renderAt("/me/health");
+
+		expect(screen.getByRole("link", { name: "我的" })).toHaveAttribute(
+			"aria-current",
+			"page",
+		);
+		expect(screen.getByRole("link", { name: "總覽" })).not.toHaveAttribute(
+			"aria-current",
+		);
+	});
+
 	it("在 /diet 時亮的是飲食，不是總覽", () => {
 		// 守的是「用 NavLink，不要自己拿 useLocation() 比字串」：
 		// "/diet".startsWith("/") 為真，自己比字串的實作會讓總覽也亮起來。

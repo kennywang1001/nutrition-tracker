@@ -156,7 +156,8 @@ function BodyProfileForm({ current }: { current: BodyProfileData }) {
 		setErrors([]);
 		// 導頁放在 mutate 的 callback：元件卸載之後不會跑（handover §7）。
 		save.mutate(result.body, {
-			onSuccess: () => navigate("/me"),
+			// 導回身體與目標（首頁改版規格 D2）：剛改的值在那一頁的卡片上，回「我的」看不到。
+			onSuccess: () => navigate("/me/health"),
 			onError: (caught: unknown) => {
 				if (caught instanceof ApiError && caught.status === 422) {
 					// BIRTH_YEAR_OUT_OF_RANGE 沒有 errors 陣列，會退回後端的訊息（寫出允許的年份）。

@@ -9,7 +9,7 @@ import { ExerciseBudgetSwitch } from "./ExerciseBudgetSwitch";
 import styles from "./TargetsCard.module.css";
 import ui from "./ui.module.css";
 
-/** 「我的」的每日目標（帳號設定規格 §5.1）。讀 `stats/daily` 的 `target`——那是後端用使用者的
+/** 身體與目標的每日目標（帳號設定規格 §5.1；首頁改版從「我的」搬過來）。讀 `stats/daily` 的 `target`——那是後端用使用者的
  *  今天算的「今天生效的目標」，不另外加讀取端點（規格 決定 6）；存完 `/me/targets` 失效它，
  *  這裡跟總覽、飲食頁一起更新。 */
 export function TargetsCard() {

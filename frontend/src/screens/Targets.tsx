@@ -101,7 +101,7 @@ function initialValues(current: DailyStats["target"]): Values {
 	const values = {} as Values;
 	for (const field of TARGET_FIELDS) {
 		const value = current?.[field.key] ?? null;
-		// formatMacro 去掉尾數的 0：「1800.00」預填成「1800」，跟「我的」卡片上看到的一樣。
+		// formatMacro 去掉尾數的 0：「1800.00」預填成「1800」，跟身體與目標的卡片上看到的一樣。
 		values[field.key] = value === null ? "" : formatMacro(value);
 	}
 	return values;
@@ -121,7 +121,7 @@ function TargetsForm({ current }: { current: DailyStats["target"] }) {
 			void queryClient.invalidateQueries({ queryKey: queryKeys.dailyStats });
 			void queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatsAll });
 			// 後端同時清掉了套用建議時的體重（身體資料規格 D16）：建議裡的 `resuggest` 要重抓，
-			// 不然「我的」上「體重變了…要重算建議目標嗎？」還留著（審查 I1）。
+			// 不然身體與目標上「體重變了…要重算建議目標嗎？」還留著（審查 I1）。
 			void invalidateBody(queryClient);
 		},
 	});
@@ -143,7 +143,8 @@ function TargetsForm({ current }: { current: DailyStats["target"] }) {
 		if (problems.length > 0) return;
 		// 導頁放在 mutate 的 callback：元件卸載之後不會跑（handover §7）。
 		save.mutate(body, {
-			onSuccess: () => navigate("/me"),
+			// 導回身體與目標（首頁改版規格 D2）：剛改的值在那一頁的卡片上，回「我的」看不到。
+			onSuccess: () => navigate("/me/health"),
 			onError: (caught: unknown) => {
 				if (caught instanceof ApiError && caught.status === 409) {
 					setErrors([caught.message]);

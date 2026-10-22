@@ -42,6 +42,7 @@ import {
 import { useIsDesktop } from "./lib/use-is-desktop";
 import { AddExpense } from "./screens/AddExpense";
 import { AdminRevisions } from "./screens/AdminRevisions";
+import { BodyHub } from "./screens/BodyHub";
 import { BodyProfile } from "./screens/BodyProfile";
 import { ChangePassword } from "./screens/ChangePassword";
 import { EditExercise } from "./screens/EditExercise";
@@ -323,11 +324,14 @@ export function App() {
 							{/* 今天還能吃什麼（營養素配餐規格 §7.3），入口是飲食頁的卡片。 */}
 							<Route path="/planner" element={<Planner />} />
 							<Route path="/me" element={<Me />} />
-							{/* 每日目標（帳號設定規格 §5.2），入口是「我的」的每日目標卡片。 */}
+							{/* 身體與目標（首頁改版規格 §5）：每日目標、體重、身體資料三張卡片。入口是「我的」的入口卡片。
+									在 `/me` 底下，分頁的「我的」照樣亮著（D1）。 */}
+							<Route path="/me/health" element={<BodyHub />} />
+							{/* 每日目標（帳號設定規格 §5.2），入口是身體與目標的每日目標卡片，存好導回身體與目標（首頁改版規格 D2）。 */}
 							<Route path="/me/targets" element={<Targets />} />
-							{/* 身體資料（身體資料規格 §6.3），入口是「我的」的身體資料卡片與建議目標的「填寫身體資料」。 */}
+							{/* 身體資料（身體資料規格 §6.3），入口是身體與目標的身體資料卡片與建議目標的「填寫身體資料」，存好導回身體與目標（D2）。 */}
 							<Route path="/me/body" element={<BodyProfile />} />
-							{/* 體重的圖與清單（身體資料規格 §6.4），入口是「我的」體重卡片的「看全部」；
+							{/* 體重的圖與清單（身體資料規格 §6.4），入口是身體與目標體重卡片的「看全部」；
 									總覽的快速記錄、體重小卡片與「＋」的記體重帶著「焦點放在體重欄位」來（首頁改版規格 D11）。 */}
 							<Route path="/weight" element={<WeightRoute />} />
 							{/* 修改密碼（帳號設定規格 §5.3），入口是「我的」帳號卡片的「修改密碼」。 */}

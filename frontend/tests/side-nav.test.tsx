@@ -47,6 +47,17 @@ describe("SideNav", () => {
 		}
 	});
 
+	it("在 /me/health（身體與目標）時亮的是「我的」（首頁改版規格 D1）", () => {
+		renderAt("/me/health");
+		expect(screen.getByRole("link", { name: "我的" })).toHaveAttribute(
+			"aria-current",
+			"page",
+		);
+		expect(screen.getByRole("link", { name: "總覽" })).not.toHaveAttribute(
+			"aria-current",
+		);
+	});
+
 	it("在 /diet 時亮的是飲食，不是總覽", () => {
 		renderAt("/diet");
 		expect(screen.getByRole("link", { name: "飲食" })).toHaveAttribute(

@@ -1248,6 +1248,30 @@ describe("App 的電腦版外框（電腦版版面規格 §3）", () => {
 		).not.toBeNull();
 	});
 
+	it("「我的」的「身體與目標」：到 /me/health，三張卡片都在，內容寬度是 narrow，導覽的「我的」亮著（首頁改版規格 D1）", async () => {
+		setDesktop(true);
+		mockBackend();
+		// Task 5 之前「我的」還沒有入口卡片：直接打開。
+		window.history.replaceState(null, "", "/me/health");
+		render(<App />);
+
+		expect(
+			await screen.findByRole("heading", { level: 1, name: "身體與目標" }),
+		).toBeInTheDocument();
+		expect(window.location.pathname).toBe("/me/health");
+		expect(screen.getByTestId("targets-card")).toBeInTheDocument();
+		expect(screen.getByTestId("weight-card")).toBeInTheDocument();
+		expect(screen.getByTestId("body-profile-card")).toBeInTheDocument();
+		expect(
+			screen.getByRole("main").querySelector(".app-content-narrow"),
+		).not.toBeNull();
+		const nav = screen.getByRole("navigation", { name: "主要導覽" });
+		expect(within(nav).getByRole("link", { name: "我的" })).toHaveAttribute(
+			"aria-current",
+			"page",
+		);
+	});
+
 	it("/meals/7 是餐點頁（唯讀的一餐與留言），窄的內容寬度；/meals/new 仍然是記一餐", async () => {
 		// 路由的接線只有 App 層看得到：兩種卡片上的「留言 N」連到 /meals/:id
 		// （社群規格 §6.3）。`/meals/new` 與 `/meals/:id` 長得一樣，靠 react-router
