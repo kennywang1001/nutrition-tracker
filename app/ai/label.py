@@ -18,8 +18,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from app.ai.estimator import _round_to_cents
 from app.errors import BadGatewayError
 from app.models.food import BaseUnit
-from app.nutrition_units import is_physically_plausible, kj_to_kcal, per_100_from_serving
-from app.schemas.food import NutritionInput
+from app.nutrition_units import kj_to_kcal, per_100_from_serving, plausible_per_100
 from app.schemas.validators import single_line
 
 # 讀一張表的 JSON 只有十幾個欄位；給 8192 是因為會思考的模型把思考算進上限（同多樣估算，審查 I1）。
@@ -221,18 +220,9 @@ def parse_raw_label(response_text: str) -> RawLabel:
         )
 
     base_unit = BaseUnit(label.base_unit)
-    try:
-        # 範圍只有一份定義：跟新增食物同一個 NutritionInput（規格 D27）。
-        checked = NutritionInput(
-            base_unit=base_unit,
-            kcal=values[0],
-            protein_g=values[1],
-            fat_g=values[2],
-            carb_g=values[3],
-        )
-    except ValidationError as exc:
-        raise BadGatewayError(*_UNREADABLE) from exc
-    if not is_physically_plausible(checked.kcal, checked.protein_g, checked.fat_g, checked.carb_g):
+    # 範圍與物理上限只有一份定義（規格 D27、審查 M3）；手機辨識的文字也用它（標示 OCR 規格 D8）。
+    checked = plausible_per_100(base_unit, *values)
+    if checked is None:
         raise BadGatewayError(*_UNREADABLE)
 
     return RawLabel(

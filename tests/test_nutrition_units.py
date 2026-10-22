@@ -4,7 +4,14 @@ from decimal import Decimal
 
 import pytest
 
-from app.nutrition_units import kj_to_kcal, per_100_from_serving, round_cents, to_decimal
+from app.models.food import BaseUnit
+from app.nutrition_units import (
+    kj_to_kcal,
+    per_100_from_serving,
+    plausible_per_100,
+    round_cents,
+    to_decimal,
+)
 
 
 @pytest.mark.parametrize(
@@ -46,3 +53,23 @@ def test_to_decimal_accepts_finite_numbers(value, expected):
 @pytest.mark.parametrize("value", [True, None, "abc", "", "1,5", "NaN", "Infinity", [], {}])
 def test_to_decimal_rejects_everything_else(value):
     assert to_decimal(value) is None
+
+
+@pytest.mark.parametrize(
+    ("values", "ok"),
+    [
+        (("514.00", "6.00", "28.00", "60.90"), True),
+        (("945.00", "0", "100", "5"), True),  # 兩個上限剛好
+        (("945.01", "0", "100", "0"), False),  # 熱量超過純脂肪
+        (("100", "40", "40", "25.01"), False),  # 營養素加起來超過 105
+        (("5142.86", "6", "28", "60"), False),  # 每一份量讀成 3.5（NutritionInput 收、物理上限擋）
+        (("10000.01", "0", "0", "0"), False),  # NutritionInput 的範圍
+        (("1.234", "0", "0", "0"), False),  # 超過兩位小數（NutritionInput）
+    ],
+)
+def test_plausible_per_100(values, ok):
+    checked = plausible_per_100(BaseUnit.G, *(Decimal(value) for value in values))
+    assert (checked is not None) is ok
+    if ok:
+        assert checked.kcal == Decimal(values[0])
+        assert checked.base_unit is BaseUnit.G
