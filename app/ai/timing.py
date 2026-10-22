@@ -6,6 +6,7 @@
 那是別人吃了什麼，而且模型的輸出是不可信的文字（可以帶換行偽造 log 行）。
 """
 
+import asyncio
 import logging
 from collections.abc import Mapping
 from typing import Literal
@@ -13,7 +14,7 @@ from typing import Literal
 from app.ai.estimator import EstimatorMisconfiguredError, EstimatorUpstreamError
 
 Source = Literal["text", "image"]
-Outcome = Literal["ok", "misconfigured", "upstream", "error"]
+Outcome = Literal["ok", "misconfigured", "upstream", "cancelled", "error"]
 
 
 def outcome_of(exc: BaseException) -> Outcome:
@@ -22,6 +23,9 @@ def outcome_of(exc: BaseException) -> Outcome:
         return "misconfigured"
     if isinstance(exc, EstimatorUpstreamError):
         return "upstream"
+    if isinstance(exc, asyncio.CancelledError):
+        # 等供應商的那個 task 被取消（審查 M3）：不是錯誤，但花掉的秒數照樣要看得到。
+        return "cancelled"
     return "error"
 
 

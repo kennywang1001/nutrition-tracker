@@ -15,6 +15,7 @@
 照樣全綠，綠的理由卻完全不是這裡的程式碼（handover §6 規矩 8：紅燈／綠燈要問為什麼）。
 """
 
+import asyncio
 import itertools
 import json
 import logging
@@ -1600,6 +1601,45 @@ async def test_an_unclassified_exception_logs_outcome_error(caplog, monkeypatch)
     (record,) = _timing_records(caplog)
     assert "outcome=error" in record.getMessage()
     assert "something else" not in record.getMessage()
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+async def test_a_cancelled_call_logs_outcome_cancelled_once_and_stays_cancelled(
+    provider, caplog, monkeypatch
+):
+    """使用者關掉頁面、伺服器關機：等供應商的那個 task 被取消。`CancelledError` 是
+    `BaseException`，`except Exception` 接不到——計時那一行要照樣留一行（`outcome=cancelled`），
+    取消要照樣往外拋，不能吞掉（審查 M3）。"""
+    caplog.set_level(logging.INFO)
+    upstream, estimator = _estimator_for(provider, _VALID_ESTIMATE_JSON)
+    _fake_clock(monkeypatch, provider)
+    started = asyncio.Event()
+
+    async def hang(**kwargs: object) -> None:
+        started.set()
+        await asyncio.Event().wait()  # 永遠等不到：只能被取消
+
+    if provider == "anthropic":
+        monkeypatch.setattr(estimator._client.messages, "create", hang)
+    else:
+        monkeypatch.setattr(estimator._client.aio.models, "generate_content", hang)
+
+    task = asyncio.create_task(estimator.estimate_image(_PNG, "image/png", hint="飯半碗"))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert task.cancelled()
+    (record,) = _timing_records(caplog)
+    message = record.getMessage()
+    assert record.levelno == logging.INFO
+    assert "kind=single" in message
+    assert "input=image" in message
+    assert "outcome=cancelled" in message
+    assert "elapsed=2.50s" in message
+    assert "tokens=" not in message
+    assert "飯半碗" not in message
 
 
 @pytest.mark.parametrize("provider", ["anthropic", "gemini"])

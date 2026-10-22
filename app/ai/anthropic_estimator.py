@@ -5,6 +5,7 @@
 `tests/test_ai_provider_errors.py` 把 client 換成接假傳輸層的版本來測。
 """
 
+import asyncio
 import base64
 import logging
 from dataclasses import dataclass
@@ -283,8 +284,10 @@ class AnthropicEstimator:
         started = perf_counter()
         try:
             response = await self._create(message, call)
-        except Exception as exc:
+        except (Exception, asyncio.CancelledError) as exc:
             # 失敗也要一行：「30 秒後逾時」跟「馬上被拒」是兩件事。沒有用量可記。
+            # 被取消（使用者關掉頁面、伺服器關機）也算：`CancelledError` 是 `BaseException`，
+            # 只接 `Exception` 會整行不見（審查 M3）。下面的 `raise` 照樣往外拋，不吞掉。
             log_provider_call(
                 logger,
                 kind=call.kind,
