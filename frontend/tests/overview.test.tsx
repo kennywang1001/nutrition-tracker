@@ -13,6 +13,7 @@ import { queryKeys } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { ringDasharray } from "../src/components/CalorieRing";
+import { quickPhotoFrom, WEIGHT_FORM_STATE } from "../src/lib/quick-actions";
 import { Overview } from "../src/screens/Overview";
 import { NO_WEIGHTS } from "./helpers/body-routes";
 import { NO_EXERCISE, RUN } from "./helpers/exercise-routes";
@@ -649,7 +650,7 @@ describe("總覽：圓環卡片與小卡片（首頁改版規格 §3）", () => 
 		).not.toBeInTheDocument();
 		await userEvent.click(link);
 		expect(await screen.findByTestId("location-state")).toHaveTextContent(
-			'{"weightForm":true}',
+			JSON.stringify(WEIGHT_FORM_STATE),
 		);
 	});
 
@@ -702,5 +703,95 @@ describe("總覽：圓環卡片與小卡片（首頁改版規格 §3）", () => 
 		expect(
 			within(kcal).queryByTestId("calorie-ring-arc"),
 		).not.toBeInTheDocument();
+	});
+});
+
+describe("總覽：快速記錄（首頁改版規格 §4）", () => {
+	/** 總覽＋快速記錄的三個去處：去處只印出帶來的 router state。 */
+	function renderWithTargets() {
+		render(
+			<QueryClientProvider client={newClient()}>
+				<MemoryRouter>
+					<Routes>
+						<RouterRoute path="/" element={<Overview />} />
+						<RouterRoute path="/meals/new" element={<LocationState />} />
+						<RouterRoute path="/weight" element={<LocationState />} />
+					</Routes>
+				</MemoryRouter>
+			</QueryClientProvider>,
+		);
+	}
+
+	it("四顆：拍照記是相機的檔案輸入；掃條碼、記運動、記體重是連結", async () => {
+		mockOverview();
+
+		render(wrap(<Overview />));
+
+		const list = screen.getByRole("list", { name: "快速記錄" });
+		expect(within(list).getAllByRole("listitem")).toHaveLength(4);
+		expect(within(list).getByRole("link", { name: "掃條碼" })).toHaveAttribute(
+			"href",
+			"/meals/new",
+		);
+		expect(within(list).getByRole("link", { name: "記運動" })).toHaveAttribute(
+			"href",
+			"/exercises/new",
+		);
+		expect(within(list).getByRole("link", { name: "記體重" })).toHaveAttribute(
+			"href",
+			"/weight",
+		);
+		const photo = within(list).getByLabelText("拍照記");
+		expect(photo).toHaveAttribute("type", "file");
+		expect(photo).toHaveAttribute("accept", "image/*");
+		expect(photo).toHaveAttribute("capture", "environment");
+		// 等時間線回來（不然 act 警告）。
+		await screen.findAllByTestId("timeline-row");
+	});
+
+	it("順序：圓環卡片 → 快速記錄 → 本月支出", async () => {
+		mockOverview();
+
+		render(wrap(<Overview />));
+
+		await screen.findAllByTestId("timeline-row");
+		const kcal = screen.getByTestId("today-kcal");
+		const actions = screen.getByRole("list", { name: "快速記錄" });
+		const spend = screen.getByTestId("month-spend");
+		expect(precedes(kcal, actions)).toBe(true);
+		expect(precedes(actions, spend)).toBe(true);
+	});
+
+	it("掃條碼帶 quickScan", async () => {
+		mockOverview();
+		renderWithTargets();
+
+		await userEvent.click(screen.getByRole("link", { name: "掃條碼" }));
+		expect(await screen.findByTestId("location-state")).toHaveTextContent(
+			'{"quickScan":true}',
+		);
+	});
+
+	it("記體重帶 weightForm", async () => {
+		mockOverview();
+		renderWithTargets();
+
+		await userEvent.click(screen.getByRole("link", { name: "記體重" }));
+		expect(await screen.findByTestId("location-state")).toHaveTextContent(
+			'{"weightForm":true}',
+		);
+	});
+
+	it("拍照記：選了照片就到記一餐，state 只有號碼、換得回同一個 File", async () => {
+		mockOverview();
+		renderWithTargets();
+		const file = new File(["x"], "lunch.jpg", { type: "image/jpeg" });
+
+		await userEvent.upload(screen.getByLabelText("拍照記"), file);
+
+		const printed = (await screen.findByTestId("location-state")).textContent;
+		const state = JSON.parse(printed ?? "null");
+		expect(Object.keys(state)).toEqual(["quickPhoto"]);
+		expect(quickPhotoFrom(state)).toBe(file);
 	});
 });

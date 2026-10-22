@@ -24,13 +24,17 @@ function newClient() {
 	});
 }
 
-function renderScreen(routes: ApiRoute[], client = newClient()) {
+function renderScreen(
+	routes: ApiRoute[],
+	client = newClient(),
+	element = <Weight />,
+) {
 	const spy = mockApi(routes);
 	render(
 		<QueryClientProvider client={client}>
 			<MemoryRouter initialEntries={["/weight"]}>
 				<Routes>
-					<Route path="/weight" element={<Weight />} />
+					<Route path="/weight" element={element} />
 				</Routes>
 			</MemoryRouter>
 		</QueryClientProvider>,
@@ -344,5 +348,28 @@ describe("/weight", () => {
 		]);
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("無法載入體重");
+	});
+});
+
+describe("/weight：從記體重來（首頁改版規格 D11）", () => {
+	it("focusForm：資料回來、表單掛上去，焦點在「體重（公斤）」", async () => {
+		renderScreen(
+			bodyRoutes({ weights: TWO }),
+			newClient(),
+			<Weight focusForm />,
+		);
+
+		const input = await screen.findByLabelText("體重（公斤）");
+		await waitFor(() => expect(input).toHaveFocus());
+	});
+
+	it("沒有 focusForm：焦點不在體重欄位", async () => {
+		renderScreen(bodyRoutes({ weights: TWO }));
+
+		const input = await screen.findByLabelText("體重（公斤）");
+		// 等圖畫完（表單的 effect 早就跑過了）再看焦點。
+		await screen.findByRole("group", { name: "體重" });
+		await settle();
+		expect(input).not.toHaveFocus();
 	});
 });

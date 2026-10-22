@@ -33,6 +33,12 @@ import {
 	pickedFoodFrom,
 } from "./lib/new-food-handoff";
 import { plannerHandoffFrom } from "./lib/planner";
+import {
+	quickPhotoFrom,
+	quickScanFrom,
+	releaseQuickPhoto,
+	weightFormFrom,
+} from "./lib/quick-actions";
 import { useIsDesktop } from "./lib/use-is-desktop";
 import { AddExpense } from "./screens/AddExpense";
 import { AdminRevisions } from "./screens/AdminRevisions";
@@ -79,8 +85,13 @@ function LogMealRoute() {
 	const [handoff] = useState(() => plannerHandoffFrom(location.state));
 	// 掃條碼（規格 D21）：新增食物存好交回來的那個食物，同一套「讀一次、清掉 history 的 state」。
 	const [picked] = useState(() => pickedFoodFrom(location.state));
+	// 總覽的快速記錄（首頁改版規格 D8、D9）：同一套「讀一次、清掉 history 的 state」。照片在 `lib/quick-actions`
+	// 的暫存裡，清 state 的同時放掉它（state 只有號碼；照片已經在 AiMealPanel 自己的 state 裡）。
+	const [photo] = useState(() => quickPhotoFrom(location.state));
+	const [scan] = useState(() => quickScanFrom(location.state));
 	useEffect(() => {
 		if (location.state == null) return;
+		releaseQuickPhoto();
 		navigate(`${location.pathname}${location.search}`, {
 			replace: true,
 			state: null,
@@ -91,6 +102,8 @@ function LogMealRoute() {
 			initialItems={handoff?.kind === "items" ? handoff.items : undefined}
 			startSuggesting={handoff?.kind === "suggest"}
 			initialFood={picked ?? undefined}
+			initialPhoto={photo ?? undefined}
+			startScanning={scan}
 			// `replace`（規格 D20）：記一餐這一筆 history 換成新增食物，存好再換回來——history 裡
 			// 不會多出兩個一樣的記一餐。
 			onCreateFromBarcode={(code, prefill) =>
@@ -126,6 +139,22 @@ function NewFoodRoute() {
 		});
 	}, [location.state, location.pathname, location.search, navigate]);
 	return <NewFood handoff={handoff} />;
+}
+
+/** `/weight`：快速記錄、沒有體重時的小卡片與「＋」的「記體重」帶 `{weightForm: true}`（首頁改版規格 D11）——
+ *  讀一次、`replace` 清掉，上一頁或重新整理不會再搶焦點。 */
+function WeightRoute() {
+	const navigate = useNavigate();
+	const location = useLocation();
+	const [focusForm] = useState(() => weightFormFrom(location.state));
+	useEffect(() => {
+		if (location.state == null) return;
+		navigate(`${location.pathname}${location.search}`, {
+			replace: true,
+			state: null,
+		});
+	}, [location.state, location.pathname, location.search, navigate]);
+	return <Weight focusForm={focusForm} />;
 }
 
 /** `/expenses/new`：記完或關閉都回總覽。 */
@@ -298,8 +327,9 @@ export function App() {
 							<Route path="/me/targets" element={<Targets />} />
 							{/* 身體資料（身體資料規格 §6.3），入口是「我的」的身體資料卡片與建議目標的「填寫身體資料」。 */}
 							<Route path="/me/body" element={<BodyProfile />} />
-							{/* 體重的圖與清單（身體資料規格 §6.4），入口是「我的」體重卡片的「看全部」。 */}
-							<Route path="/weight" element={<Weight />} />
+							{/* 體重的圖與清單（身體資料規格 §6.4），入口是「我的」體重卡片的「看全部」；
+									總覽的快速記錄、體重小卡片與「＋」的記體重帶著「焦點放在體重欄位」來（首頁改版規格 D11）。 */}
+							<Route path="/weight" element={<WeightRoute />} />
 							{/* 修改密碼（帳號設定規格 §5.3），入口是「我的」帳號卡片的「修改密碼」。 */}
 							<Route path="/me/password" element={<ChangePassword />} />
 							{/* 通知（社群規格 §6.4），入口是「我的」最上面的通知卡片。 */}

@@ -64,6 +64,8 @@ type Props = {
 	/** 掃條碼沒命中時的「用這個條碼建立食物」（掃條碼規格 §11）：呼叫端決定帶到哪裡、怎麼回來。
 	 *  不給就只說找不到。 */
 	onCreateFromBarcode?: (code: string, prefill: BarcodePrefill | null) => void;
+	/** 一掛載就打開掃條碼的掃描層（總覽的「掃條碼」，首頁改版規格 D9）：交給 `BarcodeScanEntry`。只在掛載時讀。 */
+	startScanning?: boolean;
 };
 
 /** 搜尋框＋常吃／最近吃清單（記一餐與編輯餐點的「加一項」共用）。
@@ -77,6 +79,7 @@ export function FoodPicker({
 	onSelect,
 	renderBelowSearch,
 	onCreateFromBarcode,
+	startScanning,
 }: Props) {
 	const [searchInput, setSearchInput] = useState("");
 
@@ -116,6 +119,7 @@ export function FoodPicker({
 				onFood={onSelect}
 				onCreate={onCreateFromBarcode}
 				requireNutrition
+				startScanning={startScanning}
 			/>
 			{renderBelowSearch?.(searchInput.trim())}
 

@@ -3,6 +3,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PhotoTooLargeError } from "../src/api/photos";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { LogMeal } from "../src/screens/LogMeal";
@@ -724,5 +725,104 @@ describe("記一餐：讓 AI 配一餐（營養素配餐規格 §7.4）", () => 
 		expect(
 			await screen.findByRole("button", { name: "牛肉麵" }),
 		).toBeInTheDocument();
+	});
+});
+
+describe("記一餐：總覽的拍照記帶來的照片（首頁改版規格 D8）", () => {
+	function analyzeBodies(fetchMock: FetchMock): Record<string, unknown>[] {
+		return fetchMock.mock.calls
+			.filter(
+				([input, init]) =>
+					(init?.method ?? "GET").toUpperCase() === "POST" &&
+					String(input).includes("/api/ai/analyze-meal"),
+			)
+			.map(([, init]) => JSON.parse(String(init?.body)));
+	}
+
+	it("initialPhoto：一打開就是「確認照片」卡片、焦點在卡片；按「開始估算」才送（不帶 hint）", async () => {
+		const fetchMock = mockLogMeal();
+		render(
+			wrap(
+				<LogMeal
+					onSaved={vi.fn()}
+					initialPhoto={new File(["x"], "lunch.jpg", { type: "image/jpeg" })}
+				/>,
+			),
+		);
+
+		const region = await screen.findByRole("region", { name: "確認照片" });
+		await waitFor(() => expect(region).toHaveFocus());
+		expect(within(region).getByRole("img")).toHaveAttribute(
+			"alt",
+			"要送給 AI 的照片",
+		);
+		// 不自動送出：看照片、選填說明，按了才算一次額度。
+		expect(analyzeBodies(fetchMock)).toEqual([]);
+
+		await userEvent.click(
+			within(region).getByRole("button", { name: "開始估算" }),
+		);
+
+		expect(
+			await screen.findByRole("region", { name: "AI 估算結果" }),
+		).toBeInTheDocument();
+		expect(analyzeBodies(fetchMock)).toEqual([
+			{ kind: "image", image_base64: btoa("x") },
+		]);
+	});
+
+	it("initialPhoto 太大：說太大，不出卡片、不打 AI", async () => {
+		const fetchMock = mockLogMeal();
+		const big = new File(["x"], "big.jpg", { type: "image/jpeg" });
+		Object.defineProperty(big, "size", { value: 10 * 1024 * 1024 + 1 });
+		render(wrap(<LogMeal onSaved={vi.fn()} initialPhoto={big} />));
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			new PhotoTooLargeError().message,
+		);
+		expect(
+			screen.queryByRole("region", { name: "確認照片" }),
+		).not.toBeInTheDocument();
+		// 等常吃的清單回來（不然 act 警告），再看沒有打 AI。
+		await screen.findByRole("button", { name: "牛肉麵" });
+		expect(
+			fetchMock.mock.calls.some(([input]) =>
+				String(input).includes("/api/ai/"),
+			),
+		).toBe(false);
+	});
+
+	it("initialPhoto 的卡片按「取消」：卡片收起，焦點回到「拍照估算」", async () => {
+		mockLogMeal();
+		render(
+			wrap(
+				<LogMeal
+					onSaved={vi.fn()}
+					initialPhoto={new File(["x"], "lunch.jpg", { type: "image/jpeg" })}
+				/>,
+			),
+		);
+
+		const region = await screen.findByRole("region", { name: "確認照片" });
+		await userEvent.click(within(region).getByRole("button", { name: "取消" }));
+
+		expect(
+			screen.queryByRole("region", { name: "確認照片" }),
+		).not.toBeInTheDocument();
+		await waitFor(() =>
+			expect(screen.getByLabelText("拍照估算")).toHaveFocus(),
+		);
+	});
+
+	it("沒有 initialPhoto：沒有「確認照片」卡片", async () => {
+		mockLogMeal();
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+
+		expect(
+			await screen.findByRole("button", { name: "牛肉麵" }),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByRole("region", { name: "確認照片" }),
+		).not.toBeInTheDocument();
 	});
 });

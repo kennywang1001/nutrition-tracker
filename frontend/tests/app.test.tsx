@@ -12,6 +12,12 @@ import {
 	setTokens,
 } from "../src/auth/store";
 import { itemsState, SUGGEST_STATE } from "../src/lib/planner";
+import {
+	quickPhotoFrom,
+	releaseQuickPhoto,
+	SCAN_STATE,
+	stashQuickPhoto,
+} from "../src/lib/quick-actions";
 import { PHOTO_UPLOAD_FAILED_NOTICE } from "../src/screens/LogMeal";
 import { setDesktop } from "../src/test/media";
 import { EMPTY_PROFILE, NO_WEIGHTS, NOT_READY } from "./helpers/body-routes";
@@ -241,7 +247,13 @@ describe("App", () => {
 			await screen.findByRole("heading", { name: "總覽" }),
 		).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
-		await userEvent.click(screen.getByRole("link", { name: "記運動" }));
+		// 限定在對話框裡（首頁改版規格 D18）：總覽的快速記錄也有一個「記運動」，getByRole 不看 aria-modal。
+		await userEvent.click(
+			within(screen.getByRole("dialog", { name: "新增紀錄" })).getByRole(
+				"link",
+				{ name: "記運動" },
+			),
+		);
 
 		expect(
 			await screen.findByRole("heading", { level: 1, name: "記運動" }),
@@ -499,6 +511,75 @@ describe("App", () => {
 		expect(window.history.length).toBe(lengthBefore);
 		// 新增食物讀一次交接、清掉 history 的 state（重新整理不會再帶一次）。
 		await waitFor(() => expect(window.history.state?.usr ?? null).toBeNull());
+	});
+
+	it("總覽的拍照記：到記一餐、確認照片的卡片已經打開，history 的 state 清掉、暫存的照片放掉（首頁改版規格 D8）", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockBackend(foodLists);
+		render(<App />);
+		expect(
+			await screen.findByRole("heading", { level: 1, name: "總覽" }),
+		).toBeInTheDocument();
+		// 號碼是遞增的：先量下一個，上傳的那一張是它的下一號。
+		const probe = stashQuickPhoto(
+			new File(["p"], "p.jpg", { type: "image/jpeg" }),
+		);
+		releaseQuickPhoto();
+		const file = new File(["x"], "lunch.jpg", { type: "image/jpeg" });
+
+		await userEvent.upload(screen.getByLabelText("拍照記"), file);
+
+		expect(
+			await screen.findByRole("heading", { level: 1, name: "記一餐" }),
+		).toBeInTheDocument();
+		const region = await screen.findByRole("region", { name: "確認照片" });
+		await waitFor(() => expect(region).toHaveFocus());
+		await waitFor(() => expect(window.history.state?.usr ?? null).toBeNull());
+		expect(window.location.pathname).toBe("/meals/new");
+		// 清 state 的同時放掉暫存：上一頁回來不會再帶這張照片。畫面上的卡片照樣在（它在 AiMealPanel 的 state 裡）。
+		expect(quickPhotoFrom({ quickPhoto: probe.quickPhoto + 1 })).toBeNull();
+		expect(
+			screen.getByRole("region", { name: "確認照片" }),
+		).toBeInTheDocument();
+	});
+
+	it("從總覽的掃條碼：記一餐一打開就是掃描層，history 的 state 清掉（首頁改版規格 D9）", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		HTMLMediaElement.prototype.play = vi.fn(async () => undefined);
+		mockBackend(foodLists);
+		openWithState("/meals/new", SCAN_STATE);
+
+		render(<App />);
+
+		const dialog = await screen.findByRole("dialog", { name: "掃條碼" });
+		await waitFor(() => expect(window.history.state?.usr ?? null).toBeNull());
+		// 清掉之後掃描層照樣開著（讀一次、放進自己的 state）。
+		expect(dialog).toBeInTheDocument();
+		expect(screen.getByRole("dialog", { name: "掃條碼" })).toBe(dialog);
+	});
+
+	it("從總覽的記體重：到 /weight、焦點在體重欄位，history 的 state 清掉（首頁改版規格 D11）", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockBackend();
+		render(<App />);
+		expect(
+			await screen.findByRole("heading", { level: 1, name: "總覽" }),
+		).toBeInTheDocument();
+
+		await userEvent.click(
+			within(screen.getByRole("list", { name: "快速記錄" })).getByRole("link", {
+				name: "記體重",
+			}),
+		);
+
+		expect(
+			await screen.findByRole("heading", { level: 1, name: "體重" }),
+		).toBeInTheDocument();
+		await waitFor(() =>
+			expect(screen.getByLabelText("體重（公斤）")).toHaveFocus(),
+		);
+		await waitFor(() => expect(window.history.state?.usr ?? null).toBeNull());
+		expect(window.location.pathname).toBe("/weight");
 	});
 });
 

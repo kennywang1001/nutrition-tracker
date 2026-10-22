@@ -157,3 +157,28 @@ describe("記一餐與掃條碼（掃條碼規格 D19–D21）", () => {
 		expect(onCreateFromBarcode).toHaveBeenCalledWith(CODE, PREFILL);
 	});
 });
+
+describe("記一餐：總覽的掃條碼（首頁改版規格 D9）", () => {
+	it("startScanning：一打開就是掃描層、焦點在「取消」；取消之後焦點在記一餐的「掃條碼」", async () => {
+		routes();
+		render(wrap(<LogMeal onSaved={vi.fn()} startScanning />));
+
+		const dialog = await screen.findByRole("dialog", { name: "掃條碼" });
+		const cancel = within(dialog).getByRole("button", { name: "取消" });
+		await waitFor(() => expect(cancel).toHaveFocus());
+		await userEvent.click(cancel);
+
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: "掃條碼" })).toHaveFocus(),
+		);
+	});
+
+	it("沒有 startScanning：沒有掃描層", async () => {
+		routes();
+		render(wrap(<LogMeal onSaved={vi.fn()} />));
+
+		expect(await screen.findByLabelText("搜尋食物")).toBeInTheDocument();
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+});

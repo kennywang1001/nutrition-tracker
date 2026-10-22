@@ -61,6 +61,12 @@ type Props = {
 	/** 掃條碼沒命中的「用這個條碼建立食物」。導頁由 `LogMealRoute` 做（`replace`、帶 `returnTo`，
 	 *  掃條碼規格 D20）：這個元件不碰 router——它的測試不掛 Router。 */
 	onCreateFromBarcode?: (code: string, prefill: BarcodePrefill | null) => void;
+	/** 總覽「拍照記」選好的照片（首頁改版規格 D8）：交給 AI 面板，一打開就是「確認照片」卡片。只在掛載時讀。
+	 *  **不直接當這一餐的照片**：估算加入之後照既有的規則（`onItemsReady` 的 `source.image`，已經有就不覆蓋）
+	 *  放進來——跟在面板裡選的一樣。 */
+	initialPhoto?: File;
+	/** 總覽「掃條碼」來的：一打開就是掃描層（D9）。只在掛載時讀。 */
+	startScanning?: boolean;
 };
 
 /** 餐存好、照片沒傳上去時給總覽顯示的話。補傳走飲食頁 `MealList` 既有的上傳。 */
@@ -73,6 +79,8 @@ export function LogMeal({
 	startSuggesting,
 	initialFood,
 	onCreateFromBarcode,
+	initialPhoto,
+	startScanning,
 }: Props) {
 	const queryClient = useQueryClient();
 	const [selectedFood, setSelectedFood] = useState<Food | null>(
@@ -352,10 +360,12 @@ export function LogMeal({
 			<FoodPicker
 				onSelect={setSelectedFood}
 				onCreateFromBarcode={onCreateFromBarcode}
+				startScanning={startScanning}
 				renderBelowSearch={(query) => (
 					<AiMealPanel
 						text={query}
 						startSuggesting={startSuggesting}
+						initialPhoto={initialPhoto}
 						onFoodPicked={(food) => {
 							// 整段文字就是食物庫裡的食物：跟從清單選一個一樣（份量歸位，
 							// 不然上一個食物打的 200 會留下來）。

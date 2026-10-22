@@ -19,6 +19,9 @@ type Props = {
 	/** 沒命中時的「用這個條碼建立食物」；不給就只說找不到。`code` 是後端回的標準形式。 */
 	onCreate?: (code: string, prefill: BarcodePrefill | null) => void;
 	requireNutrition?: boolean;
+	/** 一掛載就打開掃描層（總覽的「掃條碼」，首頁改版規格 D9）。只在掛載時讀。掃描層自己把焦點放在「取消」；
+	 *  「取消」之後焦點回到這裡的「掃條碼」，再按一次就是使用者手勢。 */
+	startScanning?: boolean;
 };
 
 type Outcome =
@@ -57,8 +60,9 @@ export function BarcodeScanEntry({
 	onFood,
 	onCreate,
 	requireNutrition,
+	startScanning,
 }: Props) {
-	const [scanning, setScanning] = useState(false);
+	const [scanning, setScanning] = useState(startScanning === true);
 	const [outcome, setOutcome] = useState<Outcome>({ kind: "idle" });
 	const triggerRef = useRef<HTMLButtonElement>(null);
 	const lookup = useMutation({ mutationFn: lookupBarcode });

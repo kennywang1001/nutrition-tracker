@@ -41,11 +41,20 @@ const SPANS = [
 	{ value: "all", label: "全部" },
 ] as const satisfies readonly { value: WeightSpan; label: string }[];
 
+type Props = {
+	/** 快速記錄或「＋」的「記體重」來的（首頁改版規格 D11）：焦點放在體重欄位。 */
+	focusForm?: boolean;
+};
+
 /** `/weight`（身體資料規格 §6.4）：期間切換、圖表、記一筆、由新到舊的清單（修改、刪除）。
  *
  *  **一個 query（最近 800 天）**，30／90／全部在前端篩（D22）：一人一天最多一筆，切換不用等網路。
- *  圖的右端與表單的預設日期都是回應裡的 `today`——前端不算今天。 */
-export function Weight() {
+ *  圖的右端與表單的預設日期都是回應裡的 `today`——前端不算今天。
+ *
+ *  `focusForm`：從總覽的快速記錄或「＋」的「記體重」來（首頁改版規格 D11）——資料回來、表單掛上去時焦點放在
+ *  體重欄位（`WeightForm` 的 `focusOnMount`；表單在資料回來之前不存在，掛載時就是對的時機）。讀 router state
+ *  的是 `App.tsx` 的 `WeightRoute`。 */
+export function Weight({ focusForm = false }: Props) {
 	const weights = useWeights();
 	// 目標體重只是圖上的一條線；讀不到就當沒有，不擋整頁。
 	const targetKg = useBodyProfile().data?.target_weight_kg ?? null;
@@ -66,6 +75,7 @@ export function Weight() {
 					span={span}
 					onSpan={setSpan}
 					targetKg={targetKg}
+					focusForm={focusForm}
 				/>
 			)}
 		</section>
@@ -78,12 +88,14 @@ function WeightBody({
 	span,
 	onSpan,
 	targetKg,
+	focusForm,
 }: {
 	today: string;
 	all: readonly WeightEntry[];
 	span: WeightSpan;
 	onSpan: (span: WeightSpan) => void;
 	targetKg: string | null;
+	focusForm: boolean;
 }) {
 	const formTitleId = useId();
 	const listTitleId = useId();
@@ -155,7 +167,7 @@ function WeightBody({
 			<section aria-labelledby={formTitleId}>
 				<h2 id={formTitleId}>記錄體重</h2>
 				{all.length === 0 && <p className={styles.empty}>還沒有體重紀錄</p>}
-				<WeightForm today={today} />
+				<WeightForm today={today} focusOnMount={focusForm} />
 			</section>
 
 			{all.length > 0 && (

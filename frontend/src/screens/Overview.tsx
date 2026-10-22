@@ -20,10 +20,12 @@ import {
 	MealTypeIcon,
 } from "../components/IconBadge";
 import layout from "../components/layout.module.css";
+import { QuickActions } from "../components/QuickActions";
 import ui from "../components/ui.module.css";
 import { WeightSparkline } from "../components/WeightSparkline";
 import { formatTime } from "../lib/dates";
 import { formatMacro, formatMoney } from "../lib/decimal";
+import { stashQuickPhoto, WEIGHT_FORM_STATE } from "../lib/quick-actions";
 import { buildTimeline, type TimelineRow } from "../lib/timeline";
 import { signedKg, weekChange } from "../lib/weights";
 import styles from "./Overview.module.css";
@@ -108,8 +110,7 @@ function WeightGlanceCard() {
 		<Card testId="weight-glance">
 			<Link
 				to="/weight"
-				// Task 3 換成 lib/quick-actions.ts 的 WEIGHT_FORM_STATE。
-				state={empty ? { weightForm: true } : undefined}
+				state={empty ? WEIGHT_FORM_STATE : undefined}
 				className={styles.glance}
 			>
 				<span className={styles.label}>體重</span>{" "}
@@ -304,7 +305,7 @@ function OfflineBanner() {
 	);
 }
 
-/** 總覽（介面改版規格 §5.2、首頁改版規格 §3）：今天熱量的圓環卡片、快速記錄（Task 3）、
+/** 總覽（介面改版規格 §5.2、首頁改版規格 §3）：今天熱量的圓環卡片、快速記錄（§4）、
  *  兩張小卡片（本月支出、體重）、今天的時間線。
  *  每一塊**各自**處理載入與錯誤——一塊失敗不拖垮整頁。
  *  時間線的餐點列連到編輯畫面；支出列只能看（編輯餐點規格 §4.3）。 */
@@ -335,11 +336,17 @@ export function Overview() {
 				{notice !== null && <p className={styles.notice}>{notice}</p>}
 			</div>
 			<OfflineBanner />
-			{/* 手機往下排、電腦版左欄（首頁改版規格 §3.1）：圓環 → 快速記錄（Task 3）→ 兩張小卡片並排；
+			{/* 手機往下排、電腦版左欄（首頁改版規格 §3.1）：圓環 → 快速記錄 → 兩張小卡片並排；
 			    右欄是時間線（電腦版版面規格 §4）。DOM 順序就是手機上的順序與焦點順序。 */}
 			<div className={layout.columns}>
 				<div className={styles.left}>
 					<TodayBudgetCard />
+					{/* 拍照記（D8）：照片放進記憶體裡的暫存，router state 只帶號碼——File 不進 history。 */}
+					<QuickActions
+						onPhoto={(file) =>
+							navigate("/meals/new", { state: stashQuickPhoto(file) })
+						}
+					/>
 					<div className={styles.cards}>
 						<MonthSpendCard />
 						<WeightGlanceCard />
