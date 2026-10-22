@@ -29,7 +29,7 @@
 | 項目 | 數字 |
 |---|---|
 | 端點 | **108**（OpenAPI 的 operation 數，2026-10-16 在 `feat/barcode-label` 量的：掃條碼多 `GET /api/foods/by-barcode/{code}`、`PATCH /api/foods/{id}`、`POST /api/ai/read-label`。之前 105，2026-10-15 在 `feat/meal-planner` 量的：營養素配餐多 `GET /api/planner/library-suggestions`、`POST /api/ai/suggest-meal`。之前 103：`@router.` 101 ＋ `@activities_router.` 2——運動有兩個 router，只 grep `@router\.` 會少 2；2026-10-14 在 `feat/exercise` 量的。之前 95） |
-| 測試 | 後端 **2237**（`pytest -q -W error` 全綠，約 6 分半）；前端 `Test Files 210`、`Tests 3109`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **62** 條、25 個檔案（Playwright；預設 workers 連跑兩次都是 `62 passed`，53 秒、53 秒）。2026-10-22 在 `feat/ai-hint-speed` 修完審查（M1–M4）之後量的（做完 Task 8 時是後端 2235、前端 210／3091、e2e 62；開工前是下一句 `feat/barcode-label` 修完審查之後的後端 2110、前端 206／3022、e2e 59 條 24 個檔案）。`feat/barcode-label`：2026-10-20 修完審查（I1–I3、M1–M6、Caddy 壓縮）之後量的（做完 Task 12 時是後端 2071、前端 204／2978）（開工前是 `feat/meal-planner` 修完審查之後的後端 1853、前端 188／2712、e2e 56 條 23 個檔案）。`feat/meal-planner`：2026-10-15 修完審查（M1–M3）之後量的（做完 Task 12 時是後端 1851、前端 188／2710、e2e 56；開工前是 `feat/exercise` 修完審查之後的後端 1757、前端 178／2574、e2e 54 條 22 個檔案）。`feat/exercise`：2026-10-15 修完審查（I1、M1–M4）之後量的（修之前是後端 1745、前端 178／2538、e2e 54；開工前是後端 1606、前端 166／2312、e2e 53，跟下一句 `feat/body-targets` 的一樣）。**dev 資料庫 1090 個帳號時** `invites.spec.ts` 量「我的」每一顆按鈕的觸控高度逾時（第 1036 顆），改成跟 `account-settings.spec.ts` 一樣不量清單那一顆（見 §8.2「帳號與目標設定」第 6 點）。（`feat/body-targets` 修完審查之後：後端 1606、前端 166／2312、e2e 53 條 21 個檔案） |
+| 測試 | 後端 **2237**（`pytest -q -W error` 全綠，約 6 分半；首頁改版沒有後端改動，沿用 `feat/ai-hint-speed` 量的）；前端 `Test Files 222`、`Tests 3264`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **68** 條、26 個檔案（Playwright；預設 6 個 workers 連跑兩次都是 `68 passed`，44 秒、43 秒）。前端與 e2e 是 2026-10-22 在 `feat/home-redesign` 做完 Task 8 量的（開工前是下一句 `feat/ai-hint-speed` 的前端 210／3109、e2e 62 條 25 個檔案）。`feat/ai-hint-speed`：2026-10-22 修完審查（M1–M4）之後量的（做完 Task 8 時是後端 2235、前端 210／3091、e2e 62；開工前是下一句 `feat/barcode-label` 修完審查之後的後端 2110、前端 206／3022、e2e 59 條 24 個檔案）。`feat/barcode-label`：2026-10-20 修完審查（I1–I3、M1–M6、Caddy 壓縮）之後量的（做完 Task 12 時是後端 2071、前端 204／2978）（開工前是 `feat/meal-planner` 修完審查之後的後端 1853、前端 188／2712、e2e 56 條 23 個檔案）。`feat/meal-planner`：2026-10-15 修完審查（M1–M3）之後量的（做完 Task 12 時是後端 1851、前端 188／2710、e2e 56；開工前是 `feat/exercise` 修完審查之後的後端 1757、前端 178／2574、e2e 54 條 22 個檔案）。`feat/exercise`：2026-10-15 修完審查（I1、M1–M4）之後量的（修之前是後端 1745、前端 178／2538、e2e 54；開工前是後端 1606、前端 166／2312、e2e 53，跟下一句 `feat/body-targets` 的一樣）。**dev 資料庫 1090 個帳號時** `invites.spec.ts` 量「我的」每一顆按鈕的觸控高度逾時（第 1036 顆），改成跟 `account-settings.spec.ts` 一樣不量清單那一顆（見 §8.2「帳號與目標設定」第 6 點）。（`feat/body-targets` 修完審查之後：後端 1606、前端 166／2312、e2e 53 條 21 個檔案） |
 | 覆蓋率 | 96%（2026-09 量的，之後沒再量） |
 | 資料表 | 22（+ `alembic_version`；2026-10-16 在 dev 資料庫數的，掃條碼與營養素配餐都沒有新表。之前 21） |
 | Migration | `0001` ~ `0022`（`0022` 是掃條碼的 `foods.barcode`＋兩個唯一索引、`ai_analyses.kind` 多 `label`；`0021` 是營養素配餐的 `suggest`；dev 資料庫在 `0022`） |
@@ -62,6 +62,7 @@
 | 營養素配餐（今天還能吃什麼） | 飲食頁多一張卡片、新畫面 `/planner`：今天還剩多少熱量與三大營養素（額度含運動），**從食物庫配**（從自己常吃的食物用確定性的解題器配最多 3 組，免費，`GET /api/planner/library-suggestions`）與**讓 AI 配一餐**（記一餐裡打偏好、同一個勾選清單，算一次 AI 額度，`POST /api/ai/suggest-meal`）。兩種都只把項目帶進記一餐（有份量的送 `portion_id`），**不自動存**。migration `0021`（`ai_analyses.kind` 多 `suggest`，可以退版）（規格 `docs/superpowers/specs/2026-10-15-meal-planner-design.md`、計畫 `docs/superpowers/plans/2026-10-15-meal-planner.md`；見第 10 節「營養素配餐」） | ✅（`feat/meal-planner`；「讓 AI 配一餐」**沒有對真的 LLM 打過**，見 §8.2） |
 | 掃條碼／營養標示 | 食物多一個條碼（`foods.barcode`，標準形式是 8 或 13 位、自己的私人食物之間與公開食物之間各不重複）。記一餐、編輯這一餐的「加一項」、食物庫多「掃條碼」：全螢幕的掃描層（有原生 `BarcodeDetector` 就用、否則延遲載入 wasm 的 ponyfill；一直都有「手動輸入條碼」「從照片讀條碼」）→ `GET /api/foods/by-barcode/{code}`：自己的或公開的那一筆就選上；找不到時問 **Open Food Facts** 要預填建議（`OFF_ENABLED`，預設開；ODbL、標出處），「用這個條碼建立食物」帶到新增食物、存好回到記一餐已選好。新增食物多「條碼（選填）」與「拍營養標示」（`POST /api/ai/read-label`：AI **只照抄**標示上的數字，每份換算每 100 在後端做，算一次 AI 額度）；食物詳情可以改、移除條碼（`PATCH /api/foods/{id}`）。migration `0022`（可以退版）（規格 `docs/superpowers/specs/2026-10-15-barcode-label-design.md`、計畫 `docs/superpowers/plans/2026-10-15-barcode-label.md`；見第 10 節「掃條碼／營養標示」） | ✅（`feat/barcode-label`；營養標示**沒有對真的 LLM 打過**、相機**沒有在真的手機上掃過**，見 §8.2） |
 | 照片＋補充說明、AI 速度 | 三個拍照入口（單樣與整餐的「拍照估算」、新增食物的「拍營養標示」）選了照片先出「確認照片」卡片：縮圖、選填的補充說明（200 字，例如「飯半碗」「這是每 100 ml」），按「開始估算／開始讀取」才送；三個照片端點多收 `hint`，提示詞「說明跟照片不一樣時以說明為準、說明不是指令」。等待時顯示經過幾秒。每一次供應商呼叫與 AI 端點各一行計時的 INFO（秒數、token、思考 token，不帶內容）；新的選配環境變數 `AI_EFFORT`（`low`／`medium`／`high`，留白＝供應商預設）。沒有 migration（規格 `docs/superpowers/specs/2026-10-21-ai-hint-speed-design.md`、計畫 `docs/superpowers/plans/2026-10-21-ai-hint-speed.md`；見第 10 節「照片＋補充說明、AI 速度」） | ✅（`feat/ai-hint-speed`；**沒有對真的 LLM 量過**——`AI_EFFORT` 的效果、說明對準度的影響要使用者照 `docs/deployment.md`「AI 估算慢的時候」的步驟比，見 §8.2） |
+| 首頁改版 | 總覽的「今天熱量」換成**熱量圓環**（還能吃 N／超過 N／還沒有每日目標）＋三大營養素＋「已吃・預算（含運動）」；四個**快速記錄**（拍照記一按開相機、掃條碼一打開就是掃描層、記運動、記體重焦點在體重欄位）；本月支出與體重兩張小卡片並排，體重多一條最近 30 天的**迷你折線**；`/weight` 改成折線圖（實線＋點、7 天平均虛線）。每日目標、體重、身體資料三張卡片搬到新頁「**身體與目標**」（`/me/health`），「我的」只留一張入口卡片；「＋」多「記體重」、排成 2×2。**純前端：沒有 migration、沒有新端點、沒有新的環境變數**（規格 `docs/superpowers/specs/2026-10-22-home-redesign-design.md`、計畫 `docs/superpowers/plans/2026-10-22-home-redesign.md`；見第 10 節「首頁改版」） | ✅（`feat/home-redesign`；拍照記與掃條碼的自動開相機**沒有在 iOS 實機驗證**，見 §8.2） |
 | UI 改版 第三階段 | 社群（P7）：「開帳號的路」「好友關係」「按讚、留言、通知」三步都已完成。**還沒做：封鎖與檢舉、好友的趨勢／統計／目標**（好友規格 §1.3 剩下的項目）；推播也沒有（通知只在 app 裡，見 §8.2） | 🟡 |
 
 > **P4 早於 P2/P3 完成是刻意的，但當初的理由有瑕疵。**
@@ -1242,7 +1243,7 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
 | e2e：巢狀清單的 `listitem` | 卡片是 `<li>`、裡面每一項食物也是 `<li>`：`getByRole("listitem").filter({ hasText: 食物 })` 兩層都中。要卡片就 `.first()`（文件順序外層在前）或用卡片才有的東西過濾 |
 | e2e：直接打開一個深的網址 | 還沒登入時 `goto("/meals/5")` 看到的是登入表單，**登入之後留在那個網址**（`App` 只是換外框，不導頁）——一個 context 一次 `goto` 就能測「用網址直接開」，不用登入之後再 `goto`（那會多換一次票） |
 
-| 畫出「我的」的單元測試 | 「我的」掛了身體資料、體重兩張卡片，每日目標卡片也讀建議：**每一個掛 `<Me />` 的測試**路由清單最前面都要 `bodyRoutes()`（`tests/helpers/body-routes.ts`）——不只 `me.test.tsx`，`invite-friends.test.tsx` 也掛它。`mock-api.ts` 依序用 `url.includes` 比對，`/api/me` 會吃掉 `/api/me/body-profile`。`app.test.tsx` 的 `mockBackend` 是手寫的 `if` 串：身體資料、建議、`/api/weights` 要排在 `/api/me` 之前，否則 `/api/me` 那一行把使用者物件當成身體資料回去（卡片因為 `?? null` 沒炸，看不出來） |
+| 畫出身體與目標、「我的」的單元測試 | 身體與目標（`/me/health`，`screens/BodyHub.tsx`）掛了身體資料、體重兩張卡片，每日目標卡片也讀建議；「我的」的入口卡片讀 `/api/weights` 與 `/api/stats/daily`（首頁改版之後「我的」不再打 `/api/me/body-profile`、`/api/me/target-suggestion`）。**每一個掛 `<BodyHub />` 或 `<Me />` 的測試**路由清單最前面都要 `bodyRoutes()`（`tests/helpers/body-routes.ts`）——`body-hub.test.tsx`、`exercise-budget-switch.test.tsx`、`me.test.tsx`，`invite-friends.test.tsx` 也掛 `<Me />`。`mock-api.ts` 依序用 `url.includes` 比對，`/api/me` 會吃掉 `/api/me/body-profile`。`app.test.tsx` 的 `mockBackend` 是手寫的 `if` 串：身體資料、建議、`/api/weights` 要排在 `/api/me` 之前，否則 `/api/me` 那一行把使用者物件當成身體資料回去（卡片因為 `?? null` 沒炸，看不出來） |
 | 從另一個測試檔 import 夾具 | vitest 會把**那個檔案的 `describe` 一起註冊**進來，測試跑兩份。共用的資料放 `tests/helpers/`（建議的 `READY_SUGGESTION` 在 `body-routes.ts`） |
 | `components/Segmented.module.css` | 趨勢頁的營養素切換與 `/weight` 的期間切換**共用**（從 `Trend.module.css` 搬出來的）。改它兩個畫面一起變 |
 | e2e：水平線的 `toBeVisible()` | SVG `<line>` 的 `y1 == y2` 時外框高度是 0，Playwright 判成看不見（體重圖的目標線）。看它在不在用 `toHaveCount(1)` |
@@ -1264,6 +1265,10 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
 | TanStack Query v5 的 `mutationFn` 收兩個參數 | 第二個是 mutation 的 context 物件。`useMutation({ mutationFn: readLabel })` 在 `readLabel` 多一個選填的 `hint` 之後，那個物件就會被當成說明（`.trim()` 炸掉）——**typecheck 抓到的**，測試不會（都是 `vi.fn` 或包過的）。函式有選填參數時一律包一層：`mutationFn: (x) => readLabel(x)` |
 | 選了照片之後移焦點會被蓋回去 | 選檔的視窗關掉時，瀏覽器把焦點還給 `<input type=file>`，而且**不保證在 `change` 之前**；user-event 的 `upload` 照「change 之後才還」模擬（`focusElement(target)` 在 `fileDialog` 之後）。在 change 那一次 render 的 effect 裡同步移焦點，會被這一下蓋回照片按鈕。晚一個 task 再移（`PhotoHintStep.tsx` 的 `focusStepAfterFileDialog`）。Playwright 的 `setInputFiles` 不開視窗、不還焦點——**這件事只有 vitest 守得到** |
 | `LogMeal` 不碰 router | `log-meal*.test.tsx` 三個檔案都不掛 Router——`LogMeal` 裡一加 `useNavigate` 就全紅。要導頁的事情用 prop 交給 `LogMealRoute`（`onSaved`、`onCreateFromBarcode`）；「history 沒有變長」那種斷言寫在 `app.test.tsx`（真的 `BrowserRouter`） |
+| `getByRole` 不看 `aria-modal` | testing-library 與 Playwright 的 `getByRole` 都**不管對話框的 `aria-modal`**：「＋」開著時，背景裡總覽快速記錄的「記運動」「記體重」照樣找得到，`exact: true` 也是兩個（strict mode 紅，或點到背景那一個）。「＋」裡的一律限定在對話框裡：`within(dialog)`／`page.getByRole("dialog", { name: "新增紀錄" }).getByRole(…)`（首頁改版規格 D18；`exercise.spec.ts` 的 `openAddExercise` 因此改了）。「掃條碼」在總覽是連結、在記一餐是按鈕，角色不同、不會撞 |
+| 行內 `<span>` 接成可及名稱沒有空白 | jsdom（dom-accessibility-api）把連結裡行內的 `<span>` 直接接起來：「體重」＋「79 公斤」是「體重79 公斤」。總覽小卡片在標籤與數字之間放 `{" "}`（欄排版裡空白不佔位置，畫面不變）；Chromium 算出來的也是「體重 79.4 公斤 比 7 天前 -0.9 公斤」（`home.spec.ts` 斷言整個名稱） |
+| grid 拉伸的卡片，裡面的連結沒有跟著撐滿 | 兩張小卡片並排時 grid 把矮的那張拉成一樣高，裡面的連結照樣只有 `min-height` 的 44px，下半張點了沒反應（截圖才看得到，jsdom 沒有版面）。連結加 `box-sizing: border-box; height: 100%`（grid 拉伸過的項目高度算是確定的） |
+| e2e：重現「不換行的長字串」 | 第一次寫的長 email（`newAccount` 的 label 帶連字號）在 390 寬**換行了**，測試沒紅——「-」後面是換行的地方。沒有空白、沒有連字號的才溢出（`home.spec.ts` 用 `homemelongemailwraps`）。另外 `<p>` 是區塊，外框永遠是容器的寬，字溢出去量 `boundingBox()` 看不到——量元素自己的 `scrollWidth - clientWidth` |
 
 ---
 
@@ -1698,6 +1703,17 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
      在欄位裡捲。iOS Safari、Android Chrome 沒有實機看過。
   10. **AI 沒設定之後按「取消」，焦點掉到 body**（審查 M1）：卡片收起、照片按鈕因為 AI 沒設定是停用的，焦點沒有地方回去
      （旗標留著，按鈕不會恢復，所以不會晚一點才搶焦點）。這時畫面上的錯誤訊息也跟著清掉，只剩停用的照片按鈕。
+- **首頁改版的已知限制**（規格 §10 的七點，加上執行中發現的）：
+  1. **iOS 實機沒有驗證**：拍照記（`<label>`＋`capture="environment"`，一按開相機）與掃條碼（記一餐一打開就開掃描層，`getUserMedia` 不在手勢裡）都只在 Playwright 的 Chromium 跑過（e2e 用 `setInputFiles`；headless 沒有相機，掃描層是錯誤狀態、「手動輸入條碼」照樣在）。iOS Safari 的相機權限、自動播放、拍完回到頁面時焦點落在哪裡都沒有在手機上看過（同掃條碼的已知限制第 1 點）。
+  2. **拍照記只能拍、不能從相簿選**：`capture="environment"` 在 iOS 直接開後鏡頭。要從相簿選，用記一餐裡原本的「拍照估算」。
+  3. **記一餐重新整理會失去帶進來的照片**：照片只放在記憶體裡的暫存（`lib/quick-actions.ts`），router state 只帶號碼——重新整理、上一頁都不會再帶回來（刻意的：`history.state` 會被結構化複製、Firefox 有大小上限）。
+  4. **記體重在 iOS 不會自動跳鍵盤**：程式化的 `focus()` 不在使用者手勢裡；焦點與捲動到了，再點一下欄位才有鍵盤。
+  5. **已吃與預算各自捨入**（`roundForDisplay(…, 0)`）：額度有小數時，「預算 − 已吃」跟「超過 N」／「還能吃 N」可能差 1。實際的額度都是整數（目標的熱量、運動的估算），只有小數的餐（例如 732.5）會讓「已吃」進位。
+  6. **「本月支出」「體重」小卡片的連結名稱含數字**（「本月支出 $12480.00」「體重 79 公斤 比 7 天前 -0.4 公斤」）：標籤在連結裡、整張可點，名稱跟著資料變。e2e 一律先用 testid 找卡片再 `getByRole("link")`。
+  7. **體重的線跨過沒記的日子**（不斷開、不補 0）：x 照日期，中間空幾天線就直接連過去。
+  8. **迷你折線沒有刻度**：x 從最近 30 天裡的**第一筆**畫到最後一筆（不是從 30 天前），只看得出方向；30 天內少於 2 筆不畫。
+  9. **深色模式的顏色接近**：快速記錄裡掃條碼的徽章是 `--color-action`（深色 `#ff8a6b`），跟拍照記的 food 橘看得出是兩個色但很近；`/weight` 的 7 天平均（`--color-action`）跟每天的線（`--color-accent`）在深色是同一個色，只差虛線與 `opacity`。看截圖分得出來，沒有加新的設計變數（規格 D17、D24 都沒要求）。
+  10. **「我的」的長 email 斷在任何字元**：以前沒有空白、沒有連字號的 email 在 390 寬溢出、撐出整頁的水平捲動（既有的，首頁改版的截圖看到的）。現在 `AccountCard.module.css` 的 `.email` 是 `overflow-wrap: anywhere`，會斷在「@exampl／e.com」這種地方，不是斷在 `@` 或 `.`。
 - **編輯自己已送出的提案**：後端沒有這個端點，目前只能等審核結果。
 
 ---
@@ -2407,10 +2423,10 @@ B 看 A 的餐時，C 的留言算不算只看 C 與 A 的關係）：
 |---|---|---|
 | query 的鍵 | `api/queries.ts`：`["body","profile"]`、`["body","suggestion"]`、`["body","weights"]`；`invalidateBody` 失效整個 `["body"]` | **刻意不掛在 `["me"]` 底下**。`["body", …]` **進離線快取**（自己的資料，D19）——舊回應可能少欄位，畫面一律 `?? null` |
 | API 層 | `api/body.ts`：`useBodyProfile`、`useFreshBodyProfile`、`saveBodyProfile`、`useTargetSuggestion`、`applySuggestion`、`useWeights`、`saveWeight`、`deleteWeight` | 數字運算只在 `lib/decimal.ts`（`differenceOf`、`paddedExtent`、`positionIn`、`checkRangeInput`）；日期加減只在 `lib/civil-date.ts`（`daysBetween`、UTC） |
-| `/me/body` | `screens/BodyProfile.tsx`（`form` 寬度） | **預填同 `/me/targets`**（D27）：離線快取還原完才掛、`useFreshBodyProfile` 掛載時一定重抓、只用掛載後抓回來的那一份——PUT 是整組取代，拿舊快取預填會把沒動的欄位悄悄改回去。速度只在減重、增重時出現（切到維持不清掉）。存好失效 `["body"]`、導回 `/me` |
-| 卡片 | `components/BodyProfileCard.tsx`（「修改身體資料」）、`WeightCard.tsx`（「記錄體重」展開 `WeightForm`、「看全部」）、`TargetsCard.tsx`（重算提示＋「重算建議目標」） | 「我的」的順序：通知 → 帳號 → 每日目標 → 身體資料 → 體重 → 好友 → 匯出（D21）。卡片**不算年齡**（年齡要使用者的今天）。「比 7 天前」與重算提示的正負號都用 `lib/weights.ts` 的 `signedKg`（變重寫 `+`） |
-| `/weight` | `screens/Weight.tsx`、`components/WeightChart.tsx`、`WeightForm.tsx` | 一個 query（800 天），30／90／全部在前端篩（D22）。平均用**全部**的紀錄算、只畫範圍內的；y 軸也包含畫出來的平均與目標體重。每個點是 `role="img"`＋名稱「10/12，79 公斤」，跟今天不同年的寫「2025/10/12」（`dateLabel`；清單的「修改 …」「刪除 …」也是）。刪除是畫面上的 `alertdialog`，「刪除」用 `aria-disabled`＋ref 擋重複送出 |
-| 建議目標 | `components/TargetSuggestion.tsx`（`/me/targets` 上面，手動表單在「自己設定」那一區） | 「套用建議目標」送的是畫面上的四個數字；`SUGGESTION_CHANGED` → 重抓建議、說「建議目標剛剛變了」；`PROFILE_INCOMPLETE`（另一個分頁剛刪了體重）→ 失效 `["body"]`、說「身體資料或體重剛剛變了，已經重新整理建議」，重抓回來缺東西就換成「還差：…」（審查 M4）。成功失效 `dailyStats`、`rangeStatsAll`、`["body"]`（hook 層），導回 `/me`（`mutate` 的 callback）。缺資料：「還差：…」＋「填寫身體資料」（到 `/me/body`）／「記錄體重」（到 `/weight`）。**下面的手動儲存（`screens/Targets.tsx`）也失效 `["body"]`**：後端清掉了套用時的體重，不失效的話「我的」上的重算提示還在（審查 I1） |
+| `/me/body` | `screens/BodyProfile.tsx`（`form` 寬度） | **預填同 `/me/targets`**（D27）：離線快取還原完才掛、`useFreshBodyProfile` 掛載時一定重抓、只用掛載後抓回來的那一份——PUT 是整組取代，拿舊快取預填會把沒動的欄位悄悄改回去。速度只在減重、增重時出現（切到維持不清掉）。存好失效 `["body"]`、導回 `/me`（首頁改版之後導回 `/me/health`，首頁改版規格 D2） |
+| 卡片 | `components/BodyProfileCard.tsx`（「修改身體資料」）、`WeightCard.tsx`（「記錄體重」展開 `WeightForm`、「看全部」）、`TargetsCard.tsx`（重算提示＋「重算建議目標」） | 三張卡片在首頁改版之後搬到「身體與目標」（`/me/health`，順序：每日目標 → 體重 → 身體資料；見第 10 節「首頁改版」），「我的」只剩一張入口卡片（原本「我的」的順序是通知 → 帳號 → 每日目標 → 身體資料 → 體重 → 好友 → 匯出，D21）。卡片**不算年齡**（年齡要使用者的今天）。「比 7 天前」與重算提示的正負號都用 `lib/weights.ts` 的 `signedKg`（變重寫 `+`） |
+| `/weight` | `screens/Weight.tsx`、`components/WeightChart.tsx`、`WeightForm.tsx` | 一個 query（800 天），30／90／全部在前端篩（D22）。首頁改版之後是折線圖：每天的紀錄連成實線、7 天平均是虛線，座標換算在 `lib/weight-plot.ts`（見第 10 節「首頁改版」）。平均用**全部**的紀錄算、只畫範圍內的；y 軸也包含畫出來的平均與目標體重。每個點是 `role="img"`＋名稱「10/12，79 公斤」，跟今天不同年的寫「2025/10/12」（`dateLabel`；清單的「修改 …」「刪除 …」也是）。刪除是畫面上的 `alertdialog`，「刪除」用 `aria-disabled`＋ref 擋重複送出 |
+| 建議目標 | `components/TargetSuggestion.tsx`（`/me/targets` 上面，手動表單在「自己設定」那一區） | 「套用建議目標」送的是畫面上的四個數字；`SUGGESTION_CHANGED` → 重抓建議、說「建議目標剛剛變了」；`PROFILE_INCOMPLETE`（另一個分頁剛刪了體重）→ 失效 `["body"]`、說「身體資料或體重剛剛變了，已經重新整理建議」，重抓回來缺東西就換成「還差：…」（審查 M4）。成功失效 `dailyStats`、`rangeStatsAll`、`["body"]`（hook 層），導回 `/me`（`mutate` 的 callback；首頁改版之後是 `/me/health`）。缺資料：「還差：…」＋「填寫身體資料」（到 `/me/body`）／「記錄體重」（到 `/weight`）。**下面的手動儲存（`screens/Targets.tsx`）也失效 `["body"]`**：後端清掉了套用時的體重，不失效的話「我的」上的重算提示還在（審查 I1） |
 | 匯出 | `api/export.ts` 的 `EXPORT_KINDS` | 「匯出資料」多一顆「體重」（四顆） |
 
 **新的東西在哪裡：**
@@ -2476,8 +2492,8 @@ MET 一律用字串建 Decimal（`Decimal("9.8")`，不經 float）。值取自 
 | 舊快取的相容 | `api/stats.ts` 的 `kcalBudgetOf`、`exerciseInBudgetOf`；`api/me.ts` 的 `exerciseAddsToBudgetOf` | 離線快取裡的舊回應沒有新欄位（`undefined`，不是 `null`）：額度退回目標、「含運動」不顯示、設定當成開。**畫面一律經過這三個小函式讀**，不直接碰 `stats.kcal_budget` |
 | 表單 | `components/ExerciseForm.tsx`（新增與編輯共用）、`lib/exercise.ts`（檢查、預覽的參數） | 預覽：活動與分鐘有效時停 400 ms 再問後端——**debounce 的是 `JSON.stringify(params)`**（§7）。「沒有體重」記住到下一個「有」的答案（`lastReady`），改分鐘時熱量欄不閃。沒有體重：提示＋「記錄體重」連到 `/weight`，「手動輸入熱量」勾著而且鎖住——**用 `aria-disabled`＋`onChange` 擋**（可能在焦點正在它身上時鎖住）。存的時候伺服器說 `EXERCISE_NEEDS_WEIGHT`：換成手動、**`resetQueries` 清掉手上的預覽重問**，之後的預覽回 `ready: true` 就解鎖（審查 M2）。`stored`（編輯估算的一筆才有）：活動、分鐘、時間跟存好的一樣時寫「目前 N kcal（估算）」、不問預覽、沒有體重也不強制手動（`sameEstimateInputs`，審查 I1）。日期與時間是裝置時區（`lib/dates.ts`），未來的時間前端也擋 |
 | 兩個畫面 | `screens/LogExercise.tsx`（`/exercises/new`，`form` 寬度）、`EditExercise.tsx`（`/exercises/:id/edit`，`narrow`） | 編輯**只送改了的欄位**（`lib/exercise.ts` 的 `exercisePatch`，跟預填的那一筆比、時間比到分鐘；什麼都沒改不送；審查 I1）：熱量只在估算→手動、手動的數字改了、手動→估算（`null`）時帶。離線快取還原完才掛、**只用掛載之後抓回來的那一份預填**（`ExerciseLoader`，`key={id}`；拿舊的比，另一台裝置改過的欄位會被當成「改了」送回去）。存好導回總覽。「刪除這筆運動」→ `alertdialog`「刪除這筆運動？」（焦點在「取消」）→ 先 `removeQueries(exercise(id))` 再失效 |
-| 入口 | `AddSheet.tsx` | 「＋ 新增」三個：記帳、記一餐、記運動（`repeat(3, …)`）。運動的顏色 `EXERCISE_COLOR`（`IconBadge.tsx`，`--color-success`） |
-| 總覽 | `screens/Overview.tsx` | 「今天熱量」的分母是額度，下面一行「含運動 +N」；時間線第三種列（`lib/timeline.ts` 的 `kind: "exercise"`）：「跑步（約 10 km/h）・30 分鐘」、時間、「-343 kcal」（ASCII 減號），連到編輯。運動清單抓不到跟餐點一樣算「無法載入今天的紀錄」 |
+| 入口 | `AddSheet.tsx` | 「＋ 新增」三個：記帳、記一餐、記運動（`repeat(3, …)`）。首頁改版之後是四個（多「記體重」，`repeat(2, …)` 排成 2×2），總覽的快速記錄也有一個「記運動」（見第 10 節「首頁改版」）。運動的顏色 `EXERCISE_COLOR`（`IconBadge.tsx`，`--color-success`） |
+| 總覽 | `screens/Overview.tsx` | 「今天熱量」的分母是額度，下面一行「含運動 +N」（首頁改版之後是圓環＋「已吃 N・預算 N（含運動 +N）」，見第 10 節「首頁改版」）；時間線第三種列（`lib/timeline.ts` 的 `kind: "exercise"`）：「跑步（約 10 km/h）・30 分鐘」、時間、「-343 kcal」（ASCII 減號），連到編輯。運動清單抓不到跟餐點一樣算「無法載入今天的紀錄」 |
 | 飲食頁 | `screens/Today.tsx`、`components/TodayExercises.tsx`、`MacroBar.tsx`（`note`） | 熱量那一列用額度、`note`「含運動 +N」；其他三列不變。「今日運動」卡片（`<h2>` 與清單同名）每筆一列連到編輯、「共 -N kcal」、「記運動」；只在「我的」那一邊掛（看好友時不畫也不抓）。電腦版在左欄補劑下面 |
 | 設定 | `components/ExerciseBudgetSwitch.tsx`（`TargetsCard.tsx` 底部，「修改」後面） | `<input type="checkbox" role="switch">`「運動消耗加回今天的熱量額度」。`PATCH /api/me` → 回應寫回 `["me"]`、失效 `dailyStats`（hook 層）。送出中顯示要變成的值、`aria-disabled`＋ref 擋重複；失敗回到原值＋「沒有存到，請再試一次」 |
 | 匯出 | `api/export.ts` 的 `EXPORT_KINDS` | 五顆：手機 3＋2（grid `repeat(auto-fit, minmax(5rem, 1fr))`），電腦版一列 |
@@ -2738,6 +2754,71 @@ INFO:     app.api.routes.ai: AI 端點（route=analyze-meal, input=image, hint=y
 
 **已知限制**在 §8.2「照片＋補充說明、AI 速度的已知限制」（10 點）。最要緊的：**沒有對真的 LLM 量過**（第 1 點）、Gemini 2.5 不收 `thinking_level`（第 2 點）、
 production 不要開 DEBUG log（第 7 點）。
+
+### 首頁改版：熱量圓環、快速記錄、身體與目標
+
+總覽一打開就回答「今天還能吃多少」，常記的四件事一按就到；每天不會碰的設定卡片從「我的」搬到自己的一頁
+（規格 `docs/superpowers/specs/2026-10-22-home-redesign-design.md`、計畫 `docs/superpowers/plans/2026-10-22-home-redesign.md`，
+計畫的「執行中發現的差異」記了每個 task 跟計畫不一樣的地方、量到的數字與突變結果）。
+**沒有 migration、沒有新端點（仍是 108）、沒有新的環境變數**：數字全部來自既有的 `GET /api/stats/daily`、`GET /api/weights`、`GET /api/expenses/summary`。
+
+**總覽（`/`）**：圓環卡片 → 快速記錄 → 兩張小卡片（本月支出、體重）→ 時間線。電腦版左欄是前三樣、右欄是時間線；兩張小卡片在兩種版面都並排。
+
+- **圓環卡片**（`components/BudgetSummary.tsx`、`CalorieRing.tsx`；`data-testid="today-kcal"` 沿用，**意義變了**：整張卡片，含營養素）：
+  `section aria-labelledby` →「今天熱量」。額度一律經過 `kcalBudgetOf`（舊快取退回目標），「還能吃／超過」是 `lib/decimal.ts` 的
+  `kcalBalance(額度, 實際)`——**先**四捨五入到整數（half-up，遠離 0）**再**看正負，畫面上不會出現「超過 0 kcal」。圓環是 `<svg aria-hidden>`，
+  `ratioOf` 夾在 [0, 1] 換成 `stroke-dasharray`（「弧長 圓周」，兩位小數），超過時整圈 `--color-danger`、`data-tone="over"`；沒有額度只有底圈、中間寫「已吃 N」，
+  下面「還沒有每日目標」＋「設定每日目標」（直接到 `/me/targets`）。三大營養素是 `MacroBar`。下面一行「已吃 N・預算 N（含運動 +N）」，「・」在前一段的尾巴（§7）。
+  e2e 的斷言從「/ N kcal」「含運動 +N」改成「預算 N」「（含運動 +N）」，精度（732.5）改在飲食頁的 `macro-kcal` 守。
+- **快速記錄**（`components/QuickActions.tsx`、`lib/quick-actions.ts`；`<ul aria-label="快速記錄">`，四欄）：
+  - **拍照記**：`<label for="quick-photo">`＋視覺隱藏的 `<input type=file accept="image/*" capture="environment">`。iOS 只在使用者手勢裡開檔案選擇器，
+    點標籤本身就是手勢——**一按就開相機**；導頁之後再 `click()` 會被擋。選好的 `File` 放進記憶體裡的單一暫存（`stashQuickPhoto`），router state 只帶
+    `{quickPhoto: n}`；`LogMealRoute` 用 `quickPhotoFrom` 換回檔案、清 history 的 state 時 `releaseQuickPhoto()`，交給 `AiMealPanel` 的 `initialPhoto`：
+    一掛載就是「確認照片」卡片（焦點在卡片），**不自動送出**（補充說明要看到照片才想得到；每送一次算一次額度）。
+  - **掃條碼**：`<Link to="/meals/new" state={SCAN_STATE}>` → `FoodPicker` → `BarcodeScanEntry` 的 `startScanning`，一掛載就打開掃描層（焦點在「取消」，
+    取消回到記一餐的「掃條碼」）。WebKit 的 `getUserMedia` 不要求手勢。
+  - **記運動**：連到 `/exercises/new`。**記體重**：`/weight`＋`WEIGHT_FORM_STATE`，`WeightRoute`（`App.tsx`）讀一次、清掉，`WeightForm` 的 `focusOnMount`。
+  - 交接只在掛載時讀一次、`replace` 清掉：上一頁、重新整理都不會再開相機或再帶照片。`LogMeal` 照樣不碰 router（§7）。
+- **兩張小卡片**：本月支出（`month-spend`，不變）與體重（`weight-glance`；最新一筆＋「比 7 天前」，同 `lib/weights.ts` 的 `weekChange`／`signedKg`；
+  沒有紀錄是「記錄體重」，跟快速記錄同一個去處）。整張是連結（`.glance` 撐滿 grid 拉伸的高度，§7）。`OfflineBanner` 多算 `useWeights()`。
+- **迷你折線**（`components/WeightSparkline.tsx`，`data-testid="weight-sparkline"`）：**沿用 `useWeights()`**（同 `["body","weights"]`，800 天、進離線快取），
+  在前端篩最近 30 天，**不加新的 query key**；少於 2 筆不畫。`aria-hidden`（資料在旁邊的字）、`viewBox="0 0 100 32"`＋`preserveAspectRatio="none"`＋
+  `vector-effect: non-scaling-stroke`（寬度跟著卡片、線不變粗），x 從這 30 天裡的第一筆到最後一筆。
+
+**`/weight` 的折線圖**：兩張圖的座標換算抽成 `lib/weight-plot.ts`（`weightScale`：`paddedExtent` 定 y、`positionIn` 換比例、`daysBetween` 照日期排 x；
+`polylinePoints`）。`WeightChart` 改用它時座標逐一不變（既有的 `weight-chart.test.tsx` 一個字沒改就綠）。範圍內的紀錄照日期連成實線（`weight-line`，`.weight-line`），
+點照留（`role="img"`、有名稱，畫在線上面）；7 天平均改成淡色虛線（`.weight-average`：`stroke-dasharray: 4 3`、`opacity: 0.6`）。沒記的日子線直接跨過去。
+圖例「每天的紀錄」「7 天平均」每一項是「色塊＋字」包成一段。
+
+**身體與目標（`/me/health`，`screens/BodyHub.tsx`）**：`h1`「身體與目標」、每日目標（重算提示、運動加回的開關）→ 體重 → 身體資料，**卡片本身沒改**。
+在 `/me` 底下：分頁的「我的」（`NavLink` 沒有 `end`）在這一頁照樣亮著。`/me/targets` 的手動儲存、套用建議、`/me/body` 的儲存都**導回這裡**（原本是 `/me`）。
+寬度是 `contentWidthFor` 的預設 narrow。
+
+**「我的」**：拿掉三張卡片，通知後面一張入口卡片（`components/BodyHubEntry.tsx`，`data-testid="body-hub-entry"`）：連結名稱固定「身體與目標」，
+摘要（「2000 kcal・79 公斤」，只有一個就寫一個、都沒有「還沒設定」、載入中「載入中…」）**在連結外面、用 `aria-describedby` 唸**——放在連結裡名稱就跟著資料變。
+摘要的熱量是**目標**（`target.kcal`），不是額度。帳號卡片的 email 多 `overflow-wrap: anywhere`（長 email 以前會撐出 390 寬的水平捲動，§8.2 第 10 點）。
+
+**「＋」（`AddSheet.tsx`）**：多「記體重」（`/weight`＋`WEIGHT_FORM_STATE`，徽章 `WEIGHT_COLOR`＝交通的藍、圖示 lucide `Weight`），`.choices` 改
+`repeat(2, minmax(0, 1fr))` 排成 2×2，DOM 順序＝焦點順序。「記運動」「記體重」跟總覽的快速記錄同名：測試一律限定在對話框裡（§7「`getByRole` 不看 `aria-modal`」）。
+
+量到的（Task 8 的截圖，390×844／1280×800）：快速記錄每格 86×82／95×82；圓環 132×132；迷你折線 145×32／164×32；小卡片的連結 145×103／164×103；
+「＋」每格 173×104／178×104；入口連結 334×44／608×44；「設定每日目標」96×44。兩種寬度、淺色深色，總覽、「我的」、身體與目標、`/weight` 都沒有水平捲動。
+
+**新的東西在哪裡：**
+
+- 前端：`lib/decimal.ts`（`kcalBalance`）、`lib/quick-actions.ts`（新）、`lib/weight-plot.ts`（新）；`components/{CalorieRing,BudgetSummary,QuickActions,WeightSparkline,BodyHubEntry}.{tsx,module.css}`（新）、
+  `WeightChart.tsx`、`AiMealPanel.tsx`（`initialPhoto`）、`FoodPicker.tsx`／`BarcodeScanEntry.tsx`（`startScanning`）、`AddSheet.{tsx,module.css}`、`IconBadge.tsx`（`WEIGHT_COLOR`）、
+  `AccountCard.module.css`；`screens/BodyHub.tsx`（新）、`Overview.{tsx,module.css}`（`WeightGlanceCard` 在這裡）、`Me.tsx`、`LogMeal.tsx`、`Weight.{tsx,module.css}`、
+  `Targets.tsx`、`BodyProfile.tsx`、`TargetSuggestion.tsx`；`index.css`（`.weight-line`、`.weight-average`）；`App.tsx`（`/me/health`、`WeightRoute`、`LogMealRoute`）。
+- 測試：新檔 `tests/calorie-ring.test.tsx`、`budget-summary.test.tsx`、`quick-actions.test.ts`、`body-hub.test.tsx`（從 `me.test.tsx` 整組搬過來的四組）、
+  `weight-plot.test.ts`、`weight-sparkline.test.tsx`；`overview`、`me`、`app`、`tab-bar`、`side-nav`、`layout`、`log-meal-ai`、`log-meal-barcode`、`weight`、`weight-chart`、
+  `decimal`、`targets`、`target-suggestion`、`body-profile`、`exercise-budget-switch` 的修改與新增。
+- e2e：`e2e/home.spec.ts`（新，6 條：圓環的數字＋迷你折線＋超過＋`/weight` 的實線與虛線；沒有目標；快速記錄四顆＋「＋」2×2；「我的」的長 email（手機）；
+  身體與目標與精簡的「我的」（電腦版）；電腦版的兩欄）。`account-settings`、`body-targets`、`exercise`、`planner` 跟著改（我的 → 身體與目標、`today-kcal` 的新字樣、
+  「＋」裡的「記運動」限定在對話框；`body-targets` 第三條多看 `/weight` 的實線與虛線、總覽的體重小卡片與迷你折線）。
+
+**已知限制**在 §8.2「首頁改版的已知限制」（10 點）。最要緊的：拍照記與掃條碼的自動開相機**沒有在 iOS 實機驗證**（第 1 點）、拍照記只能拍不能從相簿選（第 2 點）、
+深色模式幾個顏色很接近（第 9 點）。
 
 ---
 
