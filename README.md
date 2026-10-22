@@ -232,7 +232,8 @@ docker compose $PROD exec api python -m app.cli cleanup-photos  # 清理孤兒�
 2. 打開你傳的**分享連結**，按接受。
 3. 在 Tailscale App 裡把連線**打開**（用 app 的時候 Tailscale 要開著，平常一直開著也可以）。
 4. 打開你傳的**邀請連結**，設定 email、密碼和名字，建立帳號。
-5. 之後都用 <https://kennywang.tailc1f9e9.ts.net> 登入。手機可以「加入主畫面」，用起來就像一般 App。
+5. 之後都用你給他的網址登入（`https://<機器名>.<tailnet>.ts.net`，你在 NAS 上跑 `tailscale serve status`
+   第一行就是）。手機可以「加入主畫面」，用起來就像一般 App。
 
 ### 常見問題
 
