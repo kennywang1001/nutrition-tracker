@@ -22,6 +22,7 @@ from app.ratelimit import (
     export_in_flight,
     export_rate_limiter,
     friend_request_rate_limiter,
+    label_text_rate_limiter,
     like_rate_limiter,
     login_rate_limiter,
     off_global_rate_limiter,
@@ -97,6 +98,7 @@ def _reset_login_rate_limiter() -> None:
     鍵是使用者 id：現在不重置也不會互相影響，重置是同一條「沒有例外」的規矩。
     `friend_request_rate_limiter`（送好友邀請，社群審查 M3）同上。
     `barcode_lookup_rate_limiter`（條碼查詢，掃條碼規格 D11）同上。
+    `label_text_rate_limiter`（營養標示的文字，標示 OCR 規格 D6）同上。
     `off_global_rate_limiter`（全部使用者問 OFF 的次數，掃條碼審查 M5）**一定要**重置：
     它只有一個鍵，不重置的話整個測試 session 累積到 60 次之後，每一個要 OFF 預填的測試
     都會安靜地拿到 None。
@@ -109,6 +111,7 @@ def _reset_login_rate_limiter() -> None:
     comment_rate_limiter.reset()
     friend_request_rate_limiter.reset()
     barcode_lookup_rate_limiter.reset()
+    label_text_rate_limiter.reset()
     off_global_rate_limiter.reset()
 
 

@@ -423,6 +423,19 @@ barcode_lookup_rate_limiter = KeyedRateLimiter(
     message="查得太頻繁了，請稍後再試",
 )
 
+LABEL_TEXT_LIMIT = 30
+
+# 營養標示的文字（`POST /api/foods/parse-label-text`；標示 OCR 規格 D6），鍵是使用者 id，
+# **每一次都算**、在解析之前（422 的不算：body 驗不過根本進不到路由）。
+# 正常使用一張照片一次；擋的是寫壞的迴圈——
+# 解析是純 CPU、很便宜，但沒有理由讓它沒有上限。
+label_text_rate_limiter = KeyedRateLimiter(
+    limit=LABEL_TEXT_LIMIT,
+    window_seconds=SOCIAL_WINDOW_SECONDS,
+    code="TOO_MANY_LABEL_PARSES",
+    message="讀得太頻繁了，請稍後再試",
+)
+
 OFF_GLOBAL_LIMIT = 60
 # `OpenFoodFacts.lookup` 共用的鍵：整台伺服器一份。
 OFF_GLOBAL_KEY = "openfoodfacts"
