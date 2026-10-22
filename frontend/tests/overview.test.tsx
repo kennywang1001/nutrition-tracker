@@ -1,12 +1,20 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { MemoryRouter, useLocation } from "react-router";
+import {
+	MemoryRouter,
+	Route as RouterRoute,
+	Routes,
+	useLocation,
+} from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { queryKeys } from "../src/api/queries";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
+import { ringDasharray } from "../src/components/CalorieRing";
 import { Overview } from "../src/screens/Overview";
+import { NO_WEIGHTS } from "./helpers/body-routes";
 import { NO_EXERCISE, RUN } from "./helpers/exercise-routes";
 import { json, mockApi, type Route } from "./helpers/mock-api";
 
@@ -134,6 +142,8 @@ function mockOverview(
 		"/api/meals": () => json([LUNCH]),
 		// 運動（運動規格 §7.4）：跟 `/api/expenses` 互不包含，順序不影響。
 		"/api/exercises": () => json(NO_EXERCISE),
+		// 體重小卡片（首頁改版規格 D12）：跟其他路徑互不包含，順序不影響。
+		"/api/weights": () => json(NO_WEIGHTS),
 		...overrides,
 	};
 	return mockApi(
@@ -169,6 +179,9 @@ describe("總覽", () => {
 		const kcal = screen.getByTestId("today-kcal");
 		expect(await within(kcal).findByText(/1240/)).toBeInTheDocument();
 		expect(within(kcal).getByText(/2000/)).toBeInTheDocument();
+		// 首頁改版規格 §3.2：還能吃＝額度 − 已吃（舊回應的額度退回目標 2000）。
+		expect(kcal).toHaveTextContent("還能吃 760 kcal");
+		expect(kcal).toHaveTextContent("已吃 1240・預算 2000");
 	});
 
 	it("時間線：有餐費的那一餐只出現一次，支出各自一列，由新到舊", async () => {
@@ -292,14 +305,19 @@ describe("總覽", () => {
 		).not.toBeInTheDocument();
 	});
 
-	it("有目標時畫熱量進度條", async () => {
+	it("有目標時畫圓環（裝飾）", async () => {
 		mockOverview();
 
 		render(wrap(<Overview />));
 
+		const kcal = screen.getByTestId("today-kcal");
+		const arc = await within(kcal).findByTestId("calorie-ring-arc");
+		expect(arc).toHaveAttribute("data-tone", "normal");
+		expect(kcal.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+		// 圓環不是 progressbar（規格 D4）：念出來的是「還能吃 N kcal」。
 		expect(
-			await screen.findByRole("progressbar", { name: "熱量進度" }),
-		).toBeInTheDocument();
+			screen.queryByRole("progressbar", { name: "熱量進度" }),
+		).not.toBeInTheDocument();
 	});
 
 	it.each([
@@ -308,23 +326,35 @@ describe("總覽", () => {
 			"有目標但熱量沒設（target.kcal 是 null）",
 			{ kcal: null, protein_g: null, fat_g: null, carb_g: null },
 		],
-	])("%s：只顯示數字，沒有「/」也沒有進度條", async (_name, target) => {
-		mockOverview({
-			"/api/stats/daily": () =>
-				json({
-					...STATS,
-					target,
-					ratio: { kcal: null, protein_g: null, fat_g: null, carb_g: null },
-				}),
-		});
+	])(
+		"%s：還沒有每日目標，有『設定每日目標』，沒有『/』也沒有圓弧",
+		async (_name, target) => {
+			mockOverview({
+				"/api/stats/daily": () =>
+					json({
+						...STATS,
+						target,
+						ratio: { kcal: null, protein_g: null, fat_g: null, carb_g: null },
+					}),
+			});
 
-		render(wrap(<Overview />));
+			render(wrap(<Overview />));
 
-		const kcal = screen.getByTestId("today-kcal");
-		expect(await within(kcal).findByText(/1240/)).toBeInTheDocument();
-		expect(kcal).not.toHaveTextContent("/");
-		expect(within(kcal).queryByRole("progressbar")).not.toBeInTheDocument();
-	});
+			const kcal = screen.getByTestId("today-kcal");
+			expect(
+				await within(kcal).findByText("還沒有每日目標"),
+			).toBeInTheDocument();
+			expect(kcal).toHaveTextContent("已吃 1240 kcal");
+			expect(
+				within(kcal).getByRole("link", { name: "設定每日目標" }),
+			).toHaveAttribute("href", "/me/targets");
+			expect(kcal).not.toHaveTextContent("/");
+			expect(
+				within(kcal).queryByTestId("calorie-ring-arc"),
+			).not.toBeInTheDocument();
+			expect(within(kcal).queryByRole("progressbar")).not.toBeInTheDocument();
+		},
+	);
 
 	it("連得到網路但到不了後端：保留快取資料並顯示離線提示", async () => {
 		const client = newClient();
@@ -337,6 +367,8 @@ describe("總覽", () => {
 		seed(queryKeys.expensesByDate("2026-12-15"), [LUNCH_COST, METRO]);
 		// 運動清單也在快取裡（運動規格 D23）。沒有的話它是「失敗而且沒有資料」，時間線說無法載入。
 		seed(queryKeys.exercisesToday, NO_EXERCISE);
+		// 體重也在快取裡（首頁改版規格 D23）。沒有的話體重小卡片是「無法載入體重」，下面的 /無法載入/ 會紅。
+		seed(queryKeys.weights, NO_WEIGHTS);
 		vi.spyOn(globalThis, "fetch").mockRejectedValue(
 			new TypeError("network request failed"),
 		);
@@ -402,19 +434,22 @@ const STATS_WITH_EXERCISE = {
 const MORNING_RUN = { ...RUN, performed_at: "2026-12-15T03:00:00+00:00" };
 
 describe("總覽：運動（運動規格 §7.4）", () => {
-	it("今天熱量的分母是額度，下面寫「含運動 +343」；進度條用額度算", async () => {
+	it("今天熱量的預算是額度，後面寫「（含運動 +343）」；圓環用額度算", async () => {
 		mockOverview({ "/api/stats/daily": () => json(STATS_WITH_EXERCISE) });
 
 		render(wrap(<Overview />));
 
 		const kcal = screen.getByTestId("today-kcal");
-		expect(await within(kcal).findByText("/ 2343 kcal")).toBeInTheDocument();
-		expect(within(kcal).getByText("含運動 +343")).toBeInTheDocument();
-		const bar = within(kcal).getByRole("progressbar", { name: "熱量進度" });
-		expect((bar as HTMLProgressElement).value).toBeCloseTo(1240 / 2343, 5);
+		await waitFor(() => expect(kcal).toHaveTextContent("預算 2343"));
+		expect(within(kcal).getByText("（含運動 +343）")).toBeInTheDocument();
+		// 弧長的比例來源是額度（1240 / 2343），不是目標（1240 / 2000）。
+		expect(within(kcal).getByTestId("calorie-ring-arc")).toHaveAttribute(
+			"stroke-dasharray",
+			ringDasharray(1240 / 2343),
+		);
 	});
 
-	it("設定關掉：分母是目標，沒有「含運動」", async () => {
+	it("設定關掉：預算是目標，沒有「含運動」", async () => {
 		mockOverview({
 			"/api/stats/daily": () =>
 				json({
@@ -427,17 +462,17 @@ describe("總覽：運動（運動規格 §7.4）", () => {
 		render(wrap(<Overview />));
 
 		const kcal = screen.getByTestId("today-kcal");
-		expect(await within(kcal).findByText("/ 2000 kcal")).toBeInTheDocument();
+		await waitFor(() => expect(kcal).toHaveTextContent("預算 2000"));
 		expect(kcal).not.toHaveTextContent("含運動");
 	});
 
-	it("舊回應（沒有三個欄位，離線快取裡的）：跟以前一樣 / 2000，沒有「含運動」", async () => {
+	it("舊回應（沒有三個欄位，離線快取裡的）：預算退回目標 2000，沒有「含運動」", async () => {
 		mockOverview();
 
 		render(wrap(<Overview />));
 
 		const kcal = screen.getByTestId("today-kcal");
-		expect(await within(kcal).findByText("/ 2000 kcal")).toBeInTheDocument();
+		await waitFor(() => expect(kcal).toHaveTextContent("預算 2000"));
 		expect(kcal).not.toHaveTextContent("含運動");
 	});
 
@@ -497,5 +532,175 @@ describe("總覽：運動（運動規格 §7.4）", () => {
 		);
 		// 手上的那一筆照樣在時間線上。
 		expect(await screen.findAllByTestId("timeline-row")).toHaveLength(3);
+	});
+});
+
+/** 跟 `me.test.tsx` 的 `WEIGHTS` 一樣：10/14 的 79 比 10/07 的 80 少 1。 */
+const WEIGHTS = {
+	today: "2026-10-14",
+	entries: [
+		{ date: "2026-10-07", weight_kg: "80.00" },
+		{ date: "2026-10-10", weight_kg: "79.60" },
+		{ date: "2026-10-14", weight_kg: "79.00" },
+	],
+};
+
+function precedes(a: Element, b: Element): boolean {
+	return Boolean(
+		a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING,
+	);
+}
+
+describe("總覽：圓環卡片與小卡片（首頁改版規格 §3）", () => {
+	it("圓環卡片是 region「今天熱量」，today-kcal 在它上面", async () => {
+		mockOverview();
+
+		render(wrap(<Overview />));
+
+		const region = await screen.findByRole("region", { name: "今天熱量" });
+		expect(region.dataset.testid).toBe("today-kcal");
+	});
+
+	it("超過：超過 57 kcal、弧是 over", async () => {
+		mockOverview({
+			"/api/stats/daily": () =>
+				json({
+					...STATS_WITH_EXERCISE,
+					actual: { ...STATS.actual, kcal: "2400.00" },
+				}),
+		});
+
+		render(wrap(<Overview />));
+
+		const kcal = screen.getByTestId("today-kcal");
+		await waitFor(() => expect(kcal).toHaveTextContent("超過 57 kcal"));
+		expect(within(kcal).getByTestId("calorie-ring-arc")).toHaveAttribute(
+			"data-tone",
+			"over",
+		);
+	});
+
+	it("本月支出是連到報表的連結，名稱含金額", async () => {
+		mockOverview();
+
+		render(wrap(<Overview />));
+
+		const spend = await screen.findByTestId("month-spend");
+		await within(spend).findByText("$12480.00");
+		const link = within(spend).getByRole("link");
+		expect(link).toHaveAttribute("href", "/reports");
+		expect(link).toHaveAccessibleName("本月支出 $12480.00");
+	});
+
+	it("體重：最新一筆、比 7 天前，連到 /weight；迷你折線是裝飾、不進連結的名稱", async () => {
+		mockOverview({ "/api/weights": () => json(WEIGHTS) });
+
+		render(wrap(<Overview />));
+
+		const glance = await screen.findByTestId("weight-glance");
+		await waitFor(() => expect(glance).toHaveTextContent("79 公斤"));
+		expect(glance).toHaveTextContent("比 7 天前 -1 公斤");
+		const link = within(glance).getByRole("link", {
+			name: "體重 79 公斤 比 7 天前 -1 公斤",
+		});
+		expect(link).toHaveAttribute("href", "/weight");
+		const sparkline = within(glance).getByTestId("weight-sparkline");
+		expect(sparkline).toHaveAttribute("aria-hidden", "true");
+	});
+
+	it("體重只有一筆：有數字，沒有迷你折線", async () => {
+		mockOverview({
+			"/api/weights": () =>
+				json({
+					today: "2026-10-14",
+					entries: [{ date: "2026-10-14", weight_kg: "79.00" }],
+				}),
+		});
+
+		render(wrap(<Overview />));
+
+		const glance = await screen.findByTestId("weight-glance");
+		await waitFor(() => expect(glance).toHaveTextContent("79 公斤"));
+		expect(
+			within(glance).queryByTestId("weight-sparkline"),
+		).not.toBeInTheDocument();
+	});
+
+	it("沒有體重：「記錄體重」，沒有迷你折線；點了帶著 weightForm 到 /weight", async () => {
+		mockOverview();
+
+		render(
+			<QueryClientProvider client={newClient()}>
+				<MemoryRouter>
+					<Routes>
+						<RouterRoute path="/" element={<Overview />} />
+						<RouterRoute path="/weight" element={<LocationState />} />
+					</Routes>
+				</MemoryRouter>
+			</QueryClientProvider>,
+		);
+
+		const glance = await screen.findByTestId("weight-glance");
+		const link = await within(glance).findByRole("link", {
+			name: "體重 記錄體重",
+		});
+		expect(
+			within(glance).queryByTestId("weight-sparkline"),
+		).not.toBeInTheDocument();
+		await userEvent.click(link);
+		expect(await screen.findByTestId("location-state")).toHaveTextContent(
+			'{"weightForm":true}',
+		);
+	});
+
+	it("體重讀不到（沒有快取）：只有那張卡說無法載入，時間線照常", async () => {
+		mockOverview({ "/api/weights": serverError });
+
+		render(wrap(<Overview />));
+
+		const glance = await screen.findByTestId("weight-glance");
+		expect(await within(glance).findByText("無法載入體重")).toBeInTheDocument();
+		expect(await screen.findAllByTestId("timeline-row")).toHaveLength(2);
+	});
+
+	it("只有體重重抓失敗、手上有資料：離線提示也出現", async () => {
+		const client = newClient();
+		client.setQueryData(queryKeys.weights, WEIGHTS);
+		mockOverview({ "/api/weights": serverError });
+
+		render(wrap(<Overview />, client));
+
+		expect(await screen.findByTestId("offline-banner")).toHaveTextContent(
+			"離線資料，最後更新於",
+		);
+		expect(screen.getByTestId("weight-glance")).toHaveTextContent("79 公斤");
+	});
+
+	it("順序：圓環卡片 → 本月支出 → 體重 → 今天的時間線", async () => {
+		mockOverview();
+
+		render(wrap(<Overview />));
+
+		const today = await screen.findByRole("heading", { name: "今天" });
+		const kcal = screen.getByTestId("today-kcal");
+		const spend = screen.getByTestId("month-spend");
+		const weight = screen.getByTestId("weight-glance");
+		expect(precedes(kcal, spend)).toBe(true);
+		expect(precedes(spend, weight)).toBe(true);
+		expect(precedes(weight, today)).toBe(true);
+	});
+
+	it("stats 讀不到（沒有快取）：圓環卡片說無法載入，沒有圓弧", async () => {
+		mockOverview({ "/api/stats/daily": serverError });
+
+		render(wrap(<Overview />));
+
+		const kcal = screen.getByTestId("today-kcal");
+		expect(
+			await within(kcal).findByText("無法載入今天的熱量"),
+		).toBeInTheDocument();
+		expect(
+			within(kcal).queryByTestId("calorie-ring-arc"),
+		).not.toBeInTheDocument();
 	});
 });
