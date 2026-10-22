@@ -181,6 +181,19 @@ export function roundForDisplay(value: Numeric, places: 0 | 1): string {
 		.toString();
 }
 
+/** 今天的熱量額度還剩多少（首頁改版規格 D3）：`額度 − 實際` **先**四捨五入到整數（half-up：.5 遠離 0），再看正負。
+ *  負的＝超過（`over: true`，`amount` 是絕對值）；0 與正的＝還能吃。先捨入再判斷，畫面上不會出現「超過 0 kcal」：
+ *  −0.4 捨入成 −0，`lessThan(0)` 是 false，`abs()` 印成 "0"。 */
+export function kcalBalance(
+	budget: Numeric,
+	actual: Numeric,
+): { over: boolean; amount: string } {
+	const diff = new Decimal(budget)
+		.minus(actual)
+		.toDecimalPlaces(0, Decimal.ROUND_HALF_UP);
+	return { over: diff.lessThan(0), amount: diff.abs().toString() };
+}
+
 /** 一組數值的平均。**空陣列回 `null`，不是 `"0"`**——沒有資料就沒有平均，
  *  「平均 0」讀起來是「每天都吃了 0」（跟 `ratioOf` 的 null 同一個道理）。
  *
