@@ -152,18 +152,20 @@ docker compose $PROD exec api python -m app.cli create-admin you@example.com '�
 
 ### 7. 從手機確認
 
-tailnet 裡的手機開 `http://100.x.y.z:8000/docs`。
+tailnet 裡的手機開 `https://<機器名>.<tailnet>.ts.net`（`tailscale serve status` 第一行就是網址；
+api 只綁在 NAS 自己的 loopback，從外面連 `100.x.y.z:8000` 是連不到的，那是刻意的）。
 
 ### 更新
 
-程式碼是 build 進映像的（production 沒有原始碼掛載也沒有 `--reload`），
-所以**一律用 `up -d --build`，`restart` 不夠**：
+映像由 GitHub Actions 在測試全綠之後建好、推到 GHCR，NAS 只負責拉下來換上。等 master 那次
+push 的 CI 全綠，在 NAS 上跑：
 
 ```bash
-git pull
-docker compose $PROD up -d --build
-docker compose $PROD exec api python -m alembic upgrade head   # 若這次有 migration
+cd ~/apps/nutrition-tracker && sudo ./scripts/deploy.sh
 ```
+
+腳本會 `git pull`、拉映像、先備份資料庫、跑 migration、換上新版、等健康檢查，起不來就自動退回上一版。
+細節（版本檢查、部署鎖、退版的限制）見 [docs/deployment.md](docs/deployment.md)。
 
 ### 例行維護
 
@@ -176,6 +178,71 @@ docker compose $PROD exec api python -m app.cli cleanup-photos  # 清理孤兒�
 > 在 host 上跑會看錯目錄、回報「0 個孤兒」而真實的卷一直累積。
 
 排程與還原流程見 [docs/deployment.md](docs/deployment.md)。
+
+## 開放給朋友使用（Tailscale 分享）
+
+這個 app 只開放給 tailnet 裡的裝置。要讓朋友用，最安全的做法是用 Tailscale 的**分享（Share）**：
+朋友用**他自己的** Tailscale 帳號，只看得到你分享的這一台 NAS，看不到你其他的裝置；app 也不會公開在網路上。
+陌生人不能自己註冊——每個帳號都要你發的邀請連結。
+
+> Tailscale 管理頁的按鈕名稱可能隨版本略有不同，以畫面上看到的為準。
+
+### 一次性：限制朋友只能連到 app（建議先做）
+
+分享出去的是**整台 NAS**。不加限制的話，朋友的裝置也連得到 NAS 的其他服務（DSM 管理介面、SSH、檔案分享）。
+在 Tailscale 的存取規則裡，把「分享進來的人」限制成只能連這台的 443（也就是這個 app）：
+
+1. 在 NAS 上查 Tailscale 的 IP：
+
+   ```bash
+   tailscale ip -4
+   ```
+
+2. 打開 <https://login.tailscale.com/admin/acls>（Access controls）。**先把整份內容複製存一份備份**。
+3. 在 `"hosts"` 裡替 NAS 取個名字（沒有 `"hosts"` 就新增），把 `"acls"` 換成下面這兩條——
+   第一條讓**你自己的裝置**照舊什麼都連得到，第二條讓**分享進來的人**只能連 NAS 的 443：
+
+   ```jsonc
+   "hosts": {
+     "nas": "100.x.y.z"   // 換成第 1 步查到的 IP
+   },
+   "acls": [
+     { "action": "accept", "src": ["autogroup:member"], "dst": ["*:*"] },
+     { "action": "accept", "src": ["autogroup:shared"], "dst": ["nas:443"] }
+   ],
+   ```
+
+   檔案裡其他段落（例如 `"ssh"`、`"tagOwners"`）**照舊留著**，只改 `"hosts"` 與 `"acls"`。
+4. 按 **Save**。存檔前頁面會檢查格式；存好之後用你自己的手機打開 app，確認還連得到。
+   改壞了就把第 2 步的備份貼回去、再存一次。
+
+### 每加一位朋友
+
+**你要做的：**
+
+1. 打開 <https://login.tailscale.com/admin/machines>，找到 NAS 那一台，點右邊的 **⋯** →
+   **Share…**，產生一條分享連結（或直接填朋友的 email 邀請），傳給朋友。
+2. 打開這個 app → **我的 → 邀請朋友**，產生一條**建立帳號的邀請連結**，也傳給朋友。
+   兩條連結不一樣：第一條讓他連得到 NAS，第二條讓他在 app 裡開帳號。
+
+**朋友要做的：**
+
+1. 在手機或電腦安裝 **Tailscale**（App Store、Google Play，或 <https://tailscale.com/download>），
+   用 Google／Apple／Microsoft 帳號登入（個人使用免費）。
+2. 打開你傳的**分享連結**，按接受。
+3. 在 Tailscale App 裡把連線**打開**（用 app 的時候 Tailscale 要開著，平常一直開著也可以）。
+4. 打開你傳的**邀請連結**，設定 email、密碼和名字，建立帳號。
+5. 之後都用 <https://kennywang.tailc1f9e9.ts.net> 登入。手機可以「加入主畫面」，用起來就像一般 App。
+
+### 常見問題
+
+- **朋友打不開網址**：確認 Tailscale 是「已連線」，而且在 Tailscale App 的裝置列表裡看得到你的 NAS。
+  分享連結要用**他自己登入 Tailscale 的那個帳號**接受。
+- **朋友連得到 app、但連不到 NAS 的其他東西**：這是上面存取規則的效果，正常。
+- **不想再讓某位朋友用**：
+  1. Tailscale 管理頁 → Machines → NAS 那一台 → **⋯ → Share…**（或 Sharing），把那個人移除——他就連不到了；
+  2. app 裡他的帳號和資料還在；要改他的密碼用「我的 → 所有帳號 → 產生重設密碼連結」（帳號目前沒有刪除功能）。
+- **朋友的資料存在哪**：全部在你的 NAS 上（每天備份到 `backups/`）。邀請朋友前，讓他知道他的飲食、體重和照片會存在你這裡。
 
 ## 交接文件
 
