@@ -523,7 +523,8 @@ export function AiMealPanel({
 					onHintChange={(hint) => setPending({ ...pending, hint })}
 					startLabel="開始估算"
 					placeholder="例：飯半碗、雞皮沒吃、7-11 的"
-					busy={busy || aiUnavailable}
+					busy={busy}
+					startDisabled={aiUnavailable}
 					sectionRef={stepRef}
 					onStart={() =>
 						analyze.mutate({

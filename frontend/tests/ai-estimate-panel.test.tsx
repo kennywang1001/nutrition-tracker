@@ -1096,6 +1096,28 @@ describe("AI 估算面板：照片＋補充說明（照片說明規格 §6）", 
 		expect(screen.queryByText(/秒$/)).not.toBeInTheDocument();
 	});
 
+	it("AI 沒設定（照片估算回 503）：「開始估算」aria-disabled、不再送；「取消」照樣收起卡片", async () => {
+		const fetchMock = mockApi(
+			routes(apiError(503, "AI_NOT_CONFIGURED", "AI 分析未設定")),
+		);
+		renderPanel();
+
+		await pickPhoto("拍照估算", PHOTO, { hint: "飯半碗" });
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("AI 分析未設定");
+		const start = within(step()).getByRole("button", { name: "開始估算" });
+		expect(start).toHaveAttribute("aria-disabled", "true");
+		await userEvent.click(start);
+		expect(posted(fetchMock, "/api/ai/analyze")).toBe(1);
+
+		const cancel = within(step()).getByRole("button", { name: "取消" });
+		expect(cancel).toHaveAttribute("aria-disabled", "false");
+		await userEvent.click(cancel);
+		expect(
+			screen.queryByRole("region", { name: "確認照片" }),
+		).not.toBeInTheDocument();
+	});
+
 	it("卡片開著再選一張：說明留著，縮圖換成新的那一張", async () => {
 		mockApi(routes());
 		const created = vi.spyOn(URL, "createObjectURL");

@@ -1540,6 +1540,28 @@ describe("AI 多樣估算面板：照片＋補充說明（照片說明規格 §6
 		expect(bodies[1].hint).toBe("7-11 的");
 	});
 
+	it("AI 沒設定（照片估算回 503）：「開始估算」aria-disabled、不再送；「取消」照樣收起卡片", async () => {
+		const fetchMock = mockPanel({
+			estimate: () => apiError(503, "AI_NOT_CONFIGURED", "AI 分析未設定"),
+		});
+		renderPanel("");
+
+		await pickPhoto("拍照估算", PHOTO, { hint: "飯半碗" });
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("AI 分析未設定");
+		const start = within(step()).getByRole("button", { name: "開始估算" });
+		expect(start).toHaveAttribute("aria-disabled", "true");
+		await userEvent.click(start);
+		expect(mealBodies(fetchMock)).toHaveLength(1);
+
+		const cancel = within(step()).getByRole("button", { name: "取消" });
+		expect(cancel).toHaveAttribute("aria-disabled", "false");
+		await userEvent.click(cancel);
+		expect(
+			screen.queryByRole("region", { name: "確認照片" }),
+		).not.toBeInTheDocument();
+	});
+
 	it("照片太大：選的當下就擋，不出卡片、不打網路", async () => {
 		const fetchMock = mockPanel();
 		renderPanel("");

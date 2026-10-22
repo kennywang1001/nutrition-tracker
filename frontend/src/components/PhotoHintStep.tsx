@@ -22,8 +22,11 @@ type Props = {
 	/** 「開始估算」或「開始讀取」。 */
 	startLabel: string;
 	placeholder: string;
-	/** 送出中（或已經知道 AI 沒設定）：兩顆按鈕 aria-disabled、說明唯讀。 */
+	/** 真的有請求在路上：兩顆按鈕 aria-disabled、說明唯讀。 */
 	busy: boolean;
+	/** 只停用「開始」（已經知道 AI 沒設定）：「取消」照樣能按——沒有東西在路上，卡片一定要
+	 *  收得起來（審查 M1）。 */
+	startDisabled?: boolean;
 	onStart: () => void;
 	onCancel: () => void;
 	/** 選了照片時呼叫端把焦點移到這張卡片。 */
@@ -36,7 +39,8 @@ type Props = {
  *  - **不自動對焦到說明**：手機會直接跳出鍵盤、蓋住「開始估算」，多數人不打說明。焦點由呼叫端移到卡片本身。
  *  - 按鈕用 `aria-disabled`：按下「開始估算」的當下焦點在它身上，原生 `disabled` 會讓焦點掉到 body。
  *  - 「取消」送出中也停用：已經送出的那一次照樣會回來、照樣算額度，這時收起卡片，結果卻在 20 秒後
- *    冒出來，比等它回來更讓人困惑（規格 §6.3）。
+ *    冒出來，比等它回來更讓人困惑（規格 §6.3）。**只有**送出中停用：AI 沒設定只停用「開始」
+ *    （`startDisabled`），不然卡片收不起來（審查 M1）。
  *  - 剩幾字那一行是 `aria-describedby`，不是 live region：聚焦時念一次，打字時不吵。 */
 export function PhotoHintStep({
 	file,
@@ -45,11 +49,13 @@ export function PhotoHintStep({
 	startLabel,
 	placeholder,
 	busy,
+	startDisabled = false,
 	onStart,
 	onCancel,
 	sectionRef,
 }: Props) {
 	const id = useId();
+	const startOff = busy || startDisabled;
 	const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 	useEffect(() => {
 		const url = URL.createObjectURL(file);
@@ -100,9 +106,9 @@ export function PhotoHintStep({
 				<button
 					type="button"
 					className={base.primary}
-					aria-disabled={busy}
+					aria-disabled={startOff}
 					onClick={() => {
-						if (!busy) onStart();
+						if (!startOff) onStart();
 					}}
 				>
 					{startLabel}

@@ -11,12 +11,14 @@ const OTHER = new File(["b"], "b.jpg", { type: "image/jpeg" });
 function Harness({
 	file = PHOTO,
 	busy = false,
+	startDisabled = false,
 	startLabel = "開始估算",
 	onStart,
 	onCancel,
 }: {
 	file?: File;
 	busy?: boolean;
+	startDisabled?: boolean;
 	startLabel?: string;
 	onStart: () => void;
 	onCancel: () => void;
@@ -30,6 +32,7 @@ function Harness({
 			startLabel={startLabel}
 			placeholder="例：飯半碗、雞皮沒吃、7-11 的"
 			busy={busy}
+			startDisabled={startDisabled}
 			onStart={onStart}
 			onCancel={onCancel}
 		/>
@@ -121,6 +124,24 @@ describe("PhotoHintStep（確認照片）", () => {
 		expect(onStart).not.toHaveBeenCalled();
 		expect(onCancel).not.toHaveBeenCalled();
 		expect(screen.getByLabelText("補充說明（選填）")).toHaveAttribute(
+			"readonly",
+		);
+	});
+
+	it("只停用開始（AI 沒設定）：「開始估算」aria-disabled、按了不呼叫；「取消」照樣能按、說明能打", async () => {
+		const onStart = vi.fn();
+		const onCancel = vi.fn();
+		render(<Harness startDisabled onStart={onStart} onCancel={onCancel} />);
+
+		const start = screen.getByRole("button", { name: "開始估算" });
+		const cancel = screen.getByRole("button", { name: "取消" });
+		expect(start).toHaveAttribute("aria-disabled", "true");
+		expect(cancel).toHaveAttribute("aria-disabled", "false");
+		await userEvent.click(start);
+		expect(onStart).not.toHaveBeenCalled();
+		await userEvent.click(cancel);
+		expect(onCancel).toHaveBeenCalledTimes(1);
+		expect(screen.getByLabelText("補充說明（選填）")).not.toHaveAttribute(
 			"readonly",
 		);
 	});
