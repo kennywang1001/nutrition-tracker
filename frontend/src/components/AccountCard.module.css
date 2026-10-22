@@ -8,9 +8,12 @@
 	font-weight: 600;
 }
 
+/* email 沒有空白、常常也沒有連字號：長的在 390 寬放不下一行、又找不到地方換行，會撐出整頁的水平捲動。
+   `anywhere`：必要時在任何字元之間換行（也讓 min-content 變窄，flex／grid 裡一樣縮得下）。 */
 .email {
 	margin: 0;
 	color: var(--color-text-muted);
+	overflow-wrap: anywhere;
 }
 
 .form {
