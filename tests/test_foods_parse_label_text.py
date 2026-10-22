@@ -136,6 +136,28 @@ async def test_the_31st_in_a_minute_is_429(client, db_session):
     assert others.status_code == 200
 
 
+async def test_a_422_does_not_use_up_the_limit(client, db_session):
+    # 順序是 401 → 422 → 429：body 驗不過根本進不到路由，限速器沒被叫到。
+    headers = auth(await create_user(db_session))
+
+    for text in ["", "字" * 4001] * 16:
+        assert (await client.post(URL, headers=headers, json={"text": text})).status_code == 422
+    ok = await client.post(URL, headers=headers, json={"text": "x"})
+
+    assert ok.status_code == 200
+
+
+async def test_a_long_digit_run_is_200(client, db_session):
+    # 30 位數的數字以前在四捨五入那一步丟 InvalidOperation、變成 500（審查 I2）。
+    headers = auth(await create_user(db_session))
+    text = "每100公克\n熱量 514 大卡\n蛋白質 " + "1" * 30 + " 公克\n"
+
+    response = await client.post(URL, headers=headers, json={"text": text})
+
+    assert response.status_code == 200
+    assert response.json()["complete"] is False
+
+
 async def test_the_text_never_reaches_the_log(client, db_session, caplog):
     # root 設成 DEBUG、掃每一個 record：不是只看某一個 logger。
     caplog.set_level(logging.DEBUG)

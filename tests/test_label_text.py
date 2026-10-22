@@ -270,3 +270,325 @@ def test_full_width_pasted_table():
 
 def test_huge_input_does_not_raise():
     parse_label_text("熱量 9" * 2000)  # 端點的上限是 4000 字，解析器本身不該因為長而出錯
+
+
+# ---- 審查後的修正：欄的順序看表頭那一行、兩欄交叉檢查（規格 §4.2、§4.4）----
+
+PER_100_FIRST = _text(
+    "{size}",
+    "{header}",
+    "熱量 514 大卡 180 大卡",
+    "蛋白質 6.0 公克 2.1 公克",
+    "脂肪 28.0 公克 9.8 公克",
+    "碳水化合物 60.9 公克 21.3 公克",
+)
+SERVING_FIRST = _text(
+    "{size}",
+    "{header}",
+    "熱量 180 大卡 514 大卡",
+    "蛋白質 2.1 公克 6.0 公克",
+    "脂肪 9.8 公克 28.0 公克",
+    "碳水化合物 21.3 公克 60.9 公克",
+)
+RIGHT = "514.00/6.00/28.00/60.90"
+
+
+def test_uk_per_100_first_and_a_bar_column():
+    # 「Per 45g bar」是每份那一欄、也是一份的量；每 100 在前面。
+    text = _text(
+        "Nutrition",
+        "Typical values  Per 100g  Per 45g bar  %RI*",
+        "Energy  2151kJ  968kJ",
+        "        514kcal  231kcal  12%",
+        "Fat  28.0g  12.6g  18%",
+        "of which saturates  9.1g  4.1g  21%",
+        "Carbohydrate  60.9g  27.4g",
+        "of which sugars  3.4g  1.5g  2%",
+        "Fibre  2.0g  0.9g",
+        "Protein  6.0g  2.7g  5%",
+        "Salt  0.86g  0.39g  7%",
+    )
+    assert _summary(parse_label_text(text)) == "complete per_100 g 45.00 - 514.10/6.00/28.00/60.90"
+
+
+def test_per_100_first_and_a_gram_serving_header():
+    text = _text(
+        "Per 100g  Per 30g serving",
+        "Energy  2151kJ/514kcal  645kJ/154kcal",
+        "Fat  28.0g  8.4g",
+        "Carbohydrate  60.9g  18.3g",
+        "Protein  6.0g  1.8g",
+    )
+    assert _summary(parse_label_text(text)) == f"complete per_100 g 30.00 - {RIGHT}"
+
+
+@pytest.mark.parametrize("size", ["每一份量 35 公克", ""], ids=["with_size", "without_size"])
+def test_a_misread_serving_header_after_per_100(size):
+    # 只讀到「每100公克」、它後面還有像表頭的字（讀錯的「每份」）→ 每 100 在前面。
+    # 沒有每一份量（不能交叉檢查）也一樣。
+    text = PER_100_FIRST.format(size=size, header="每100公克 每仿")
+    expected_size = "35.00" if size else "-"
+    assert _summary(parse_label_text(text)) == f"complete per_100 g {expected_size} - {RIGHT}"
+
+
+def test_a_misread_serving_header_before_per_100_without_a_size():
+    text = SERVING_FIRST.format(size="", header="每仿 每100公克")
+    assert _summary(parse_label_text(text)) == f"complete per_100 g - - {RIGHT}"
+
+
+def test_a_serving_size_line_above_the_header():
+    # 「每份 35 公克」是每一份量，不是表頭：欄的順序看「每100公克 每份」那一行。
+    text = PER_100_FIRST.format(size="每份 35 公克", header="每100公克 每份")
+    assert _summary(parse_label_text(text)) == f"complete per_100 g 35.00 - {RIGHT}"
+
+
+@pytest.mark.parametrize("line", ["每份 35 公克", "每份量 35 公克"])
+def test_a_serving_size_line_below_the_header_is_not_a_header(line):
+    text = _text(
+        "營養標示",
+        "每100公克",
+        line,
+        "熱量 514 大卡",
+        "蛋白質 6.0 公克",
+        "脂肪 28.0 公克",
+        "碳水化合物 60.9 公克",
+    )
+    assert _summary(parse_label_text(text)) == f"complete per_100 g 35.00 - {RIGHT}"
+
+
+@pytest.mark.parametrize(
+    ("size", "expected_size"),
+    [("Serving size 30 g", "30.00"), ("", "-")],
+    ids=["with_size", "without_size"],
+)
+def test_prose_above_the_header(size, expected_size):
+    # 說明文字裡的「per serving and per 100 g」不是表頭。
+    # 沒有一份的量（不能交叉檢查）時只靠表頭那一行。
+    text = _text(
+        "Nutrition information (per serving and per 100 g)",
+        size,
+        "per 100 g   per serving",
+        "Energy 2151 kJ 645 kJ",
+        "Protein 6.0 g 1.8 g",
+        "Fat 28.0 g 8.4 g",
+        "Carbohydrate 60.9 g 18.3 g",
+    )
+    expected = f"complete per_100 g {expected_size} - 514.10/6.00/28.00/60.90"
+    assert _summary(parse_label_text(text)) == expected
+
+
+def test_columns_in_the_wrong_order_are_swapped():
+    # 表頭說每 100 在前，數字說每份在前（514 ÷ 180 ≈ 100 ÷ 35）：照數字。
+    text = SERVING_FIRST.format(size="每一份量 35 公克", header="每100公克 每份")
+    assert _summary(parse_label_text(text)) == f"complete per_100 g 35.00 - {RIGHT}"
+
+
+def test_columns_that_cannot_be_reconciled_are_not_complete():
+    # 每一份量讀成 3.5、欄又排反：兩種排法都對不起來 → 哪一欄都不信。
+    text = PER_100_FIRST.format(size="每一份量 3.5 公克", header="每份 每100公克")
+    assert _summary(parse_label_text(text)) == "implausible - g 3.50 - -/-/-/-"
+
+
+@pytest.mark.parametrize(
+    "table", [PER_100_FIRST, SERVING_FIRST], ids=["per_100_first", "serving_first"]
+)
+def test_without_headers_the_serving_size_settles_the_order(table):
+    text = table.format(size="每一份量 35 公克", header="營養標示")
+    assert _summary(parse_label_text(text)) == f"complete per_100 g 35.00 - {RIGHT}"
+
+
+@pytest.mark.parametrize("header", ["營養標示", "每100公克", "營養標示 每100公克"])
+def test_an_order_that_cannot_be_read_or_checked_is_not_guessed(header):
+    # 沒有表頭、只有一個單獨的表頭、或旁邊的字不像表頭；又沒有每一份量可以交叉檢查 → 不猜。
+    text = SERVING_FIRST.format(size="", header=header)
+    assert _summary(parse_label_text(text)) == "columns_unknown - g - - -/-/-/-"
+
+
+def test_without_headers_or_a_size_that_fits_the_order_is_unknown():
+    text = SERVING_FIRST.format(size="每一份量 50 公克", header="營養標示")
+    assert parse_label_text(text).reason == "columns_unknown"
+
+
+def test_one_nutrient_that_contradicts_the_other_column_is_dropped():
+    # 脂肪 9.8 ÷ 35 × 100 = 28，不是 2.0；兩個都在範圍內、分不出哪一個錯 → 那一項讀不到。
+    result = parse_label_text(TABLE.format(fat="脂肪 9.8 公克 2.0 公克"))
+    assert _summary(result) == "missing_fields - g 35.00 4.00 514.00/6.00/-/60.90"
+
+
+def test_a_contradicted_value_beyond_the_physical_limit_loses():
+    # 每份那一欄的脂肪少了小數點（98 → 每 100 是 280，不可能）：每 100 那一欄的 28.0 照用。
+    result = parse_label_text(TABLE.format(fat="脂肪 98 公克 28.0 公克"))
+    assert _summary(result) == f"complete per_100 g 35.00 4.00 {RIGHT}"
+
+
+def test_a_broken_column_and_a_contradiction_keep_what_agrees():
+    # 每 100 的脂肪少了小數點（不合理），蛋白質兩欄又對不起來（都在範圍內）：每份那一欄也不能用。
+    # 結果是不完整、留下兩欄對得起來的項目，不是整個「不合理」。
+    text = TABLE.format(fat="脂肪 9.8 公克 2809").replace(
+        "蛋白質 2.1 公克 6.0 公克", "蛋白質 2.1 公克 9.0 公克"
+    )
+    assert _summary(parse_label_text(text)) == "missing_fields - g 35.00 4.00 514.00/-/-/60.90"
+
+
+def test_the_tolerance_is_not_wider_than_the_rounding():
+    # 9.8 ÷ 35 × 100 = 28.0，30.5 差 9%：不是進位的差。
+    result = parse_label_text(TABLE.format(fat="脂肪 9.8 公克 30.5 公克"))
+    assert _summary(result) == "missing_fields - g 35.00 4.00 514.00/6.00/-/60.90"
+
+
+def test_the_tolerance_covers_a_small_value_labelled_zero():
+    # 每 100 不超過 0.5 公克可以標 0；每份 0.1 → 每 100 是 0.29。
+    result = parse_label_text(TABLE.format(fat="脂肪 0.1 公克 0 公克"))
+    assert _summary(result) == "complete per_100 g 35.00 4.00 514.00/6.00/0.00/60.90"
+
+
+def test_the_tolerance_covers_whole_kcal_on_a_small_serving():
+    # 一份 10 公克：4.4 大卡印成 4，每 100 是 44。
+    text = _text(
+        "每一份量 10 公克",
+        "每份 每100公克",
+        "熱量 4 大卡 44 大卡",
+        "蛋白質 0.1 公克 1.2 公克",
+        "脂肪 0 公克 0 公克",
+        "碳水化合物 1.0 公克 10.4 公克",
+    )
+    assert _summary(parse_label_text(text)) == "complete per_100 g 10.00 - 44.00/1.20/0.00/10.40"
+
+
+def test_the_tolerance_covers_whole_grams():
+    # 歐盟的進位：10 公克以上印整數（18.27 → 18、60.9 → 61）。
+    text = KJ_ONLY.replace("18.3 g 60.9 g", "18 g 61 g")
+    assert _summary(parse_label_text(text)) == "complete per_100 g 30.00 - 514.10/6.00/28.00/61.00"
+
+
+# ---- 審查後的修正：很長的數字不丟例外（規格 §4.2）----
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "每100公克\n熱量 514 大卡\n蛋白質 " + "1" * 30 + " 公克\n",
+            "missing_fields - g - - 514.00/-/-/-",
+        ),
+        # 那一行有數字（只是不算數）：不去借下一行的。
+        (
+            "每100公克\n熱量 514 大卡\n蛋白質 " + "1" * 30 + " 公克\n6.0 公克\n",
+            "missing_fields - g - - 514.00/-/-/-",
+        ),
+        ("每一份量 " + "9" * 30 + " 公克\n", "no_values - g - - -/-/-/-"),
+        ("本包裝含" + "9" * 30 + "份\n", "no_values - g - - -/-/-/-"),
+        ("每100公克\n熱量 " + "l" * 30 + "8 大卡\n", "no_values - g - - -/-/-/-"),
+        ("per 100 g\nEnergy " + "9" * 30 + " kJ\n", "no_values - g - - -/-/-/-"),
+        # 表頭裡的量讀不出來：還是每份那一欄，只是沒有一份的量。
+        (
+            "Per 100g  Per " + "9" * 30 + "g bar\nFat 28.0 g 1.0 g\n",
+            "missing_fields - g - - -/-/28.00/-",
+        ),
+    ],
+    ids=["row", "row_no_borrow", "serving_size", "servings", "lookalikes", "kj", "header_size"],
+)
+def test_a_long_digit_run_is_not_a_number(text, expected):
+    assert _summary(parse_label_text(text)) == expected
+
+
+# ---- 審查後的修正：每日參考值那一欄的截斷（規格 §4.2）----
+
+
+def test_a_split_number_beside_its_own_percent_is_not_cut():
+    # 「19.0」讀成「1 9.0」：% 還在，多出來的不是讀丟了 % 的百分比 → 這一列讀不到。
+    text = _text(
+        "每一份量 250 毫升",
+        "每份 每日參考值百分比",
+        "熱量 135 大卡 7%",
+        "蛋白質 8.0 公克 13%",
+        "脂肪 7.5 公克 13%",
+        "碳水化合物 1 9.0 公克 6%",
+    )
+    assert _summary(parse_label_text(text)) == "missing_fields - ml 250.00 - 54.00/3.20/3.00/-"
+
+
+def test_two_extra_values_are_not_cut():
+    text = _text(
+        "每一份量 250 毫升",
+        "每份 每日參考值百分比",
+        "熱量 135 大卡 7",
+        "蛋白質 8.0 公克 13",
+        "脂肪 7 5 公克 13",
+        "碳水化合物 9.0 公克 3",
+    )
+    assert _summary(parse_label_text(text)) == "missing_fields - ml 250.00 - 54.00/3.20/-/3.60"
+
+
+def test_the_reference_footnote_does_not_turn_on_the_cut():
+    text = _text(
+        "每一份量 35 公克",
+        "每份 每100公克",
+        "熱量 180 大卡 514 大卡",
+        "蛋白質 2.1 公克 6.0 公克",
+        "脂肪 9.8 公克 2 8.0 公克",
+        "碳水化合物 21.3 公克 60.9 公克",
+        "每日參考值：熱量2000大卡、蛋白質60公克、脂肪60公克",
+    )
+    assert _summary(parse_label_text(text)) == "missing_fields - g 35.00 - 514.00/6.00/-/60.90"
+
+
+@pytest.mark.parametrize(
+    ("top", "bottom"),
+    [("每日參考值：熱量2000大卡、脂肪60公克", ""), ("", "＊參考值未訂定")],
+    ids=["note_with_nutrients_on_top", "note_below_the_table"],
+)
+def test_a_reference_note_outside_the_header_does_not_turn_on_the_cut(top, bottom):
+    # 只有每 100 一欄，脂肪的「28.0」拆成「2 8.0」：說明行不是表頭，不砍成 2。
+    text = _text(
+        top,
+        "每100公克",
+        "熱量 514 大卡",
+        "蛋白質 6.0 公克",
+        "脂肪 2 8.0 公克",
+        "碳水化合物 60.9 公克",
+        bottom,
+    )
+    assert _summary(parse_label_text(text)) == "missing_fields - g - - 514.00/6.00/-/60.90"
+
+
+# ---- 審查後的修正：每一份量與份數的冒號、點線（規格 §4.1、§4.4）----
+
+
+@pytest.mark.parametrize(
+    "line", ["每一份量：35 公克", "每一份量 : 35公克", "Serving size: 35 g", "serving size35g"]
+)
+def test_serving_size_with_or_without_a_colon(line):
+    assert parse_label_text(line + "\n").serving_size == D("35.00")
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "本包裝含：4 份",
+        "Servings per container: about 4",
+        "servings per pack : 4",
+        "Servings per package 4",
+    ],
+)
+def test_servings_with_or_without_a_colon(line):
+    assert parse_label_text(line + "\n").servings_per_package == D("4.00")
+
+
+def test_dot_leaders():
+    text = _text(
+        "每100公克",
+        "熱量......514大卡",
+        "蛋白質……6.0公克",  # NFKC：… → ...
+        "脂肪......28.0公克",
+        "碳水化合物......60.9公克",
+    )
+    assert _summary(parse_label_text(text)) == f"complete per_100 g - - {RIGHT}"
+
+
+def test_a_lone_point_before_a_number_is_not_a_leader():
+    # 「.5」多半是「0.5」讀丟了 0：不當成 5。
+    text = _text(
+        "每100公克", "熱量 514 大卡", "蛋白質 .5 公克", "脂肪 28.0 公克", "碳水化合物 60.9 公克"
+    )
+    assert _summary(parse_label_text(text)) == "missing_fields - g - - 514.00/-/28.00/60.90"

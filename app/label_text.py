@@ -17,6 +17,7 @@ from typing import Literal
 
 from app.models.food import BaseUnit
 from app.nutrition_units import (
+    MAX_EXTERNAL_NUMBER,
     MAX_KCAL_PER_100,
     kj_to_kcal,
     per_100_from_serving,
@@ -91,10 +92,20 @@ _UNITS: dict[str, Unit] = {
     "ml": "ml",
     "%": "pct",
 }
+# 數字前面不能是數字或單獨一個小數點（「1.2.3」的 3、「.5」都不算）；點線（「熱量......514」）
+# 可以（審查 M2）。
 _VALUE = re.compile(
-    r"(?<![\d.])(\d+(?:\.\d+)?)\s*(大卡|千卡|kcal|cal|千焦|kj|公克|克|g|毫克|mg|毫升|ml|%)?",
+    r"(?:(?<![\d.])|(?<=\.\.))(\d+(?:\.\d+)?)\s*"
+    r"(大卡|千卡|kcal|cal|千焦|kj|公克|克|g|毫克|mg|毫升|ml|%)?",
     re.IGNORECASE,
 )
+
+
+def _bounded(digits: str) -> Decimal | None:
+    """一段數字 → Decimal；超過 `MAX_EXTERNAL_NUMBER`（1e6）的是垃圾，不是數字（審查 I2：30 位數的
+    數字在 `round_cents` 丟 `InvalidOperation`，端點變成 500）。每一個讀數字的地方都先經過這裡。"""
+    value = Decimal(digits)
+    return value if value <= MAX_EXTERNAL_NUMBER else None
 
 
 @dataclass(frozen=True)
@@ -104,13 +115,13 @@ class _Token:
 
 
 def _tokens(line: str) -> list[_Token]:
-    return [
-        _Token(
-            Decimal(match.group(1)),
-            None if match.group(2) is None else _UNITS[match.group(2).lower()],
-        )
-        for match in _VALUE.finditer(line)
-    ]
+    tokens: list[_Token] = []
+    for match in _VALUE.finditer(line):
+        value = _bounded(match.group(1))
+        if value is not None:
+            unit = None if match.group(2) is None else _UNITS[match.group(2).lower()]
+            tokens.append(_Token(value, unit))
+    return tokens
 
 
 _KEYWORDS: dict[Nutrient, re.Pattern[str]] = {
@@ -153,6 +164,7 @@ class _Row:
     nutrient: Nutrient
     label: str  # 第一個數字之前的字（`熱量(大卡)` 的單位在這裡）
     tokens: list[_Token]
+    line: int  # 名稱那一行是第幾行（找表頭用）
 
 
 def _rows(lines: list[str]) -> list[_Row]:
@@ -166,20 +178,31 @@ def _rows(lines: list[str]) -> list[_Row]:
         first_number = _VALUE.search(line)
         label = line if first_number is None else line[: first_number.start()]
         tokens = _tokens(line)
-        if not tokens and index + 1 < len(lines) and not _is_row_label(lines[index + 1]):
-            # 名稱與數字在相鄰兩行（規格 §4.3）。
+        # 名稱與數字在相鄰兩行（規格 §4.3）。這一行有數字、只是太大不算數的，不去借下一行的。
+        if first_number is None and index + 1 < len(lines) and not _is_row_label(lines[index + 1]):
             tokens = _tokens(lines[index + 1])
         if tokens:
-            rows.append(_Row(nutrients[0], label, tokens))
+            rows.append(_Row(nutrients[0], label, tokens, index))
     return rows
 
 
 # ---- 欄（規格 §4.2）----
 
-_HEADER_SERVING = re.compile(r"每份|每一份(?!量)|per\s*serving", re.IGNORECASE)
+# 每份那一欄。「每份量」「每一份量」是每一份量（§4.4），不是表頭；`Per 45g bar`、`per 30 g serving`
+# 是每份那一欄，也帶著一份的量（審查 C1）。`per 100 g` 在 `_serving_header` 裡跳過。
+_HEADER_SERVING = re.compile(
+    r"每份(?!量)|每一份(?!量)|per\s*(?:serving|bar|portion)\b|per\s*(\d+(?:\.\d+)?)\s*(g|ml)\b",
+    re.IGNORECASE,
+)
 _HEADER_PER_100 = re.compile(r"每\s*100\s*(公克|克|毫升|g|ml)|per\s*100\s*(g|ml)", re.IGNORECASE)
 _HEADER_DV = re.compile(r"參考值|%\s*dv|daily\s*value", re.IGNORECASE)
+# 表頭的字後面直接是量（「每份 35 公克」）：那是每一份量。用 `\s*(?::\s*)?`、不用 `\s*:?\s*`
+# （一長串空白上是平方時間，審查 M1）。
+_AN_AMOUNT = re.compile(r"\s*(?::\s*)?\d")
+# 只認得一個表頭時，同一行另一邊「像表頭的字」：讀錯的「每份」（`每仿`）、英文的 `per …`。
+_HEADER_LIKE = re.compile(r"每|\bper(?![a-z])", re.IGNORECASE)
 _STANDARD = [Column.SERVING, Column.PER_100]  # 衛福部的格式：每份、每 100
+_PER_100_FIRST = [Column.PER_100, Column.SERVING]
 
 
 def _plain_values(row: _Row) -> list[Decimal]:
@@ -187,33 +210,99 @@ def _plain_values(row: _Row) -> list[Decimal]:
     return [token.value for token in row.tokens if token.unit in ("g", None)]
 
 
-def _columns(text: str, rows: list[_Row]) -> list[Column] | None:
-    serving = _HEADER_SERVING.search(text)
-    per_100 = _HEADER_PER_100.search(text)
-    if serving and per_100:
-        return _STANDARD if serving.start() < per_100.start() else [Column.PER_100, Column.SERVING]
-    dv = _HEADER_DV.search(text) is not None
-    # 只讀到一個（或零個）表頭：至少兩列剛好兩個數字、而且沒有每日參考值那一欄，才照衛福部的
-    # 順序當成「每份、每 100」。有每日參考值時第二個數字可能是讀丟了 % 的百分比，不能猜。
-    two_values = sum(1 for row in rows if row.nutrient != "kcal" and len(_plain_values(row)) == 2)
-    if not dv and two_values >= 2:
-        return _STANDARD
-    if serving:
-        return [Column.SERVING]
-    if per_100:
-        return [Column.PER_100]
+def _serving_header(line: str) -> re.Match[str] | None:
+    """一行裡第一個每份那一欄的表頭；`per 100 g` 與後面直接是量的（每一份量）不算。"""
+    for match in _HEADER_SERVING.finditer(line):
+        if match.group(1) is not None and _bounded(match.group(1)) == 100:
+            continue
+        if _AN_AMOUNT.match(line, match.end()):
+            continue
+        return match
     return None
 
 
-def _fit(values: list[Decimal], width: int, dv: bool) -> list[Decimal] | None:
+def _is_header_line(line: str) -> bool:
+    """有欄的表頭（每份、每 100、每日參考值），而且一個營養素都沒提：不是列，也不是底下的
+    「每日參考值：熱量2000大卡…」。"""
+    if any(pattern.search(line) for pattern in _KEYWORDS.values()):
+        return False
+    return bool(_serving_header(line) or _HEADER_PER_100.search(line) or _HEADER_DV.search(line))
+
+
+@dataclass(frozen=True)
+class _Header:
+    line: str | None  # 每份／每 100 的表頭在的那一行
+    dv: bool  # 表頭有每日參考值那一欄
+
+
+def _header(lines: list[str], first_row: int) -> _Header:
+    """表頭是第一列之前的表頭行（審查 C1、I3）；第一列之前沒有，就用全文的第一個表頭行。
+    欄的順序只看其中最後一個有每份／每 100 的那一行，不看整段文字裡第一次出現的位置：
+    上面的「每份 35 公克」、說明文字裡的「per serving and per 100 g」都不算。
+    每日參考值也只看表頭，不看底下的說明。"""
+    headers = [index for index, line in enumerate(lines) if _is_header_line(line)]
+    above = [index for index in headers if index < first_row] or headers[:1]
+    with_columns = [
+        index
+        for index in above
+        if _serving_header(lines[index]) or _HEADER_PER_100.search(lines[index])
+    ]
+    return _Header(
+        line=lines[with_columns[-1]] if with_columns else None,
+        dv=any(_HEADER_DV.search(lines[index]) for index in above),
+    )
+
+
+def _beside(line: str, known: re.Match[str], kind: Column) -> list[Column] | None:
+    """只認得一個表頭：同一行只有一邊還有像表頭的字（讀錯的那一個）→ 另一欄在那一邊。
+    兩邊都有、都沒有 → 看不出來（審查 C1）。"""
+    other = Column.PER_100 if kind is Column.SERVING else Column.SERVING
+    before = _HEADER_LIKE.search(line[: known.start()]) is not None
+    after = _HEADER_LIKE.search(line[known.end() :]) is not None
+    if after and not before:
+        return [kind, other]
+    if before and not after:
+        return [other, kind]
+    return None
+
+
+def _columns(header: _Header, rows: list[_Row]) -> tuple[list[Column] | None, bool]:
+    """(欄, 順序是不是從表頭讀到的)。讀不到順序的兩欄先排成衛福部的「每份、每 100」，
+    要靠每一份量交叉檢查才定得下來（`parse_label_text`）。"""
+    line = header.line
+    serving = None if line is None else _serving_header(line)
+    per_100 = None if line is None else _HEADER_PER_100.search(line)
+    if serving and per_100:
+        return (_STANDARD if serving.start() < per_100.start() else _PER_100_FIRST), True
+    # 只讀到一個（或零個）表頭：至少兩列剛好兩個數字、而且沒有每日參考值那一欄，才是兩欄。
+    # 有每日參考值時第二個數字可能是讀丟了 % 的百分比，不能猜。
+    two_values = sum(1 for row in rows if row.nutrient != "kcal" and len(_plain_values(row)) == 2)
+    if not header.dv and two_values >= 2:
+        known = serving or per_100
+        if line is not None and known is not None:
+            beside = _beside(line, known, Column.SERVING if serving else Column.PER_100)
+            if beside is not None:
+                return beside, True
+        return _STANDARD, False
+    if serving:
+        return [Column.SERVING], True
+    if per_100:
+        return [Column.PER_100], True
+    return None, False
+
+
+def _fit(values: list[Decimal], width: int, cut: bool) -> list[Decimal] | None:
+    """`cut`：表頭有每日參考值那一欄、而且這一列自己沒有帶 % 的數字——剛好多一個時，多的那個
+    是讀丟了 % 的百分比（它在最後面）。帶著 % 的列多出來的是拆開的數字（「1 9.0」），不砍
+    （審查 I3）。"""
     if len(values) == width:
         return values
-    if len(values) > width and dv:
-        return values[:width]  # 每日參考值那一欄讀丟了 %：它在最後面
+    if cut and len(values) == width + 1:
+        return values[:width]
     return None
 
 
-def _energy(row: _Row, width: int, dv: bool) -> list[Decimal] | None:
+def _energy(row: _Row, width: int, cut: bool) -> list[Decimal] | None:
     kcal = [token.value for token in row.tokens if token.unit == "kcal"]
     kj = [token.value for token in row.tokens if token.unit == "kj"]
     if len(kcal) == width:
@@ -222,9 +311,9 @@ def _energy(row: _Row, width: int, dv: bool) -> list[Decimal] | None:
         return [kj_to_kcal(value) for value in kj]
     bare = [token.value for token in row.tokens if token.unit is None]
     if _ENERGY_IN_KCAL.search(row.label):
-        return _fit(bare, width, dv)
+        return _fit(bare, width, cut)
     if _ENERGY_IN_KJ.search(row.label):
-        fitted = _fit(bare, width, dv)
+        fitted = _fit(bare, width, cut)
         return None if fitted is None else [kj_to_kcal(value) for value in fitted]
     return None  # 熱量沒有單位：不猜是 kcal 還是 kJ
 
@@ -237,10 +326,11 @@ def _read_columns(
     for row in rows:
         if row.nutrient in done:
             continue  # 同一種有好幾行：用第一行分得出欄的
+        cut = dv and not any(token.unit == "pct" for token in row.tokens)
         if row.nutrient == "kcal":
-            values = _energy(row, len(columns), dv)
+            values = _energy(row, len(columns), cut)
         else:
-            values = _fit(_plain_values(row), len(columns), dv)
+            values = _fit(_plain_values(row), len(columns), cut)
         if values is None:
             continue
         done.add(row.nutrient)
@@ -251,12 +341,14 @@ def _read_columns(
 
 # ---- 每一份量、份數、單位（規格 §4.4）----
 
+# 冒號前後的空白是 `\s*(?::\s*)?`：`\s*:?\s*` 在一長串空白上是平方時間（審查 M1）。
 _SERVING_SIZE = re.compile(
-    r"(?:每一?份量?|serving\s*size)\s*:?\s*(\d+(?:\.\d+)?)\s*(公克|克|g|毫升|ml)", re.IGNORECASE
+    r"(?:每一?份量?|serving\s*size)\s*(?::\s*)?(\d+(?:\.\d+)?)\s*(公克|克|g|毫升|ml)",
+    re.IGNORECASE,
 )
 _SERVINGS = re.compile(
     r"本包.{0,3}?(\d+(?:\.\d+)?)\s*份"
-    r"|servings?\s*per\s*(?:package|container|pack)\s*:?\s*(?:about\s*)?(\d+(?:\.\d+)?)",
+    r"|servings?\s*per\s*(?:package|container|pack)\s*(?::\s*)?(?:about\s*)?(\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
 
@@ -265,22 +357,64 @@ def _unit_of(word: str) -> BaseUnit:
     return BaseUnit.ML if word.lower() in ("毫升", "ml") else BaseUnit.G
 
 
-def _serving_size(text: str) -> tuple[Decimal, BaseUnit] | None:
-    match = _SERVING_SIZE.search(text)
-    if match is None:
+def _size(digits: str, unit: str) -> tuple[Decimal, BaseUnit] | None:
+    value = _bounded(digits)
+    if value is None:
         return None
-    size = round_cents(Decimal(match.group(1)))
+    size = round_cents(value)
     if not Decimal(0) < size <= MAX_SERVING_SIZE:
         return None
-    return size, _unit_of(match.group(2))
+    return size, _unit_of(unit)
+
+
+def _serving_size(text: str, header: str | None) -> tuple[Decimal, BaseUnit] | None:
+    """「每一份量 35 公克」；沒有的話，表頭裡的量（`Per 45g bar`，審查 C1）。"""
+    match = _SERVING_SIZE.search(text)
+    if match is not None:
+        return _size(match.group(1), match.group(2))
+    serving = None if header is None else _serving_header(header)
+    if serving is not None and serving.group(1) is not None:
+        return _size(serving.group(1), serving.group(2))
+    return None
 
 
 def _servings(text: str) -> Decimal | None:
     match = _SERVINGS.search(text)
     if match is None:
         return None
-    count = round_cents(Decimal(match.group(1) or match.group(2)))
+    value = _bounded(match.group(1) or match.group(2))
+    if value is None:
+        return None
+    count = round_cents(value)
     return count if Decimal(0) < count <= MAX_SERVINGS else None
+
+
+# ---- 兩欄的交叉檢查（審查 C1）----
+
+_HUNDRED = Decimal(100)
+# 標示自己的進位：熱量印到整數、其他印到一位小數，每份那一邊的半格乘上 100 ÷ 一份；每 100 那一邊
+# 給 0.5（≤ 0.5 公克可以標 0，也蓋過它自己的半格）。再加 3%：兩欄各自從沒進位的數字算、歐盟 10 公克
+# 以上印整數。排反的兩欄差 (100 ÷ 一份)² 倍（35 公克是 8 倍、90 公克也還有 23%），遠在這之外。
+_HALF_STEP_KCAL = Decimal("0.5")
+_HALF_STEP_GRAMS = Decimal("0.05")
+_PER_100_SLACK = Decimal("0.5")
+_RELATIVE = Decimal("0.03")
+
+
+def _agrees(nutrient: Nutrient, per_100: Decimal, per_serving: Decimal, size: Decimal) -> bool:
+    """每 100 ≈ 每份 × 100 ÷ 一份。"""
+    scale = _HUNDRED / size
+    expected = per_serving * scale
+    half_step = _HALF_STEP_KCAL if nutrient == "kcal" else _HALF_STEP_GRAMS
+    tolerance = half_step * scale + _PER_100_SLACK + _RELATIVE * max(per_100, expected)
+    return abs(per_100 - expected) <= tolerance
+
+
+def _agreeing(
+    per_100: Mapping[Nutrient, Decimal], per_serving: Mapping[Nutrient, Decimal], size: Decimal
+) -> frozenset[Nutrient]:
+    common = per_100.keys() & per_serving.keys()
+    return frozenset(n for n in common if _agrees(n, per_100[n], per_serving[n], size))
 
 
 # ---- 結果 ----
@@ -311,11 +445,11 @@ def parse_label_text(text: str) -> LabelText:
     normalized = normalize(text)
     lines = [line.strip() for line in normalized.split("\n") if line.strip()]
     rows = _rows(lines)
-    columns = _columns(normalized, rows)
-    dv = _HEADER_DV.search(normalized) is not None
-    read = _read_columns(rows, columns, dv) if columns is not None else {}
+    header = _header(lines, rows[0].line if rows else len(lines))
+    columns, ordered = _columns(header, rows)
+    read = _read_columns(rows, columns, header.dv) if columns is not None else {}
 
-    serving = _serving_size(normalized)
+    serving = _serving_size(normalized, header.line)
     per_100_header = _HEADER_PER_100.search(normalized)
     if per_100_header is not None:
         base_unit = _unit_of(per_100_header.group(1) or per_100_header.group(2))
@@ -328,11 +462,6 @@ def parse_label_text(text: str) -> LabelText:
 
     per_100 = read.get(Column.PER_100, {})
     per_serving = read.get(Column.SERVING, {})
-    converted = (
-        {nutrient: per_100_from_serving(value, size) for nutrient, value in per_serving.items()}
-        if size is not None
-        else {}
-    )
 
     def result(
         found: Mapping[Nutrient, Decimal | None], reason: Reason | None, basis: Basis | None
@@ -349,8 +478,38 @@ def parse_label_text(text: str) -> LabelText:
             servings_per_package=servings,
         )
 
-    # 選欄（規格 D9）：完整而且合理的每 100 → 完整而且合理的每份（換算過）→ 不完整。
-    implausible = False
+    # 交叉檢查（審查 C1）：兩欄都有、知道一份多少 → 每 100 ≈ 每份 × 100 ÷ 一份。對得起來的項目
+    # 比較多的那一種排法就是欄的順序（表頭排反了就換過來）；一項都對不起來 → 哪一欄都不信。
+    # 兩欄、順序讀不到、又不能交叉檢查 → 不猜。
+    contradicted: frozenset[Nutrient] = frozenset()
+    if per_100 and per_serving and size is not None:
+        agree = _agreeing(per_100, per_serving, size)
+        swapped = _agreeing(per_serving, per_100, size)
+        if len(swapped) > len(agree):
+            per_100, per_serving, agree = per_serving, per_100, swapped
+        if not agree:
+            return result({}, "implausible" if ordered else "columns_unknown", None)
+        contradicted = frozenset(per_100.keys() - agree)
+    elif columns is not None and not ordered:
+        return result({}, "columns_unknown", None)
+
+    converted = (
+        {nutrient: per_100_from_serving(value, size) for nutrient, value in per_serving.items()}
+        if size is not None
+        else {}
+    )
+
+    def side(nutrient: Nutrient) -> Basis | None:
+        """對不起來的那一項：只有一邊在物理上限內 → 那一邊；不然分不出哪一欄錯。"""
+        in_per_100 = _sane(nutrient, per_100[nutrient])
+        in_converted = _sane(nutrient, converted[nutrient])
+        if in_per_100 == in_converted:
+            return None
+        return "per_100" if in_per_100 else "per_serving"
+
+    # 選欄（規格 D9）：完整而且合理的每 100 → 完整而且合理的每份（換算過）→ 不完整。對不起來的
+    # 項目要每一項都是這一欄贏（另一欄的值超過物理上限），這一欄才能用。
+    implausible = blocked = False
     candidates: list[tuple[Basis, dict[Nutrient, Decimal]]] = [
         ("per_100", per_100),
         ("per_serving", converted),
@@ -364,6 +523,9 @@ def parse_label_text(text: str) -> LabelText:
         if checked is None:
             implausible = True
             continue
+        if any(side(nutrient) != basis for nutrient in contradicted):
+            blocked = True
+            continue
         return result(
             {
                 "kcal": checked.kcal,
@@ -375,7 +537,7 @@ def parse_label_text(text: str) -> LabelText:
             basis,
         )
 
-    if implausible:
+    if implausible and not blocked:
         return result({}, "implausible", None)
     if columns is None:
         return result({}, "columns_unknown" if rows else "no_values", None)
@@ -383,6 +545,11 @@ def parse_label_text(text: str) -> LabelText:
         return result({}, "no_values", None)
     if len(per_serving) > len(per_100) and size is None:
         return result({}, "needs_serving_size", None)
-    best = per_100 if len(per_100) >= len(converted) else converted
-    sane = {nutrient: value for nutrient, value in best.items() if _sane(nutrient, value)}
+    best_basis: Basis = "per_100" if len(per_100) >= len(converted) else "per_serving"
+    best = per_100 if best_basis == "per_100" else converted
+    sane = {
+        nutrient: value
+        for nutrient, value in best.items()
+        if _sane(nutrient, value) and (nutrient not in contradicted or side(nutrient) == best_basis)
+    }
     return result(sane, "missing_fields", None)
