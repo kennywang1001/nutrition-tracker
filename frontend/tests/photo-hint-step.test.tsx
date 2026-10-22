@@ -67,7 +67,7 @@ describe("PhotoHintStep（確認照片）", () => {
 		expect(URL.createObjectURL).toHaveBeenCalledWith(PHOTO);
 	});
 
-	it("標籤「補充說明（選填）」對到 textarea：placeholder、200 字上限、2 行", () => {
+	it("標籤「補充說明（選填）」對到 textarea：placeholder、200 字上限、3 行", () => {
 		render(<Harness onStart={vi.fn()} onCancel={vi.fn()} />);
 
 		const textarea = screen.getByLabelText("補充說明（選填）");
@@ -77,7 +77,7 @@ describe("PhotoHintStep（確認照片）", () => {
 			"例：飯半碗、雞皮沒吃、7-11 的",
 		);
 		expect(textarea).toHaveAttribute("maxLength", "200");
-		expect(textarea).toHaveAttribute("rows", "2");
+		expect(textarea).toHaveAttribute("rows", "3");
 		// 不自動對焦到說明：手機會跳出鍵盤蓋住「開始估算」（規格 §6.3）。
 		expect(textarea).not.toHaveFocus();
 	});

@@ -114,6 +114,25 @@ test("整餐：選照片 → 確認照片打說明 → 開始估算（送出說�
 		"16px",
 	);
 	await expectTouchTargets(step.locator("button, textarea"), "確認照片");
+	// 說明欄（審查 M4）：空的是 3 行高（line-height 1.5 × 16px × 3 ＋ 上下 padding 與框線 ≈ 90px）；
+	// 字多了跟著長高（field-sizing: content），最高 8em（128px），再多就在欄位裡捲。
+	const height = async () => (await hint.boundingBox())?.height ?? 0;
+	const empty = await height();
+	expect(empty).toBeGreaterThanOrEqual(88);
+	expect(empty).toBeLessThanOrEqual(92);
+	await hint.fill("飯".repeat(80));
+	const grown = await height();
+	expect(grown).toBeGreaterThan(empty + 10);
+	expect(grown).toBeLessThanOrEqual(128.5);
+	await hint.fill("飯".repeat(195));
+	expect(await height()).toBeCloseTo(128, 0);
+	expect(
+		await hint.evaluate(
+			(el) =>
+				el.scrollHeight > el.clientHeight &&
+				getComputedStyle(el).overflowY === "auto",
+		),
+	).toBe(true);
 	await hint.fill("飯半碗、雞皮沒吃");
 	// 選照片不會送。
 	expect(sent).toHaveLength(0);

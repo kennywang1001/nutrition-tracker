@@ -35,17 +35,24 @@
 	color: var(--color-text-muted);
 }
 
-/* 16px：iOS 在小於 16px 的輸入框聚焦時會放大整頁（mobile-form-zoom.spec.ts 量的那一條）。 */
+/* 16px：iOS 在小於 16px 的輸入框聚焦時會放大整頁（mobile-form-zoom.spec.ts 量的那一條）。
+   高度（審查 M4）：至少 3 行（line-height 寫死，min-height 才算得準），字多了跟著長高
+   （field-sizing: content），最高約 8em、再多就在欄位裡捲。不支援 field-sizing 的瀏覽器
+   照 rows={3} 固定 3 行，一樣捲。 */
 .hint {
 	box-sizing: border-box;
 	width: 100%;
-	min-height: 44px;
+	field-sizing: content;
+	min-height: calc(3 * 1.5em + 2 * var(--space-2) + 2px);
+	max-height: 8em;
+	overflow-y: auto;
 	padding: var(--space-2) var(--space-3);
 	border: 1px solid var(--color-border);
 	border-radius: var(--radius-button);
 	background: var(--color-bg);
 	color: var(--color-text);
 	font-size: 16px;
+	line-height: 1.5;
 	font-family: inherit;
 	resize: vertical;
 }

@@ -91,7 +91,7 @@ export function PhotoHintStep({
 			<textarea
 				id={hintId}
 				className={styles.hint}
-				rows={2}
+				rows={3}
 				maxLength={HINT_MAX_LENGTH}
 				placeholder={placeholder}
 				value={hint}
