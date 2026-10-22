@@ -607,6 +607,45 @@ describe("App", () => {
 		await waitFor(() => expect(window.history.state?.usr ?? null).toBeNull());
 		expect(window.location.pathname).toBe("/weight");
 	});
+
+	it("已經在 /weight 時從「＋」點「記體重」：頁面不重掛，焦點照樣回到體重欄位（首頁改版審查 M1）", async () => {
+		// 以前「要不要搶焦點」只在 WeightRoute 掛上時讀一次：人已經在 /weight，從「＋」再點記體重，
+		// 路由不重掛、表單沒拿到焦點，面板一關焦點掉到 body——看起來像按了沒反應。
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockBackend();
+		window.history.replaceState(null, "", "/weight");
+		render(<App />);
+		const field = await screen.findByLabelText("體重（公斤）");
+		expect(field).not.toHaveFocus();
+
+		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
+		await userEvent.click(
+			within(screen.getByRole("dialog", { name: "新增紀錄" })).getByRole(
+				"link",
+				{ name: "記體重" },
+			),
+		);
+
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+		await waitFor(() =>
+			expect(screen.getByLabelText("體重（公斤）")).toHaveFocus(),
+		);
+		await waitFor(() => expect(window.history.state?.usr ?? null).toBeNull());
+
+		// 第二次：「要搶焦點」已經是 true，光看 prop 沒有變化——要靠每次 navigation 各自算數。
+		screen.getByLabelText("體重（公斤）").blur();
+		expect(screen.getByLabelText("體重（公斤）")).not.toHaveFocus();
+		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
+		await userEvent.click(
+			within(screen.getByRole("dialog", { name: "新增紀錄" })).getByRole(
+				"link",
+				{ name: "記體重" },
+			),
+		);
+		await waitFor(() =>
+			expect(screen.getByLabelText("體重（公斤）")).toHaveFocus(),
+		);
+	});
 });
 
 describe("App：被登出（帳號設定審查 I2）", () => {

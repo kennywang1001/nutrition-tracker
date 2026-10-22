@@ -143,11 +143,22 @@ function NewFoodRoute() {
 }
 
 /** `/weight`：快速記錄、沒有體重時的小卡片與「＋」的「記體重」帶 `{weightForm: true}`（首頁改版規格 D11）——
- *  讀一次、`replace` 清掉，上一頁或重新整理不會再搶焦點。 */
+ *  `replace` 清掉，上一頁或重新整理不會再搶焦點。
+ *
+ *  **每一次帶著 state 進來都要算數，不只是第一次掛上**（審查 M1）：人已經在 /weight，從「＋」再點記體重，
+ *  路由不會重掛。所以記下「是哪一次 navigation 要的焦點」（`location.key`），換了一次就把 `Weight` 用
+ *  那個 key 重掛——表單的 `focusOnMount` 再跑一次。`replace` 清掉 state 的那一次 key 也會變，但 state 是
+ *  null，不算數，所以不會多重掛一次。（render 時調整 state 的寫法，同 `use-add-sheet.ts`。） */
 function WeightRoute() {
 	const navigate = useNavigate();
 	const location = useLocation();
-	const [focusForm] = useState(() => weightFormFrom(location.state));
+	const [focus, setFocus] = useState(() => ({
+		key: location.key,
+		on: weightFormFrom(location.state),
+	}));
+	if (location.state != null && focus.key !== location.key) {
+		setFocus({ key: location.key, on: weightFormFrom(location.state) });
+	}
 	useEffect(() => {
 		if (location.state == null) return;
 		navigate(`${location.pathname}${location.search}`, {
@@ -155,7 +166,7 @@ function WeightRoute() {
 			state: null,
 		});
 	}, [location.state, location.pathname, location.search, navigate]);
-	return <Weight focusForm={focusForm} />;
+	return <Weight key={focus.key} focusForm={focus.on} />;
 }
 
 /** `/expenses/new`：記完或關閉都回總覽。 */

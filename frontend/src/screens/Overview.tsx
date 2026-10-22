@@ -27,7 +27,7 @@ import { formatTime } from "../lib/dates";
 import { formatMacro, formatMoney } from "../lib/decimal";
 import { stashQuickPhoto, WEIGHT_FORM_STATE } from "../lib/quick-actions";
 import { buildTimeline, type TimelineRow } from "../lib/timeline";
-import { signedKg, weekChange } from "../lib/weights";
+import { dateLabel, signedKg, weekChange } from "../lib/weights";
 import styles from "./Overview.module.css";
 
 /** 從路由 state 拿通知（例如記一餐「照片沒傳上去」）。state 是 unknown——
@@ -124,6 +124,10 @@ function WeightGlanceCard() {
 					<>
 						<span className={styles.total}>
 							{formatMacro(latest.weight_kg)} 公斤
+							{/* 最新一筆不是今天就帶日期（審查 M2）：兩個月沒量的人，首頁不該看起來像今天的數字。
+							    「比 7 天前」也是從那一筆往回算的，有日期才讀得懂。 */}
+							{latest.date !== data.today &&
+								`・${dateLabel(latest.date, data.today)}`}
 						</span>
 						{change !== null && (
 							<>

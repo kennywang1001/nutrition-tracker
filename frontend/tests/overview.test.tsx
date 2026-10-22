@@ -609,6 +609,44 @@ describe("總覽：圓環卡片與小卡片（首頁改版規格 §3）", () => 
 		expect(sparkline).toHaveAttribute("aria-hidden", "true");
 	});
 
+	it("體重最新一筆不是今天：數字後面帶日期，看得出是舊的（首頁改版審查 M2）", async () => {
+		// 只寫「79 公斤 比 7 天前 -1」的話，兩個月沒量的人在首頁看到的像是今天的數字。
+		mockOverview({
+			"/api/weights": () =>
+				json({
+					today: "2026-10-14",
+					entries: [
+						{ date: "2026-08-01", weight_kg: "80.00" },
+						{ date: "2026-08-08", weight_kg: "79.00" },
+					],
+				}),
+		});
+
+		render(wrap(<Overview />));
+
+		const glance = await screen.findByTestId("weight-glance");
+		await waitFor(() => expect(glance).toHaveTextContent("79 公斤・8/8"));
+		expect(within(glance).getByRole("link")).toHaveAccessibleName(
+			"體重 79 公斤・8/8 比 7 天前 -1 公斤",
+		);
+	});
+
+	it("體重最新一筆是今天：不帶日期", async () => {
+		mockOverview({
+			"/api/weights": () =>
+				json({
+					today: "2026-10-14",
+					entries: [{ date: "2026-10-14", weight_kg: "79.00" }],
+				}),
+		});
+
+		render(wrap(<Overview />));
+
+		const glance = await screen.findByTestId("weight-glance");
+		await waitFor(() => expect(glance).toHaveTextContent("79 公斤"));
+		expect(glance).not.toHaveTextContent("・");
+	});
+
 	it("體重只有一筆：有數字，沒有迷你折線", async () => {
 		mockOverview({
 			"/api/weights": () =>
