@@ -131,7 +131,9 @@ POST parse-label-text ─ 失敗（網路、429）→ 卡片：錯誤＋「改�
   每日參考值＝`每日參考值`、`參考值百分比`、`%DV`。
 - 一列裡的數值：`數字＋單位（可以沒有）`；**帶 `%` 的丟掉**（每日參考值那一欄）。剩下的個數等於欄數 → 照表頭順序分給各欄；
   比欄數多、而且表頭有每日參考值 → 取前面幾個（OCR 把 `%` 讀丟了）；其他情況這一列算讀不到。
-- 表頭兩種都沒有 → `columns_unknown`（不猜是每份還是每 100）。
+- 兩種表頭都讀到 → 照位置排。只讀到一種（OCR 常把「每份」讀成「每仿」）或都沒有：**沒有**每日參考值那一欄、而且**至少兩列**（熱量以外）剛好兩個數字 →
+  照衛福部格式當成「每份、每 100」；否則只讀到哪一種就是哪一欄；都沒有 → `columns_unknown`（不猜）。有每日參考值時不推：第二個數字可能是讀丟了 `%` 的百分比
+  （「熱量 135 大卡 7」當成每 100 的 7 kcal 是合理的數字，擋不住）。只有一列的時候也不推（實驗裡亂碼那張只剩一列「脂肪75公克 3」）。
 
 ### 4.3 列
 
@@ -144,7 +146,8 @@ POST parse-label-text ─ 失敗（網路、429）→ 卡片：錯誤＋「改�
 
 - 一行裡出現兩種營養素的關鍵字（OCR 把兩列併成一行）→ 這一行不用。
 - **名稱與數字在相鄰兩行**：名稱那一行沒有數字時，看下一行（下一行不能有任何營養素的關鍵字）。
-- 糖、鈉、膳食纖維、飽和脂肪、反式脂肪：沒有自己的規則，碰到也不會被當成上面四種。
+- 糖、鈉、膳食纖維、飽和脂肪、反式脂肪：沒有自己的規則，碰到也不會被當成上面四種。帶著 `鈉`、`糖`、`纖維`、`參考值`、`sodium`、`salt`、`sugar`、`fibre`、
+  `daily value` 的行**不當成**營養素那一列（台灣標示底下的「每日參考值：熱量2000大卡、蛋白質60公克…」），也不讓「相鄰兩行」借走它們的數字。
 - 同一種營養素有好幾行：用第一行分得出欄的。
 - 熱量那一列同時有 kcal 與 kJ（歐洲的「2151 kJ / 514 kcal」）：kcal 的個數等於欄數就用 kcal，否則 kJ 的個數等於欄數就換算，否則讀不到。
 
@@ -263,7 +266,9 @@ Carbohydrate 18.3 g 60.9 g
 | `chi_tra.traineddata.gz` | 1,656.24 KB（解開 2,368.6 KB） | 已經是 gzip | 不預先快取；Tesseract.js 的 IndexedDB（存解開的） |
 | `eng.traineddata.gz`（**不用**） | 2,952.87 KB（解開 5,199.1 KB） | — | — |
 
-第一次用要下載約 **3.16 MB**（Caddy 壓縮 core 時；沒壓縮是 5.6 MB）。主程式 `index-*.js` 的增加要在 Task 4 用 `npm run build` 量（預期只有 `lib/label-ocr.ts` 的幾百 bytes）。
+經過 Caddy（`caddy:2-alpine` v2.11.4＋這個 repo 的 Caddyfile，2026-10-23 在本機量）實際傳的：core **1,473,651 B（zstd）**／1,516,876 B（gzip）、
+worker 33,681 B（zstd）、`chi_tra.traineddata.gz` 1,656,239 B（不再壓）。第一次用要下載約 **3.17 MB**（瀏覽器不收 zstd 時 3.21 MB）。
+主程式 `index-*.js` 的增加要在 Task 4 用 `npm run build` 量（預期只有 `lib/label-ocr.ts` 的幾百 bytes）。
 
 ### 6.3 實驗（2026-10-22，這台 Windows 桌機、Chromium（Playwright 1.63）、本機伺服器）
 
@@ -298,8 +303,9 @@ PSM 3／4 在**乾淨**的 PNG 上也會把「每份」那一整欄丟掉。大�
 - `tesseract.js` 預設從 jsDelivr 抓 worker、core 與語言資料；三個都改成自己的網址（`workerPath`、`corePath`、`langPath`），`workerBlobURL: false`（同源的 worker 直接用網址，
   不用 blob 包一層，也讓 service worker 看得到它的請求）。實驗裡 Playwright 記下的請求：**第三方 0 個**。
 - dev 伺服器：`?url` 給的是 `/node_modules/…` 的網址，語言資料由 plugin 的 middleware 給；實驗在 dev 與 preview 都跑過。
-- Caddy：`.js` 是 `text/javascript`，在 `encode zstd gzip` 的範圍裡（core 3.9 MB → gzip 約 1.46 MB）；`.gz` 是 `application/gzip`，不在 `encode` 的預設類型裡，不會被再壓一次
-  （就算被壓了，瀏覽器解開傳輸編碼、Tesseract.js 看得出 gzip 的開頭兩個位元組自己再解）。**檔案不在時 `try_files` 回 `index.html`（200）**：Tesseract.js 初始化失敗、
+- Caddy（**實測**，同 §6.2 的設定）：`.js` 是 `text/javascript; charset=utf-8`、`Content-Encoding: zstd`（或 gzip）；`.gz` 是 `application/gzip`、
+  **沒有** `Content-Encoding`（不在 `encode` 的預設類型裡，不會被再壓一次；就算被壓了，瀏覽器解開傳輸編碼、Tesseract.js 看得出 gzip 的開頭兩個位元組自己再解）。
+  兩者都只有 `ETag`／`Last-Modified`，沒有 `Cache-Control`。**檔案不在時 `try_files` 回 `index.html`（200 `text/html`，實測）**：Tesseract.js 初始化失敗、
   走 D16 的錯誤 → 「這台裝置現在不能用手機辨識」＋AI 按鈕。Caddyfile 不改；部署後的檢查寫進 `docs/deployment.md`。
 
 ### 6.5 前處理
