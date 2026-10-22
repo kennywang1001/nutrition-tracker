@@ -1,7 +1,18 @@
-/* 焦點在選了照片時移到這張卡片（tabIndex=-1）：外框要看得到，鍵盤使用者才知道跳到哪裡。 */
-.step:focus {
+/* 焦點在選了照片時移到這張卡片（tabIndex=-1）：鍵盤使用者要看得到外框，才知道跳到哪裡；
+   用手點的不畫（卡片本身已經有框，再疊一圈像兩張卡片）。同新增食物的讀取結果那一段。 */
+.step:focus-visible {
 	outline: 2px solid var(--color-action);
 	outline-offset: 2px;
+}
+
+.step:focus:not(:focus-visible) {
+	outline: none;
+}
+
+/* 字級自己給：記一餐沒有 .screen、新增食物有（:where(.screen button) 給 15px），兩邊的按鈕
+   原本會差一號。一般權重（0,1,1）贏過零權重的 :where()。 */
+.step button {
+	font-size: 15px;
 }
 
 /* 縮圖最高 160px：手機上卡片、按鈕與「AI 估算中」都還在同一個畫面裡。 */
