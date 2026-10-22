@@ -1,10 +1,6 @@
-import { daysBetween, formatCivilDate } from "../lib/civil-date";
-import {
-	formatMacro,
-	type Numeric,
-	paddedExtent,
-	positionIn,
-} from "../lib/decimal";
+import { formatCivilDate } from "../lib/civil-date";
+import { formatMacro, type Numeric } from "../lib/decimal";
+import { polylinePoints, weightScale } from "../lib/weight-plot";
 import { dateLabel, type WeightPoint } from "../lib/weights";
 
 /** SVG 的座標系。**固定值，不量容器**（同 `TrendChart`）：jsdom 不做版面計算，依賴實際寬度的
@@ -39,11 +35,10 @@ type Props = {
  *  - **幾何一律算成屬性**（`cx`、`cy`、`points`），不交給 CSS——測試量得到的才是真的。
  *  - **每個點是 `role="img"`＋`aria-label`**：拿掉 role 的話，`<circle>` 的 aria-label 多半被輔助技術
  *    忽略，點對螢幕閱讀器整個消失。Biome 的兩條規則在這裡是誤判。
- *  - **數字比大小、算比例全部經過 `lib/decimal.ts`**（`paddedExtent`、`positionIn`）；這裡只把
- *    0–1 的比例換成座標。
+ *  - **座標換算在 `lib/weight-plot.ts`**（跟總覽的迷你折線共用，首頁改版規格 D21）：x 照日期、
+ *    數字比大小與比例經過 `lib/decimal.ts`，這裡只拿換好的座標來畫。
  *
- *  x 照**日期**（`daysBetween`），不是照第幾筆：記錄的日子不連續，照索引平均分配會把一週的
- *  空白畫成跟一天一樣寬。y 軸範圍包含點、畫出來的平均、目標體重，各往外留 1 公斤。 */
+ *  y 軸範圍包含點、畫出來的平均、目標體重，各往外留 1 公斤。 */
 export function WeightChart({
 	entries,
 	average,
@@ -60,18 +55,20 @@ export function WeightChart({
 		...shownAverage.map((point) => point.weight_kg),
 		...(targetKg === null ? [] : [targetKg]),
 	];
-	const extent = paddedExtent(values, AXIS_PAD_KG);
-	if (extent === null) return null;
-	// 起點就是終點（只有今天一筆）時除數是 1：點畫在左邊界，不除以零。
-	const days = Math.max(daysBetween(start, end), 1);
-	const plotWidth = VIEW_WIDTH - PAD_X - PLOT_LEFT;
-	const x = (date: string) =>
-		PLOT_LEFT + (daysBetween(start, date) / days) * plotWidth;
-	const y = (value: Numeric) =>
-		VIEW_HEIGHT * (1 - positionIn(value, extent.lo, extent.hi));
-	const line = shownAverage
-		.map((point) => `${x(point.date)},${y(point.weight_kg)}`)
-		.join(" ");
+	// 座標換算跟總覽的迷你折線共用（`lib/weight-plot.ts`，規格 D21）：x 照日期、y 經過 Decimal；
+	// 起點就是終點（只有今天一筆）時點畫在左邊界，不除以零。
+	const scale = weightScale(values, AXIS_PAD_KG, start, end, {
+		left: PLOT_LEFT,
+		right: VIEW_WIDTH - PAD_X,
+		top: 0,
+		bottom: VIEW_HEIGHT,
+	});
+	if (scale === null) return null;
+	const { x, y } = scale;
+	const averageLine = polylinePoints(shownAverage, scale);
+	// 每天的紀錄連成實線（規格 D24）：照日期由舊到新，沒記的日子照樣連起來——x 照日期，
+	// 跨過的那一段本身就看得出中間沒有點；斷開要另一套「多久算斷」的規則。一筆畫不成線。
+	const dailyLine = entries.length >= 2 ? polylinePoints(entries, scale) : "";
 
 	return (
 		// biome-ignore lint/a11y/useSemanticElements: 同 TrendChart：它建議的 <fieldset> 對一張 SVG 圖沒有意義
@@ -90,7 +87,7 @@ export function WeightChart({
 				className="weight-axis"
 				aria-hidden="true"
 			>
-				{extent.hi}
+				{scale.hi}
 			</text>
 			{/* biome-ignore lint/a11y/noAriaHiddenOnFocusable: 同上 */}
 			<text
@@ -100,7 +97,7 @@ export function WeightChart({
 				className="weight-axis"
 				aria-hidden="true"
 			>
-				{extent.lo}
+				{scale.lo}
 			</text>
 			<line
 				className="weight-baseline"
@@ -119,12 +116,23 @@ export function WeightChart({
 					y2={y(targetKg)}
 				/>
 			)}
-			{line !== "" && (
+			{/* 7 天平均：淡色虛線（規格 D24）——實線是真的紀錄，虛線是算出來的。畫在每天的線下面。 */}
+			{averageLine !== "" && (
 				// biome-ignore lint/a11y/noAriaHiddenOnFocusable: SVG <polyline> 不能聚焦（同 <text> 的誤判）；平均線是裝飾，圖下面有「最近 7 天平均」的文字
 				<polyline
 					data-testid="weight-average"
 					className="weight-average"
-					points={line}
+					points={averageLine}
+					aria-hidden="true"
+				/>
+			)}
+			{/* 每天的線在平均之上、點之下：點的名稱是螢幕閱讀器讀得到的資料，要畫在最上面。 */}
+			{dailyLine !== "" && (
+				// biome-ignore lint/a11y/noAriaHiddenOnFocusable: SVG <polyline> 不能聚焦（同平均線）；線是裝飾，資料在每個點的名稱裡
+				<polyline
+					data-testid="weight-line"
+					className="weight-line"
+					points={dailyLine}
 					aria-hidden="true"
 				/>
 			)}

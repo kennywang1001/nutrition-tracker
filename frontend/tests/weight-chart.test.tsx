@@ -129,6 +129,56 @@ describe("WeightChart", () => {
 		expect(attr("weight-point-2026-10-14", "cy")).toBeCloseTo(VIEW_HEIGHT / 2);
 	});
 
+	it("每天的紀錄連成實線：照日期由舊到新，每一組座標就是那一點的 cx／cy", () => {
+		chart();
+
+		const line = points("weight-line");
+		expect(line).toHaveLength(3);
+		entries.forEach((entry, i) => {
+			const testId = `weight-point-${entry.date}`;
+			expect(line[i]?.[0]).toBeCloseTo(attr(testId, "cx"));
+			expect(line[i]?.[1]).toBeCloseTo(attr(testId, "cy"));
+		});
+	});
+
+	it("沒記的日子照樣連起來（x 照日期）：一條線，不斷開", () => {
+		chart();
+
+		expect(screen.getAllByTestId("weight-line")).toHaveLength(1);
+		// 10/01 → 10/08 中間空了 6 天：第二組在 7/13 的位置（照索引的話是 1/2）。
+		expect(points("weight-line")[1]?.[0]).toBeCloseTo(
+			PLOT_LEFT + (7 / 13) * (RIGHT - PLOT_LEFT),
+		);
+	});
+
+	it("只有一筆：沒有線，只有那一點", () => {
+		const one = [{ date: "2026-10-14", weight_kg: "70" }];
+		chart({ entries: one, average: movingAverage(one), start: "2026-10-14" });
+
+		expect(screen.queryByTestId("weight-line")).not.toBeInTheDocument();
+		expect(screen.getByTestId("weight-point-2026-10-14")).toBeInTheDocument();
+	});
+
+	it("線與平均都是裝飾；畫的順序是 平均 → 每天的線 → 點（點在最上面）", () => {
+		chart();
+
+		const daily = screen.getByTestId("weight-line");
+		const average = screen.getByTestId("weight-average");
+		expect(daily).toHaveAttribute("aria-hidden", "true");
+		expect(average).toHaveAttribute("aria-hidden", "true");
+		// 全域 class（index.css）：實線與虛線的樣子在那裡。
+		expect(daily).toHaveClass("weight-line");
+		expect(average).toHaveClass("weight-average");
+		const firstPoint = screen.getByTestId("weight-point-2026-10-01");
+		expect(
+			average.compareDocumentPosition(daily) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		expect(
+			daily.compareDocumentPosition(firstPoint) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+	});
+
 	it("圖的名稱是「體重」；刻度與日期是裝飾", () => {
 		chart();
 

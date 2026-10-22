@@ -20,10 +20,15 @@ function shortDate(date: string): string {
 	return `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}`;
 }
 
-async function openMe(page: Page) {
+/** 我的 → 身體與目標（首頁改版規格 §5、§6）：每日目標、體重的卡片搬到那一頁了。 */
+async function openHub(page: Page) {
 	await page.getByRole("link", { name: "我的", exact: true }).click();
 	await expect(
 		page.getByRole("heading", { name: "我的", exact: true, level: 1 }),
+	).toBeVisible();
+	await page.getByRole("link", { name: "身體與目標", exact: true }).click();
+	await expect(
+		page.getByRole("heading", { name: "身體與目標", exact: true, level: 1 }),
 	).toBeVisible();
 }
 
@@ -43,7 +48,11 @@ async function openOverview(page: Page) {
 
 async function openAddExercise(page: Page) {
 	await page.getByRole("button", { name: "新增紀錄", exact: true }).click();
-	await page.getByRole("link", { name: "記運動", exact: true }).click();
+	// 限定在對話框裡：總覽的快速記錄也有一個「記運動」（首頁改版規格 D18）。
+	await page
+		.getByRole("dialog", { name: "新增紀錄", exact: true })
+		.getByRole("link", { name: "記運動", exact: true })
+		.click();
 	await expect(
 		page.getByRole("heading", { name: "記運動", exact: true, level: 1 }),
 	).toBeVisible();
@@ -80,7 +89,7 @@ test("沒有體重要手動；記了體重之後估算；總覽的額度含運�
 	await loginAs(page, account);
 
 	// 1. 目標 2000 kcal。
-	await openMe(page);
+	await openHub(page);
 	await openTargets(page);
 	const manualTargets = page.getByRole("region", {
 		name: "自己設定",
@@ -90,8 +99,9 @@ test("沒有體重要手動；記了體重之後估算；總覽的額度含運�
 	await manualTargets
 		.getByRole("button", { name: "儲存", exact: true })
 		.click();
+	// 存好回到身體與目標（首頁改版規格 D2）。
 	await expect(
-		page.getByRole("heading", { name: "我的", exact: true, level: 1 }),
+		page.getByRole("heading", { name: "身體與目標", exact: true, level: 1 }),
 	).toBeVisible();
 	const targetsCard = page.getByTestId("targets-card");
 	await expect(targetsCard).toContainText("2000 kcal");
@@ -163,8 +173,9 @@ test("沒有體重要手動；記了體重之後估算；總覽的額度含運�
 
 	// 5. 總覽：分母是目標＋運動，時間線有那一列。
 	const todayKcal = page.getByTestId("today-kcal");
-	await expect(todayKcal).toContainText(`/ ${2000 + thirty} kcal`);
-	await expect(todayKcal).toContainText(`含運動 +${thirty}`);
+	// 首頁改版規格 §9.2：「/ N kcal」→「預算 N」、「含運動 +N」→「（含運動 +N）」。
+	await expect(todayKcal).toContainText(`預算 ${2000 + thirty}`);
+	await expect(todayKcal).toContainText(`（含運動 +${thirty}）`);
 	const exerciseRow = (minutesText: string) =>
 		page
 			.getByTestId("timeline-row")
@@ -191,8 +202,8 @@ test("沒有體重要手動；記了體重之後估算；總覽的額度含運�
 	await expect(
 		page.getByRole("heading", { name: "總覽", exact: true, level: 1 }),
 	).toBeVisible();
-	await expect(todayKcal).toContainText(`/ ${2000 + sixty} kcal`);
-	await expect(todayKcal).toContainText(`含運動 +${sixty}`);
+	await expect(todayKcal).toContainText(`預算 ${2000 + sixty}`);
+	await expect(todayKcal).toContainText(`（含運動 +${sixty}）`);
 	await expect(exerciseRow("60")).toContainText(`-${sixty} kcal`);
 	await expect(exerciseRow("30")).toHaveCount(0);
 
@@ -211,7 +222,7 @@ test("沒有體重要手動；記了體重之後估算；總覽的額度含運�
 
 	// 6b. 體重更正成 72（同一天覆蓋），再打開那一筆只改備註：顯示存好的熱量、存了也不用新的
 	//     體重重估（審查 I1；重估的話會是 706）。
-	await openMe(page);
+	await openHub(page);
 	const weightCard = page.getByTestId("weight-card");
 	await weightCard
 		.getByRole("button", { name: "記錄體重", exact: true })
@@ -234,11 +245,11 @@ test("沒有體重要手動；記了體重之後估算；總覽的額度含運�
 	await expect(
 		page.getByRole("heading", { name: "總覽", exact: true, level: 1 }),
 	).toBeVisible();
-	await expect(todayKcal).toContainText(`/ ${2000 + sixty} kcal`);
+	await expect(todayKcal).toContainText(`預算 ${2000 + sixty}`);
 	await expect(exerciseRow("60")).toContainText(`-${sixty} kcal`);
 
 	// 7. 關掉「加回」：分母回到目標，運動照樣在時間線上。
-	await openMe(page);
+	await openHub(page);
 	const budgetSwitch = targetsCard.getByRole("switch", {
 		name: "運動消耗加回今天的熱量額度",
 		exact: true,
@@ -248,7 +259,7 @@ test("沒有體重要手動；記了體重之後估算；總覽的額度含運�
 	await expect(budgetSwitch).not.toBeChecked();
 	await expect(budgetSwitch).toBeEnabled();
 	await openOverview(page);
-	await expect(todayKcal).toContainText("/ 2000 kcal");
+	await expect(todayKcal).toContainText("預算 2000");
 	await expect(todayKcal).not.toContainText("含運動");
 	await expect(exerciseRow("60")).toContainText(`-${sixty} kcal`);
 

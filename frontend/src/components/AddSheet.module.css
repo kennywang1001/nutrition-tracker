@@ -31,8 +31,8 @@
 
 .choices {
 	display: grid;
-	/* 三個入口一列（運動規格 §7.1）：手機寬度 390 每格約 110px，圖示加兩個字放得下。 */
-	grid-template-columns: repeat(3, minmax(0, 1fr));
+	/* 四個入口 2×2（首頁改版規格 §7）：DOM 順序＝焦點順序＝由左到右、由上到下。 */
+	grid-template-columns: repeat(2, minmax(0, 1fr));
 	gap: var(--space-3);
 }
 

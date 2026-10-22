@@ -86,7 +86,7 @@ function renderScreen(client = newClient()) {
 			<MemoryRouter initialEntries={["/me/body"]}>
 				<Routes>
 					<Route path="/me/body" element={<BodyProfile />} />
-					<Route path="/me" element={<h1>我的</h1>} />
+					<Route path="/me/health" element={<h1>身體與目標</h1>} />
 				</Routes>
 			</MemoryRouter>
 		</QueryClientProvider>,
@@ -170,7 +170,7 @@ describe("/me/body", () => {
 		).not.toBeInTheDocument();
 	});
 
-	it("送出整組七個鍵：維持時速度藏起來但照送原本的值、空白的目標體重是 null；存好回 /me、失效 [body]", async () => {
+	it("送出整組七個鍵：維持時速度藏起來但照送原本的值、空白的目標體重是 null；存好回 /me/health、失效 [body]", async () => {
 		const spy = mockApi([
 			profileRoute(),
 			putRoute(() => json({ ...PROFILE, goal: "maintain" })),
@@ -189,7 +189,7 @@ describe("/me/body", () => {
 		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
 
 		expect(
-			await screen.findByRole("heading", { name: "我的" }),
+			await screen.findByRole("heading", { name: "身體與目標" }),
 		).toBeInTheDocument();
 		expect(putBodies(spy)).toEqual([
 			{
@@ -332,7 +332,7 @@ describe("/me/body：整頁重新載入，離線快取裡有舊的身體資料",
 		);
 	}
 
-	/** 上一次載入：「我的」的卡片讀過身體資料，它就進了離線快取。 */
+	/** 上一次載入：身體與目標的卡片讀過身體資料，它就進了離線快取。 */
 	function Probe() {
 		const profile = useBodyProfile();
 		return <p>上一次載入：{profile.data?.height_cm ?? "還沒有"}</p>;

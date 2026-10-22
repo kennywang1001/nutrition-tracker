@@ -5,7 +5,7 @@ import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
-import { Me } from "../src/screens/Me";
+import { BodyHub } from "../src/screens/BodyHub";
 import { bodyRoutes } from "./helpers/body-routes";
 import { json, mockApi, type Route } from "./helpers/mock-api";
 
@@ -32,7 +32,7 @@ const STATS = {
 	kcal_budget: "2000.00",
 };
 
-/** 「我的」：`bodyRoutes()` 一定在最前面（`/api/me` 會吃掉 `/api/me/body-profile`）。 */
+/** 身體與目標：`bodyRoutes()` 一定在最前面（`/api/me` 會吃掉 `/api/me/body-profile`）。 */
 function routes(me: unknown, extra: Route[] = []): Route[] {
 	return [
 		...bodyRoutes(),
@@ -54,14 +54,14 @@ function calls(
 	);
 }
 
-function renderMe() {
+function renderHub() {
 	const client = new QueryClient({
 		defaultOptions: { queries: { retry: false } },
 	});
 	render(
 		<QueryClientProvider client={client}>
 			<MemoryRouter>
-				<Me />
+				<BodyHub />
 			</MemoryRouter>
 		</QueryClientProvider>,
 	);
@@ -83,7 +83,7 @@ describe("運動消耗加回今天的熱量額度（運動規格 §7.6）", () =
 		["舊快取沒有這個欄位 → 開著", OLD_ME, true],
 	])("%s", async (_name, me, on) => {
 		mockApi(routes(me));
-		renderMe();
+		renderHub();
 
 		const card = await screen.findByTestId("targets-card");
 		const toggle = await within(card).findByRole("switch", { name: NAME });
@@ -101,7 +101,7 @@ describe("運動消耗加回今天的熱量額度（運動規格 §7.6）", () =
 				},
 			]),
 		);
-		renderMe();
+		renderHub();
 
 		const toggle = await screen.findByRole("switch", { name: NAME });
 		await waitFor(() =>
@@ -135,7 +135,7 @@ describe("運動消耗加回今天的熱量額度（運動規格 §7.6）", () =
 				},
 			]),
 		);
-		renderMe();
+		renderHub();
 
 		const toggle = await screen.findByRole("switch", { name: NAME });
 		await userEvent.click(toggle);
@@ -178,7 +178,7 @@ describe("運動消耗加回今天的熱量額度（運動規格 §7.6）", () =
 				},
 			]),
 		);
-		renderMe();
+		renderHub();
 
 		const toggle = await screen.findByRole("switch", { name: NAME });
 		await userEvent.click(toggle);

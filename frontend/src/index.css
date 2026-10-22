@@ -188,7 +188,7 @@ a {
 	font-size: 10px;
 }
 
-/* 體重圖（身體資料規格 §6.4）：點、7 天移動平均、刻度、底線。目標線沿用 .trend-target、
+/* 體重圖（身體資料規格 §6.4、首頁改版規格 D24）：點、每天的線、7 天平均（虛線）、刻度、底線。目標線沿用 .trend-target、
    起訖日期沿用 .trend-date。 */
 .weight-point {
 	fill: var(--color-accent);
@@ -197,11 +197,23 @@ a {
 	stroke-width: 1.5;
 }
 
+/* 每天的紀錄連成的實線（首頁改版規格 D24）：跟點同色，點畫在它上面。 */
+.weight-line {
+	fill: none;
+	stroke: var(--color-accent);
+	stroke-width: 2;
+	stroke-linejoin: round;
+	stroke-linecap: round;
+}
+
+/* 7 天平均：淡色虛線——實線是真的紀錄，虛線是算出來的。顏色不變（opacity 不是色碼）。 */
 .weight-average {
 	fill: none;
 	stroke: var(--color-action);
-	stroke-width: 2;
+	stroke-width: 1.5;
+	stroke-dasharray: 4 3;
 	stroke-linejoin: round;
+	opacity: 0.6;
 }
 
 .weight-axis {

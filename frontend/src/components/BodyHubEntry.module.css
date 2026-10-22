@@ -1,0 +1,18 @@
+/* 「我的」的身體與目標入口（BodyHubEntry.tsx；首頁改版規格 D13）。整行是連結（44px），右邊的箭頭說「進去」。 */
+
+.link {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	min-height: 44px;
+	color: var(--color-text);
+	font-weight: 600;
+	text-decoration: none;
+}
+
+/* 摘要在連結外面（aria-describedby），緊貼在連結下面。 */
+.summary {
+	margin: 0;
+	color: var(--color-text-muted);
+	font-variant-numeric: tabular-nums;
+}

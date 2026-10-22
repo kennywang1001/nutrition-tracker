@@ -138,7 +138,7 @@ test("從食物庫配（全部是真的）：卡片 → 組合 → 記成一餐 
 
 	// 期望值是解題器算的（規格 §4.5、tests/test_planner_solver.py::test_the_e2e_pair）：
 	// 雞胸 175 g（192.5 kcal）＋白飯 1.5 碗＝300 g（540 kcal）＝732.5 kcal；第二、三組是雞胸 250 g、白飯 2 碗。
-	// /planner 的熱量顯示到整數（half-up）：192.5 → 193、732.5 → 733；總覽照舊印 732.5。
+	// /planner 與總覽的熱量顯示到整數（half-up）：192.5 → 193、732.5 → 733；飲食頁的熱量列照舊印 732.5。
 	await loginAs(page, account);
 	await openPlanner(page);
 
@@ -190,15 +190,16 @@ test("從食物庫配（全部是真的）：卡片 → 組合 → 記成一餐 
 		planned.getByLabel(`${rice}（份，1 份＝1 碗）`, { exact: true }),
 	).toHaveValue("1.5");
 
-	// 4. 選晚餐、記錄 → 總覽：今天 732.5（白飯照份量算 300 g；不帶 portion_id 的話會是 1.5 g）。
+	// 4. 選晚餐、記錄 → 總覽：今天 733（732.5；白飯照份量算 300 g，不帶 portion_id 的話會是 1.5 g）。
 	await page
 		.getByLabel("餐別", { exact: true })
 		.selectOption({ label: "晚餐" });
 	await page.getByRole("button", { name: "記錄", exact: true }).click();
 	await expectOverview(page);
-	await expect(page.getByTestId("today-kcal")).toContainText(
-		"732.5 / 700 kcal",
-	);
+	// 總覽顯示到整數（首頁改版規格 D19）：已吃 733、超過 33。「白飯照份量算 300 g」的精度改在飲食頁的熱量列守（732.5）。
+	const todayKcal = page.getByTestId("today-kcal");
+	await expect(todayKcal).toContainText("已吃 733・預算 700");
+	await expect(todayKcal).toContainText("超過 33 kcal");
 
 	// 5. 再看一次：剩 0，沒有東西可以配。
 	await openPlanner(page);
@@ -211,6 +212,8 @@ test("從食物庫配（全部是真的）：卡片 → 組合 → 記成一餐 
 
 	// 6. 飲食頁的「今日餐點」：那一餐（晚餐）兩樣，白飯是 300 g。
 	await openDiet(page);
+	// 精度：飲食頁的熱量列照舊印到小數（732.5；白飯不照份量算的話是 192.5 + 1.5 g 的熱量）。
+	await expect(page.getByTestId("macro-kcal")).toContainText("732.5 / 700");
 	const dinner = mealCardOf(page, "晚餐");
 	await expect(dinner).toHaveCount(1);
 	await expect(dinner.getByRole("listitem")).toHaveText([

@@ -12,6 +12,12 @@ import {
 	setTokens,
 } from "../src/auth/store";
 import { itemsState, SUGGEST_STATE } from "../src/lib/planner";
+import {
+	quickPhotoFrom,
+	releaseQuickPhoto,
+	SCAN_STATE,
+	stashQuickPhoto,
+} from "../src/lib/quick-actions";
 import { PHOTO_UPLOAD_FAILED_NOTICE } from "../src/screens/LogMeal";
 import { setDesktop } from "../src/test/media";
 import { EMPTY_PROFILE, NO_WEIGHTS, NOT_READY } from "./helpers/body-routes";
@@ -75,7 +81,7 @@ function mockBackend(
 				typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
 			);
 			if (custom !== undefined) return custom;
-			// 「我的」的身體資料、體重卡片與每日目標卡片的重算提示（身體資料規格 §6.2）。
+			// 身體與目標的身體資料、體重卡片與每日目標卡片的重算提示（身體資料規格 §6.2）；「我的」的入口摘要也讀體重。
 			// **要在 `/api/me` 之前**：`/api/me/body-profile` 也包含 "/api/me"。
 			if (url.includes("/api/me/body-profile"))
 				return jsonResponse(EMPTY_PROFILE);
@@ -241,7 +247,13 @@ describe("App", () => {
 			await screen.findByRole("heading", { name: "總覽" }),
 		).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
-		await userEvent.click(screen.getByRole("link", { name: "記運動" }));
+		// 限定在對話框裡（首頁改版規格 D18）：總覽的快速記錄也有一個「記運動」，getByRole 不看 aria-modal。
+		await userEvent.click(
+			within(screen.getByRole("dialog", { name: "新增紀錄" })).getByRole(
+				"link",
+				{ name: "記運動" },
+			),
+		);
 
 		expect(
 			await screen.findByRole("heading", { level: 1, name: "記運動" }),
@@ -499,6 +511,140 @@ describe("App", () => {
 		expect(window.history.length).toBe(lengthBefore);
 		// 新增食物讀一次交接、清掉 history 的 state（重新整理不會再帶一次）。
 		await waitFor(() => expect(window.history.state?.usr ?? null).toBeNull());
+	});
+
+	it("總覽的拍照記：到記一餐、確認照片的卡片已經打開，history 的 state 清掉、暫存的照片放掉（首頁改版規格 D8）", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockBackend(foodLists);
+		render(<App />);
+		expect(
+			await screen.findByRole("heading", { level: 1, name: "總覽" }),
+		).toBeInTheDocument();
+		// 號碼是遞增的：先量下一個，上傳的那一張是它的下一號。
+		const probe = stashQuickPhoto(
+			new File(["p"], "p.jpg", { type: "image/jpeg" }),
+		);
+		releaseQuickPhoto();
+		const file = new File(["x"], "lunch.jpg", { type: "image/jpeg" });
+
+		await userEvent.upload(screen.getByLabelText("拍照記"), file);
+
+		expect(
+			await screen.findByRole("heading", { level: 1, name: "記一餐" }),
+		).toBeInTheDocument();
+		const region = await screen.findByRole("region", { name: "確認照片" });
+		await waitFor(() => expect(region).toHaveFocus());
+		await waitFor(() => expect(window.history.state?.usr ?? null).toBeNull());
+		expect(window.location.pathname).toBe("/meals/new");
+		// 清 state 的同時放掉暫存：上一頁回來不會再帶這張照片。畫面上的卡片照樣在（它在 AiMealPanel 的 state 裡）。
+		expect(quickPhotoFrom({ quickPhoto: probe.quickPhoto + 1 })).toBeNull();
+		expect(
+			screen.getByRole("region", { name: "確認照片" }),
+		).toBeInTheDocument();
+	});
+
+	it("從總覽的掃條碼：記一餐一打開就是掃描層，history 的 state 清掉（首頁改版規格 D9）", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		HTMLMediaElement.prototype.play = vi.fn(async () => undefined);
+		mockBackend(foodLists);
+		openWithState("/meals/new", SCAN_STATE);
+
+		render(<App />);
+
+		const dialog = await screen.findByRole("dialog", { name: "掃條碼" });
+		await waitFor(() => expect(window.history.state?.usr ?? null).toBeNull());
+		// 清掉之後掃描層照樣開著（讀一次、放進自己的 state）。
+		expect(dialog).toBeInTheDocument();
+		expect(screen.getByRole("dialog", { name: "掃條碼" })).toBe(dialog);
+	});
+
+	it("從「＋」點「記體重」：到 /weight、焦點在體重欄位（首頁改版規格 §7）", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockBackend();
+		render(<App />);
+		expect(
+			await screen.findByRole("heading", { level: 1, name: "總覽" }),
+		).toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
+		// 限定在對話框裡（D18）：總覽的快速記錄也有一個「記體重」。
+		await userEvent.click(
+			within(screen.getByRole("dialog", { name: "新增紀錄" })).getByRole(
+				"link",
+				{ name: "記體重" },
+			),
+		);
+
+		expect(
+			await screen.findByRole("heading", { level: 1, name: "體重" }),
+		).toBeInTheDocument();
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+		await waitFor(() =>
+			expect(screen.getByLabelText("體重（公斤）")).toHaveFocus(),
+		);
+	});
+
+	it("從總覽的記體重：到 /weight、焦點在體重欄位，history 的 state 清掉（首頁改版規格 D11）", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockBackend();
+		render(<App />);
+		expect(
+			await screen.findByRole("heading", { level: 1, name: "總覽" }),
+		).toBeInTheDocument();
+
+		await userEvent.click(
+			within(screen.getByRole("list", { name: "快速記錄" })).getByRole("link", {
+				name: "記體重",
+			}),
+		);
+
+		expect(
+			await screen.findByRole("heading", { level: 1, name: "體重" }),
+		).toBeInTheDocument();
+		await waitFor(() =>
+			expect(screen.getByLabelText("體重（公斤）")).toHaveFocus(),
+		);
+		await waitFor(() => expect(window.history.state?.usr ?? null).toBeNull());
+		expect(window.location.pathname).toBe("/weight");
+	});
+
+	it("已經在 /weight 時從「＋」點「記體重」：頁面不重掛，焦點照樣回到體重欄位（首頁改版審查 M1）", async () => {
+		// 以前「要不要搶焦點」只在 WeightRoute 掛上時讀一次：人已經在 /weight，從「＋」再點記體重，
+		// 路由不重掛、表單沒拿到焦點，面板一關焦點掉到 body——看起來像按了沒反應。
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockBackend();
+		window.history.replaceState(null, "", "/weight");
+		render(<App />);
+		const field = await screen.findByLabelText("體重（公斤）");
+		expect(field).not.toHaveFocus();
+
+		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
+		await userEvent.click(
+			within(screen.getByRole("dialog", { name: "新增紀錄" })).getByRole(
+				"link",
+				{ name: "記體重" },
+			),
+		);
+
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+		await waitFor(() =>
+			expect(screen.getByLabelText("體重（公斤）")).toHaveFocus(),
+		);
+		await waitFor(() => expect(window.history.state?.usr ?? null).toBeNull());
+
+		// 第二次：「要搶焦點」已經是 true，光看 prop 沒有變化——要靠每次 navigation 各自算數。
+		screen.getByLabelText("體重（公斤）").blur();
+		expect(screen.getByLabelText("體重（公斤）")).not.toHaveFocus();
+		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
+		await userEvent.click(
+			within(screen.getByRole("dialog", { name: "新增紀錄" })).getByRole(
+				"link",
+				{ name: "記體重" },
+			),
+		);
+		await waitFor(() =>
+			expect(screen.getByLabelText("體重（公斤）")).toHaveFocus(),
+		);
 	});
 });
 
@@ -1165,6 +1311,36 @@ describe("App 的電腦版外框（電腦版版面規格 §3）", () => {
 		expect(
 			screen.getByRole("main").querySelector(".app-content-narrow"),
 		).not.toBeNull();
+	});
+
+	it("「我的」的「身體與目標」：到 /me/health，三張卡片都在，內容寬度是 narrow，導覽的「我的」亮著（首頁改版規格 D1）", async () => {
+		setDesktop(true);
+		mockBackend();
+		render(<App />);
+		await screen.findByRole("heading", { level: 1, name: "總覽" });
+		const nav = screen.getByRole("navigation", { name: "主要導覽" });
+		await userEvent.click(within(nav).getByRole("link", { name: "我的" }));
+		await screen.findByRole("heading", { level: 1, name: "我的" });
+		await userEvent.click(
+			within(screen.getByTestId("body-hub-entry")).getByRole("link", {
+				name: "身體與目標",
+			}),
+		);
+
+		expect(
+			await screen.findByRole("heading", { level: 1, name: "身體與目標" }),
+		).toBeInTheDocument();
+		expect(window.location.pathname).toBe("/me/health");
+		expect(screen.getByTestId("targets-card")).toBeInTheDocument();
+		expect(screen.getByTestId("weight-card")).toBeInTheDocument();
+		expect(screen.getByTestId("body-profile-card")).toBeInTheDocument();
+		expect(
+			screen.getByRole("main").querySelector(".app-content-narrow"),
+		).not.toBeNull();
+		expect(within(nav).getByRole("link", { name: "我的" })).toHaveAttribute(
+			"aria-current",
+			"page",
+		);
 	});
 
 	it("/meals/7 是餐點頁（唯讀的一餐與留言），窄的內容寬度；/meals/new 仍然是記一餐", async () => {

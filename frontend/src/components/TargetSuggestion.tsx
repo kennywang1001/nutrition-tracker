@@ -103,7 +103,8 @@ function Ready({ suggestion }: { suggestion: SuggestionReady }) {
 		apply.mutate(
 			{ kcal, protein_g, fat_g, carb_g },
 			{
-				onSuccess: () => navigate("/me"),
+				// 導回身體與目標（首頁改版規格 D2）：剛套用的目標在那一頁的卡片上。
+				onSuccess: () => navigate("/me/health"),
 				onError: (caught: unknown) => {
 					if (
 						caught instanceof ApiError &&

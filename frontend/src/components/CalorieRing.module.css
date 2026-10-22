@@ -1,0 +1,24 @@
+/* 熱量圓環（CalorieRing.tsx；首頁改版規格 D4、D5）。大小由外層決定（BudgetSummary 的 .ringBox）。
+   顏色只用設計變數：底圈是框線色、弧是強調色，超過額度時弧用危險色——「超過」兩個字也是危險色，
+   顏色不是唯一的線索。圓環是裝飾（aria-hidden），不需要圖形對比。 */
+
+.ring {
+	display: block;
+	width: 100%;
+	height: 100%;
+}
+
+.track {
+	fill: none;
+	stroke: var(--color-border);
+}
+
+.arc {
+	fill: none;
+	stroke: var(--color-accent);
+}
+
+/* 寫在 .arc 之後：同權重靠順序。 */
+.over {
+	stroke: var(--color-danger);
+}

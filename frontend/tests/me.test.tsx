@@ -18,12 +18,8 @@ import {
 	setTokens,
 } from "../src/auth/store";
 import { Me } from "../src/screens/Me";
-import {
-	bodyRoutes,
-	EMPTY_PROFILE,
-	READY_SUGGESTION,
-} from "./helpers/body-routes";
-import { json, mockApi, type Route } from "./helpers/mock-api";
+import { bodyRoutes, NO_WEIGHTS } from "./helpers/body-routes";
+import { json, mockApi } from "./helpers/mock-api";
 
 function me(role: "user" | "admin") {
 	return {
@@ -394,123 +390,6 @@ describe("我的：帳號卡片", () => {
 	});
 });
 
-describe("我的：每日目標卡片的重算提示（身體資料規格 §6.6）", () => {
-	function renderWith(suggestion: unknown) {
-		mockApi([
-			...bodyRoutes({ suggestion }),
-			statsRoute(),
-			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
-		]);
-		render(wrap(<Me />));
-		return screen.getByTestId("targets-card");
-	}
-
-	it("resuggest：「體重變了 -1.5 公斤，要重算建議目標嗎？」，連到 /me/targets", async () => {
-		const card = renderWith({
-			...READY_SUGGESTION,
-			applied_weight_kg: "80.00",
-			weight_change_kg: "-1.50",
-			resuggest: true,
-		});
-
-		expect(
-			await within(card).findByText("體重變了 -1.5 公斤，要重算建議目標嗎？"),
-		).toBeInTheDocument();
-		expect(
-			within(card).getByRole("link", { name: "重算建議目標" }),
-		).toHaveAttribute("href", "/me/targets");
-	});
-
-	it("變重了寫 +", async () => {
-		const card = renderWith({
-			...READY_SUGGESTION,
-			applied_weight_kg: "80.00",
-			weight_change_kg: "1.00",
-			resuggest: true,
-		});
-		expect(
-			await within(card).findByText("體重變了 +1 公斤，要重算建議目標嗎？"),
-		).toBeInTheDocument();
-	});
-
-	it("resuggest 是 false、或建議還沒準備好：沒有提示", async () => {
-		const card = renderWith({
-			...READY_SUGGESTION,
-			applied_weight_kg: "80.00",
-			weight_change_kg: "-0.50",
-			resuggest: false,
-		});
-		// 先等卡片的目標載入完（第 41 種）。
-		await within(card).findByText("1800 kcal");
-		await new Promise((resolve) => setTimeout(resolve, 50));
-		expect(within(card).queryByText(/體重變了/)).not.toBeInTheDocument();
-		expect(
-			within(card).queryByRole("link", { name: "重算建議目標" }),
-		).not.toBeInTheDocument();
-		cleanup();
-		vi.restoreAllMocks();
-
-		const second = renderWith({ ready: false, missing: ["weight"] });
-		await within(second).findByText("1800 kcal");
-		await new Promise((resolve) => setTimeout(resolve, 50));
-		expect(within(second).queryByText(/體重變了/)).not.toBeInTheDocument();
-	});
-});
-
-describe("我的：每日目標卡片", () => {
-	it("顯示四個值，沒設的寫「未設定」，連到 /me/targets", async () => {
-		mockApi([
-			...bodyRoutes(),
-			statsRoute(),
-			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
-		]);
-		render(wrap(<Me />));
-
-		const card = await screen.findByTestId("targets-card");
-		expect(
-			within(card).getByRole("heading", { name: "每日目標" }),
-		).toBeInTheDocument();
-		expect(await within(card).findByText("1800 kcal")).toBeInTheDocument();
-		expect(within(card).getByText("120 g")).toBeInTheDocument();
-		expect(within(card).getAllByText("未設定")).toHaveLength(2);
-		expect(
-			within(card).getByRole("link", { name: "修改每日目標" }),
-		).toHaveAttribute("href", "/me/targets");
-	});
-
-	it("今天沒有目標（target 是 null）：四格都是「未設定」", async () => {
-		mockApi([
-			...bodyRoutes(),
-			statsRoute({ ...STATS, target: null, ratio: null }),
-			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
-		]);
-		render(wrap(<Me />));
-
-		const card = await screen.findByTestId("targets-card");
-		await waitFor(() =>
-			expect(within(card).getAllByText("未設定")).toHaveLength(4),
-		);
-	});
-
-	it("讀不到統計：「無法載入目前的目標」", async () => {
-		mockApi([
-			...bodyRoutes(),
-			statsRoute(
-				{ error: { code: "INTERNAL_ERROR", message: "壞了", details: {} } },
-				500,
-			),
-			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
-		]);
-		render(wrap(<Me />));
-
-		const card = await screen.findByTestId("targets-card");
-		expect(
-			await within(card).findByText("無法載入目前的目標"),
-		).toBeInTheDocument();
-		expect(within(card).queryByText("未設定")).not.toBeInTheDocument();
-	});
-});
-
 describe("我的：匯出資料", () => {
 	it("每個人都有「匯出資料」卡片，在登出之前；畫出來的時候不打任何匯出端點", async () => {
 		// 卡片自己的行為在 export-card.test.tsx；這裡只守「我的」有沒有把它放進來。
@@ -632,252 +511,101 @@ describe("我的：通知卡片（社群規格 §6.4）", () => {
 	});
 });
 
-describe("我的：身體資料卡片", () => {
-	function renderWith(profile: unknown) {
-		mockApi([
-			...bodyRoutes({ profile }),
-			statsRoute(),
-			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
-		]);
-		render(wrap(<Me />));
-		return screen.getByTestId("body-profile-card");
-	}
-
-	it("還沒填：「還沒有填」，「修改身體資料」連到 /me/body", async () => {
-		const card = renderWith(EMPTY_PROFILE);
-
-		expect(await within(card).findByText("還沒有填")).toBeInTheDocument();
-		expect(
-			within(card).getByRole("heading", { name: "身體資料" }),
-		).toBeInTheDocument();
-		expect(
-			within(card).getByRole("link", { name: "修改身體資料" }),
-		).toHaveAttribute("href", "/me/body");
-	});
-
-	it("填了：一行摘要，用「・」隔開", async () => {
-		const card = renderWith({
-			sex: "male",
-			birth_year: 1990,
-			height_cm: "175.0",
-			activity_level: "moderate",
-			goal: "lose",
-			rate_kg_per_week: "0.50",
-			target_weight_kg: "72.00",
-		});
-
-		expect(
-			await within(card).findByText(
-				"男・1990 年生・175 cm・中度活動・減重每週 0.5 公斤・目標 72 公斤",
-			),
-		).toBeInTheDocument();
-	});
-
-	it("沒設的段落略過；維持不寫速度；減重沒有速度只寫「減重」", async () => {
-		const card = renderWith({
-			...EMPTY_PROFILE,
-			sex: "female",
-			height_cm: "160.5",
-			goal: "maintain",
-			rate_kg_per_week: "0.25",
-		});
-		expect(
-			await within(card).findByText("女・160.5 cm・維持體重"),
-		).toBeInTheDocument();
-		cleanup();
-		vi.restoreAllMocks();
-
-		const second = renderWith({ ...EMPTY_PROFILE, goal: "gain" });
-		expect(await within(second).findByText("增重")).toBeInTheDocument();
-	});
-
-	it("順序：每日目標之後、好友之前（規格 D21）", async () => {
-		const card = renderWith(EMPTY_PROFILE);
-		await within(card).findByText("還沒有填");
-
-		const targets = screen.getByTestId("targets-card");
-		const friends = screen.getByRole("heading", { name: "好友" });
-		expect(
-			targets.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING,
-		).toBeTruthy();
-		expect(
-			card.compareDocumentPosition(friends) & Node.DOCUMENT_POSITION_FOLLOWING,
-		).toBeTruthy();
-	});
-});
-
-describe("我的：體重卡片", () => {
-	const WEIGHTS = {
-		today: "2026-10-14",
+describe("我的：身體與目標的入口（首頁改版規格 D13–D15）", () => {
+	// 兩筆：摘要寫的是最新那一筆（由舊到新的最後一筆），不是最早的。
+	const WEIGHT_79 = {
+		today: "2019-07-04",
 		entries: [
-			{ date: "2026-10-07", weight_kg: "80.00" },
-			{ date: "2026-10-10", weight_kg: "79.60" },
-			{ date: "2026-10-14", weight_kg: "79.00" },
+			{ date: "2019-07-01", weight_kg: "80.20" },
+			{ date: "2019-07-04", weight_kg: "79.00" },
 		],
 	};
 
-	function renderWith(weights: unknown, extra: Route[] = []) {
+	function renderWith(stats: unknown, weights: unknown) {
 		const spy = mockApi([
-			...extra,
 			...bodyRoutes({ weights }),
-			statsRoute(),
+			statsRoute(stats),
 			{ method: "GET", path: "/api/me", handler: () => json(me("user")) },
 		]);
 		render(wrap(<Me />));
-		return { spy, card: screen.getByTestId("weight-card") };
+		return { spy, card: screen.getByTestId("body-hub-entry") };
 	}
 
-	function puts(spy: ReturnType<typeof mockApi>) {
-		return spy.mock.calls
-			.filter(([, init]) => init?.method === "PUT")
-			.map(([url, init]) => ({ url: String(url), body: init?.body }));
-	}
-
-	it("最新一筆與「比 7 天前」：跟 7 天前那一筆比，不是跟前一筆比", async () => {
-		const { card } = renderWith(WEIGHTS);
-
-		expect(await within(card).findByText("79 公斤・10/14")).toBeInTheDocument();
-		// 前一筆是 10/10 的 79.6（差 −0.6）；7 天前是 10/07 的 80（差 −1）。
-		expect(within(card).getByText("比 7 天前 -1 公斤")).toBeInTheDocument();
+	it("連結的名稱固定「身體與目標」、連到 /me/health；摘要是說明（不在名稱裡）", async () => {
+		const { card } = renderWith(STATS, WEIGHT_79);
 		expect(
-			within(card).getByRole("heading", { name: "體重" }),
+			await within(card).findByText("1800 kcal・79 公斤"),
 		).toBeInTheDocument();
-		expect(within(card).getByRole("link", { name: "看全部" })).toHaveAttribute(
-			"href",
-			"/weight",
-		);
+		const link = within(card).getByRole("link", { name: "身體與目標" });
+		expect(link).toHaveAttribute("href", "/me/health");
+		expect(link).toHaveAccessibleDescription("1800 kcal・79 公斤");
 	});
 
-	it("變重了寫 +；七天以前沒有紀錄就不寫「比 7 天前」；沒有紀錄寫「還沒有體重紀錄」", async () => {
-		const { card } = renderWith({
-			today: "2026-10-14",
-			entries: [
-				{ date: "2026-10-01", weight_kg: "70" },
-				{ date: "2026-10-14", weight_kg: "70.5" },
-			],
-		});
-		expect(
-			await within(card).findByText("比 7 天前 +0.5 公斤"),
-		).toBeInTheDocument();
+	it("只有目標、只有體重、都沒有", async () => {
+		const first = renderWith(STATS, NO_WEIGHTS).card;
+		expect(await within(first).findByText("1800 kcal")).toBeInTheDocument();
 		cleanup();
 		vi.restoreAllMocks();
 
-		const second = renderWith({
-			today: "2026-10-14",
-			entries: [{ date: "2026-10-10", weight_kg: "70" }],
-		}).card;
-		expect(
-			await within(second).findByText("70 公斤・10/10"),
-		).toBeInTheDocument();
-		expect(within(second).queryByText(/比 7 天前/)).not.toBeInTheDocument();
+		const second = renderWith({ ...STATS, target: null }, WEIGHT_79).card;
+		expect(await within(second).findByText("79 公斤")).toBeInTheDocument();
 		cleanup();
 		vi.restoreAllMocks();
 
-		const third = renderWith({ today: "2026-10-14", entries: [] }).card;
+		const third = renderWith({ ...STATS, target: null }, NO_WEIGHTS).card;
+		expect(await within(third).findByText("還沒設定")).toBeInTheDocument();
+	});
+
+	it("還在載入：「載入中…」，連結照樣在", async () => {
+		const { card } = renderWith(STATS, WEIGHT_79);
+		expect(within(card).getByText("載入中…")).toBeInTheDocument();
 		expect(
-			await within(third).findByText("還沒有體重紀錄"),
+			within(card).getByRole("link", { name: "身體與目標" }),
 		).toBeInTheDocument();
+		// 等資料回來（不然 act 警告）。
+		await within(card).findByText("1800 kcal・79 公斤");
 	});
 
-	it("記錄體重：展開表單（日期預設、上下限是後端給的今天），存了收起來、焦點回到按鈕", async () => {
-		const { spy, card } = renderWith(WEIGHTS, [
+	it("「我的」沒有每日目標、體重、身體資料三張卡片，也不打身體資料與建議的端點", async () => {
+		const { spy, card } = renderWith(STATS, NO_WEIGHTS);
+		await within(card).findByText("1800 kcal");
+		await screen.findByText("kenny@example.com");
+		expect(screen.queryByTestId("targets-card")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("weight-card")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("body-profile-card")).not.toBeInTheDocument();
+		const urls = spy.mock.calls.map(([input]) => String(input));
+		expect(urls.some((url) => url.includes("/api/me/body-profile"))).toBe(
+			false,
+		);
+		expect(urls.some((url) => url.includes("/api/me/target-suggestion"))).toBe(
+			false,
+		);
+	});
+
+	it("摘要寫的是目標，不是額度（含運動的那個數字）", async () => {
+		const { card } = renderWith(
 			{
-				method: "PUT",
-				path: "/api/weights/2026-10-14",
-				handler: () => json({ date: "2026-10-14", weight_kg: "78.50" }),
+				...STATS,
+				exercise_kcal: "343.00",
+				exercise_adds_to_budget: true,
+				kcal_budget: "2143.00",
 			},
-		]);
-
-		await userEvent.click(
-			await within(card).findByRole("button", { name: "記錄體重" }),
+			NO_WEIGHTS,
 		);
-		const weight = within(card).getByLabelText("體重（公斤）");
-		expect(weight).toHaveFocus();
-		expect(weight).toHaveAttribute("inputmode", "decimal");
-		const date = within(card).getByLabelText("日期");
-		expect(date).toHaveAttribute("type", "date");
-		expect(date).toHaveValue("2026-10-14");
-		expect(date).toHaveAttribute("max", "2026-10-14");
-		expect(date).toHaveAttribute("min", "2024-10-14");
-
-		await userEvent.type(weight, "78.5");
-		await userEvent.click(within(card).getByRole("button", { name: "儲存" }));
-
-		await waitFor(() =>
-			expect(puts(spy)).toEqual([
-				{ url: "/api/weights/2026-10-14", body: '{"weight_kg":"78.5"}' },
-			]),
-		);
-		await waitFor(() =>
-			expect(
-				within(card).getByRole("button", { name: "記錄體重" }),
-			).toHaveFocus(),
-		);
-		expect(
-			within(card).queryByLabelText("體重（公斤）"),
-		).not.toBeInTheDocument();
+		expect(await within(card).findByText("1800 kcal")).toBeInTheDocument();
 	});
 
-	it("體重不合規則不送；取消收起來、焦點回到「記錄體重」", async () => {
-		const { spy, card } = renderWith(WEIGHTS, [
-			{
-				method: "PUT",
-				path: "/api/weights/",
-				handler: () => new Promise<Response>(() => {}),
-			},
-		]);
-
-		await userEvent.click(
-			await within(card).findByRole("button", { name: "記錄體重" }),
-		);
-		await userEvent.type(within(card).getByLabelText("體重（公斤）"), "24");
-		await userEvent.click(within(card).getByRole("button", { name: "儲存" }));
-
-		expect(await within(card).findByRole("alert")).toHaveTextContent(
-			"體重要在 25 到 350 公斤之間，最多兩位小數",
-		);
-		await new Promise((resolve) => setTimeout(resolve, 50));
-		expect(puts(spy)).toEqual([]);
-
-		await userEvent.click(within(card).getByRole("button", { name: "取消" }));
+	it("順序：通知 → 身體與目標 → 帳號（D15）", async () => {
+		const { card } = renderWith(STATS, NO_WEIGHTS);
+		const notifications = screen.getByTestId("notifications-card");
+		const account = await screen.findByText("kenny@example.com");
 		expect(
-			within(card).getByRole("button", { name: "記錄體重" }),
-		).toHaveFocus();
-	});
-
-	it("送出中「儲存」是 aria-disabled（焦點還在它身上），再按不會送第二次", async () => {
-		const { spy, card } = renderWith(WEIGHTS, [
-			{
-				method: "PUT",
-				path: "/api/weights/",
-				handler: () => new Promise<Response>(() => {}),
-			},
-		]);
-
-		await userEvent.click(
-			await within(card).findByRole("button", { name: "記錄體重" }),
-		);
-		await userEvent.type(within(card).getByLabelText("體重（公斤）"), "78");
-		const save = within(card).getByRole("button", { name: "儲存" });
-		await userEvent.click(save);
-		await waitFor(() => expect(save).toHaveAttribute("aria-disabled", "true"));
-		expect(save).not.toBeDisabled();
-		await userEvent.click(save);
-		await new Promise((resolve) => setTimeout(resolve, 50));
-		expect(puts(spy)).toHaveLength(1);
-	});
-
-	it("順序：身體資料之後、好友之前（規格 D21）", async () => {
-		const { card } = renderWith(WEIGHTS);
-		await within(card).findByText("79 公斤・10/14");
-
-		const body = screen.getByTestId("body-profile-card");
-		const friends = screen.getByRole("heading", { name: "好友" });
-		expect(
-			body.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING,
+			notifications.compareDocumentPosition(card) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
 		).toBeTruthy();
 		expect(
-			card.compareDocumentPosition(friends) & Node.DOCUMENT_POSITION_FOLLOWING,
+			card.compareDocumentPosition(account) & Node.DOCUMENT_POSITION_FOLLOWING,
 		).toBeTruthy();
+		await within(card).findByText("1800 kcal");
 	});
 });

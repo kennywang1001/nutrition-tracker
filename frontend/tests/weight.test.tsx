@@ -24,13 +24,17 @@ function newClient() {
 	});
 }
 
-function renderScreen(routes: ApiRoute[], client = newClient()) {
+function renderScreen(
+	routes: ApiRoute[],
+	client = newClient(),
+	element = <Weight />,
+) {
 	const spy = mockApi(routes);
 	render(
 		<QueryClientProvider client={client}>
 			<MemoryRouter initialEntries={["/weight"]}>
 				<Routes>
-					<Route path="/weight" element={<Weight />} />
+					<Route path="/weight" element={element} />
 				</Routes>
 			</MemoryRouter>
 		</QueryClientProvider>,
@@ -283,6 +287,52 @@ describe("/weight", () => {
 		expect(screen.getByTestId("weight-target")).toBeInTheDocument();
 	});
 
+	it("圖例：每天的紀錄、7 天平均，色塊是裝飾", async () => {
+		renderScreen(bodyRoutes({ weights: TWO }));
+
+		const card = await screen.findByTestId("weight-chart-card");
+		const daily = within(card).getByText("每天的紀錄");
+		const average = within(card).getByText("7 天平均");
+		// 每一項是「色塊＋字」：色塊是 aria-hidden 的 span，字本身就說了。
+		expect(daily.querySelector("span")).toHaveAttribute("aria-hidden", "true");
+		expect(average.querySelector("span")).toHaveAttribute(
+			"aria-hidden",
+			"true",
+		);
+	});
+
+	it("切期間：線只連範圍內的點", async () => {
+		renderScreen(
+			bodyRoutes({
+				weights: {
+					today: "2026-10-14",
+					entries: [
+						e("2026-07-01", "82"),
+						e("2026-09-01", "80"),
+						e("2026-10-01", "79"),
+						e("2026-10-10", "78.4"),
+					],
+				},
+			}),
+		);
+		const linePairs = () =>
+			(screen.getByTestId("weight-line").getAttribute("points") ?? "").split(
+				" ",
+			);
+
+		const period = await screen.findByRole("group", { name: "期間" });
+		expect(dots()).toHaveLength(2);
+		expect(linePairs()).toHaveLength(2);
+
+		await userEvent.click(within(period).getByRole("radio", { name: "全部" }));
+		expect(dots()).toHaveLength(4);
+		expect(linePairs()).toHaveLength(4);
+
+		await userEvent.click(within(period).getByRole("radio", { name: "30 天" }));
+		expect(dots()).toHaveLength(2);
+		expect(linePairs()).toHaveLength(2);
+	});
+
 	it("讀不到：「無法載入體重」", async () => {
 		renderScreen([
 			{
@@ -298,5 +348,28 @@ describe("/weight", () => {
 		]);
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("無法載入體重");
+	});
+});
+
+describe("/weight：從記體重來（首頁改版規格 D11）", () => {
+	it("focusForm：資料回來、表單掛上去，焦點在「體重（公斤）」", async () => {
+		renderScreen(
+			bodyRoutes({ weights: TWO }),
+			newClient(),
+			<Weight focusForm />,
+		);
+
+		const input = await screen.findByLabelText("體重（公斤）");
+		await waitFor(() => expect(input).toHaveFocus());
+	});
+
+	it("沒有 focusForm：焦點不在體重欄位", async () => {
+		renderScreen(bodyRoutes({ weights: TWO }));
+
+		const input = await screen.findByLabelText("體重（公斤）");
+		// 等圖畫完（表單的 effect 早就跑過了）再看焦點。
+		await screen.findByRole("group", { name: "體重" });
+		await settle();
+		expect(input).not.toHaveFocus();
 	});
 });

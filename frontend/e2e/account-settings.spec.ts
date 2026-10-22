@@ -23,6 +23,11 @@ test("每日目標從今天起生效：總覽的分母跟著變，同一天再�
 		await expect(
 			page.getByRole("heading", { name: "我的", exact: true }),
 		).toBeVisible();
+		// 每日目標的卡片在身體與目標（首頁改版規格 §5、§6）。
+		await page.getByRole("link", { name: "身體與目標", exact: true }).click();
+		await expect(
+			page.getByRole("heading", { name: "身體與目標", exact: true, level: 1 }),
+		).toBeVisible();
 		await page.getByRole("link", { name: "修改每日目標", exact: true }).click();
 		// 只有目標頁有這個欄位。
 		await expect(
@@ -31,9 +36,9 @@ test("每日目標從今天起生效：總覽的分母跟著變，同一天再�
 		await page.getByLabel("熱量（kcal）", { exact: true }).fill(value);
 		await page.getByLabel("蛋白質（g）", { exact: true }).fill("120");
 		await page.getByRole("button", { name: "儲存", exact: true }).click();
-		// 回到「我的」：卡片上是新的值（第二圈走的是「今天才開始→原地改」）。
+		// 回到身體與目標（首頁改版規格 D2）：卡片上是新的值（第二圈走的是「今天才開始→原地改」）。
 		await expect(
-			page.getByRole("heading", { name: "我的", exact: true }),
+			page.getByRole("heading", { name: "身體與目標", exact: true, level: 1 }),
 		).toBeVisible();
 		await expect(page.getByTestId("targets-card")).toContainText(
 			`${value} kcal`,
@@ -42,7 +47,9 @@ test("每日目標從今天起生效：總覽的分母跟著變，同一天再�
 		await expect(
 			page.getByRole("heading", { name: "總覽", exact: true }),
 		).toBeVisible();
-		await expect(kcal).toContainText(`/ ${value} kcal`);
+		// 分母是新的目標（首頁改版規格 §9.2：「/ N kcal」→「預算 N」）；新帳號什麼都沒吃，還能吃的就是整個目標。
+		await expect(kcal).toContainText(`預算 ${value}`);
+		await expect(kcal).toContainText(`還能吃 ${value} kcal`);
 	}
 });
 

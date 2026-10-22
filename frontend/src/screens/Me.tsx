@@ -5,18 +5,16 @@ import { useMe } from "../api/me";
 import { logout } from "../auth/session";
 import { AccountCard } from "../components/AccountCard";
 import { AccountsAdmin } from "../components/AccountsAdmin";
-import { BodyProfileCard } from "../components/BodyProfileCard";
+import { BodyHubEntry } from "../components/BodyHubEntry";
 import { Card } from "../components/Card";
 import { ExportCard } from "../components/ExportCard";
 import { FriendsCard } from "../components/FriendsCard";
 import { InviteFriends } from "../components/InviteFriends";
 import { NotificationsCard } from "../components/NotificationsCard";
-import { TargetsCard } from "../components/TargetsCard";
-import { WeightCard } from "../components/WeightCard";
 import styles from "./Me.module.css";
 
-/** 我的：通知、帳號、每日目標、身體資料、體重、好友、匯出資料、管理員的審核、邀請與所有帳號、登出
- *  （介面改版規格 §5.7、帳號設定規格 §5.1、報表月份與匯出規格 §4.2、身體資料規格 §6.2）。 */
+/** 我的：通知、身體與目標的入口、帳號、好友、匯出資料、管理員的審核、邀請與所有帳號、登出
+ *  （介面改版規格 §5.7、帳號設定規格 §5.1、報表月份與匯出規格 §4.2、首頁改版規格 §6）。 */
 export function Me() {
 	// 帳號卡片自己讀 useMe；這裡只剩「是不是管理員」要用它（同一個 query，不會多打一次）。
 	const me = useMe().data;
@@ -43,15 +41,11 @@ export function Me() {
 			    （社群規格 §6.4）。 */}
 			<NotificationsCard />
 
+			{/* 每日目標、體重、身體資料搬到「身體與目標」（首頁改版規格 §6）；這裡只留入口與一行摘要，
+			    排在通知之後、帳號之前（D15）。 */}
+			<BodyHubEntry />
+
 			<AccountCard />
-
-			<TargetsCard />
-
-			{/* 身體資料跟每日目標放在一起：建議目標是從它算出來的（身體資料規格 D21）。 */}
-			<BodyProfileCard />
-
-			{/* 體重是每天會碰的，放在好友前面（D21）。 */}
-			<WeightCard />
 
 			<FriendsCard />
 

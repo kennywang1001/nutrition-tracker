@@ -1,0 +1,49 @@
+/* 總覽的快速記錄（QuickActions.tsx；首頁改版規格 §4）。四欄：390px 寬每格約 80px，徽章＋三個字放得下。 */
+
+.actions {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: var(--space-2);
+}
+
+/* 每一格整塊都能點（標籤或連結本身就是那一格），至少 44px；實際是徽章＋字，約 72px。 */
+.action {
+	box-sizing: border-box;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: var(--space-1);
+	height: 100%;
+	min-height: 44px;
+	padding: var(--space-2) var(--space-1);
+	border-radius: var(--radius-card);
+	background: var(--color-surface);
+	color: var(--color-text);
+	font-size: 14px;
+	font-weight: 600;
+	text-align: center;
+	text-decoration: none;
+	cursor: pointer;
+}
+
+.action:hover,
+.action:active {
+	background: var(--color-accent-soft);
+}
+
+/* 視覺上藏起來但仍可用鍵盤對焦（同 PhotoPickerButton.module.css 的 .input），對焦外框畫在前面的標籤上。 */
+.fileInput {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	opacity: 0;
+}
+
+.action:has(+ .fileInput:focus-visible) {
+	outline: 2px solid var(--color-action);
+	outline-offset: 2px;
+}

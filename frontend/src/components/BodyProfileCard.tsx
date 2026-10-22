@@ -36,7 +36,7 @@ function summary(profile: BodyProfile): string | null {
 	return parts.length === 0 ? null : parts.join("・");
 }
 
-/** 「我的」的身體資料（身體資料規格 §6.2）。不算年齡：年齡要「使用者的今天」，前端不算今天。 */
+/** 身體與目標的身體資料（身體資料規格 §6.2；首頁改版從「我的」搬過來）。不算年齡：年齡要「使用者的今天」，前端不算今天。 */
 export function BodyProfileCard() {
 	const profile = useBodyProfile();
 

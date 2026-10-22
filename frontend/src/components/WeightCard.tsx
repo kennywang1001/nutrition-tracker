@@ -9,7 +9,7 @@ import ui from "./ui.module.css";
 import styles from "./WeightCard.module.css";
 import { WeightForm } from "./WeightForm";
 
-/** 「我的」的體重（身體資料規格 §6.2）：最新一筆、跟 7 天前比、行內記錄、看全部。
+/** 身體與目標的體重（身體資料規格 §6.2；首頁改版從「我的」搬過來）：最新一筆、跟 7 天前比、行內記錄、看全部。
  *  「今天」用 `GET /api/weights` 回的 `today`——前端不算今天，讀不到就不給記錄的按鈕。 */
 export function WeightCard() {
 	const weights = useWeights();

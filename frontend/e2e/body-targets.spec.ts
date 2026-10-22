@@ -26,15 +26,20 @@ function dateLabel(date: string, today: string): string {
 		: `${date.slice(0, 4)}/${shortDate(date)}`;
 }
 
-async function openMe(page: Page) {
+/** 我的 → 身體與目標（首頁改版規格 §5、§6）：三張卡片搬到那一頁了。 */
+async function openHub(page: Page) {
 	await page.getByRole("link", { name: "我的", exact: true }).click();
 	await expect(
 		page.getByRole("heading", { name: "我的", exact: true, level: 1 }),
 	).toBeVisible();
+	await page.getByRole("link", { name: "身體與目標", exact: true }).click();
+	await expect(
+		page.getByRole("heading", { name: "身體與目標", exact: true, level: 1 }),
+	).toBeVisible();
 }
 
-/** 「我的」的體重卡片記一筆（日期用預設的今天），回傳那個今天。 */
-async function recordWeightOnMe(page: Page, kg: string): Promise<string> {
+/** 身體與目標的體重卡片記一筆（日期用預設的今天），回傳那個今天。 */
+async function recordWeightOnHub(page: Page, kg: string): Promise<string> {
 	const card = page.getByTestId("weight-card");
 	await card.getByRole("button", { name: "記錄體重", exact: true }).click();
 	// 表單打開時「記錄體重」與「看全部」那一列整個換成表單。
@@ -79,7 +84,7 @@ async function applySuggestion(page: Page) {
 		.getByRole("button", { name: "套用建議目標", exact: true })
 		.click();
 	await expect(
-		page.getByRole("heading", { name: "我的", exact: true, level: 1 }),
+		page.getByRole("heading", { name: "身體與目標", exact: true, level: 1 }),
 	).toBeVisible();
 }
 
@@ -108,7 +113,7 @@ test("缺資料時說還差什麼；填身體資料、記體重、套用建議�
 }) => {
 	const account = await newAccount(request, "body");
 	await loginAs(page, account);
-	await openMe(page);
+	await openHub(page);
 	await expect(page.getByTestId("body-profile-card")).toContainText("還沒有填");
 	await expect(page.getByTestId("weight-card")).toContainText("還沒有體重紀錄");
 
@@ -158,13 +163,13 @@ test("缺資料時說還差什麼；填身體資料、記體重、套用建議�
 	);
 	await page.getByRole("button", { name: "儲存", exact: true }).click();
 	await expect(
-		page.getByRole("heading", { name: "我的", exact: true, level: 1 }),
+		page.getByRole("heading", { name: "身體與目標", exact: true, level: 1 }),
 	).toBeVisible();
 	await expect(page.getByTestId("body-profile-card")).toContainText(
 		"男・1990 年生・175 cm・中度活動・減重每週 0.5 公斤",
 	);
 
-	await recordWeightOnMe(page, "80");
+	await recordWeightOnHub(page, "80");
 	await openTargets(page);
 	const kcal = await suggestedKcal(page);
 	await expect(suggestion).toContainText("依 ");
@@ -176,13 +181,14 @@ test("缺資料時說還差什麼；填身體資料、記體重、套用建議�
 	await expect(
 		page.getByRole("heading", { name: "總覽", exact: true }),
 	).toBeVisible();
-	await expect(page.getByTestId("today-kcal")).toContainText(`/ ${kcal} kcal`);
+	// 分母是套用的建議（首頁改版規格 §9.2：「/ N kcal」→「預算 N」）。
+	await expect(page.getByTestId("today-kcal")).toContainText(`預算 ${kcal}`);
 
-	await openMe(page);
+	await openHub(page);
 	const targetsCard = page.getByTestId("targets-card");
 	await expect(targetsCard).toContainText(`${kcal} kcal`);
 	await expect(targetsCard).not.toContainText("體重變了");
-	await recordWeightOnMe(page, "78.5"); // 同一天：更正，最新體重是 78.5
+	await recordWeightOnHub(page, "78.5"); // 同一天：更正，最新體重是 78.5
 	await expect(targetsCard).toContainText(
 		"體重變了 -1.5 公斤，要重算建議目標嗎？",
 	);
@@ -202,8 +208,8 @@ test("缺資料時說還差什麼；填身體資料、記體重、套用建議�
 	await expect(targetsCard).not.toContainText("體重變了");
 
 	// 體重又變了，這次不重算、自己手動設目標（審查 I1）：手打的目標不是建議（D16），
-	// 回到「我的」提示要消失——不能留著快取裡的舊建議。
-	await recordWeightOnMe(page, "77");
+	// 回到身體與目標提示要消失——不能留著快取裡的舊建議。
+	await recordWeightOnHub(page, "77");
 	await expect(targetsCard).toContainText(
 		"體重變了 -1.5 公斤，要重算建議目標嗎？",
 	);
@@ -214,7 +220,7 @@ test("缺資料時說還差什麼；填身體資料、記體重、套用建議�
 	await manualKcal.fill("1900");
 	await manual.getByRole("button", { name: "儲存", exact: true }).click();
 	await expect(
-		page.getByRole("heading", { name: "我的", exact: true, level: 1 }),
+		page.getByRole("heading", { name: "身體與目標", exact: true, level: 1 }),
 	).toBeVisible();
 	await expect(targetsCard).toContainText("1900 kcal");
 	await expect(targetsCard).not.toContainText("體重變了");
@@ -226,7 +232,7 @@ test("只差體重時只給「記錄體重」；記了之後有目標線，建�
 }) => {
 	const account = await newAccount(request, "floor");
 	await loginAs(page, account);
-	await openMe(page);
+	await openHub(page);
 
 	await page.getByRole("link", { name: "修改身體資料", exact: true }).click();
 	await expect(
@@ -252,7 +258,7 @@ test("只差體重時只給「記錄體重」；記了之後有目標線，建�
 	await page.getByLabel("目標體重（kg，選填）", { exact: true }).fill("42");
 	await page.getByRole("button", { name: "儲存", exact: true }).click();
 	await expect(
-		page.getByRole("heading", { name: "我的", exact: true, level: 1 }),
+		page.getByRole("heading", { name: "身體與目標", exact: true, level: 1 }),
 	).toBeVisible();
 	await expect(page.getByTestId("body-profile-card")).toContainText(
 		"目標 42 公斤",
@@ -293,7 +299,7 @@ test("只差體重時只給「記錄體重」；記了之後有目標線，建�
 	).toBeVisible();
 
 	// 女、36 歲上下、150 cm、45 kg、久坐、每週減 0.5：原始值遠低於 1200，調到下限。
-	await openMe(page);
+	await openHub(page);
 	await openTargets(page);
 	expect(await suggestedKcal(page)).toBe("1200");
 	await expect(suggestion).toContainText("已調到最低建議熱量 1200 kcal");
@@ -305,8 +311,8 @@ test("體重頁：記幾天、切期間、改一筆、刪一筆；卡片跟 7 �
 }) => {
 	const account = await newAccount(request, "weight");
 	await loginAs(page, account);
-	await openMe(page);
-	const today = await recordWeightOnMe(page, "79");
+	await openHub(page);
+	const today = await recordWeightOnHub(page, "79");
 	await page
 		.getByTestId("weight-card")
 		.getByRole("link", { name: "看全部", exact: true })
@@ -407,9 +413,35 @@ test("體重頁：記幾天、切期間、改一筆、刪一筆；卡片跟 7 �
 	).toBeVisible();
 	await expectTouchTargets(page.locator("main button:visible"), "體重");
 
+	// 折線圖（首頁改版規格 D24）：每天的紀錄連成一條實線，組數＝看得到的點數；7 天平均是虛線。
+	const daily = chart.getByTestId("weight-line");
+	await expect(daily).toHaveCount(1);
+	const pairs = ((await daily.getAttribute("points")) ?? "").split(" ").length;
+	expect(pairs).toBe(await points.count());
+	const dash = await chart
+		.getByTestId("weight-average")
+		.evaluate((node) => getComputedStyle(node).strokeDasharray);
+	expect(dash).not.toBe("none");
+	await expect(page.getByText("每天的紀錄", { exact: true })).toBeVisible();
+	await expect(page.getByText("7 天平均", { exact: true })).toBeVisible();
+
 	// 卡片：最新一筆是今天的 79，7 天前（含）最近的一筆是 79.4。
-	await openMe(page);
+	await openHub(page);
 	const card = page.getByTestId("weight-card");
 	await expect(card).toContainText(`79 公斤・${shortDate(today)}`);
 	await expect(card).toContainText("比 7 天前 -0.4 公斤");
+
+	// 總覽的體重小卡片：同一套「比 7 天前」（規格 D12）。最近 30 天剩今天與 7 天前兩筆
+	// （2 天前刪了、40 天前在 30 天外）：迷你折線兩個點（D22）。
+	await page.getByRole("link", { name: "總覽", exact: true }).click();
+	await expect(
+		page.getByRole("heading", { name: "總覽", exact: true, level: 1 }),
+	).toBeVisible();
+	const glance = page.getByTestId("weight-glance");
+	await expect(glance).toContainText("79 公斤");
+	await expect(glance).toContainText("比 7 天前 -0.4 公斤");
+	await expect(glance.getByTestId("weight-sparkline-line")).toHaveAttribute(
+		"points",
+		/^\S+ \S+$/,
+	);
 });

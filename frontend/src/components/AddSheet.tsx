@@ -1,9 +1,10 @@
-import { Dumbbell, Utensils, Wallet } from "lucide-react";
+import { Dumbbell, Utensils, Wallet, Weight } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { Link } from "react-router";
 import { CATEGORY_COLORS } from "../api/expenses";
+import { WEIGHT_FORM_STATE } from "../lib/quick-actions";
 import styles from "./AddSheet.module.css";
-import { EXERCISE_COLOR, IconBadge } from "./IconBadge";
+import { EXERCISE_COLOR, IconBadge, WEIGHT_COLOR } from "./IconBadge";
 
 type Props = {
 	/** Esc、取消、點背景：留在原頁，呼叫端負責把焦點還給「＋」。 */
@@ -12,7 +13,7 @@ type Props = {
 	onNavigate: () => void;
 };
 
-/** 「＋」滑出的面板：記帳、記一餐或記運動（規格 §3.1、§5.1；運動規格 §7.1）。
+/** 「＋」滑出的面板：記帳、記一餐、記運動或記體重（規格 §3.1、§5.1；運動規格 §7.1；首頁改版規格 §7）。
  *
  *  三種關法：「取消」、點背景、按 Esc。開著時是 `role="dialog"`＋
  *  `aria-modal`，焦點一打開就移到第一個入口——不然鍵盤使用者的焦點會
@@ -75,6 +76,16 @@ export function AddSheet({ onDismiss, onNavigate }: Props) {
 					>
 						<IconBadge icon={Dumbbell} color={EXERCISE_COLOR} size="large" />
 						記運動
+					</Link>
+					{/* 記體重（首頁改版規格 §7）：跟總覽的快速記錄同一個去處——/weight、焦點在體重欄位。 */}
+					<Link
+						to="/weight"
+						state={WEIGHT_FORM_STATE}
+						className={styles.choice}
+						onClick={onNavigate}
+					>
+						<IconBadge icon={Weight} color={WEIGHT_COLOR} size="large" />
+						記體重
 					</Link>
 				</div>
 				<button type="button" className={styles.cancel} onClick={onDismiss}>

@@ -69,6 +69,10 @@ type Props = {
 	/** 一開始就展開「讓 AI 配一餐」、焦點在偏好欄位（從飲食頁或 `/planner` 來的；營養素配餐
 	 *  規格 D22）。只在掛載時讀。 */
 	startSuggesting?: boolean;
+	/** 一開始就選好的照片（總覽的「拍照記」，首頁改版規格 D8）：一掛載就是「確認照片」卡片、焦點在卡片；
+	 *  **不自動送出**（看照片、選填說明、按「開始估算」才算一次額度）。太大的同「選的當下就擋」——說太大、
+	 *  不出卡片。只在掛載時讀。 */
+	initialPhoto?: File;
 };
 
 /** 同名檢查搜尋的筆數（同 `AiEstimatePanel`：用後端的上限）。 */
@@ -195,6 +199,7 @@ export function AiMealPanel({
 	onFoodPicked,
 	onItemsReady,
 	startSuggesting,
+	initialPhoto,
 }: Props) {
 	const queryClient = useQueryClient();
 	const id = useId();
@@ -223,12 +228,22 @@ export function AiMealPanel({
 	const [resultKind, setResultKind] = useState<"estimate" | "suggest">(
 		"estimate",
 	);
+	// 總覽帶來的照片跟這裡選的照片同一套規則（首頁改版規格 D8；照片說明規格 D9：太大在選的當下就擋）。
+	const initialFits =
+		initialPhoto !== undefined && initialPhoto.size <= MAX_PHOTO_BYTES;
 	// 選好、還沒送出的照片＋補充說明（照片說明規格 §6，同單樣面板）：按「開始估算」才送。
 	const [pending, setPending] = useState<{ file: File; hint: string } | null>(
-		null,
+		() =>
+			initialFits && initialPhoto !== undefined
+				? { file: initialPhoto, hint: "" }
+				: null,
 	);
 	// 選的當下就知道太大（規格 D9）：不出卡片，直接說。
-	const [pickError, setPickError] = useState<string | null>(null);
+	const [pickError, setPickError] = useState<string | null>(() =>
+		initialPhoto !== undefined && !initialFits
+			? new PhotoTooLargeError().message
+			: null,
+	);
 
 	// 同一時間只跑一輪「加入」。平常 React 在兩次點擊之間就會重畫，下面按鈕的
 	// `adding` 檢查擋得住；這個 ref 是**不靠重畫時機**的那一半——同一批更新裡進來的
@@ -250,6 +265,7 @@ export function AiMealPanel({
 	// 入口那顆按鈕（按下去的那顆消失了，焦點不能掉到 body）。
 	// 確認照片的卡片（同單樣面板）：選了照片 → 卡片本身；卡片收起（成功、取消）→ 照片按鈕。
 	// 送出中照片按鈕是 disabled：等它恢復的那一次 render 才移（找得到目標才清旗標）。
+	// 總覽帶來的照片（首頁改版規格 D8）：一掛載就是卡片，焦點跟選了照片一樣到卡片本身（"step"）。
 	const focusNextRef = useRef<
 		| "form"
 		| "preference"
@@ -258,7 +274,7 @@ export function AiMealPanel({
 		| "picker"
 		| { editButton: number }
 		| null
-	>(startSuggesting === true ? "preference" : null);
+	>(startSuggesting === true ? "preference" : initialFits ? "step" : null);
 	const nameInputRef = useRef<HTMLInputElement>(null);
 	const preferenceInputRef = useRef<HTMLInputElement>(null);
 	const suggestButtonRef = useRef<HTMLButtonElement>(null);

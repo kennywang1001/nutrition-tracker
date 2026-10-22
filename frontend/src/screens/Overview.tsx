@@ -2,6 +2,7 @@ import { Dumbbell } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
+import { useWeights } from "../api/body";
 import { useTodayExercises } from "../api/exercises";
 import {
 	CATEGORY_LABELS,
@@ -9,7 +10,8 @@ import {
 	useExpensesByDate,
 } from "../api/expenses";
 import { MEAL_TYPE_LABELS, useTodayMeals } from "../api/meals";
-import { exerciseInBudgetOf, kcalBudgetOf, useDailyStats } from "../api/stats";
+import { useDailyStats } from "../api/stats";
+import { BudgetSummary } from "../components/BudgetSummary";
 import { Card } from "../components/Card";
 import {
 	CategoryIcon,
@@ -18,11 +20,14 @@ import {
 	MealTypeIcon,
 } from "../components/IconBadge";
 import layout from "../components/layout.module.css";
-import { RatioProgress } from "../components/RatioProgress";
+import { QuickActions } from "../components/QuickActions";
 import ui from "../components/ui.module.css";
+import { WeightSparkline } from "../components/WeightSparkline";
 import { formatTime } from "../lib/dates";
-import { formatMacro, formatMoney, ratioOf } from "../lib/decimal";
+import { formatMacro, formatMoney } from "../lib/decimal";
+import { stashQuickPhoto, WEIGHT_FORM_STATE } from "../lib/quick-actions";
 import { buildTimeline, type TimelineRow } from "../lib/timeline";
+import { dateLabel, signedKg, weekChange } from "../lib/weights";
 import styles from "./Overview.module.css";
 
 /** 從路由 state 拿通知（例如記一餐「照片沒傳上去」）。state 是 unknown——
@@ -39,72 +44,104 @@ function noticeFrom(state: unknown): string | null {
 	return null;
 }
 
+/** 本月支出（首頁改版規格 D12）：整塊是連到報表的連結。字樣照舊「本月支出」。
+ *  span 之間的空白是連結名稱的一部分（「本月支出 $12480.00」）；欄排版裡它不佔位置。 */
 function MonthSpendCard() {
 	const summaryQuery = useExpenseSummary(null);
 	const summary = summaryQuery.data;
 
 	return (
 		<Card testId="month-spend">
-			<p className={styles.label}>本月支出</p>
-			{summaryQuery.isPending ? (
-				<p>載入中…</p>
-			) : summary != null ? (
-				<p className={styles.total}>${formatMoney(summary.total)}</p>
-			) : (
-				<p>無法載入本月支出</p>
-			)}
+			<Link to="/reports" className={styles.glance}>
+				<span className={styles.label}>本月支出</span>{" "}
+				{summaryQuery.isPending ? (
+					<span>載入中…</span>
+				) : summary != null ? (
+					<span className={styles.total}>${formatMoney(summary.total)}</span>
+				) : (
+					<span>無法載入本月支出</span>
+				)}
+			</Link>
 		</Card>
 	);
 }
 
-function TodayKcalCard() {
+/** 今天熱量（首頁改版規格 §3）：圓環、三大營養素、已吃・預算。`data-testid="today-kcal"` 沿用（意義變成整張卡片，D7）。
+ *  是 `<section>` 而不是 `Card`：要 region 的名稱「今天熱量」，跟時間線的「今天」分得開。
+ *  資料優先於錯誤：重抓失敗時照樣顯示快取，離線提示由頂端那一條負責。 */
+function TodayBudgetCard() {
 	const statsQuery = useDailyStats();
 	const stats = statsQuery.data;
 
-	if (statsQuery.isPending) {
-		return (
-			<Card testId="today-kcal">
-				<p className={styles.label}>今天熱量</p>
+	return (
+		<section
+			aria-labelledby="overview-budget"
+			data-testid="today-kcal"
+			className={styles.budgetCard}
+		>
+			<h2
+				id="overview-budget"
+				className={`${ui.sectionTitle} ${styles.budgetTitle}`}
+			>
+				今天熱量
+			</h2>
+			{statsQuery.isPending ? (
 				<p>載入中…</p>
-			</Card>
-		);
-	}
-	// 資料優先於錯誤：重抓失敗時（連得到網路、到不了後端）照樣顯示快取，
-	// 離線提示由 Overview 頂端那一條負責。
-	if (stats == null) {
-		return (
-			<Card testId="today-kcal">
-				<p className={styles.label}>今天熱量</p>
+			) : stats == null ? (
 				<p>無法載入今天的熱量</p>
-			</Card>
-		);
-	}
+			) : (
+				<BudgetSummary stats={stats} />
+			)}
+		</section>
+	);
+}
 
-	// 分母是今天的熱量額度（運動規格 D15：目標＋運動，設定關掉時就是目標）。兩層 null
-	// （沿用 MacroBar 的語意）：`target` 整個是 null＝今天沒有目標；`target.kcal` 是 null＝
-	// 有目標但熱量沒設——兩種額度都是 null，只顯示數字、不畫進度條。
-	const budget = kcalBudgetOf(stats);
-	const added = exerciseInBudgetOf(stats);
-	const ratio = ratioOf(stats.actual.kcal, budget);
+/** 體重（首頁改版規格 D12）：最新一筆、比 7 天前（同「身體與目標」的體重卡片，`lib/weights.ts`），整塊連到 `/weight`。
+ *  沒有紀錄：「記錄體重」，跟快速記錄的記體重同一個去處（焦點放在體重欄位，D11）。
+ *  資料沿用 `useWeights()`（800 天、進離線快取），迷你折線自己篩最近 30 天——不多一個 query key（D23）。 */
+function WeightGlanceCard() {
+	const weights = useWeights();
+	const data = weights.data;
+	const latest = data?.entries.at(-1);
+	const change = data == null ? null : weekChange(data.entries);
+	const empty = data != null && latest === undefined;
 
 	return (
-		<Card testId="today-kcal">
-			<p className={styles.label}>今天熱量</p>
-			<p className={styles.total}>
-				{formatMacro(stats.actual.kcal)}
-				<span className={styles.unit}>
-					{budget === null ? " kcal" : ` / ${formatMacro(budget)} kcal`}
-				</span>
-			</p>
-			{/* 分母比目標大的時候說出來為什麼，不然看起來像目標被改了。 */}
-			{added !== null && (
-				<p className={styles.budgetNote}>含運動 +{formatMacro(added)}</p>
-			)}
-			<RatioProgress
-				ratio={ratio}
-				label="熱量進度"
-				className={styles.progress}
-			/>
+		<Card testId="weight-glance">
+			<Link
+				to="/weight"
+				state={empty ? WEIGHT_FORM_STATE : undefined}
+				className={styles.glance}
+			>
+				<span className={styles.label}>體重</span>{" "}
+				{weights.isPending ? (
+					<span>載入中…</span>
+				) : data == null ? (
+					<span>無法載入體重</span>
+				) : latest === undefined ? (
+					<span className={styles.action}>記錄體重</span>
+				) : (
+					<>
+						<span className={styles.total}>
+							{formatMacro(latest.weight_kg)} 公斤
+							{/* 最新一筆不是今天就帶日期（審查 M2）：兩個月沒量的人，首頁不該看起來像今天的數字。
+							    「比 7 天前」也是從那一筆往回算的，有日期才讀得懂。 */}
+							{latest.date !== data.today &&
+								`・${dateLabel(latest.date, data.today)}`}
+						</span>
+						{change !== null && (
+							<>
+								{" "}
+								<span className={styles.sub}>
+									比 7 天前 {signedKg(change.change)} 公斤
+								</span>
+							</>
+						)}
+						{/* 最近 30 天的迷你折線（D22）：裝飾（aria-hidden），不進連結的名稱；少於 2 筆它自己不畫。 */}
+						<WeightSparkline entries={data.entries} today={data.today} />
+					</>
+				)}
+			</Link>
 		</Card>
 	);
 }
@@ -250,6 +287,8 @@ function OfflineBanner() {
 	const mealsQuery = useTodayMeals();
 	const expensesQuery = useExpensesByDate(statsQuery.data?.date ?? null);
 	const exercisesQuery = useTodayExercises();
+	// 體重小卡片（首頁改版規格 §3.4）：重抓失敗而手上有資料，也是畫面上的「離線資料」。
+	const weightsQuery = useWeights();
 
 	const stale = [
 		statsQuery,
@@ -257,6 +296,7 @@ function OfflineBanner() {
 		mealsQuery,
 		expensesQuery,
 		exercisesQuery,
+		weightsQuery,
 	].filter((query) => query.isError && query.data !== undefined);
 	if (stale.length === 0) {
 		return null;
@@ -269,8 +309,9 @@ function OfflineBanner() {
 	);
 }
 
-/** 總覽（介面改版規格 §5.2）：本月支出、今天熱量、今天的時間線。
- *  三塊**各自**處理載入與錯誤——一塊失敗不拖垮整頁。
+/** 總覽（介面改版規格 §5.2、首頁改版規格 §3）：今天熱量的圓環卡片、快速記錄（§4）、
+ *  兩張小卡片（本月支出、體重）、今天的時間線。
+ *  每一塊**各自**處理載入與錯誤——一塊失敗不拖垮整頁。
  *  時間線的餐點列連到編輯畫面；支出列只能看（編輯餐點規格 §4.3）。 */
 export function Overview() {
 	const location = useLocation();
@@ -299,12 +340,21 @@ export function Overview() {
 				{notice !== null && <p className={styles.notice}>{notice}</p>}
 			</div>
 			<OfflineBanner />
-			{/* 電腦版：左＝兩張數字卡、右＝今天的時間線（電腦版版面規格 §4）。
-			    本來的順序就是先卡片後時間線，手機版照樣往下排。 */}
+			{/* 手機往下排、電腦版左欄（首頁改版規格 §3.1）：圓環 → 快速記錄 → 兩張小卡片並排；
+			    右欄是時間線（電腦版版面規格 §4）。DOM 順序就是手機上的順序與焦點順序。 */}
 			<div className={layout.columns}>
-				<div className={styles.cards}>
-					<MonthSpendCard />
-					<TodayKcalCard />
+				<div className={styles.left}>
+					<TodayBudgetCard />
+					{/* 拍照記（D8）：照片放進記憶體裡的暫存，router state 只帶號碼——File 不進 history。 */}
+					<QuickActions
+						onPhoto={(file) =>
+							navigate("/meals/new", { state: stashQuickPhoto(file) })
+						}
+					/>
+					<div className={styles.cards}>
+						<MonthSpendCard />
+						<WeightGlanceCard />
+					</div>
 				</div>
 				<TodayTimeline />
 			</div>

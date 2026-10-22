@@ -9,6 +9,7 @@ import {
 	isPlainPositiveDecimal,
 	isPositiveAmount,
 	isZero,
+	kcalBalance,
 	paddedExtent,
 	percentOf,
 	perServingToPer100,
@@ -337,5 +338,23 @@ describe("roundForDisplay（只給畫面看的四捨五入；營養素配餐 /pl
 		["12", 1, "12"],
 	] as const)("%j 到 %i 位 → %j", (value, places, text) => {
 		expect(roundForDisplay(value, places)).toBe(text);
+	});
+});
+
+describe("kcalBalance（首頁改版規格 D3）", () => {
+	it.each([
+		["2343.00", "1500.00", false, "843"],
+		["2343", "1523.4", false, "820"],
+		// 819.5 → 820（half-up）
+		["2343", "1523.5", false, "820"],
+		// −32.5 → −33（遠離 0）：「超過 33」
+		["700", "732.5", true, "33"],
+		// −0.4 → −0：還能吃 0，不是「超過 0」
+		["2000", "2000.4", false, "0"],
+		["2000", "2000.5", true, "1"],
+		["2000", "2000", false, "0"],
+		["2343.00", "2500.00", true, "157"],
+	])("額度 %s、實際 %s → over %s、%s", (budget, actual, over, amount) => {
+		expect(kcalBalance(budget, actual)).toEqual({ over, amount });
 	});
 });

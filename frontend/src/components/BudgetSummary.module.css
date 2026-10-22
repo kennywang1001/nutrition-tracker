@@ -1,0 +1,85 @@
+/* 總覽的熱量卡片內容（BudgetSummary.tsx；首頁改版規格 §3.1）。
+   圓環 132px 與營養素同一列；寬度不夠（約 340px 以下）時營養素換到下面。 */
+
+.top {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-4);
+}
+
+.ringBox {
+	position: relative;
+	flex: none;
+	width: 132px;
+	height: 132px;
+}
+
+/* 疊在圓環正中間的字。是真的文字（圓環是 aria-hidden）。 */
+.center {
+	position: absolute;
+	inset: 0;
+	margin: 0;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	text-align: center;
+	font-variant-numeric: tabular-nums;
+}
+
+.centerLabel,
+.centerUnit {
+	font-size: 12px;
+	color: var(--color-text-muted);
+}
+
+.centerNumber {
+	font-size: var(--font-size-total);
+	font-weight: 700;
+	line-height: 1.2;
+	overflow-wrap: anywhere;
+}
+
+/* 超過：字也是危險色（不只靠圓環的顏色）。寫在上面兩條之後，權重 (0,2,0) 也比較高。 */
+.centerOver .centerLabel,
+.centerOver .centerNumber {
+	color: var(--color-danger);
+}
+
+.macros {
+	flex: 1 1 160px;
+	min-width: 0;
+}
+
+.line {
+	margin: var(--space-3) 0 0;
+	font-size: 14px;
+	color: var(--color-text-muted);
+	font-variant-numeric: tabular-nums;
+}
+
+.nowrap {
+	white-space: nowrap;
+}
+
+/* 沒有目標：一行字＋連結。跟上面的圓環列之間要留距離（.line 的上邊距在這裡歸零）。 */
+.noTarget {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	column-gap: var(--space-3);
+	margin-top: var(--space-2);
+}
+
+.noTarget .line {
+	margin: 0;
+}
+
+.link {
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+	color: var(--color-action);
+	font-weight: 600;
+}

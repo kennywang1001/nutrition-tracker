@@ -67,7 +67,7 @@ function renderScreen() {
 			<MemoryRouter initialEntries={["/me/targets"]}>
 				<Routes>
 					<Route path="/me/targets" element={<Targets />} />
-					<Route path="/me" element={<h1>我的</h1>} />
+					<Route path="/me/health" element={<h1>身體與目標</h1>} />
 				</Routes>
 			</MemoryRouter>
 		</QueryClientProvider>,
@@ -209,7 +209,7 @@ describe("/me/targets", () => {
 		});
 	});
 
-	it("存好之後失效今天的統計與所有期間的趨勢，回到 /me", async () => {
+	it("存好之後失效今天的統計與所有期間的趨勢，回到 /me/health", async () => {
 		const spy = mockApi([
 			...bodyRoutes(),
 			statsRoute(),
@@ -227,7 +227,7 @@ describe("/me/targets", () => {
 		await userEvent.click(screen.getByRole("button", { name: "儲存" }));
 
 		expect(
-			await screen.findByRole("heading", { name: "我的" }),
+			await screen.findByRole("heading", { name: "身體與目標" }),
 		).toBeInTheDocument();
 		expect(client.getQueryState(rangeKey)?.isInvalidated).toBe(true);
 		// 今天的統計在這一頁掛著：失效會立刻重抓（staleTime 60 秒，不失效就不會再打一次）。
@@ -241,7 +241,7 @@ describe("/me/targets", () => {
 			putRoute(() => json(SAVED)),
 		]);
 		const client = renderScreen();
-		// 「我的」的體重卡片讀的那一份：這一頁沒人觀察，失效之後留著 `isInvalidated`。
+		// 身體與目標的體重卡片讀的那一份：這一頁沒人觀察，失效之後留著 `isInvalidated`。
 		client.setQueryData(queryKeys.weights, {
 			today: "2019-07-04",
 			entries: [],
@@ -255,10 +255,10 @@ describe("/me/targets", () => {
 		);
 
 		expect(
-			await screen.findByRole("heading", { name: "我的" }),
+			await screen.findByRole("heading", { name: "身體與目標" }),
 		).toBeInTheDocument();
 		expect(client.getQueryState(queryKeys.weights)?.isInvalidated).toBe(true);
-		// 建議在這一頁掛著（存的那一刻）：失效會立刻重抓——「我的」的提示看的是這一份。
+		// 建議在這一頁掛著（存的那一刻）：失效會立刻重抓——身體與目標的提示看的是這一份。
 		await waitFor(() => expect(suggestionGets(spy)).toBe(2));
 	});
 

@@ -1,3 +1,17 @@
+/* 圓環卡片 → 快速記錄 → 兩張小卡片（首頁改版規格 §3.1）。手機是頁面的上半部，電腦版是左欄。
+   間距由這裡管，子元素自己的 margin 歸零（Card 有上下 margin）。 */
+.left {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+}
+
+.left > * {
+	margin: 0;
+}
+
+/* 兩張小卡片並排——電腦版也是：左欄約 420px，兩張各約 200px 放得下（規格 §3.1；
+   原本電腦版上下疊的覆寫拿掉了）。 */
 .cards {
 	display: grid;
 	grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -9,13 +23,43 @@
 	margin: 0;
 }
 
-/* 電腦版：左欄只有 2/5 寬，兩張數字卡上下疊（電腦版版面規格 §4）。 */
-:global(.app-desktop) .cards {
-	grid-template-columns: minmax(0, 1fr);
+/* 圓環卡片是 <section>（要 region 的名稱），外觀同 Card。 */
+.budgetCard {
+	padding: var(--space-3) var(--space-4);
+	border-radius: var(--radius-card);
+	background: var(--color-surface);
+}
+
+.budgetTitle {
+	margin: 0 0 var(--space-2);
+}
+
+/* 小卡片的整塊連結（本月支出、體重）：整張都能點，至少 44px。兩張並排時 grid 把矮的那張拉成
+   一樣高——連結跟著撐滿（height: 100%；grid 拉伸過的項目高度算是確定的），不然下半張點了沒反應。 */
+.glance {
+	box-sizing: border-box;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	height: 100%;
+	min-height: 44px;
+	color: inherit;
+	text-decoration: none;
+}
+
+.sub {
+	font-size: 12px;
+	color: var(--color-text-muted);
+	font-variant-numeric: tabular-nums;
+}
+
+.action {
+	color: var(--color-action);
+	font-weight: 600;
 }
 
 .label {
-	margin: 0 0 var(--space-1);
+	margin: 0;
 	font-size: 12px;
 	color: var(--color-text-muted);
 }
@@ -26,17 +70,6 @@
 	font-weight: 700;
 	font-variant-numeric: tabular-nums;
 	overflow-wrap: anywhere;
-}
-
-.unit {
-	font-size: 12px;
-	font-weight: 400;
-	color: var(--color-text-muted);
-}
-
-/* 進度條（components/RatioProgress）跟上面大數字的距離。 */
-.progress {
-	margin-top: var(--space-2);
 }
 
 /* 「今天」標題：字級、顏色是 ui.module.css 的 .sectionTitle，這裡只管距離——
@@ -113,13 +146,6 @@
 
 .offline {
 	margin: 0 0 var(--space-3);
-	font-size: 12px;
-	color: var(--color-text-muted);
-}
-
-/* 「含運動 +343」：大數字下面一行小字，說明分母為什麼比目標大（運動規格 §7.4）。 */
-.budgetNote {
-	margin: var(--space-1) 0 0;
 	font-size: 12px;
 	color: var(--color-text-muted);
 }

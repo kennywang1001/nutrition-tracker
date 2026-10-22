@@ -48,7 +48,7 @@ function renderSection(routes: ApiRoute[], client = newClient()) {
 			<MemoryRouter initialEntries={["/me/targets"]}>
 				<Routes>
 					<Route path="/me/targets" element={<TargetSuggestion />} />
-					<Route path="/me" element={<h1>我的</h1>} />
+					<Route path="/me/health" element={<h1>身體與目標</h1>} />
 				</Routes>
 			</MemoryRouter>
 		</QueryClientProvider>,
@@ -167,7 +167,7 @@ describe("建議目標", () => {
 		).toBeInTheDocument();
 	});
 
-	it("套用：送畫面上的四個數字（字串原樣），回 /me；統計、趨勢、[body] 都失效", async () => {
+	it("套用：送畫面上的四個數字（字串原樣），回 /me/health；統計、趨勢、[body] 都失效", async () => {
 		const client = newClient();
 		const rangeKey = queryKeys.rangeStats("2026-10-08", "2026-10-14");
 		client.setQueryData(rangeKey, []);
@@ -186,7 +186,7 @@ describe("建議目標", () => {
 		);
 
 		expect(
-			await screen.findByRole("heading", { name: "我的" }),
+			await screen.findByRole("heading", { name: "身體與目標" }),
 		).toBeInTheDocument();
 		expect(posts(spy)).toEqual([
 			{
@@ -229,7 +229,7 @@ describe("建議目標", () => {
 			"建議目標剛剛變了，請看過新的數字再套用",
 		);
 		await waitFor(() => expect(suggestionGets(spy)).toBe(2));
-		expect(screen.queryByRole("heading", { name: "我的" })).toBeNull();
+		expect(screen.queryByRole("heading", { name: "身體與目標" })).toBeNull();
 		expect(
 			screen.getByRole("button", { name: "套用建議目標" }),
 		).not.toHaveAttribute("aria-disabled", "true");
@@ -272,7 +272,7 @@ describe("建議目標", () => {
 		expect(
 			section().queryByRole("button", { name: "套用建議目標" }),
 		).not.toBeInTheDocument();
-		expect(screen.queryByRole("heading", { name: "我的" })).toBeNull();
+		expect(screen.queryByRole("heading", { name: "身體與目標" })).toBeNull();
 	});
 
 	it("422 資料不全、重抓回來又是建議（資料剛好又補上了）：說一聲，不是「套用失敗」", async () => {

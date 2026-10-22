@@ -1,0 +1,19 @@
+/* 總覽體重小卡片的迷你折線（WeightSparkline.tsx；首頁改版規格 D22）。
+   390px 寬時卡片內容約 140px：寬度跟著卡片、高度固定。 */
+
+.sparkline {
+	display: block;
+	width: 100%;
+	height: 32px;
+	margin-top: var(--space-1);
+}
+
+/* non-scaling-stroke：preserveAspectRatio="none" 把 viewBox 橫向拉長，不加的話線會跟著變粗變扁。 */
+.line {
+	fill: none;
+	stroke: var(--color-accent);
+	stroke-width: 2;
+	stroke-linejoin: round;
+	stroke-linecap: round;
+	vector-effect: non-scaling-stroke;
+}

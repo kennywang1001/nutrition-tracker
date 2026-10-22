@@ -47,6 +47,17 @@ describe("SideNav", () => {
 		}
 	});
 
+	it("在 /me/health（身體與目標）時亮的是「我的」（首頁改版規格 D1）", () => {
+		renderAt("/me/health");
+		expect(screen.getByRole("link", { name: "我的" })).toHaveAttribute(
+			"aria-current",
+			"page",
+		);
+		expect(screen.getByRole("link", { name: "總覽" })).not.toHaveAttribute(
+			"aria-current",
+		);
+	});
+
 	it("在 /diet 時亮的是飲食，不是總覽", () => {
 		renderAt("/diet");
 		expect(screen.getByRole("link", { name: "飲食" })).toHaveAttribute(
@@ -89,6 +100,22 @@ describe("SideNav", () => {
 		const exercise = screen.getByRole("link", { name: "記運動" });
 		expect(exercise).toHaveAttribute("href", "/exercises/new");
 		await userEvent.click(exercise);
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+
+	it("選單裡有「記體重」，連到 /weight；四個入口依序是記帳、記一餐、記運動、記體重；點了選單關掉（首頁改版規格 §7）", async () => {
+		renderAt("/");
+		await userEvent.click(screen.getByRole("button", { name: "新增紀錄" }));
+
+		const dialog = screen.getByRole("dialog", { name: "新增紀錄" });
+		expect(
+			within(dialog)
+				.getAllByRole("link")
+				.map((link) => link.textContent),
+		).toEqual(["記帳", "記一餐", "記運動", "記體重"]);
+		const weight = within(dialog).getByRole("link", { name: "記體重" });
+		expect(weight).toHaveAttribute("href", "/weight");
+		await userEvent.click(weight);
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 	});
 

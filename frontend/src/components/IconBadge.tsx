@@ -13,6 +13,10 @@ type Size = "small" | "large";
  *  綠：跟每個支出分類的顏色都不一樣，時間線上一眼分得出是運動；它是設計變數，深色模式跟著換。 */
 export const EXERCISE_COLOR = "var(--color-success)";
 
+/** 體重的徽章色（總覽的快速記錄、「＋」的記體重；首頁改版規格 D17）。借交通的藍：體重不出現在時間線上，不會跟
+ *  交通的支出列混淆；「＋」的四個入口（記帳 `--color-action`、記一餐 food 橘、記運動綠、記體重藍）互不相同。 */
+export const WEIGHT_COLOR = CATEGORY_COLORS.transport;
+
 type Props = {
 	icon: LucideIcon;
 	/** 任何 CSS 顏色：分類色（`CATEGORY_COLORS`）或 `var(--color-action)`。 */
