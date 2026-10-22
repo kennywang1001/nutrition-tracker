@@ -16,10 +16,16 @@ import { describeBarcodeError, updateFoodBarcode } from "../api/barcode";
 import { apiFetch } from "../api/client";
 import { ApiError, describeFieldErrors, hasFieldError } from "../api/errors";
 import { useMe } from "../api/me";
+import { MAX_PHOTO_BYTES, PhotoTooLargeError } from "../api/photos";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
 import { AiEstimatePanel } from "../components/AiEstimatePanel";
 import { OffAttribution } from "../components/BarcodeScanEntry";
+import { ElapsedSeconds } from "../components/ElapsedSeconds";
+import {
+	focusStepAfterFileDialog,
+	PhotoHintStep,
+} from "../components/PhotoHintStep";
 import { PhotoPickerButton } from "../components/PhotoPickerButton";
 import ui from "../components/ui.module.css";
 import { BARCODE_LENGTH_HINT, cleanBarcodeInput } from "../lib/barcode";
@@ -33,6 +39,8 @@ import styles from "./NewFood.module.css";
 
 type Food = components["schemas"]["FoodResponse"];
 type BaseUnit = components["schemas"]["BaseUnit"];
+/** 選好、還沒送出的營養標示照片與補充說明。 */
+type LabelPhoto = { file: File; hint: string };
 
 // 匯出給 FoodDetail.tsx（提議修改，Task 5）重用——兩個表單填的都是同一個
 // NutritionInput，欄位、label、上下限沒有理由各寫一份。
@@ -323,20 +331,37 @@ export function NewFood({ handoff = null }: Props) {
 	// 包一層：TanStack Query 會把 mutation 的 context 當第二個參數傳進來，直接傳 readLabel 的話
 	// 那個物件會被當成補充說明。
 	const readLabelMutation = useMutation({
-		mutationFn: (file: File) => readLabel(file),
+		mutationFn: ({ file, hint }: LabelPhoto) => readLabel(file, hint),
 	});
 	const [labelResult, setLabelResult] = useState<LabelReadResponse | null>(
 		null,
 	);
-	// 讀的時候照片的選擇是停用的（同 AI 面板的「拍照估算」）——焦點本來在它身上，停用就掉到 body。
-	// 所以一開始讀就把焦點移到狀態那一段（先寫「AI 讀取中…」、讀完換成結果或錯誤，都在同一塊裡）。
-	// 旗標只在選了照片那一次移，同記一餐的「已選擇」。
+	// 選好、還沒送出的營養標示照片＋補充說明（照片說明規格 §6）：按「開始讀取」才送。
+	const [labelPending, setLabelPending] = useState<LabelPhoto | null>(null);
+	// 選的當下就知道太大（規格 D9）：不出卡片，直接說。
+	const [labelPickError, setLabelPickError] = useState<string | null>(null);
+	// 讀完：「開始讀取」跟著卡片消失（焦點本來在它身上），所以移到狀態那一段（讀到的結果）。
+	// 旗標只在讀完那一次移，同記一餐的「已選擇」。
 	const labelResultRef = useRef<HTMLDivElement>(null);
 	const focusLabelResultRef = useRef(false);
 	useEffect(() => {
 		if (focusLabelResultRef.current && labelResultRef.current !== null) {
 			focusLabelResultRef.current = false;
 			labelResultRef.current.focus();
+		}
+	});
+	// 選了照片 → 卡片本身（不是說明欄：手機會跳鍵盤）；取消 → 照片按鈕（「取消」跟著卡片消失）。
+	const labelInputRef = useRef<HTMLInputElement>(null);
+	const labelStepRef = useRef<HTMLElement>(null);
+	const focusLabelNextRef = useRef<"step" | "picker" | null>(null);
+	useEffect(() => {
+		const next = focusLabelNextRef.current;
+		if (next === "step" && labelStepRef.current !== null) {
+			focusLabelNextRef.current = null;
+			focusStepAfterFileDialog(labelStepRef);
+		} else if (next === "picker" && labelInputRef.current !== null) {
+			focusLabelNextRef.current = null;
+			labelInputRef.current.focus();
 		}
 	});
 
@@ -367,10 +392,30 @@ export function NewFood({ handoff = null }: Props) {
 		// 清掉：同一張照片再選一次也要觸發 change。
 		event.target.value = "";
 		if (file === null) return;
+		// 太大在選的當下就擋（規格 D9）：不要讓人打完說明才知道白打。preparePhoto 送出前照樣再擋一次。
+		if (file.size > MAX_PHOTO_BYTES) {
+			setLabelPending(null);
+			setLabelPickError(new PhotoTooLargeError().message);
+			return;
+		}
+		setLabelPickError(null);
+		readLabelMutation.reset();
+		// 換一張照片：說明留著（多半是同一個包裝、只是拍糊了）。
+		setLabelPending((current) => ({ file, hint: current?.hint ?? "" }));
+		focusLabelNextRef.current = "step";
+	}
+
+	function startLabel(pending: LabelPhoto) {
 		setLabelResult(null);
-		focusLabelResultRef.current = true;
 		// 填表單放在 mutate 的第二個參數：元件卸載之後不跑（handover §7）。
-		readLabelMutation.mutate(file, { onSuccess: applyLabel });
+		// 失敗時卡片留著（規格 D10）：再按一次「開始讀取」就是重試。
+		readLabelMutation.mutate(pending, {
+			onSuccess: (result) => {
+				applyLabel(result);
+				setLabelPending(null);
+				focusLabelResultRef.current = true;
+			},
+		});
 	}
 
 	return (
@@ -409,29 +454,57 @@ export function NewFood({ handoff = null }: Props) {
 						capture="environment"
 						variant="accent"
 						disabled={readLabelMutation.isPending}
+						inputRef={labelInputRef}
 						onChange={handleLabelPhoto}
 					/>
 				</div>
+				{labelPickError !== null && <p role="alert">{labelPickError}</p>}
+				{labelPending !== null && (
+					<PhotoHintStep
+						file={labelPending.file}
+						hint={labelPending.hint}
+						onHintChange={(hint) => setLabelPending({ ...labelPending, hint })}
+						startLabel="開始讀取"
+						placeholder="例：這是每 100 ml、一包 2 份"
+						busy={readLabelMutation.isPending}
+						sectionRef={labelStepRef}
+						onStart={() => startLabel(labelPending)}
+						onCancel={() => {
+							setLabelPending(null);
+							readLabelMutation.reset();
+							focusLabelNextRef.current = "picker";
+						}}
+					/>
+				)}
 				<div ref={labelResultRef} tabIndex={-1} className={styles.labelResult}>
-					<div role="status">
-						{readLabelMutation.isPending && <p>AI 讀取中…</p>}
-						{labelResult !== null && !readLabelMutation.isPending && (
-							<>
-								<p className={styles.labelCheck}>AI 讀的數字，請對照包裝確認</p>
-								{labelResult.consistency.flagged && (
-									<p className={styles.warning}>
-										熱量跟三大營養素算起來對不太上，請特別確認
+					{/* 秒數在 role="status" 外面（規格 D11）：每秒變一次的字放進 live region，讀屏會每秒念一次。 */}
+					<div className={styles.statusRow}>
+						<div role="status">
+							{readLabelMutation.isPending && <p>AI 讀取中…</p>}
+							{labelResult !== null && !readLabelMutation.isPending && (
+								<>
+									<p className={styles.labelCheck}>
+										AI 讀的數字，請對照包裝確認
 									</p>
-								)}
-								{labelResult.servings_per_package !== null && (
-									<p>
-										本包裝含 {formatMacro(labelResult.servings_per_package)} 份
+									{labelResult.consistency.flagged && (
+										<p className={styles.warning}>
+											熱量跟三大營養素算起來對不太上，請特別確認
+										</p>
+									)}
+									{labelResult.servings_per_package !== null && (
+										<p>
+											本包裝含 {formatMacro(labelResult.servings_per_package)}{" "}
+											份
+										</p>
+									)}
+									<p className={styles.muted}>
+										今天還能用 {labelResult.remaining_today} 次
 									</p>
-								)}
-								<p className={styles.muted}>
-									今天還能用 {labelResult.remaining_today} 次
-								</p>
-							</>
+								</>
+							)}
+						</div>
+						{readLabelMutation.isPending && (
+							<ElapsedSeconds className={styles.muted} />
 						)}
 					</div>
 					{readLabelMutation.isError && (

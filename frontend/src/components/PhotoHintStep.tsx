@@ -1,4 +1,4 @@
-import { type Ref, useEffect, useId, useState } from "react";
+import { type Ref, type RefObject, useEffect, useId, useState } from "react";
 import base from "./AiEstimatePanel.module.css";
 import styles from "./PhotoHintStep.module.css";
 
@@ -6,6 +6,14 @@ import styles from "./PhotoHintStep.module.css";
 export const HINT_MAX_LENGTH = 200;
 /** 打到這麼多字才說還能打幾字：一直顯示的話，多數不打說明的人每次都多讀一行沒用的字。 */
 const COUNT_FROM = 150;
+
+/** 選了照片之後把焦點移到這張卡片——**晚一個 task**。選檔的視窗關掉時，瀏覽器會把焦點還給
+ *  `<input type=file>`，而且不保證在 `change` 之前還（user-event 也照「change 之後才還」模擬）：
+ *  在 change 的那一次 render 裡同步移過去，會被這一下蓋回照片按鈕。卡片已經不在（取消、卸載）
+ *  就什麼都不做。 */
+export function focusStepAfterFileDialog(ref: RefObject<HTMLElement | null>) {
+	window.setTimeout(() => ref.current?.focus(), 0);
+}
 
 type Props = {
 	file: File;

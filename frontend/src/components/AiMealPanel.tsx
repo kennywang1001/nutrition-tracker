@@ -17,6 +17,7 @@ import {
 import { apiFetch } from "../api/client";
 import { ApiError, describeFieldErrors } from "../api/errors";
 import { type Food, searchFoods } from "../api/foods";
+import { MAX_PHOTO_BYTES, PhotoTooLargeError } from "../api/photos";
 import { queryKeys } from "../api/queries";
 import {
 	confirmedFoodRequest,
@@ -37,13 +38,15 @@ import {
 import { formatMacro } from "../lib/decimal";
 import base from "./AiEstimatePanel.module.css";
 import styles from "./AiMealPanel.module.css";
+import { ElapsedSeconds } from "./ElapsedSeconds";
 import { EstimateDraftFields } from "./EstimateDraftFields";
+import { focusStepAfterFileDialog, PhotoHintStep } from "./PhotoHintStep";
 import { PhotoPickerButton } from "./PhotoPickerButton";
 import ui from "./ui.module.css";
 
 type AnalyzeInput =
 	| { kind: "text"; text: string }
-	| { kind: "image"; file: File }
+	| { kind: "image"; file: File; hint: string }
 	// 營養素配餐（規格 §5、D15）：剩下的額度由後端算，這裡只送偏好。
 	| { kind: "suggest"; preference: string };
 
@@ -220,6 +223,12 @@ export function AiMealPanel({
 	const [resultKind, setResultKind] = useState<"estimate" | "suggest">(
 		"estimate",
 	);
+	// 選好、還沒送出的照片＋補充說明（照片說明規格 §6，同單樣面板）：按「開始估算」才送。
+	const [pending, setPending] = useState<{ file: File; hint: string } | null>(
+		null,
+	);
+	// 選的當下就知道太大（規格 D9）：不出卡片，直接說。
+	const [pickError, setPickError] = useState<string | null>(null);
 
 	// 同一時間只跑一輪「加入」。平常 React 在兩次點擊之間就會重畫，下面按鈕的
 	// `adding` 檢查擋得住；這個 ref 是**不靠重畫時機**的那一半——同一批更新裡進來的
@@ -239,16 +248,32 @@ export function AiMealPanel({
 	// 「修改」。只在切換那一次移（旗標），不是每次 render——剛估算完不搶焦點。
 	// 配餐的表單同一套：打開（含一掛載就打開）→ 偏好欄位；「取消」、或配好了表單收起來 →
 	// 入口那顆按鈕（按下去的那顆消失了，焦點不能掉到 body）。
+	// 確認照片的卡片（同單樣面板）：選了照片 → 卡片本身；卡片收起（成功、取消）→ 照片按鈕。
+	// 送出中照片按鈕是 disabled：等它恢復的那一次 render 才移（找得到目標才清旗標）。
 	const focusNextRef = useRef<
-		"form" | "preference" | "suggest-button" | { editButton: number } | null
+		| "form"
+		| "preference"
+		| "suggest-button"
+		| "step"
+		| "picker"
+		| { editButton: number }
+		| null
 	>(startSuggesting === true ? "preference" : null);
 	const nameInputRef = useRef<HTMLInputElement>(null);
 	const preferenceInputRef = useRef<HTMLInputElement>(null);
 	const suggestButtonRef = useRef<HTMLButtonElement>(null);
 	const editButtonsRef = useRef(new Map<number, HTMLButtonElement>());
+	const stepRef = useRef<HTMLElement>(null);
+	const photoInputRef = useRef<HTMLInputElement>(null);
 	useEffect(() => {
 		const next = focusNextRef.current;
 		if (next === null) return;
+		if (next === "step") {
+			if (stepRef.current === null) return;
+			focusNextRef.current = null;
+			focusStepAfterFileDialog(stepRef);
+			return;
+		}
 		const target =
 			next === "form"
 				? nameInputRef.current
@@ -256,7 +281,11 @@ export function AiMealPanel({
 					? preferenceInputRef.current
 					: next === "suggest-button"
 						? suggestButtonRef.current
-						: (editButtonsRef.current.get(next.editButton) ?? null);
+						: next === "picker"
+							? photoInputRef.current?.disabled === false
+								? photoInputRef.current
+								: null
+							: (editButtonsRef.current.get(next.editButton) ?? null);
 		if (target !== null) {
 			focusNextRef.current = null;
 			target.focus();
@@ -282,13 +311,22 @@ export function AiMealPanel({
 				? suggestMeal(input.preference)
 				: input.kind === "text"
 					? analyzeMealText(input.text)
-					: analyzeMealImage(input.file),
-		onMutate: () => clearResult(),
+					: analyzeMealImage(input.file, input.hint),
+		onMutate: (input) => {
+			clearResult();
+			// 卡片開著時改按文字估算或配餐：那張照片不送了。
+			if (input.kind !== "image") setPending(null);
+		},
 		onSuccess: (response, input) => {
 			setResult(response);
 			setItems(initialChecklist(response));
 			setImage(input.kind === "image" ? input.file : null);
 			setResultKind(input.kind === "suggest" ? "suggest" : "estimate");
+			if (input.kind === "image") {
+				// 卡片收起，「開始估算」跟著消失：焦點回到入口的照片按鈕。
+				setPending(null);
+				focusNextRef.current = "picker";
+			}
 			if (input.kind === "suggest") {
 				// 配好了：表單收起來，結果就在下面。「讓 AI 建議」跟著消失，焦點回到入口。
 				setSuggesting(false);
@@ -314,7 +352,17 @@ export function AiMealPanel({
 		// 清掉 input 的值：同一張再選一次，change 才會再觸發。
 		event.target.value = "";
 		if (file === undefined) return;
-		analyze.mutate({ kind: "image", file });
+		// 太大在選的當下就擋（規格 D9）：不要讓人打完說明才知道白打。preparePhoto 送出前照樣再擋一次。
+		if (file.size > MAX_PHOTO_BYTES) {
+			setPending(null);
+			setPickError(new PhotoTooLargeError().message);
+			return;
+		}
+		setPickError(null);
+		analyze.reset();
+		// 換一張照片：說明留著（多半是同一餐）。
+		setPending((current) => ({ file, hint: current?.hint ?? "" }));
+		focusNextRef.current = "step";
 	}
 
 	/** 改一樣的狀態。回傳新的清單——要接著用它跑「加入」的呼叫端不能等 state 更新。 */
@@ -440,6 +488,7 @@ export function AiMealPanel({
 					accept="image/*"
 					variant="accent"
 					disabled={busy || aiUnavailable}
+					inputRef={photoInputRef}
 					onChange={handlePhoto}
 				/>
 				{/* 營養素配餐的模式 B（規格 D15）：在記一餐裡、用同一個勾選清單。外觀同「用 AI 估算」。
@@ -461,6 +510,35 @@ export function AiMealPanel({
 					讓 AI 配一餐
 				</button>
 			</div>
+
+			{pickError !== null && (
+				<p role="alert" className={styles.error}>
+					{pickError}
+				</p>
+			)}
+			{pending !== null && (
+				<PhotoHintStep
+					file={pending.file}
+					hint={pending.hint}
+					onHintChange={(hint) => setPending({ ...pending, hint })}
+					startLabel="開始估算"
+					placeholder="例：飯半碗、雞皮沒吃、7-11 的"
+					busy={busy || aiUnavailable}
+					sectionRef={stepRef}
+					onStart={() =>
+						analyze.mutate({
+							kind: "image",
+							file: pending.file,
+							hint: pending.hint,
+						})
+					}
+					onCancel={() => {
+						setPending(null);
+						analyze.reset();
+						focusNextRef.current = "picker";
+					}}
+				/>
+			)}
 
 			{suggesting && (
 				<form
@@ -510,16 +588,19 @@ export function AiMealPanel({
 				</form>
 			)}
 
-			{/* 一直掛著、只換文字：動態插入的 live region 常被讀屏軟體略過。 */}
-			<p role="status" className={styles.status}>
-				{analyze.isPending
-					? analyze.variables?.kind === "suggest"
-						? "AI 配餐中…"
-						: "AI 估算中…"
-					: adding
-						? "加入中…"
-						: summary}
-			</p>
+			{/* 一直掛著、只換文字：動態插入的 live region 常被讀屏軟體略過。秒數在它外面（規格 D11）。 */}
+			<div className={base.statusRow}>
+				<p role="status" className={styles.status}>
+					{analyze.isPending
+						? analyze.variables?.kind === "suggest"
+							? "AI 配餐中…"
+							: "AI 估算中…"
+						: adding
+							? "加入中…"
+							: summary}
+				</p>
+				{analyze.isPending && <ElapsedSeconds className={base.muted} />}
+			</div>
 			{analyze.isError && (
 				<p role="alert" className={styles.error}>
 					{describeAnalyzeError(analyze.error)}

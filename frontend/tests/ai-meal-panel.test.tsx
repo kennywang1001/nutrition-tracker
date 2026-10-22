@@ -12,6 +12,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { AiMealPanel } from "../src/components/AiMealPanel";
+import { pickPhoto } from "./helpers/ai-photo";
 import { json, mockApi, type Route } from "./helpers/mock-api";
 
 // 照片會先經過 shrinkToLongestEdge。**回另一個 File**：這樣才分得出交回的是
@@ -416,7 +417,7 @@ describe("AI 多樣估算面板：加入", () => {
 		const { onItemsReady } = renderPanel("");
 		const photo = new File(["fake-jpeg"], "lunch.jpg", { type: "image/jpeg" });
 
-		await userEvent.upload(screen.getByLabelText("拍照估算"), photo);
+		await pickPhoto("拍照估算", photo);
 		const card = await screen.findByRole("region", { name: "AI 估算結果" });
 		// 送去估算的是縮過的那一張。
 		const [call] = calls(fetchMock, "POST", "/api/ai/analyze-meal");
@@ -1464,5 +1465,146 @@ describe("AI 多樣估算面板：讓 AI 配一餐（營養素配餐規格 §5�
 		expect(
 			screen.queryByRole("region", { name: "AI 建議的一餐" }),
 		).not.toBeInTheDocument();
+	});
+});
+
+describe("AI 多樣估算面板：照片＋補充說明（照片說明規格 §6）", () => {
+	const PHOTO = new File(["fake-jpeg"], "lunch.jpg", { type: "image/jpeg" });
+
+	function step() {
+		return screen.getByRole("region", { name: "確認照片" });
+	}
+
+	function mealBodies(fetchMock: FetchMock) {
+		return calls(fetchMock, "POST", "/api/ai/analyze-meal").map(([, init]) =>
+			JSON.parse(String(init?.body)),
+		);
+	}
+
+	it("打說明、開始估算：body 帶 hint；清單出來卡片收起，焦點回到「拍照估算」", async () => {
+		const fetchMock = mockPanel();
+		renderPanel("");
+
+		await userEvent.upload(screen.getByLabelText("拍照估算"), PHOTO);
+		// 選照片不打網路。
+		expect(fetchMock).not.toHaveBeenCalled();
+		await waitFor(() => expect(step()).toHaveFocus());
+		await userEvent.type(
+			within(step()).getByLabelText("補充說明（選填）"),
+			"飯半碗、雞皮沒吃",
+		);
+		await userEvent.click(
+			within(step()).getByRole("button", { name: "開始估算" }),
+		);
+
+		await screen.findByRole("region", { name: "AI 估算結果" });
+		expect(mealBodies(fetchMock)).toEqual([
+			{ kind: "image", image_base64: btoa("shrunk"), hint: "飯半碗、雞皮沒吃" },
+		]);
+		expect(
+			screen.queryByRole("region", { name: "確認照片" }),
+		).not.toBeInTheDocument();
+		await waitFor(() =>
+			expect(screen.getByLabelText("拍照估算")).toHaveFocus(),
+		);
+	});
+
+	it("失敗：卡片與說明都還在；再按「開始估算」帶同一段說明再送一次", async () => {
+		let attempt = 0;
+		const fetchMock = mockPanel({
+			estimate: () => {
+				attempt += 1;
+				return attempt === 1
+					? apiError(502, "AI_UPSTREAM_ERROR", "AI 暫時無法使用，請稍後再試")
+					: json(ESTIMATE);
+			},
+		});
+		renderPanel("");
+
+		await pickPhoto("拍照估算", PHOTO, { hint: "7-11 的" });
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"AI 暫時無法使用，請稍後再試",
+		);
+		expect(within(step()).getByLabelText("補充說明（選填）")).toHaveValue(
+			"7-11 的",
+		);
+		await userEvent.click(
+			within(step()).getByRole("button", { name: "開始估算" }),
+		);
+
+		await screen.findByRole("region", { name: "AI 估算結果" });
+		const bodies = mealBodies(fetchMock);
+		expect(bodies).toHaveLength(2);
+		expect(bodies[1]).toEqual(bodies[0]);
+		expect(bodies[1].hint).toBe("7-11 的");
+	});
+
+	it("照片太大：選的當下就擋，不出卡片、不打網路", async () => {
+		const fetchMock = mockPanel();
+		renderPanel("");
+		const big = new File(["x"], "big.jpg", { type: "image/jpeg" });
+		Object.defineProperty(big, "size", { value: 10 * 1024 * 1024 + 1 });
+
+		await userEvent.upload(screen.getByLabelText("拍照估算"), big);
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("照片超過");
+		expect(
+			screen.queryByRole("region", { name: "確認照片" }),
+		).not.toBeInTheDocument();
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("送出中：「開始估算」aria-disabled、旁邊數秒；status 只念「AI 估算中…」不含秒數", async () => {
+		let release: (response: Response) => void = () => {};
+		mockPanel({
+			extra: [
+				{
+					method: "POST",
+					path: "/api/ai/analyze-meal",
+					handler: () =>
+						new Promise<Response>((resolve) => {
+							release = resolve;
+						}),
+				},
+			],
+		});
+		renderPanel("");
+
+		await pickPhoto("拍照估算", PHOTO);
+
+		expect(
+			within(step()).getByRole("button", { name: "開始估算" }),
+		).toHaveAttribute("aria-disabled", "true");
+		expect(screen.getByText("0 秒")).toBeInTheDocument();
+		const status = screen.getByRole("status");
+		expect(status).toHaveTextContent("AI 估算中…");
+		expect(status).not.toHaveTextContent("秒");
+
+		release(json(ESTIMATE));
+		await screen.findByRole("region", { name: "AI 估算結果" });
+		expect(screen.queryByText(/秒$/)).not.toBeInTheDocument();
+	});
+
+	it("「讓 AI 配一餐」送出中也看得到秒數（在 status 外面）", async () => {
+		let release: (response: Response) => void = () => {};
+		mockPanel({
+			suggest: () =>
+				new Promise<Response>((resolve) => {
+					release = resolve;
+				}),
+		});
+		renderPanel();
+		await userEvent.click(screen.getByRole("button", { name: "讓 AI 配一餐" }));
+		await userEvent.click(screen.getByRole("button", { name: "讓 AI 建議" }));
+
+		expect(await screen.findByText("0 秒")).toBeInTheDocument();
+		const status = screen.getByRole("status");
+		expect(status).toHaveTextContent("AI 配餐中…");
+		expect(status).not.toHaveTextContent("秒");
+
+		release(json(ESTIMATE));
+		await screen.findByRole("region", { name: "AI 建議的一餐" });
+		expect(screen.queryByText(/秒$/)).not.toBeInTheDocument();
 	});
 });

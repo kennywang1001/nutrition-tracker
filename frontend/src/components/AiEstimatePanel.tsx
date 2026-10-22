@@ -16,6 +16,7 @@ import {
 import { apiFetch } from "../api/client";
 import { ApiError, describeFieldErrors } from "../api/errors";
 import { type Food, searchFoods } from "../api/foods";
+import { MAX_PHOTO_BYTES, PhotoTooLargeError } from "../api/photos";
 import { queryKeys } from "../api/queries";
 import {
 	type AiFoodBody,
@@ -27,12 +28,17 @@ import {
 } from "../lib/ai-food";
 import { formatMacro } from "../lib/decimal";
 import styles from "./AiEstimatePanel.module.css";
+import { ElapsedSeconds } from "./ElapsedSeconds";
 import { EstimateDraftFields } from "./EstimateDraftFields";
+import { focusStepAfterFileDialog, PhotoHintStep } from "./PhotoHintStep";
 import { PhotoPickerButton } from "./PhotoPickerButton";
 
 type AnalyzeInput =
 	| { kind: "text"; text: string }
-	| { kind: "image"; file: File };
+	| { kind: "image"; file: File; hint: string };
+
+/** 選好、還沒送出的照片（確認照片的卡片開著）。 */
+type PendingPhoto = { file: File; hint: string };
 
 type Props = {
 	/** 文字估算要用的字（記一餐是搜尋框的字，新增食物是「描述這個食物」）。
@@ -100,20 +106,37 @@ export function AiEstimatePanel({
 		food: Food;
 		body: AiFoodBody;
 	} | null>(null);
+	// 選好、還沒送出的照片＋補充說明（照片說明規格 §6）：按「開始估算」才送。
+	const [pending, setPending] = useState<PendingPhoto | null>(null);
+	// 選的當下就知道太大（規格 D9）：不出卡片，直接說。
+	const [pickError, setPickError] = useState<string | null>(null);
 
 	// 結果卡片 ↔ 修改表單切換時，按下去的那顆按鈕會消失、焦點掉到 body。
 	// 切到表單 → 焦點到第一個欄位；切回卡片 → 焦點到卡片的標題（規格 §2
 	// 第 4 項）。只在切換那一次移（旗標），不是每次 render——剛估算完不搶焦點。
-	const focusNextRef = useRef<"form" | "card" | null>(null);
+	// 確認照片的卡片：選了照片 → 卡片本身（不是說明欄，手機會跳鍵盤）；卡片收起（成功、
+	// 取消）→ 入口的照片按鈕。送出中照片按鈕是 disabled、對不到焦點：找得到目標才清旗標，
+	// 等它恢復的那一次 render 再移（effect 每次 render 都跑）。
+	const focusNextRef = useRef<"form" | "card" | "step" | "picker" | null>(null);
 	const nameInputRef = useRef<HTMLInputElement>(null);
 	const cardHeadingRef = useRef<HTMLHeadingElement>(null);
+	const stepRef = useRef<HTMLElement>(null);
+	const photoInputRef = useRef<HTMLInputElement>(null);
 	useEffect(() => {
+		const next = focusNextRef.current;
+		if (next === "step" && stepRef.current !== null) {
+			focusNextRef.current = null;
+			focusStepAfterFileDialog(stepRef);
+			return;
+		}
 		const target =
-			focusNextRef.current === "form"
+			next === "form"
 				? nameInputRef.current
-				: focusNextRef.current === "card"
+				: next === "card"
 					? cardHeadingRef.current
-					: null;
+					: next === "picker" && photoInputRef.current?.disabled === false
+						? photoInputRef.current
+						: null;
 		if (target !== null) {
 			focusNextRef.current = null;
 			target.focus();
@@ -145,12 +168,22 @@ export function AiEstimatePanel({
 		mutationFn: (input: AnalyzeInput) =>
 			input.kind === "text"
 				? analyzeText(input.text)
-				: analyzeImage(input.file),
-		onMutate: () => clearResult(),
+				: analyzeImage(input.file, input.hint),
+		onMutate: (input) => {
+			clearResult();
+			// 卡片開著時改按文字估算：那張照片不送了。
+			if (input.kind === "text") setPending(null);
+		},
 		onSuccess: (result, input) => {
 			setEstimate(result);
 			setImage(input.kind === "image" ? input.file : null);
+			if (input.kind === "image") {
+				// 卡片收起來，按下去的「開始估算」跟著消失：焦點回到入口的照片按鈕（同配餐的「入口那顆按鈕」）。
+				setPending(null);
+				focusNextRef.current = "picker";
+			}
 		},
+		// 失敗時卡片留著（規格 D10）：再按一次「開始估算」就是重試，不用重選照片、重打說明。
 		onError: (error) => {
 			if (error instanceof ApiError && error.code === "AI_NOT_CONFIGURED") {
 				setAiUnavailable(true);
@@ -242,7 +275,17 @@ export function AiEstimatePanel({
 		// 清掉 input 的值：同一張再選一次，change 才會再觸發。
 		event.target.value = "";
 		if (file === undefined) return;
-		analyze.mutate({ kind: "image", file });
+		// 太大在選的當下就擋（規格 D9）：不要讓人打完說明才知道白打。preparePhoto 送出前照樣再擋一次。
+		if (file.size > MAX_PHOTO_BYTES) {
+			setPending(null);
+			setPickError(new PhotoTooLargeError().message);
+			return;
+		}
+		setPickError(null);
+		analyze.reset();
+		// 換一張照片：說明留著（多半是同一餐、只是拍歪了）。
+		setPending((current) => ({ file, hint: current?.hint ?? "" }));
+		focusNextRef.current = "step";
 	}
 
 	function startEditing(current: AnalyzeResponse) {
@@ -332,12 +375,42 @@ export function AiEstimatePanel({
 					accept="image/*"
 					variant="accent"
 					disabled={busy || aiUnavailable}
+					inputRef={photoInputRef}
 					onChange={handlePhoto}
 				/>
 			</div>
 
-			{/* 一直掛著、只換文字：動態插入的 live region 常被讀屏軟體略過。 */}
-			<p role="status">{analyze.isPending ? "AI 估算中…" : ""}</p>
+			{pickError !== null && <p role="alert">{pickError}</p>}
+			{pending !== null && (
+				<PhotoHintStep
+					file={pending.file}
+					hint={pending.hint}
+					onHintChange={(hint) => setPending({ ...pending, hint })}
+					startLabel="開始估算"
+					placeholder="例：飯半碗、雞皮沒吃、7-11 的"
+					busy={busy || aiUnavailable}
+					sectionRef={stepRef}
+					onStart={() =>
+						analyze.mutate({
+							kind: "image",
+							file: pending.file,
+							hint: pending.hint,
+						})
+					}
+					onCancel={() => {
+						setPending(null);
+						analyze.reset();
+						focusNextRef.current = "picker";
+					}}
+				/>
+			)}
+
+			{/* 一直掛著、只換文字：動態插入的 live region 常被讀屏軟體略過。秒數在它外面（規格 D11）：
+			    每秒變一次的字放進 live region，讀屏會每秒念一次。 */}
+			<div className={styles.statusRow}>
+				<p role="status">{analyze.isPending ? "AI 估算中…" : ""}</p>
+				{analyze.isPending && <ElapsedSeconds className={styles.muted} />}
+			</div>
 			{analyze.isError && (
 				<p role="alert">{describeAnalyzeError(analyze.error)}</p>
 			)}

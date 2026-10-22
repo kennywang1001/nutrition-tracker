@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { LogMeal } from "../src/screens/LogMeal";
+import { pickPhoto } from "./helpers/ai-photo";
 import { json, mockApi } from "./helpers/mock-api";
 
 vi.mock("../src/lib/resize-image", () => ({
@@ -246,7 +247,7 @@ describe("記一餐：AI 多樣估算", () => {
 		render(wrap(<LogMeal onSaved={vi.fn()} />));
 		const photo = new File(["fake-jpeg"], "bento.jpg", { type: "image/jpeg" });
 
-		await userEvent.upload(screen.getByLabelText("拍照估算"), photo);
+		await pickPhoto("拍照估算", photo);
 		await addAll();
 		// 預覽是 effect 裡建的 object URL——等它出現。
 		expect(await screen.findByAltText("選好的照片")).toBeInTheDocument();
@@ -267,7 +268,7 @@ describe("記一餐：AI 多樣估算", () => {
 		);
 		await userEvent.upload(screen.getByLabelText("照片（選填）"), chosen);
 		await userEvent.type(screen.getByLabelText("描述（選填）"), "我自己寫的");
-		await userEvent.upload(screen.getByLabelText("拍照估算"), forEstimate);
+		await pickPhoto("拍照估算", forEstimate);
 		await addAll();
 		await userEvent.click(screen.getByRole("button", { name: "記錄" }));
 
@@ -422,7 +423,7 @@ describe("記一餐：AI 的項目全部移除之後", () => {
 	const AI_DESCRIPTION = "一碗白飯、滷雞腿一隻";
 
 	async function estimateByPhoto() {
-		await userEvent.upload(screen.getByLabelText("拍照估算"), BENTO);
+		await pickPhoto("拍照估算", BENTO);
 		await addAll();
 		// 預覽是 effect 裡建的 object URL——等它出現，才知道照片真的放進去了。
 		await screen.findByAltText("選好的照片");
@@ -501,7 +502,7 @@ describe("記一餐：AI 的項目全部移除之後", () => {
 		await pickNoodles();
 		await userEvent.type(screen.getByLabelText("描述（選填）"), "我自己寫的");
 		await userEvent.upload(screen.getByLabelText("照片（選填）"), chosen);
-		await userEvent.upload(screen.getByLabelText("拍照估算"), BENTO);
+		await pickPhoto("拍照估算", BENTO);
 		await addAll();
 		await userEvent.click(screen.getByRole("button", { name: "不記這一樣" }));
 		await removeAiItem("白飯");

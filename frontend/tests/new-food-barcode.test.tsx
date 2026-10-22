@@ -17,6 +17,7 @@ import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import type { NewFoodHandoff } from "../src/lib/new-food-handoff";
 import { NewFood } from "../src/screens/NewFood";
+import { pickPhoto } from "./helpers/ai-photo";
 import { makeFood } from "./helpers/foods";
 import { json, mockApi } from "./helpers/mock-api";
 
@@ -596,7 +597,7 @@ describe("新增食物：拍營養標示（掃條碼規格 §8.5）", () => {
 
 		const picker = screen.getByLabelText("拍營養標示");
 		expect(picker).toHaveAttribute("capture", "environment");
-		await userEvent.upload(picker, JPEG());
+		await pickPhoto("拍營養標示", JPEG(), { start: "開始讀取" });
 
 		expect(
 			await screen.findByText("AI 讀的數字，請對照包裝確認"),
@@ -636,7 +637,7 @@ describe("新增食物：拍營養標示（掃條碼規格 §8.5）", () => {
 
 		await userEvent.type(screen.getByLabelText("名稱"), "我的洋芋片");
 		await userEvent.type(screen.getByLabelText("品牌（選填）"), "某牌");
-		await userEvent.upload(screen.getByLabelText("拍營養標示"), JPEG());
+		await pickPhoto("拍營養標示", JPEG(), { start: "開始讀取" });
 
 		await screen.findByText("AI 讀的數字，請對照包裝確認");
 		expect(screen.getByLabelText("名稱")).toHaveValue("我的洋芋片");
@@ -649,7 +650,7 @@ describe("新增食物：拍營養標示（掃條碼規格 §8.5）", () => {
 		await userEvent.type(screen.getByLabelText("每份重量（g）"), "50");
 		await userEvent.click(screen.getByRole("radio", { name: "每一份" }));
 
-		await userEvent.upload(screen.getByLabelText("拍營養標示"), JPEG());
+		await pickPhoto("拍營養標示", JPEG(), { start: "開始讀取" });
 
 		await screen.findByText("AI 讀的數字，請對照包裝確認");
 		expect(screen.getByRole("radio", { name: "每 100 g" })).toBeChecked();
@@ -664,7 +665,7 @@ describe("新增食物：拍營養標示（掃條碼規格 §8.5）", () => {
 		);
 		render(wrap(<NewFood />));
 
-		await userEvent.upload(screen.getByLabelText("拍營養標示"), JPEG());
+		await pickPhoto("拍營養標示", JPEG(), { start: "開始讀取" });
 
 		await screen.findByText("AI 讀的數字，請對照包裝確認");
 		expect(screen.getByLabelText("份量名稱")).toHaveValue("");
@@ -687,7 +688,7 @@ describe("新增食物：拍營養標示（掃條碼規格 §8.5）", () => {
 		);
 		render(wrap(<NewFood />));
 
-		await userEvent.upload(screen.getByLabelText("拍營養標示"), JPEG());
+		await pickPhoto("拍營養標示", JPEG(), { start: "開始讀取" });
 
 		expect(
 			await screen.findByText("熱量跟三大營養素算起來對不太上，請特別確認"),
@@ -705,7 +706,7 @@ describe("新增食物：拍營養標示（掃條碼規格 §8.5）", () => {
 		);
 		render(wrap(<NewFood handoff={handoff()} />));
 
-		await userEvent.upload(screen.getByLabelText("拍營養標示"), JPEG());
+		await pickPhoto("拍營養標示", JPEG(), { start: "開始讀取" });
 
 		expect(await screen.findByRole("alert")).toHaveTextContent(message);
 		expect(screen.getByLabelText("名稱")).toHaveValue("");
@@ -724,7 +725,7 @@ describe("新增食物：拍營養標示（掃條碼規格 §8.5）", () => {
 		render(wrap(<NewFood />));
 		const picker = screen.getByLabelText("拍營養標示");
 
-		await userEvent.upload(picker, JPEG());
+		await pickPhoto("拍營養標示", JPEG(), { start: "開始讀取" });
 
 		expect(await screen.findByText("AI 讀取中…")).toBeInTheDocument();
 		expect(picker).toBeDisabled();
@@ -732,5 +733,196 @@ describe("新增食物：拍營養標示（掃條碼規格 §8.5）", () => {
 		const done = await screen.findByText("AI 讀的數字，請對照包裝確認");
 		expect(picker).not.toBeDisabled();
 		await waitFor(() => expect(done.closest("[tabindex]")).toHaveFocus());
+	});
+});
+
+describe("新增食物：拍營養標示＋補充說明（照片說明規格 §6）", () => {
+	function mockLabel(response: () => Response | Promise<Response>) {
+		return mockApi([
+			{ method: "POST", path: "/api/ai/read-label", handler: response },
+		]);
+	}
+
+	function labelBodies(fetchMock: ReturnType<typeof mockApi>) {
+		return fetchMock.mock.calls
+			.filter(([input]) => String(input).includes("/api/ai/read-label"))
+			.map(([, init]) => JSON.parse(String(init?.body)));
+	}
+
+	function step() {
+		return screen.getByRole("region", { name: "確認照片" });
+	}
+
+	it("選了照片：不打網路、出卡片（placeholder 是營養標示的例子），焦點在卡片上", async () => {
+		const fetchMock = mockLabel(() => json(LABEL));
+		render(wrap(<NewFood />));
+
+		await userEvent.upload(screen.getByLabelText("拍營養標示"), JPEG());
+
+		await waitFor(() => expect(step()).toHaveFocus());
+		// 新增食物自己會讀 /api/me：斷言的是沒有讀營養標示。
+		expect(labelBodies(fetchMock)).toEqual([]);
+		expect(within(step()).getByLabelText("補充說明（選填）")).toHaveAttribute(
+			"placeholder",
+			"例：這是每 100 ml、一包 2 份",
+		);
+		expect(
+			within(step()).getByRole("button", { name: "開始讀取" }),
+		).toBeInTheDocument();
+	});
+
+	it("打說明、開始讀取：body 帶 hint；讀好卡片收起、焦點到結果那一段", async () => {
+		const fetchMock = mockLabel(() => json(LABEL));
+		render(wrap(<NewFood />));
+
+		await pickPhoto("拍營養標示", JPEG(), {
+			hint: "這是每 100 ml",
+			start: "開始讀取",
+		});
+
+		const done = await screen.findByText("AI 讀的數字，請對照包裝確認");
+		expect(labelBodies(fetchMock)).toEqual([
+			{ image_base64: btoa("fake-jpeg"), hint: "這是每 100 ml" },
+		]);
+		expect(
+			screen.queryByRole("region", { name: "確認照片" }),
+		).not.toBeInTheDocument();
+		await waitFor(() => expect(done.closest("[tabindex]")).toHaveFocus());
+	});
+
+	it("失敗：卡片與說明都還在；再按「開始讀取」帶同一段說明再讀一次", async () => {
+		let attempt = 0;
+		const fetchMock = mockLabel(() => {
+			attempt += 1;
+			return attempt === 1
+				? json(
+						{
+							error: {
+								code: "AI_UPSTREAM_ERROR",
+								message: "AI 暫時無法使用，請稍後再試",
+								details: {},
+							},
+						},
+						502,
+					)
+				: json(LABEL);
+		});
+		render(wrap(<NewFood />));
+
+		await pickPhoto("拍營養標示", JPEG(), {
+			hint: "一包 2 份",
+			start: "開始讀取",
+		});
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"AI 暫時無法使用，請稍後再試",
+		);
+		expect(within(step()).getByLabelText("補充說明（選填）")).toHaveValue(
+			"一包 2 份",
+		);
+		await userEvent.click(
+			within(step()).getByRole("button", { name: "開始讀取" }),
+		);
+
+		await screen.findByText("AI 讀的數字，請對照包裝確認");
+		const bodies = labelBodies(fetchMock);
+		expect(bodies).toHaveLength(2);
+		expect(bodies[1]).toEqual(bodies[0]);
+		expect(bodies[1].hint).toBe("一包 2 份");
+	});
+
+	it("照片太大：選的當下就擋，不出卡片、不打網路", async () => {
+		const fetchMock = mockLabel(() => json(LABEL));
+		render(wrap(<NewFood />));
+		const big = JPEG();
+		Object.defineProperty(big, "size", { value: 10 * 1024 * 1024 + 1 });
+
+		await userEvent.upload(screen.getByLabelText("拍營養標示"), big);
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("照片超過");
+		expect(
+			screen.queryByRole("region", { name: "確認照片" }),
+		).not.toBeInTheDocument();
+		// 新增食物自己會讀 /api/me：斷言的是沒有讀營養標示。
+		expect(labelBodies(fetchMock)).toEqual([]);
+	});
+
+	it("取消：卡片收起、沒打網路，焦點回到「拍營養標示」", async () => {
+		const fetchMock = mockLabel(() => json(LABEL));
+		render(wrap(<NewFood />));
+		await userEvent.upload(screen.getByLabelText("拍營養標示"), JPEG());
+
+		await userEvent.click(within(step()).getByRole("button", { name: "取消" }));
+
+		expect(
+			screen.queryByRole("region", { name: "確認照片" }),
+		).not.toBeInTheDocument();
+		// 新增食物自己會讀 /api/me：斷言的是沒有讀營養標示。
+		expect(labelBodies(fetchMock)).toEqual([]);
+		await waitFor(() =>
+			expect(screen.getByLabelText("拍營養標示")).toHaveFocus(),
+		);
+	});
+
+	it("讀取中：「開始讀取」aria-disabled、旁邊數秒；status 只念「AI 讀取中…」不含秒數", async () => {
+		let release: (response: Response) => void = () => {};
+		mockLabel(
+			() =>
+				new Promise<Response>((resolve) => {
+					release = resolve;
+				}),
+		);
+		render(wrap(<NewFood />));
+
+		await pickPhoto("拍營養標示", JPEG(), { start: "開始讀取" });
+
+		expect(
+			within(step()).getByRole("button", { name: "開始讀取" }),
+		).toHaveAttribute("aria-disabled", "true");
+		expect(await screen.findByText("0 秒")).toBeInTheDocument();
+		const status = screen.getByText("AI 讀取中…").closest("[role=status]");
+		expect(status).not.toBeNull();
+		expect(status).not.toHaveTextContent("秒");
+
+		release(json(LABEL));
+		await screen.findByText("AI 讀的數字，請對照包裝確認");
+		expect(screen.queryByText(/秒$/)).not.toBeInTheDocument();
+	});
+
+	it("「用 AI 填」與營養標示的卡片同時開著：兩個說明欄各是各的", async () => {
+		mockLabel(() => json(LABEL));
+		render(wrap(<NewFood />));
+		const photo = new File(["p"], "dish.jpg", { type: "image/jpeg" });
+
+		await userEvent.upload(screen.getByLabelText("拍照估算"), photo);
+		await userEvent.upload(screen.getByLabelText("拍營養標示"), JPEG());
+
+		const [estimateStep, labelStep] = screen.getAllByRole("region", {
+			name: "確認照片",
+		});
+		if (estimateStep === undefined || labelStep === undefined) {
+			throw new Error("兩張確認照片的卡片都要在");
+		}
+		expect(
+			within(estimateStep).getByRole("button", { name: "開始估算" }),
+		).toBeInTheDocument();
+		expect(
+			within(labelStep).getByRole("button", { name: "開始讀取" }),
+		).toBeInTheDocument();
+		await userEvent.type(
+			within(estimateStep).getByLabelText("補充說明（選填）"),
+			"飯半碗",
+		);
+		await userEvent.type(
+			within(labelStep).getByLabelText("補充說明（選填）"),
+			"一包 2 份",
+		);
+
+		expect(within(estimateStep).getByLabelText("補充說明（選填）")).toHaveValue(
+			"飯半碗",
+		);
+		expect(within(labelStep).getByLabelText("補充說明（選填）")).toHaveValue(
+			"一包 2 份",
+		);
 	});
 });

@@ -29,9 +29,17 @@
 	border-radius: var(--radius-button);
 }
 
-/* 狀態那一塊一直在（live region 才唸得到），沒有字的時候不佔空間。 */
-.labelResult:has(> [role="status"]:empty:only-child) {
+/* 狀態那一塊一直在（live region 才唸得到），沒有字的時候不佔空間。
+   狀態包在 .statusRow 裡（旁邊讀取中才有秒數）。 */
+.labelResult:has(> .statusRow:only-child > [role="status"]:empty:only-child) {
 	margin-top: 0;
+}
+
+/* 「AI 讀取中…」與經過的秒數排同一行（秒數在 role="status" 外面，見 ElapsedSeconds）。 */
+.statusRow {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-2);
 }
 
 .labelResult:focus-visible {

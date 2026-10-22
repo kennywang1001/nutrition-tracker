@@ -9,6 +9,7 @@ import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
 import { AiEstimatePanel } from "../src/components/AiEstimatePanel";
 import { shrinkToLongestEdge } from "../src/lib/resize-image";
+import { pickPhoto } from "./helpers/ai-photo";
 import { json, mockApi, type Route } from "./helpers/mock-api";
 import { percentText } from "./helpers/percent";
 
@@ -219,7 +220,7 @@ describe("AI 估算面板：估算", () => {
 			new File(["small"], "small.jpg", { type: "image/jpeg" }),
 		);
 
-		await userEvent.upload(screen.getByLabelText("拍照估算"), photo);
+		await pickPhoto("拍照估算", photo);
 		const card = await screen.findByRole("region", { name: "AI 估算結果" });
 
 		expect(bodyOf(fetchMock, "POST", "/api/ai/analyze")).toEqual({
@@ -260,10 +261,15 @@ describe("AI 估算面板：估算", () => {
 		const photo = new File(["x"], "big.jpg", { type: "image/jpeg" });
 		Object.defineProperty(photo, "size", { value: MAX_PHOTO_BYTES + 1 });
 
+		// 直接 upload、不走 pickPhoto：太大的照片不出確認卡片（照片說明規格 D9）。
 		await userEvent.upload(screen.getByLabelText("拍照估算"), photo);
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("照片超過");
 		expect(fetchMock).not.toHaveBeenCalled();
+		// 不讓人打完說明才知道白打。
+		expect(
+			screen.queryByRole("region", { name: "確認照片" }),
+		).not.toBeInTheDocument();
 	});
 });
 
@@ -950,5 +956,179 @@ describe("AI 估算面板：存之前先看食物庫有沒有同名的", () => {
 		expect(
 			await within(form).findByRole("button", { name: "用食物庫的" }),
 		).toHaveFocus();
+	});
+});
+
+describe("AI 估算面板：照片＋補充說明（照片說明規格 §6）", () => {
+	const PHOTO = new File(["fake-jpeg"], "noodle.jpg", { type: "image/jpeg" });
+
+	function step() {
+		return screen.getByRole("region", { name: "確認照片" });
+	}
+
+	/** 估算的請求先卡住，`release()` 才回。 */
+	function gatedAnalyze(response: () => Response = () => json(ESTIMATE)) {
+		let release: () => void = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		// `extra` 排在前面，先接住估算的請求。
+		const fetchMock = mockApi(
+			routes(undefined, [
+				{
+					method: "POST",
+					path: "/api/ai/analyze",
+					handler: () => gate.then(response),
+				},
+			]),
+		);
+		return { fetchMock, release: () => release() };
+	}
+
+	it("選了照片：不打網路，出現「確認照片」、焦點在卡片上（不是說明欄）", async () => {
+		const fetchMock = mockApi(routes());
+		renderPanel();
+
+		await userEvent.upload(screen.getByLabelText("拍照估算"), PHOTO);
+
+		await waitFor(() => expect(step()).toHaveFocus());
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(within(step()).getByLabelText("補充說明（選填）")).toHaveAttribute(
+			"placeholder",
+			"例：飯半碗、雞皮沒吃、7-11 的",
+		);
+	});
+
+	it("打說明、開始估算：body 帶 hint；結果出來卡片收起，焦點回到「拍照估算」", async () => {
+		const fetchMock = mockApi(routes());
+		renderPanel();
+
+		await pickPhoto("拍照估算", PHOTO, { hint: "飯半碗" });
+
+		await screen.findByRole("region", { name: "AI 估算結果" });
+		expect(bodyOf(fetchMock, "POST", "/api/ai/analyze")).toEqual({
+			kind: "image",
+			image_base64: btoa("fake-jpeg"),
+			hint: "飯半碗",
+		});
+		expect(
+			screen.queryByRole("region", { name: "確認照片" }),
+		).not.toBeInTheDocument();
+		// 按下去的「開始估算」跟著卡片消失：焦點不能掉到 body。
+		await waitFor(() =>
+			expect(screen.getByLabelText("拍照估算")).toHaveFocus(),
+		);
+	});
+
+	it("失敗：卡片與說明都還在；再按「開始估算」就是重試，帶同一段說明", async () => {
+		let attempt = 0;
+		const fetchMock = mockApi(
+			routes(() => {
+				attempt += 1;
+				return attempt === 1
+					? json(
+							{
+								error: {
+									code: "AI_UPSTREAM_ERROR",
+									message: "AI 暫時無法使用，請稍後再試",
+									details: {},
+								},
+							},
+							502,
+						)
+					: json(ESTIMATE);
+			}),
+		);
+		renderPanel();
+
+		await pickPhoto("拍照估算", PHOTO, { hint: "雞皮沒吃" });
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"AI 暫時無法使用，請稍後再試",
+		);
+		expect(within(step()).getByLabelText("補充說明（選填）")).toHaveValue(
+			"雞皮沒吃",
+		);
+		await userEvent.click(
+			within(step()).getByRole("button", { name: "開始估算" }),
+		);
+
+		await screen.findByRole("region", { name: "AI 估算結果" });
+		const bodies = fetchMock.mock.calls
+			.filter(([input]) => String(input).endsWith("/api/ai/analyze"))
+			.map(([, init]) => JSON.parse(String(init?.body)));
+		expect(bodies).toHaveLength(2);
+		expect(bodies[1]).toEqual(bodies[0]);
+		expect(bodies[1].hint).toBe("雞皮沒吃");
+	});
+
+	it("取消：卡片收起、沒打網路，焦點回到「拍照估算」", async () => {
+		const fetchMock = mockApi(routes());
+		renderPanel();
+		await userEvent.upload(screen.getByLabelText("拍照估算"), PHOTO);
+
+		await userEvent.click(within(step()).getByRole("button", { name: "取消" }));
+
+		expect(
+			screen.queryByRole("region", { name: "確認照片" }),
+		).not.toBeInTheDocument();
+		expect(fetchMock).not.toHaveBeenCalled();
+		await waitFor(() =>
+			expect(screen.getByLabelText("拍照估算")).toHaveFocus(),
+		);
+	});
+
+	it("送出中：「開始估算」aria-disabled、旁邊數秒；status 只念「AI 估算中…」不含秒數", async () => {
+		const { release } = gatedAnalyze();
+		renderPanel();
+
+		await pickPhoto("拍照估算", PHOTO);
+
+		const start = within(step()).getByRole("button", { name: "開始估算" });
+		expect(start).toHaveAttribute("aria-disabled", "true");
+		expect(screen.getByText("0 秒")).toBeInTheDocument();
+		const status = screen.getByRole("status");
+		expect(status).toHaveTextContent("AI 估算中…");
+		expect(status).not.toHaveTextContent("秒");
+
+		release();
+		await screen.findByRole("region", { name: "AI 估算結果" });
+		expect(screen.queryByText(/秒$/)).not.toBeInTheDocument();
+	});
+
+	it("卡片開著再選一張：說明留著，縮圖換成新的那一張", async () => {
+		mockApi(routes());
+		const created = vi.spyOn(URL, "createObjectURL");
+		renderPanel();
+		const other = new File(["other"], "other.jpg", { type: "image/jpeg" });
+
+		await userEvent.upload(screen.getByLabelText("拍照估算"), PHOTO);
+		await userEvent.type(
+			within(step()).getByLabelText("補充說明（選填）"),
+			"7-11 的",
+		);
+		await userEvent.upload(screen.getByLabelText("拍照估算"), other);
+
+		expect(within(step()).getByLabelText("補充說明（選填）")).toHaveValue(
+			"7-11 的",
+		);
+		expect(created).toHaveBeenLastCalledWith(other);
+	});
+
+	it("卡片開著時改按文字估算：卡片收起，照片那一次沒有送", async () => {
+		const fetchMock = mockApi(routes());
+		renderPanel();
+		await userEvent.upload(screen.getByLabelText("拍照估算"), PHOTO);
+
+		await estimateByText();
+
+		expect(
+			screen.queryByRole("region", { name: "確認照片" }),
+		).not.toBeInTheDocument();
+		expect(bodyOf(fetchMock, "POST", "/api/ai/analyze")).toEqual({
+			kind: "text",
+			text: "一碗牛肉麵",
+		});
+		expect(posted(fetchMock, "/api/ai/analyze")).toBe(1);
 	});
 });
