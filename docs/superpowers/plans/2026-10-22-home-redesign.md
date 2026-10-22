@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 總覽換成熱量圓環（還能吃／超過／沒有目標）＋三大營養素＋四個快速記錄＋兩張小卡片；每日目標、體重、身體資料三張卡片搬到新頁「身體與目標」（`/me/health`）；「我的」只留一張入口卡片；「＋」多一個記體重。
+**Goal:** 總覽換成熱量圓環（還能吃／超過／沒有目標）＋三大營養素＋四個快速記錄＋兩張小卡片；每日目標、體重、身體資料三張卡片搬到新頁「身體與目標」（`/me/health`）；「我的」只留一張入口卡片；「＋」多一個記體重；體重小卡片多一條最近 30 天的迷你折線，`/weight` 的圖改成折線圖（實線＋點、7 天平均虛線）。
 
 **Architecture:** 純前端，沒有後端改動。`lib/decimal.ts` 多 `kcalBalance`；新元件 `CalorieRing`（SVG，`aria-hidden`）、`BudgetSummary`（圓環＋中間的字＋`MacroBar`×3＋已吃・預算）、`QuickActions`、`BodyHubEntry`；新畫面 `BodyHub`。快速記錄的交接走 router state（`lib/quick-actions.ts`），照片本身放在記憶體裡的單一暫存、state 只帶號碼；`LogMealRoute` 把照片與「開掃描層」交給 `LogMeal`（→ `AiMealPanel` 的 `initialPhoto`、`FoodPicker`／`BarcodeScanEntry` 的 `startScanning`），新的 `WeightRoute` 把「焦點放在體重」交給 `Weight`。
 
@@ -83,11 +83,14 @@
 | `frontend/src/lib/decimal.ts`、`tests/decimal.test.ts` | 1 | `kcalBalance` |
 | `frontend/src/components/CalorieRing.{tsx,module.css}`（新）、`tests/calorie-ring.test.tsx`（新） | 1 | 圓環 |
 | `frontend/src/components/BudgetSummary.{tsx,module.css}`（新）、`tests/budget-summary.test.tsx`（新） | 1 | 圓環卡片的內容 |
-| `frontend/src/screens/Overview.{tsx,module.css}`、`tests/overview.test.tsx` | 2、3 | 版面、圓環卡片、小卡片；快速記錄 |
+| `frontend/src/lib/weight-plot.ts`（新）、`tests/weight-plot.test.ts`（新） | 1B | 體重圖共用的座標換算 |
+| `frontend/src/components/WeightChart.tsx`、`src/index.css`、`screens/Weight.module.css`、`tests/weight-chart.test.tsx` | 1B | `/weight` 的折線、虛線的平均、圖例 |
+| `frontend/src/screens/Weight.tsx`、`tests/weight.test.tsx` | 1B、3 | 圖例；`focusForm` |
+| `frontend/src/components/WeightSparkline.{tsx,module.css}`（新）、`tests/weight-sparkline.test.tsx`（新） | 2 | 迷你折線 |
+| `frontend/src/screens/Overview.{tsx,module.css}`、`tests/overview.test.tsx` | 2、3 | 版面、圓環卡片、小卡片（含迷你折線）；快速記錄 |
 | `frontend/src/lib/quick-actions.ts`（新）、`tests/quick-actions.test.ts`（新） | 3 | router state、照片暫存 |
 | `frontend/src/components/QuickActions.{tsx,module.css}`（新）、`IconBadge.tsx` | 3 | 四顆；`WEIGHT_COLOR` |
 | `frontend/src/screens/LogMeal.tsx`、`components/{AiMealPanel,FoodPicker,BarcodeScanEntry}.tsx`、`tests/{log-meal-ai,log-meal-barcode}.test.tsx` | 3 | `initialPhoto`、`startScanning` |
-| `frontend/src/screens/Weight.tsx`、`tests/weight.test.tsx` | 3 | `focusForm` |
 | `frontend/src/App.tsx`、`tests/app.test.tsx` | 3、4、6 | `LogMealRoute`、`WeightRoute`、`/me/health` |
 | `frontend/src/screens/BodyHub.tsx`（新）、`tests/body-hub.test.tsx`（新）、`lib/layout.ts`、`tests/layout.test.ts` | 4 | 身體與目標 |
 | `frontend/src/screens/{Targets,BodyProfile}.tsx`、`components/TargetSuggestion.tsx`、`tests/{targets,target-suggestion,body-profile,exercise-budget-switch}.test.tsx` | 4 | 存好導回 `/me/health` |
@@ -546,9 +549,427 @@ export function BudgetSummary({ stats }: { stats: DailyStats }) {
 
 ---
 
+## Task 1B：體重圖的共用幾何（`lib/weight-plot.ts`）與 `/weight` 的折線圖
+
+**Files:** `frontend/src/lib/weight-plot.ts`（新）、`components/WeightChart.tsx`、`src/index.css`、`screens/Weight.{tsx,module.css}`；
+`frontend/tests/weight-plot.test.ts`（新）、`tests/{weight-chart,weight}.test.tsx`
+
+規格 D21、D24、§3.5。**先重構、再加線**：Step 1–4 是純重構（`weight-chart.test.tsx` 既有的 7 條一個字都不改、全部要綠），Step 5 之後才加新的線。
+
+- [ ] **Step 1：`tests/weight-plot.test.ts`。**
+
+```ts
+import { describe, expect, it } from "vitest";
+import { polylinePoints, weightScale } from "../src/lib/weight-plot";
+
+const AREA = { left: 10, right: 110, top: 0, bottom: 40 };
+
+describe("weightScale（首頁改版規格 D21）", () => {
+	it("x 照日期：起點在左、終點在右、中間照天數比例（不是照第幾筆）", () => {
+		const scale = weightScale(["80"], "1", "2026-10-01", "2026-10-11", AREA);
+		if (scale === null) throw new Error("應該有比例尺");
+		expect(scale.x("2026-10-01")).toBeCloseTo(10);
+		expect(scale.x("2026-10-11")).toBeCloseTo(110);
+		expect(scale.x("2026-10-04")).toBeCloseTo(10 + (3 / 10) * 100);
+	});
+
+	it("起點就是終點：不除以零，畫在左邊界", () => {
+		const scale = weightScale(["80"], "1", "2026-10-01", "2026-10-01", AREA);
+		expect(scale?.x("2026-10-01")).toBeCloseTo(10);
+	});
+
+	it("y：範圍是 paddedExtent（各往外 pad、取整），重的在上面", () => {
+		const scale = weightScale(["78", "80"], "1", "2026-10-01", "2026-10-02", AREA);
+		if (scale === null) throw new Error("應該有比例尺");
+		expect([scale.lo, scale.hi]).toEqual(["77", "81"]);
+		expect(scale.y("81")).toBeCloseTo(0);
+		expect(scale.y("77")).toBeCloseTo(40);
+		expect(scale.y("80")).toBeCloseTo(40 * (1 - 3 / 4));
+	});
+
+	it("範圍是 0（pad 0、值都一樣）：畫在正中間；沒有值是 null", () => {
+		const flat = weightScale(["80", "80"], "0", "2026-10-01", "2026-10-02", AREA);
+		expect(flat?.y("80")).toBeCloseTo(20);
+		expect(weightScale([], "1", "2026-10-01", "2026-10-02", AREA)).toBeNull();
+	});
+});
+
+describe("polylinePoints", () => {
+	it("照傳進來的順序，每一點「x,y」、空白隔開", () => {
+		const scale = { x: (date: string) => Number(date.slice(8)), y: (kg: string) => Number(kg) };
+		expect(
+			polylinePoints(
+				[
+					{ date: "2026-10-01", weight_kg: "80" },
+					{ date: "2026-10-05", weight_kg: "79.5" },
+				],
+				scale,
+			),
+		).toBe("1,80 5,79.5");
+		expect(polylinePoints([], scale)).toBe("");
+	});
+});
+```
+
+- [ ] **Step 2：跑，看它紅** → `npx vitest run tests/weight-plot.test.ts`。Expected: FAIL（模組不存在）。
+
+- [ ] **Step 3：`lib/weight-plot.ts`。**
+
+```ts
+import { daysBetween } from "./civil-date";
+import { type Numeric, paddedExtent, positionIn } from "./decimal";
+import type { WeightPoint } from "./weights";
+
+/** 畫圖的那一塊（viewBox 座標）：`left`／`right` 是 x 的起訖，`top`／`bottom` 是 y 的上下。 */
+export type PlotArea = { left: number; right: number; top: number; bottom: number };
+
+export type WeightScale = {
+	lo: Numeric;
+	hi: Numeric;
+	x: (date: string) => number;
+	y: (value: Numeric) => number;
+};
+
+/** 體重圖的座標換算（首頁改版規格 D21）：`/weight` 的 `WeightChart` 與總覽的迷你折線共用。
+ *
+ *  - **x 照日期**（`daysBetween`），不是照第幾筆：記錄的日子不連續，照索引平均分配會把一週的空白畫成跟一天一樣寬。
+ *    起點就是終點時除數是 1——點畫在左邊界，不除以零。
+ *  - **y 經過 `lib/decimal.ts`**：範圍是 `paddedExtent(values, pad)`（各往外 `pad`、取整），比例是 `positionIn`；這裡只把 0–1 的比例
+ *    換成座標（`number` 只用在座標，同 `TrendChart`）。重的在上面。
+ *  - `values` 是空的回 `null`（沒有東西可畫）。 */
+export function weightScale(
+	values: readonly Numeric[],
+	pad: Numeric,
+	start: string,
+	end: string,
+	area: PlotArea,
+): WeightScale | null {
+	const extent = paddedExtent(values, pad);
+	if (extent === null) return null;
+	const days = Math.max(daysBetween(start, end), 1);
+	const width = area.right - area.left;
+	const height = area.bottom - area.top;
+	return {
+		lo: extent.lo,
+		hi: extent.hi,
+		x: (date) => area.left + (daysBetween(start, date) / days) * width,
+		y: (value) =>
+			area.top + height * (1 - positionIn(value, extent.lo, extent.hi)),
+	};
+}
+
+/** `<polyline points>`：照傳進來的順序（由舊到新），每一點「x,y」。 */
+export function polylinePoints(
+	points: readonly WeightPoint[],
+	scale: Pick<WeightScale, "x" | "y">,
+): string {
+	return points
+		.map((point) => `${scale.x(point.date)},${scale.y(point.weight_kg)}`)
+		.join(" ");
+}
+```
+
+  算式的順序跟 `WeightChart` 原本的 `x`、`y` 閉包一樣（`PLOT_LEFT + (d / days) * plotWidth`；`0 + VIEW_HEIGHT * (1 - p)`）——浮點數逐位元相同，既有測試的 `toBeCloseTo` 不受影響。
+
+- [ ] **Step 4：`components/WeightChart.tsx` 改用它（純重構）**：拿掉 `daysBetween`、`paddedExtent`、`positionIn` 的 import（`formatCivilDate`、`formatMacro`、`Numeric` 照留），
+  import `polylinePoints`、`weightScale`；`extent`／`days`／`plotWidth`／`x`／`y`／`line` 那一段換成：
+
+```tsx
+	const scale = weightScale(values, AXIS_PAD_KG, start, end, {
+		left: PLOT_LEFT,
+		right: VIEW_WIDTH - PAD_X,
+		top: 0,
+		bottom: VIEW_HEIGHT,
+	});
+	if (scale === null) return null;
+	const { x, y } = scale;
+	const averageLine = polylinePoints(shownAverage, scale);
+```
+
+  `{extent.hi}`／`{extent.lo}` → `{scale.hi}`／`{scale.lo}`；`line` → `averageLine`。檔頭說明的「幾何」那一段改成「座標換算在 `lib/weight-plot.ts`（跟總覽的迷你折線共用）」。
+  跑 `npx vitest run tests/weight-chart.test.tsx tests/weight.test.tsx tests/weight-plot.test.ts` → **全部綠、既有的測試沒改**。
+
+- [ ] **Step 5：新的測試**：
+  - `tests/weight-chart.test.tsx` 加（用檔案既有的 `chart()`、`points()`、`attr()`）：
+    1. 「每天的紀錄連成實線：照日期由舊到新，每一組座標就是那一點的 cx／cy」：`points("weight-line")` 長度 3，第 i 組＝`[attr("weight-point-<日期>", "cx"), attr(…, "cy")]`
+       （日期照 `entries` 的順序）。
+    2. 「沒記的日子照樣連起來（x 照日期）」：同一份資料，`weight-line` 只有一條（`getAllByTestId` 長度 1），第二組的 x 是 `PLOT_LEFT + (7 / 13) * (RIGHT - PLOT_LEFT)`。
+    3. 「只有一筆：沒有線，只有那一點」：`chart({ entries: [一筆], average: movingAverage([一筆]), start: 那天, end: 那天 })` → `queryByTestId("weight-line")` 是 null、點在。
+    4. 「線與平均都是裝飾；畫的順序是 平均 → 每天的線 → 點（點在最上面）」：兩條 `aria-hidden="true"`；`weight-line` 有 `weight-line` 的 class、`weight-average` 有 `weight-average`
+       （全域 class，`index.css`）；`compareDocumentPosition`：平均在線之前、線在第一個點之前。
+  - `tests/weight.test.tsx` 加：
+    5. 「圖例：每天的紀錄、7 天平均，色塊是裝飾」：`weight-chart-card` 裡 `getByText("每天的紀錄")`、`getByText("7 天平均")`；圖例裡的兩個色塊 `aria-hidden="true"`。
+    6. 「切期間：線只連範圍內的點」：用一份跨過 30 天的資料，切到 30 天 → `weight-line` 的組數＝`dots()` 的個數。
+
+- [ ] **Step 6：跑，看它紅** → Expected: FAIL（沒有 `weight-line`；圖例的色塊還是舊的、可能已經綠——綠的那條照實記，它守的是之後別改壞）。
+
+- [ ] **Step 7：`WeightChart.tsx` 加每天的線**：`averageLine` 下面加
+
+```tsx
+	// 每天的紀錄連成實線（規格 D24）：照日期由舊到新，沒記的日子照樣連起來（x 照日期，跨過的那一段本身就看得出中間沒有點）。
+	// 一筆畫不成線。
+	const dailyLine = entries.length >= 2 ? polylinePoints(entries, scale) : "";
+```
+
+  在平均線的 `<polyline>` **後面**、點的 `entries.map` **前面**：
+
+```tsx
+			{dailyLine !== "" && (
+				// biome-ignore lint/a11y/noAriaHiddenOnFocusable: SVG <polyline> 不能聚焦（同平均線）；線是裝飾，資料在每個點的名稱裡
+				<polyline
+					data-testid="weight-line"
+					className="weight-line"
+					points={dailyLine}
+					aria-hidden="true"
+				/>
+			)}
+```
+
+  平均線那一行註解改「7 天平均：淡色虛線（規格 D24）」。
+
+- [ ] **Step 8：`src/index.css`**（體重圖那一段）：`.weight-average` 換成、`.weight-line` 新增（只用變數；`opacity` 不是色碼）：
+
+```css
+/* 每天的紀錄連成的實線（首頁改版規格 D24）：跟點同色，點畫在它上面。 */
+.weight-line {
+	fill: none;
+	stroke: var(--color-accent);
+	stroke-width: 2;
+	stroke-linejoin: round;
+	stroke-linecap: round;
+}
+
+/* 7 天平均：淡色虛線——實線是真的紀錄，虛線是算出來的。 */
+.weight-average {
+	fill: none;
+	stroke: var(--color-action);
+	stroke-width: 1.5;
+	stroke-dasharray: 4 3;
+	stroke-linejoin: round;
+	opacity: 0.6;
+}
+```
+
+  檔頭那一行「點、7 天移動平均、刻度、底線」改「點、每天的線、7 天平均（虛線）、刻度、底線」。
+
+- [ ] **Step 9：圖例**：`screens/Weight.tsx` 的圖例改成（字不變，換色塊的 class）：
+
+```tsx
+						<p className={styles.legend}>
+							<span className={styles.swatchDaily} aria-hidden="true" />
+							每天的紀錄
+							<span className={styles.swatchAverage} aria-hidden="true" />7 天平均
+						</p>
+```
+
+  `screens/Weight.module.css`：`.swatchPoint`、`.swatchLine` 換成
+
+```css
+/* 「每天的紀錄」：實線＋中間一個點（同圖上的樣子）。 */
+.swatchDaily {
+	position: relative;
+	display: inline-block;
+	width: 16px;
+	height: 2px;
+	background: var(--color-accent);
+}
+
+.swatchDaily::after {
+	content: "";
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	width: 8px;
+	height: 8px;
+	margin: -4px 0 0 -4px;
+	border-radius: 50%;
+	background: var(--color-accent);
+}
+
+/* 「7 天平均」：淡色虛線（同 index.css 的 .weight-average）。 */
+.swatchAverage {
+	display: inline-block;
+	width: 16px;
+	margin-left: var(--space-2);
+	border-top: 2px dashed var(--color-action);
+	opacity: 0.6;
+}
+```
+
+- [ ] **Step 10：跑** → 三個檔案 PASS（weight-plot 5、weight-chart 7＋4、weight 既有＋2）；整套、`typecheck`、`lint`。
+
+- [ ] **Step 11：突變**（`$S/home-mut-t1b.json`）：
+  1. `weightScale`：`(1 - positionIn(…))` → `positionIn(…)` → 紅 weight-plot 的 y，**也紅 weight-chart 既有的「重的在上面」**（證明 `WeightChart` 真的接上了共用的幾何）。
+  2. `weightScale`：`daysBetween(start, date)` → `daysBetween(start, date) + 1` → 紅 x 的幾條。
+  3. `weightScale`：`Math.max(…, 1)` 拿掉 → 紅「起點就是終點」。
+  4. `WeightChart`：`polylinePoints(entries, scale)` → `polylinePoints(shownAverage, scale)` → 紅 1。
+  5. `WeightChart`：`entries.length >= 2` → `>= 1` → 紅 3。
+  6. `WeightChart`：每天的線搬到點的後面 → 紅 4。
+  7. `Weight.tsx`：圖例的 `swatchDaily` 的 `aria-hidden` 拿掉 → 紅 5。
+
+- [ ] **Step 12：Commit。** `git add frontend/src/lib/weight-plot.ts frontend/src/components/WeightChart.tsx frontend/src/index.css frontend/src/screens/Weight.tsx frontend/src/screens/Weight.module.css frontend/tests/weight-plot.test.ts frontend/tests/weight-chart.test.tsx frontend/tests/weight.test.tsx`；
+  訊息 `feat(frontend): 體重圖的座標換算抽成共用的 weight-plot；/weight 改成折線圖（實線＋點、7 天平均虛線）（首頁改版 Task 1B）`。
+
+  **注意**：Task 3 也改 `Weight.tsx`（`focusForm`）與 `weight.test.tsx`；照順序做不會衝突。
+
+---
+
 ## Task 2：總覽的版面、圓環卡片、兩張小卡片
 
-**Files:** `frontend/src/screens/Overview.{tsx,module.css}`、`frontend/tests/overview.test.tsx`
+**Files:** `frontend/src/screens/Overview.{tsx,module.css}`、`frontend/src/components/WeightSparkline.{tsx,module.css}`（新）；
+`frontend/tests/overview.test.tsx`、`tests/weight-sparkline.test.tsx`（新）
+
+- [ ] **Step 0：迷你折線（規格 D22、D23）**——先做元件，Step 4 再放進體重小卡片。
+  - `tests/weight-sparkline.test.tsx`：
+
+```tsx
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import { WeightSparkline } from "../src/components/WeightSparkline";
+
+const e = (date: string, weight_kg: string) => ({ date, weight_kg });
+
+/** `points="x1,y1 x2,y2 …"` → [[x1, y1], …]。 */
+function pairs(): number[][] {
+	return (screen.getByTestId("weight-sparkline-line").getAttribute("points") ?? "")
+		.split(" ")
+		.map((pair) => pair.split(",").map(Number));
+}
+
+describe("WeightSparkline（首頁改版規格 D22）", () => {
+	it("兩筆：一條線、第一筆在左、最後一筆在右、重的在上面；整張是裝飾", () => {
+		const { container } = render(
+			<WeightSparkline
+				today="2026-10-30"
+				entries={[e("2026-10-27", "80"), e("2026-10-30", "79.4")]}
+			/>,
+		);
+		expect(container.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+		expect(screen.getByTestId("weight-sparkline")).toBeInTheDocument();
+		// y 範圍 78–81（各往外 0.5、取整）；畫圖區 2–30（上下各留 2）。
+		const [first, last] = pairs();
+		expect(first?.[0]).toBeCloseTo(2);
+		expect(last?.[0]).toBeCloseTo(98);
+		expect(first?.[1]).toBeCloseTo(2 + 28 * (1 - 2 / 3));
+		expect(last?.[1]).toBeCloseTo(2 + 28 * (1 - 1.4 / 3));
+	});
+
+	it("只畫最近 30 天（今天 − 29 起）：更早的不算", () => {
+		render(
+			<WeightSparkline
+				today="2026-10-30"
+				entries={[
+					e("2026-09-30", "90"),
+					e("2026-10-01", "80"),
+					e("2026-10-30", "79"),
+				]}
+			/>,
+		);
+		expect(pairs()).toHaveLength(2);
+	});
+
+	it("最近 30 天只有 0 或 1 筆：不畫（只有字）", () => {
+		const { container, rerender } = render(
+			<WeightSparkline today="2026-10-30" entries={[]} />,
+		);
+		expect(container).toBeEmptyDOMElement();
+		rerender(
+			<WeightSparkline
+				today="2026-10-30"
+				entries={[e("2026-09-01", "80"), e("2026-10-30", "79")]}
+			/>,
+		);
+		expect(container).toBeEmptyDOMElement();
+	});
+});
+```
+
+  - `components/WeightSparkline.tsx`：
+
+```tsx
+import { polylinePoints, weightScale } from "../lib/weight-plot";
+import { entriesInSpan, type WeightPoint } from "../lib/weights";
+import styles from "./WeightSparkline.module.css";
+
+/** viewBox：寬 100、高 32，上下左右各留 2（線的圓頭不被切掉）。畫出來的寬度跟著卡片、高度固定 32px。 */
+const VIEW_WIDTH = 100;
+const VIEW_HEIGHT = 32;
+const INSET = 2;
+const PAD_KG = "0.5";
+export const SPARKLINE_DAYS = 30;
+
+type Props = {
+	/** `GET /api/weights` 的紀錄（由舊到新）。 */
+	entries: readonly WeightPoint[];
+	/** 後端給的今天：「最近 30 天」從它往回算（前端不算今天）。 */
+	today: string;
+};
+
+/** 總覽體重小卡片的迷你折線（首頁改版規格 D22）。**整張是裝飾**（`aria-hidden`）：最新一筆與比 7 天前是旁邊的字。
+ *
+ *  - 最近 30 天（`entriesInSpan`）少於 2 筆不畫——一筆畫不成線。
+ *  - x 從這 30 天裡的**第一筆到最後一筆**（不是從 30 天前）：只記了最近幾天時線不會擠在右邊；它沒有軸、沒有刻度。
+ *  - 座標換算跟 `/weight` 的圖同一份（`lib/weight-plot.ts`，D21）。
+ *  - `preserveAspectRatio="none"`：寬度跟著卡片拉伸；線寬用 `vector-effect: non-scaling-stroke`，拉伸不會變粗。 */
+export function WeightSparkline({ entries, today }: Props) {
+	const recent = entriesInSpan(entries, today, SPARKLINE_DAYS).entries;
+	const first = recent[0];
+	const last = recent.at(-1);
+	if (recent.length < 2 || first === undefined || last === undefined) {
+		return null;
+	}
+	const scale = weightScale(
+		recent.map((entry) => entry.weight_kg),
+		PAD_KG,
+		first.date,
+		last.date,
+		{ left: INSET, right: VIEW_WIDTH - INSET, top: INSET, bottom: VIEW_HEIGHT - INSET },
+	);
+	if (scale === null) return null;
+
+	return (
+		<svg
+			className={styles.sparkline}
+			viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
+			preserveAspectRatio="none"
+			aria-hidden="true"
+			focusable="false"
+			data-testid="weight-sparkline"
+		>
+			<polyline
+				data-testid="weight-sparkline-line"
+				className={styles.line}
+				points={polylinePoints(recent, scale)}
+			/>
+		</svg>
+	);
+}
+```
+
+  - `components/WeightSparkline.module.css`：
+
+```css
+/* 總覽體重小卡片的迷你折線（WeightSparkline.tsx；首頁改版規格 D22）。390px 寬時卡片內容約 140px：寬度跟著卡片、高度固定。 */
+
+.sparkline {
+	display: block;
+	width: 100%;
+	height: 32px;
+	margin-top: var(--space-1);
+}
+
+.line {
+	fill: none;
+	stroke: var(--color-accent);
+	stroke-width: 2;
+	stroke-linejoin: round;
+	stroke-linecap: round;
+	vector-effect: non-scaling-stroke;
+}
+```
+
+  跑 `npx vitest run tests/weight-sparkline.test.tsx`：先紅（元件不存在）、寫完 PASS（3 條）。
+  數字：`entriesInSpan(…, "2026-10-30", 30)` 的起點是 `2026-10-01`（今天 − 29），所以 `2026-09-30` 不算——這就是第二條的邊界。
 
 - [ ] **Step 1：改 `tests/overview.test.tsx` 既有的測試**（規格 §9.1）：
   - import `NO_WEIGHTS` from `./helpers/body-routes`；`mockOverview` 的預設多一行 `"/api/weights": () => json(NO_WEIGHTS),`（跟其他路徑互不包含）。
@@ -567,8 +988,10 @@ export function BudgetSummary({ stats }: { stats: DailyStats }) {
   2. 超過：`stats` 的 `actual.kcal` 是 `"2400.00"`、`kcal_budget` 是 `"2343.00"` →「超過 57 kcal」、`data-tone` `over`。
   3. 本月支出是連到 `/reports` 的連結：`within(spend).getByRole("link")` 的 `href`，名稱含 `$12480.00`。
   4. 體重：`/api/weights` 回 `{ today: "2026-10-14", entries: [{2026-10-07, "80.00"}, {2026-10-10, "79.60"}, {2026-10-14, "79.00"}] }`（跟 `me.test.tsx` 的 `WEIGHTS` 一樣）→
-     `weight-glance` 含「79 公斤」「比 7 天前 -1 公斤」，連結 `href="/weight"`。
-  5. 沒有體重：「記錄體重」，**點了帶著 `{weightForm: true}` 到 `/weight`**——用 `Routes`：`/` 是 `<Overview />`、`/weight` 是一個印出 `useLocation().state` 的元件，
+     `weight-glance` 含「79 公斤」「比 7 天前 -1 公斤」，連結 `href="/weight"`；卡片裡有 `weight-sparkline`（三筆都在 30 天內）、`aria-hidden`，
+     連結的可及名稱裡沒有多出東西（`getByRole("link", { name: "體重 79 公斤 比 7 天前 -1 公斤" })`——照實際的空白調整，重點是線不進名稱）。
+     另一格：只有一筆 → 有「79 公斤」、**沒有** `weight-sparkline`。
+  5. 沒有體重：「記錄體重」、沒有 `weight-sparkline`，**點了帶著 `{weightForm: true}` 到 `/weight`**——用 `Routes`：`/` 是 `<Overview />`、`/weight` 是一個印出 `useLocation().state` 的元件，
      點連結之後印出 `{"weightForm":true}`（Task 3 才有 `WEIGHT_FORM_STATE`：這一條先寫死 `{ weightForm: true }`，Task 3 改 import）。
   6. 體重讀不到（500、沒有快取）：「無法載入體重」，時間線照常（`timeline-row` 兩列）。
   7. 只有體重重抓失敗、手上有資料：離線提示出現（同運動那一條的寫法，`client.setQueryData(queryKeys.weights, …)`）。
@@ -578,8 +1001,8 @@ export function BudgetSummary({ stats }: { stats: DailyStats }) {
 - [ ] **Step 3：跑，看它紅** → `npx vitest run tests/overview.test.tsx`。Expected: FAIL（新的字、region、`weight-glance` 都還沒有）。
 
 - [ ] **Step 4：`screens/Overview.tsx`。**
-  - import：拿掉 `RatioProgress`、`exerciseInBudgetOf`、`kcalBudgetOf`、`ratioOf`；加 `useWeights`（`../api/body`）、`BudgetSummary`、`formatMacro`、
-    `signedKg`／`weekChange`（`../lib/weights`）。
+  - import：拿掉 `RatioProgress`、`exerciseInBudgetOf`、`kcalBudgetOf`、`ratioOf`；加 `useWeights`（`../api/body`）、`BudgetSummary`、`WeightSparkline`、`formatMacro`、
+    `signedKg`／`weekChange`（`../lib/weights`）。資料**沿用 `useWeights()`**（`["body","weights"]`、800 天、進離線快取），迷你折線自己篩 30 天——不加 query key（D23）。
   - `MonthSpendCard` 換成：
 
 ```tsx
@@ -665,6 +1088,8 @@ function WeightGlanceCard() {
 								比 7 天前 {signedKg(change.change)} 公斤
 							</span>
 						)}
+						{/* 最近 30 天的迷你折線（D22）：裝飾，不進連結的名稱；少於 2 筆它自己不畫。 */}
+						<WeightSparkline entries={data.entries} today={data.today} />
 					</>
 				)}
 			</Link>
@@ -755,8 +1180,12 @@ function WeightGlanceCard() {
   4. `OfflineBanner`：陣列拿掉 `weightsQuery` → 紅 7。
   5. `MonthSpendCard`：`to="/reports"` → `to="/"` → 紅 3。
   6. `Overview`：`<WeightGlanceCard />` 移到 `<TodayTimeline />` 後面（`layout.columns` 的第三個子元素）→ 紅 8。
+  7. `WeightSparkline`：`recent.length < 2` → `recent.length < 1` → 紅 weight-sparkline「0 或 1 筆」、overview「只有一筆」。
+  8. `WeightSparkline`：`SPARKLINE_DAYS = 30` → `31` → 紅「只畫最近 30 天」。
+  9. `WeightSparkline`：`first.date` → 傳 `shiftDays(today, -29)`（從 30 天前畫起）→ 紅第一條的 x。
+  10. `WeightSparkline`：拿掉 `aria-hidden="true"` → 紅第一條。
 
-- [ ] **Step 8：Commit。** `git add frontend/src/screens/Overview.tsx frontend/src/screens/Overview.module.css frontend/tests/overview.test.tsx`；
+- [ ] **Step 8：Commit。** `git add frontend/src/screens/Overview.tsx frontend/src/screens/Overview.module.css frontend/src/components/WeightSparkline.tsx frontend/src/components/WeightSparkline.module.css frontend/tests/overview.test.tsx frontend/tests/weight-sparkline.test.tsx`；
   訊息 `feat(frontend): 總覽換成熱量圓環，本月支出與體重兩張小卡片並排（首頁改版 Task 2）`。
 
 ---
@@ -1585,7 +2014,25 @@ async function openHub(page: Page) {
   - `applySuggestion` 與第 161、217、255 行附近「存好之後等『我的』的標題」→「身體與目標」（`grep -n '"我的"' e2e/body-targets.spec.ts` 逐一看，**只改存好之後的那幾個**；
     `openHub` 裡那一個是真的去「我的」）。
   - 第 179 行 `toContainText(\`/ ${kcal} kcal\`)` → `toContainText(\`預算 ${kcal}\`)`。
-  - 第三條最後（卡片「比 7 天前 -0.4 公斤」之後）加：點導覽「總覽」→ `getByTestId("weight-glance")` 含「79 公斤」與「比 7 天前 -0.4 公斤」（規格 D12：同一套 `weekChange`）。
+  - 第三條最後（卡片「比 7 天前 -0.4 公斤」之後）加：點導覽「總覽」→ `getByTestId("weight-glance")` 含「79 公斤」與「比 7 天前 -0.4 公斤」（規格 D12：同一套 `weekChange`），
+    卡片裡有 `weight-sparkline`（那條測試記的四天裡至少兩天在最近 30 天內——**寫之前看一次那四個日期**，不夠的話斷言 `toHaveCount(0)` 並在註解說明）。
+  - 第三條（`/weight` 記四天、切期間、改一筆、刪一筆）在「刪一筆」之後加（規格 D24；用那條測試已經有的 `chart`、`points` 兩個 locator）：
+
+```ts
+	// 折線圖：每天的紀錄連成一條實線，組數＝看得到的點數；7 天平均是虛線。
+	const daily = chart.getByTestId("weight-line");
+	await expect(daily).toHaveCount(1);
+	const pairs = ((await daily.getAttribute("points")) ?? "").split(" ").length;
+	expect(pairs).toBe(await points.count());
+	const dash = await chart
+		.getByTestId("weight-average")
+		.evaluate((node) => getComputedStyle(node).strokeDasharray);
+	expect(dash).not.toBe("none");
+	await expect(page.getByText("每天的紀錄", { exact: true })).toBeVisible();
+	await expect(page.getByText("7 天平均", { exact: true })).toBeVisible();
+```
+
+    （`points` 是那條測試裡數點的 locator，名稱照現況；圖例的兩段字跟色塊在同一個 `<p>` 裡，`exact: true` 對不上的話照 handover §7「`getByText`：testing-library 與 Playwright 不一樣」改用不帶 `exact` 的。）
 
 - [ ] **Step 3：`e2e/exercise.spec.ts`**：
   - `openMe` → 同 Step 2 的 `openHub`（每一個呼叫都換：1. 目標、6b. 體重更正、7. 開關，都在身體與目標上）。
@@ -1609,7 +2056,7 @@ async function openHub(page: Page) {
   `npx playwright test e2e/account-settings.spec.ts e2e/body-targets.spec.ts e2e/exercise.spec.ts e2e/planner.spec.ts` → PASS。
 
 - [ ] **Step 6：突變**（手動，各跑對應的 spec，跑完 `git diff` 確認還原）：`BudgetSummary` 的「預算 」改成「額度 」→ 四個 spec 都紅；
-  `Targets.tsx` 導回 `/me` → account-settings、exercise 紅。
+  `Targets.tsx` 導回 `/me` → account-settings、exercise 紅；`index.css` 的 `.weight-average` 拿掉 `stroke-dasharray: 4 3;` → body-targets 第三條紅（虛線）。
 
 - [ ] **Step 7：Commit。** `git add frontend/e2e/account-settings.spec.ts frontend/e2e/body-targets.spec.ts frontend/e2e/exercise.spec.ts frontend/e2e/planner.spec.ts`；
   訊息 `test(e2e): 三張卡片搬到身體與目標、總覽的熱量改成「還能吃／已吃・預算」，既有的 e2e 跟著改（首頁改版 Task 7）`。
@@ -1674,6 +2121,32 @@ async function createBento(request: APIRequestContext, token: string, name: stri
 	return ((await response.json()) as { id: number }).id;
 }
 
+/** 「YYYY-MM-DD」加減幾天（UTC，同 body-targets.spec 的 `shiftDays`）。起點是後端給的今天。 */
+function shiftDays(date: string, days: number): string {
+	const [y, m, d] = date.split("-").map(Number);
+	return new Date(Date.UTC(y ?? 0, (m ?? 1) - 1, (d ?? 1) + days))
+		.toISOString()
+		.slice(0, 10);
+}
+
+/** 記幾天體重（`PUT /api/weights/{date}`）。日期從 `GET /api/weights` 的 `today` 往回算——使用者的今天，不是這台機器的。 */
+async function logWeights(
+	request: APIRequestContext,
+	token: string,
+	byDaysAgo: ReadonlyArray<readonly [number, string]>,
+) {
+	const list = await request.get("/api/weights", { headers: auth(token) });
+	expect(list.ok()).toBe(true);
+	const { today } = (await list.json()) as { today: string };
+	for (const [daysAgo, kg] of byDaysAgo) {
+		const response = await request.put(`/api/weights/${shiftDays(today, -daysAgo)}`, {
+			headers: auth(token),
+			data: { weight_kg: kg },
+		});
+		expect(response.ok()).toBe(true);
+	}
+}
+
 /** 一分鐘前：不是「未來」。跨午夜的風險同 exercise.spec 的已知限制。 */
 function aMinuteAgo() {
 	return new Date(Date.now() - 60_000).toISOString();
@@ -1729,6 +2202,11 @@ test.describe("手機 390×844", () => {
 		const foodId = await createBento(request, token, bento);
 		await logRun(request, token);
 		await logMeal(request, token, foodId, "300");
+		// 兩天體重（3 天前 80、今天 79.4）：迷你折線有兩點（規格 D22）。
+		await logWeights(request, token, [
+			[3, "80"],
+			[0, "79.4"],
+		]);
 		await loginAs(page, account);
 
 		// 規格 §3.3：額度 2000 + 343 = 2343、吃了 1500。
@@ -1744,6 +2222,20 @@ test.describe("手機 390×844", () => {
 		await expect(
 			page.getByRole("region", { name: "今天熱量", exact: true }),
 		).toBeVisible();
+
+		// 體重小卡片：字照樣在（最新一筆；3 天前不到 7 天，沒有「比 7 天前」），下面一條兩點的迷你折線，是裝飾、放得進 390 寬的小卡片。
+		const glance = page.getByTestId("weight-glance");
+		await expect(glance).toContainText("79.4 公斤");
+		const spark = glance.getByTestId("weight-sparkline");
+		await expect(spark).toHaveAttribute("aria-hidden", "true");
+		await expect(spark.getByTestId("weight-sparkline-line")).toHaveAttribute(
+			"points",
+			/^\S+ \S+$/,
+		);
+		const [sparkBox, glanceBox] = [await box(spark), await box(glance)];
+		expect(sparkBox.width).toBeGreaterThan(50);
+		expect(sparkBox.x + sparkBox.width).toBeLessThanOrEqual(glanceBox.x + glanceBox.width);
+		expect(Math.round(sparkBox.height)).toBe(32);
 
 		// 再記 200 g（今天記過，在常吃的清單裡）：1500 + 1000 = 2500 → 超過 157。
 		await page.getByRole("button", { name: "新增紀錄", exact: true }).click();
@@ -1774,6 +2266,7 @@ test.describe("手機 390×844", () => {
 		await expect(card).toContainText("還沒有每日目標");
 		await expect(card.getByTestId("calorie-ring-arc")).toHaveCount(0);
 		await expect(page.getByTestId("weight-glance")).toContainText("記錄體重");
+		await expect(page.getByTestId("weight-sparkline")).toHaveCount(0);
 		await card.getByRole("link", { name: "設定每日目標", exact: true }).click();
 		await expect(
 			page.getByRole("heading", { name: "每日目標", exact: true, level: 1 }),
@@ -1858,6 +2351,8 @@ test.describe("手機 390×844", () => {
 		).toHaveCount(1);
 		await openOverview(page);
 		await expect(page.getByTestId("weight-glance")).toContainText("70 公斤");
+		// 只有一筆：沒有迷你折線，只有字（規格 D22）。
+		await expect(page.getByTestId("weight-sparkline")).toHaveCount(0);
 
 		// 「＋」：四個入口、2×2（第三個在第一個下面）、記體重同一個去處。
 		await page.getByRole("button", { name: "新增紀錄", exact: true }).click();
@@ -1961,6 +2456,8 @@ test.describe("電腦版 1280×800", () => {
   4. `AddSheet.module.css`：`repeat(2, …)` → `repeat(4, …)` → 紅「快速記錄」（2×2）。
   5. `Overview.module.css`：加回 `:global(.app-desktop) .cards { grid-template-columns: minmax(0, 1fr); }` → 紅「電腦版」（並排）。
   6. `BodyHubEntry`：拿掉 `aria-describedby` → 紅「身體與目標」。
+  7. `WeightSparkline`：`recent.length < 2` → `recent.length < 3` → 紅「圓環」（兩筆時沒有線）。
+  8. `WeightSparkline.module.css`：`height: 32px` → `height: 64px` → 紅「圓環」（高度）。
 
 - [ ] **Step 4：完整的 e2e 跑兩次**（同一個 dev 資料庫，`docker compose up -d --build api` 之後）：`npx playwright test > "$S/home-e2e-full1.log" 2>&1`、`…full2.log`。
   兩次都全綠；記下 passed 的條數與時間。只在某幾個 worker 數紅的照實記（handover §6「掃條碼」那一條 6 個 worker 的先例）。
@@ -1968,10 +2465,13 @@ test.describe("電腦版 1280×800", () => {
 - [ ] **Step 5：截圖**：`cp "$S/hint-fe-shots.cjs" "$S/home-fe-shots.cjs"`，改成：
   - 兩個新帳號（同檔案的 `newAccount`）：A 用 API 設 §3.3 那一組（目標、運動、便當 300 g），B 什麼都不設。
   - 每一種組合跑一次：`{390×844, 1280×800} × {light, dark}`（`browser.newContext({ viewport, colorScheme })`）。
-  - 拍：A 的總覽（一般）→ A 再用 API 記 200 g、點別的分頁再回總覽（重抓）→ 總覽（超過）；B 的總覽（沒有目標）；A 的「我的」；A 的身體與目標（`fullPage`）。
+  - A 另外用 API 記五天體重（20、10、6、3 天前與今天：80.2、79.8、79.9、79.4、79.0），迷你折線與 `/weight` 的折線才有東西看。
+  - 拍：A 的總覽（一般，體重小卡片有迷你折線）→ A 再用 API 記 200 g、點別的分頁再回總覽（重抓）→ 總覽（超過）；B 的總覽（沒有目標、沒有線）；A 的「我的」；
+    A 的身體與目標（`fullPage`）；A 的 `/weight`（實線、點、虛線的平均、目標線、圖例）。
   - 每張印出有沒有水平捲動（腳本已經有 `shot()`）；量快速記錄四顆的高度（`heights()`）。
   `node "$S/home-fe-shots.cjs" "$S/home-shots" 390 844 phone`、`… 1280 800 desktop`；dark 用第五個參數或兩份腳本。**看每一張**：
-  圓環中間的字不跟圓環重疊、超過的紅字在深色模式看得清楚、四顆在 390 寬不換行、「已吃・預算」換行在「・」之後、2×2 的「＋」。看到問題就修（CSS），修完重拍、
+  圓環中間的字不跟圓環重疊、超過的紅字在深色模式看得清楚、四顆在 390 寬不換行、「已吃・預算」換行在「・」之後、2×2 的「＋」、
+  迷你折線在 390 寬的小卡片裡不溢出、線寬沒有被拉粗、`/weight` 的實線與虛線分得出來（深色模式的虛線看得到）。看到問題就修（CSS），修完重拍、
   重跑相關的單元測試與 e2e，記進「執行中發現的差異」。
 
 - [ ] **Step 6：Commit。** `git add frontend/e2e/home.spec.ts`（加上截圖之後修的 CSS 檔）；
@@ -1987,13 +2487,15 @@ test.describe("電腦版 1280×800", () => {
   - §2 的數字（前端測試檔數／條數照 vitest 印的、e2e 條數；**照 vitest 印出來的寫**，不要自己除以二，§7）與階段進度加一行「首頁改版」。
   - §10 最後加一節「### 首頁改版：熱量圓環、快速記錄、身體與目標」（同「照片＋補充說明」那一節的格式）：規格與計畫的路徑、**沒有 migration、沒有新端點、沒有新的環境變數**；
     總覽（圓環的狀態、`kcalBalance`、`today-kcal` 的意義變了）、快速記錄（四個的機制與 iOS 的理由、`lib/quick-actions.ts` 的暫存）、身體與目標（`/me/health`、
-    存好導回這裡）、「我的」（入口卡片、`aria-describedby`）、「＋」（2×2）；新的東西在哪裡（檔案、測試、e2e）。
+    存好導回這裡）、「我的」（入口卡片、`aria-describedby`）、「＋」（2×2）、體重的折線（`lib/weight-plot.ts` 兩張圖共用、迷你折線沿用 `useWeights` 不加 key、
+    `/weight` 的實線＋點與虛線的平均、跨過沒記的日子）；新的東西在哪裡（檔案、測試、e2e）。「身體資料與目標」那一節 `/weight` 那一格補一句「首頁改版之後是折線圖」。
   - 「身體資料與目標」那一節的前端表格裡「「我的」的順序：通知 → 帳號 → 每日目標 → 身體資料 → 體重…（D21）」改成指到新的一節（三張卡片在身體與目標）；
     「運動紀錄」那一節「入口：`AddSheet.tsx` 三個（`repeat(3, …)`）」「總覽：今天熱量的分母…」兩格補一句「首頁改版之後見…」。
   - §7 的表：「畫出『我的』的單元測試」那一列改成「畫出**身體與目標**的單元測試」（`bodyRoutes()` 放最前面的規矩搬到 `body-hub.test.tsx`；「我的」只剩 `/api/weights`
     與 `/api/stats/daily`）；加新的坑（實作中真的踩到的才寫；至少：「`getByRole` 不看 `aria-modal`：『＋』開著時總覽的同名連結也找得到」）。
   - §8.2 加「首頁改版的已知限制」：iOS 實機沒有驗證拍照記（一按開相機）與掃條碼（一打開就開相機）；拍照記只能拍、不能從相簿選；記一餐重新整理會失去帶進來的照片；
-    記體重在 iOS 不會自動跳鍵盤；已吃與預算各自捨入，額度有小數時跟「超過 N」可能差 1；「本月支出」的連結名稱含金額。
+    記體重在 iOS 不會自動跳鍵盤；已吃與預算各自捨入，額度有小數時跟「超過 N」可能差 1；「本月支出」的連結名稱含金額；
+    體重的線跨過沒記的日子（不斷開）；迷你折線沒有刻度、x 從 30 天裡的第一筆開始，只看得出方向。
 - [ ] **Step 2：規格**：狀態改「已實作（日期，`feat/home-redesign`；跟規格不一樣的地方在計畫的『與規格的差異』）」；有審查的話加「審查後的修正」一節。
 - [ ] **Step 3：計畫**：「執行中發現的差異」每個 task 一節；「與規格的差異」補實作時多出來的。
 - [ ] **Step 4：前端整套最後一次**：`npm run -s test`、`npm run -s typecheck`、`npm run -s lint`（grep `FAIL`／`Unhandled`）。
@@ -2004,8 +2506,8 @@ test.describe("電腦版 1280×800", () => {
 
 ## 完成條件
 
-- 九個 task 的 commit 都在 `feat/home-redesign` 上（沒有 push）；`git status` 只剩 `lunch.jpg`。
+- 十個 task（1、1B、2–9）的 commit 都在 `feat/home-redesign` 上（沒有 push）；`git status` 只剩 `lunch.jpg`。
 - 前端整套、typecheck、lint 綠；e2e 全套連續兩次綠。
 - 每個 task 的突變都被抓到（沒抓到的照實記，補測試再跑）。
-- 截圖 2 尺寸 × 2 主題 × （總覽三種、身體與目標、我的）都看過。
+- 截圖 2 尺寸 × 2 主題 × （總覽三種、身體與目標、我的、`/weight`）都看過。
 - handover 的數字是量出來的。

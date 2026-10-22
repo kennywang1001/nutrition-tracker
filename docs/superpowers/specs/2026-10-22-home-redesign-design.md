@@ -21,10 +21,12 @@
 - **新頁「身體與目標」（`/me/health`）**：把「我的」裡的每日目標（含重算提示、運動加回開關）、體重、身體資料三張卡片**原樣搬過來**。
 - **「我的」精簡**：拿掉那三張卡片，換成一張「身體與目標」入口卡片（一行摘要）。
 - **「＋」選單**：多一個「記體重」，四個入口排成 2×2。
+- **體重的折線圖**（使用者後來加的要求）：總覽的體重小卡片多一條最近 30 天的**迷你折線**（裝飾）；`/weight` 的圖改成真的折線圖——
+  每天的紀錄連成實線（點照留、照樣有名稱），7 天平均改成淡色虛線，目標線照留。兩張圖的座標換算抽成一份共用的 `lib/weight-plot.ts`。
 
 ### 1.2 明確不做
 
-- 分頁不變（總覽／報表／＋／飲食／我的）。報表、飲食頁、其他畫面不變。
+- 分頁不變（總覽／報表／＋／飲食／我的）。報表、飲食頁、其他畫面不變（`/weight` 只改圖與圖例，見 §3.5）。
 - **沒有後端改動、沒有 migration、沒有新端點**（仍是 108）。需要的數字全部來自既有的 `GET /api/stats/daily`、`GET /api/weights`、
   `GET /api/expenses/summary`。
 - 不自動送出照片估算（見 D8）。不在總覽上放行內的體重表單（見 D11）。
@@ -55,6 +57,10 @@
 | D18 | 總覽的快速記錄四顆的可及名稱照設計：「拍照記」「掃條碼」「記運動」「記體重」——**跟「＋」選單同名**的兩個（記運動、記體重）在測試裡一律**限定在 `dialog` 裡**找 | 同名對使用者沒有問題（對話框是 `aria-modal`）；但 testing-library 與 Playwright 的 `getByRole` 不看 `aria-modal`，「＋」開著時總覽的同名連結也找得到 |
 | D19 | 顯示的捨入：已吃、預算、含運動都 `roundForDisplay(…, 0)`；「還能吃／超過」是 D3 的整數 | 「已吃 732.5」對整數的額度沒有意義。已吃與預算各自捨入，兩數相減可能跟「超過 N」差 1（額度有小數時）；實際的額度都是整數（目標的熱量、運動的估算都是整數），接受 |
 | D20 | 沒有每日目標（`kcalBudgetOf` 是 null：沒有目標或熱量沒設）：圓環只有底圈、中間「已吃 N kcal」，下面「還沒有每日目標」＋連結「設定每日目標」到 **`/me/targets`** | 直接到表單（建議目標也在那一頁），不繞身體與目標 |
+| D21 | 體重圖的座標換算抽成 **`lib/weight-plot.ts`**：`weightScale(values, pad, start, end, area)`（`paddedExtent` 定 y 範圍、`positionIn` 換比例、`daysBetween` 照日期排 x）與 `polylinePoints(points, scale)`。`WeightChart` 改用它（**座標逐一不變**，既有的 `weight-chart.test.tsx` 不改就要綠）；迷你折線也用它 | 原本這段數學寫在 `WeightChart` 的元件裡（`x`、`y` 兩個閉包）。複製一份給迷你折線會有兩套「照日期排」的寫法；抽出來後兩張圖的 x 一定照日期、y 一定經過 `lib/decimal.ts` |
+| D22 | **迷你折線**（`components/WeightSparkline.tsx`，`data-testid="weight-sparkline"`）：最近 30 天（`entriesInSpan(entries, today, 30)`，`today` 是 `GET /api/weights` 回的）的紀錄連成一條 `<polyline>`；**少於 2 筆不畫**（只有字）。`<svg aria-hidden>`、`viewBox="0 0 100 32"`、`preserveAspectRatio="none"`＋`vector-effect: non-scaling-stroke`，寬 100%、高 32px。x 從**這 30 天裡第一筆到最後一筆**（不是從 30 天前），y 範圍各往外 0.5 公斤 | 裝飾：最新一筆與比 7 天前照樣是文字（D12）。390px 寬時小卡片的內容寬約 140px，寬度跟著卡片走、高度固定；拉伸不會讓線變粗（`non-scaling-stroke`）。x 從第一筆開始：只記了最近幾天時，線不會擠在右邊一小段；它不是軸，沒有刻度可以對 |
+| D23 | 迷你折線的資料**沿用 `useWeights()`**（同一個 `["body","weights"]`，最近 800 天，進離線快取），在前端篩最近 30 天；**不加新的 query key** | 總覽的小卡片本來就讀這個 query（D12），不多一個請求。另開一個 30 天的 key 等於同一份資料在快取與 localStorage 裡存兩份，記體重之後還要多失效一個（`invalidateBody` 失效的是整個 `["body"]`，前綴蓋得到，但沒有必要）。離線時看到的是快取裡的線，跟總覽頂端的離線提示一致（`OfflineBanner` 已經算它） |
+| D24 | **`/weight` 的折線圖**：範圍內每天的紀錄照日期連成**實線**（`data-testid="weight-line"`，`.weight-line`，強調色、2px），點照留（`role="img"`、名稱「10/12，79 公斤」，畫在線的上面）；7 天平均改成**淡色虛線**（`.weight-average`：`stroke-dasharray`、`opacity`，顏色不變）；目標線不變。圖例：「每天的紀錄」（實線＋點的色塊）、「7 天平均」（虛線的色塊）。**沒記的日子照樣連起來**：x 照日期，中間空幾天線就跨過那一段，不斷開、不補 0 | 「折線」是使用者要的；點保留是因為點的名稱是螢幕閱讀器讀得到的資料。平均改虛線：兩條線同時在圖上，實線是真的紀錄、虛線是算出來的。斷開缺的日子要另一套規則（多久算斷？），而 x 已經照日期，跨過的那一段本身就看得出中間沒有點 |
 
 ### 與原始決定的差異
 
@@ -67,6 +73,8 @@
 7. **存好之後的去處**：目標、身體資料、套用建議導回身體與目標，不再是「我的」（D2）。
 8. **`today-kcal` 的文字**：「1240 / 2000 kcal」「含運動 +343」換成「還能吃 760 kcal」「已吃 1240・預算 2000」「（含運動 +343）」；
    「熱量進度」那條 `progressbar` 拿掉（圓環是裝飾、不是 progressbar）。受影響的斷言逐條列在 §9。
+9. **迷你折線的 x 範圍**：要求是「最近 30 天的紀錄」——資料照這個篩，但 x 從這 30 天裡的第一筆畫到最後一筆，不從 30 天前開始（D22 的理由）。
+10. **迷你折線的資料**：沿用既有的 `useWeights()`（800 天）在前端篩，不加 30 天的 query key（D23）。
 
 ---
 
@@ -127,7 +135,24 @@
 - **本月支出**（`data-testid="month-spend"`，不變）：標籤＋金額；金額那一塊是 `<Link to="/reports">`（44px 以上）。讀不到、載入中照舊。
 - **體重**（`data-testid="weight-glance"`）：`useWeights()`（同 `["body","weights"]`）。有紀錄：`<Link to="/weight">` 裡「79 公斤」＋（有的話）
   「比 7 天前 -0.4 公斤」；沒有紀錄：`<Link to="/weight" state={WEIGHT_FORM_STATE}>`「記錄體重」；載入中「載入中…」；讀不到「無法載入體重」＋連到 `/weight`。
+  有紀錄時，字的下面是迷你折線（D22）：最近 30 天有 2 筆以上才畫。
 - `OfflineBanner` 多算 `useWeights()`：體重重抓失敗而手上有資料也是「離線資料」。
+
+### 3.5 `/weight` 的折線圖（D21、D24）
+
+```
+81 ┤
+   │   ●───╮                     ← 實線＋點：每天的紀錄（點有名稱）
+   │ ┄┄┄┄┄┄╰──●┄┄┄┄┄┄┄┄●         ← 淡色虛線：7 天平均
+   │               ╲────╱
+77 ┤─────────────────────────    ← 目標線（照舊）
+   10/1                   今天
+```
+
+- 畫的順序（後畫的在上面）：底線 → 目標線 → 平均（虛線）→ 每天的線（實線）→ 點。
+- 範圍內只有一筆：沒有線，只有那一點（跟現在一樣）。平均線照現在的規則（範圍內那幾天的平均，可以用到範圍外的紀錄）。
+- 線是 `aria-hidden`（同平均線）：資料在點的名稱與圖下面的「最近 7 天平均」「目標」兩行字裡。
+- 圖例：`[實線＋點] 每天的紀錄  [虛線] 7 天平均`；色塊是裝飾（`aria-hidden`），字本身就說了。
 
 ---
 
@@ -199,16 +224,19 @@
 | `tests/app.test.tsx` | 「從『＋』點『記運動』」的連結改在 `dialog` 裡找（D18） | 範圍變小，不是變鬆 |
 | `tests/layout.test.ts` | `/me/health` 是 narrow | 新增 |
 | `tests/log-meal-ai.test.tsx`、`log-meal-barcode.test.tsx`、`weight.test.tsx`、`decimal.test.ts` | 新的 props／函式的測試 | 新增 |
+| `tests/weight-chart.test.tsx` | **既有的 7 條一個字都不改**（D21 的抽取是純重構，座標逐一不變）；加「每天的線：點的順序與座標＝每個點的 `cx`／`cy`」「跨過沒記的日子（x 照日期）」「只有一筆沒有線」「線與平均都是 `aria-hidden`、平均有 `weight-average` 的 class」 | 新增 |
+| `tests/weight.test.tsx` | 圖例的兩段字（「每天的紀錄」「7 天平均」）；切期間之後線只連範圍內的點 | 新增 |
+| `tests/overview.test.tsx` | 體重小卡片：2 筆以上有 `weight-sparkline`、0／1 筆沒有、30 天以前的不畫進去 | 新增 |
 | `tests/invite-friends.test.tsx` | 不用改（掛 `<Me />`，路由清單多出來的不影響）；跑一次確認 | — |
 
-新的測試檔：`tests/calorie-ring.test.tsx`、`budget-summary.test.tsx`、`quick-actions.test.ts`、`body-hub.test.tsx`。
+新的測試檔：`tests/calorie-ring.test.tsx`、`budget-summary.test.tsx`、`quick-actions.test.ts`、`body-hub.test.tsx`、`weight-plot.test.ts`、`weight-sparkline.test.tsx`。
 
 ### 9.2 要改的既有 e2e
 
 | spec | 改什麼 |
 |---|---|
 | `account-settings.spec.ts`（第一條） | 「我的」→ 點「身體與目標」→「修改每日目標」；存好之後的標題「身體與目標」；`today-kcal` 的「/ N kcal」→「預算 N」 |
-| `body-targets.spec.ts`（三條） | `openMe` → `openHub`（我的 → 身體與目標）；存好、套用之後等「身體與目標」的標題（四處）；`today-kcal` 的「/ N kcal」→「預算 N」；第三條最後多看總覽的 `weight-glance`「比 7 天前 -0.4 公斤」 |
+| `body-targets.spec.ts`（三條） | `openMe` → `openHub`（我的 → 身體與目標）；存好、套用之後等「身體與目標」的標題（四處）；`today-kcal` 的「/ N kcal」→「預算 N」；第三條最後多看總覽的 `weight-glance`「比 7 天前 -0.4 公斤」與迷你折線；第三條（`/weight` 記四天）多看 `weight-line` 一條、它的點數＝範圍內的點數、平均線的 `stroke-dasharray` 不是 `none`（`getComputedStyle`） |
 | `exercise.spec.ts` | `openMe` → `openHub`；手動存目標之後的標題；`openAddExercise` 的「記運動」限定在 `dialog`；`today-kcal` 的五處：「/ 2343」→「預算 2343」、「含運動 +N」→「（含運動 +N）」、「/ 2000」→「預算 2000」 |
 | `planner.spec.ts` | `today-kcal`「732.5 / 700 kcal」→「已吃 733・預算 700」＋「超過 33 kcal」；精度（白飯照份量算 300 g）改在飲食頁的 `macro-kcal`「732.5 / 700」守 |
 
@@ -217,11 +245,12 @@
 
 ### 9.3 新的 e2e：`e2e/home.spec.ts`
 
-1. **圓環的數字**（手機）：新帳號，API 設目標（2000／120／null／250）、記一筆手動運動 343、建便當食物、記 300 g → 登入 →「還能吃 843 kcal」「已吃 1500・預算 2343（含運動 +343）」、營養素三列、`data-tone="normal"` →
+1. **圓環的數字**（手機）：新帳號，API 設目標（2000／120／null／250）、記一筆手動運動 343、建便當食物、記 300 g → 登入 →「還能吃 843 kcal」「已吃 1500・預算 2343（含運動 +343）」、營養素三列、`data-tone="normal"`；
+   API 先記兩天體重（今天 − 3 天 80、今天 79.4）→ 體重小卡片「79.4 公斤」、`weight-sparkline` 在、折線兩個點 →
    「＋」→ 記一餐 → 便當 200 g → 回總覽「超過 157 kcal」、`data-tone="over"`。
-2. **沒有目標**：新帳號 →「已吃 0 kcal」「還沒有每日目標」→「設定每日目標」→ 每日目標頁。
+2. **沒有目標**：新帳號 →「已吃 0 kcal」「還沒有每日目標」、沒有體重所以沒有 `weight-sparkline` →「設定每日目標」→ 每日目標頁。
 3. **快速記錄**（手機，只假造 `POST /api/ai/analyze-meal`）：四顆 ≥ 44px；拍照記（`capture="environment"`）→ 記一餐的「確認照片」卡片有焦點 →「開始估算」→ 結果；
-   總覽 → 掃條碼 → 掃描層打開 →「取消」→ 焦點在「掃條碼」；總覽 → 記運動 → 表單；總覽 → 記體重 → 體重欄位有焦點 → 存 70 → 總覽的 `weight-glance`「70 公斤」；
+   總覽 → 掃條碼 → 掃描層打開 →「取消」→ 焦點在「掃條碼」；總覽 → 記運動 → 表單；總覽 → 記體重 → 體重欄位有焦點 → 存 70 → 總覽的 `weight-glance`「70 公斤」、只有一筆所以沒有迷你折線；
    「＋」四個入口、記體重到 `/weight`。
 4. **身體與目標與精簡的「我的」**（電腦版預設尺寸）：「我的」沒有三張卡片、入口摘要「還沒設定」→ 身體與目標三張卡片的順序 → 記體重 79 → 改目標 2110 → 回到身體與目標 →「我的」的摘要「2110 kcal・79 公斤」。
 5. **電腦版版面**（1280×800）：圓環卡片、快速記錄、小卡片都在時間線的左邊；兩張小卡片並排。
@@ -230,11 +259,12 @@
 
 ## 10. 交付
 
-- 前端：`lib/decimal.ts`（`kcalBalance`）、`lib/quick-actions.ts`（新）、`components/{CalorieRing,BudgetSummary,QuickActions,WeightGlanceCard,BodyHubEntry}.{tsx,module.css}`（新）、
+- 前端：`lib/decimal.ts`（`kcalBalance`）、`lib/quick-actions.ts`（新）、`lib/weight-plot.ts`（新）、`components/{CalorieRing,BudgetSummary,QuickActions,WeightSparkline,BodyHubEntry}.{tsx,module.css}`（新）、
+  `components/WeightChart.tsx`、`screens/Weight.{tsx,module.css}`、`index.css`（`.weight-line`、`.weight-average` 的虛線）、
   `screens/BodyHub.tsx`（新）、`screens/{Overview,Me,LogMeal,Weight,Targets,BodyProfile}.tsx`、`components/{AiMealPanel,FoodPicker,BarcodeScanEntry,TargetSuggestion,AddSheet,IconBadge}.tsx`、
   `AddSheet.module.css`、`Overview.module.css`、`App.tsx`（`/me/health`、`WeightRoute`、`LogMealRoute`）、`lib/layout.ts`（註解）。
 - 測試：§9 的表；e2e 全套跑兩次。
-- 截圖：390×844 與 1280×800，淺色與深色——總覽的三種圓環（一般、超過、沒有目標）、身體與目標、「我的」。
+- 截圖：390×844 與 1280×800，淺色與深色——總覽的三種圓環（一般、超過、沒有目標；一般那張要有迷你折線）、身體與目標、「我的」、`/weight`（四筆以上：實線、虛線、點、圖例）。
 - 文件：`docs/handover.md`（新的一節、量到的數字、已知限制、§7 新的坑）；這份規格與計畫的「執行中發現的差異」。
 - **已知限制（先寫下來的）**：iOS 實機沒有驗證拍照記與掃條碼的自動開相機；拍照記只能拍、不能從相簿選；記一餐重新整理會失去帶進來的照片；
-  記體重在 iOS 不會自動跳鍵盤；已吃與預算各自捨入，額度有小數時跟「超過 N」可能差 1。
+  記體重在 iOS 不會自動跳鍵盤；已吃與預算各自捨入，額度有小數時跟「超過 N」可能差 1；體重的線跨過沒記的日子（不斷開）；迷你折線沒有刻度，只看得出方向。
