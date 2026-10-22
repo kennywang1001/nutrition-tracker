@@ -29,7 +29,7 @@
 | 項目 | 數字 |
 |---|---|
 | 端點 | **108**（OpenAPI 的 operation 數，2026-10-16 在 `feat/barcode-label` 量的：掃條碼多 `GET /api/foods/by-barcode/{code}`、`PATCH /api/foods/{id}`、`POST /api/ai/read-label`。之前 105，2026-10-15 在 `feat/meal-planner` 量的：營養素配餐多 `GET /api/planner/library-suggestions`、`POST /api/ai/suggest-meal`。之前 103：`@router.` 101 ＋ `@activities_router.` 2——運動有兩個 router，只 grep `@router\.` 會少 2；2026-10-14 在 `feat/exercise` 量的。之前 95） |
-| 測試 | 後端 **2235**（`pytest -q -W error` 全綠，約 6 分鐘）；前端 `Test Files 210`、`Tests 3091`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **62** 條、25 個檔案（Playwright；預設 workers 連跑兩次都是 `62 passed`，50 秒、52 秒）。2026-10-22 在 `feat/ai-hint-speed` 做完 Task 8 時量的（開工前是下一句 `feat/barcode-label` 修完審查之後的後端 2110、前端 206／3022、e2e 59 條 24 個檔案）。`feat/barcode-label`：2026-10-20 修完審查（I1–I3、M1–M6、Caddy 壓縮）之後量的（做完 Task 12 時是後端 2071、前端 204／2978）（開工前是 `feat/meal-planner` 修完審查之後的後端 1853、前端 188／2712、e2e 56 條 23 個檔案）。`feat/meal-planner`：2026-10-15 修完審查（M1–M3）之後量的（做完 Task 12 時是後端 1851、前端 188／2710、e2e 56；開工前是 `feat/exercise` 修完審查之後的後端 1757、前端 178／2574、e2e 54 條 22 個檔案）。`feat/exercise`：2026-10-15 修完審查（I1、M1–M4）之後量的（修之前是後端 1745、前端 178／2538、e2e 54；開工前是後端 1606、前端 166／2312、e2e 53，跟下一句 `feat/body-targets` 的一樣）。**dev 資料庫 1090 個帳號時** `invites.spec.ts` 量「我的」每一顆按鈕的觸控高度逾時（第 1036 顆），改成跟 `account-settings.spec.ts` 一樣不量清單那一顆（見 §8.2「帳號與目標設定」第 6 點）。（`feat/body-targets` 修完審查之後：後端 1606、前端 166／2312、e2e 53 條 21 個檔案） |
+| 測試 | 後端 **2237**（`pytest -q -W error` 全綠，約 6 分半）；前端 `Test Files 210`、`Tests 3109`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **62** 條、25 個檔案（Playwright；預設 workers 連跑兩次都是 `62 passed`，53 秒、53 秒）。2026-10-22 在 `feat/ai-hint-speed` 修完審查（M1–M4）之後量的（做完 Task 8 時是後端 2235、前端 210／3091、e2e 62；開工前是下一句 `feat/barcode-label` 修完審查之後的後端 2110、前端 206／3022、e2e 59 條 24 個檔案）。`feat/barcode-label`：2026-10-20 修完審查（I1–I3、M1–M6、Caddy 壓縮）之後量的（做完 Task 12 時是後端 2071、前端 204／2978）（開工前是 `feat/meal-planner` 修完審查之後的後端 1853、前端 188／2712、e2e 56 條 23 個檔案）。`feat/meal-planner`：2026-10-15 修完審查（M1–M3）之後量的（做完 Task 12 時是後端 1851、前端 188／2710、e2e 56；開工前是 `feat/exercise` 修完審查之後的後端 1757、前端 178／2574、e2e 54 條 22 個檔案）。`feat/exercise`：2026-10-15 修完審查（I1、M1–M4）之後量的（修之前是後端 1745、前端 178／2538、e2e 54；開工前是後端 1606、前端 166／2312、e2e 53，跟下一句 `feat/body-targets` 的一樣）。**dev 資料庫 1090 個帳號時** `invites.spec.ts` 量「我的」每一顆按鈕的觸控高度逾時（第 1036 顆），改成跟 `account-settings.spec.ts` 一樣不量清單那一顆（見 §8.2「帳號與目標設定」第 6 點）。（`feat/body-targets` 修完審查之後：後端 1606、前端 166／2312、e2e 53 條 21 個檔案） |
 | 覆蓋率 | 96%（2026-09 量的，之後沒再量） |
 | 資料表 | 22（+ `alembic_version`；2026-10-16 在 dev 資料庫數的，掃條碼與營養素配餐都沒有新表。之前 21） |
 | Migration | `0001` ~ `0022`（`0022` 是掃條碼的 `foods.barcode`＋兩個唯一索引、`ai_analyses.kind` 多 `label`；`0021` 是營養素配餐的 `suggest`；dev 資料庫在 `0022`） |
@@ -1694,6 +1694,10 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
      （寫在 `docs/deployment.md`）。我們自己的計時行與 WARNING 不帶內容，測試掃 INFO 以上守著。
   8. **焦點移到「確認照片」卡片晚一個 task**（§7「選了照片之後移焦點會被蓋回去」）：iOS Safari、Android Chrome 選完照片之後焦點真的落在哪裡
      沒有在實機驗證過；最壞是焦點留在照片按鈕上（按 Tab 一下就到卡片），不會掉到 body。
+  9. **說明欄跟著字長高只在 Playwright 的 Chromium 量過**（審查 M4）：靠 `field-sizing: content`，不支援的瀏覽器照 `rows={3}` 固定 3 行、
+     在欄位裡捲。iOS Safari、Android Chrome 沒有實機看過。
+  10. **AI 沒設定之後按「取消」，焦點掉到 body**（審查 M1）：卡片收起、照片按鈕因為 AI 沒設定是停用的，焦點沒有地方回去
+     （旗標留著，按鈕不會恢復，所以不會晚一點才搶焦點）。這時畫面上的錯誤訊息也跟著清掉，只剩停用的照片按鈕。
 - **編輯自己已送出的提案**：後端沒有這個端點，目前只能等審核結果。
 
 ---
@@ -2673,7 +2677,7 @@ ponyfill 掃不了；Caddy 沒有 `encode`，實際傳的是沒壓縮的）。�
 （原文在規格 §5）。`ai_analyses.input_hash`：沒有說明照舊是照片的 SHA-256；有說明是 `sha256(照片 + b"\x00" + 說明的 UTF-8)`（`_photo_input_hash`）。
 **說明不存、不寫任何 log**（路由那一行只記 `hint=yes/no`）。額度照舊：一次呼叫算一次。
 
-**確認照片的卡片**（前端 `components/PhotoHintStep.tsx`，三個入口共用）：選了照片 → 卡片（縮圖、「補充說明（選填）」textarea 2 行 16px、
+**確認照片的卡片**（前端 `components/PhotoHintStep.tsx`，三個入口共用）：選了照片 → 卡片（縮圖、「補充說明（選填）」textarea 3 行起、跟著字長高到 8em 再捲（`field-sizing: content`，審查 M4）、16px、
 `maxLength` 200、打到 150 字才說「還能打 N 字」、「開始估算」或「開始讀取」、「取消」）→ 按了才送（`api/ai.ts` 的 `hintField()`：trim 完是空的就
 **沒有 `hint` 這個 key**）。
 
@@ -2681,8 +2685,10 @@ ponyfill 掃不了；Caddy 沒有 `encode`，實際傳的是沒壓縮的）。�
   成功 → 卡片收起、焦點回到照片按鈕（`PhotoPickerButton` 多 `inputRef`；送出中它是 disabled，effect 等它恢復那一次 render 才移）；營養標示照舊移到讀取結果那一段。
   「取消」→ 照片按鈕。
 - 送出中「開始估算」與「取消」都是 `aria-disabled`、說明 `readOnly`（已經送出的那一次照樣會回來、照樣算額度，這時收起卡片更讓人困惑）。
+  已經知道 AI 沒設定時只停用「開始估算」（`startDisabled`），「取消」照樣能按——不然卡片收不起來（審查 M1）。
 - **失敗時卡片與說明留著**，再按一次就是重試。卡片開著再選一張：說明留著、縮圖換掉（object URL 換照片與卸載時釋放）。卡片開著改按文字估算或配餐：卡片收起。
-- **照片太大在選的當下就擋**（不出卡片；`preparePhoto` 送出前照樣再擋一次）。
+- **照片太大在選的當下就擋**（不出卡片；`preparePhoto` 送出前照樣再擋一次）。卡片開著時選到太大的：卡片、原來那張照片與說明都留著，
+  只說太大。開始別的事（文字估算、配餐、開始估算／讀取、取消）就清掉這個提示（審查 M2）。
 - **經過的秒數**：`components/ElapsedSeconds.tsx`（從掛載的時間點算、每秒更新、`aria-hidden`），放在 `role="status"` **外面**——每秒變的字放進 live region，
   讀屏會每秒念一次。「AI 估算中…」「AI 配餐中…」「AI 讀取中…」旁邊都有。
 
@@ -2694,7 +2700,7 @@ INFO:     app.api.routes.ai: AI 端點（route=analyze-meal, input=image, hint=y
 ```
 
 - **`AI 呼叫`**（`log_provider_call`，兩家的 `_complete` 每一次都留，成功、失敗都有）：`kind` 是 `single`／`meal`／`suggest`／`label`，`input` 是 `text`／`image`，
-  `effort` 沒設是 `-`，`outcome` 是 `ok`／`misconfigured`／`upstream`／`error`（`ok` 只表示供應商回了；看不懂是路由那一行的 `status=502`）。`elapsed` 含 SDK 的重試。
+  `effort` 沒設是 `-`，`outcome` 是 `ok`／`misconfigured`／`upstream`／`cancelled`（等供應商時 task 被取消，照樣往外拋；審查 M3）／`error`（`ok` 只表示供應商回了；看不懂是路由那一行的 `status=502`）。`elapsed` 含 SDK 的重試。
   token 欄位沿用既有 WARNING 的名字、**兩家不湊成一套**：Anthropic 是 `stop_reason`、`input_tokens`、`output_tokens`（**含**思考）、`thinking_tokens`；
   Gemini 是 `finish_reason`、`prompt_tokens`、`candidates_tokens`（**不含**思考）、`thoughts_tokens`、`total_tokens`。失敗那一行沒有 token。
 - **`AI 端點`**（`ai_route_timer`，有 `yield` 的依賴，四個 AI 端點的**第一個**依賴）：`route`、`input`（`text`／`image`／`-`）、`hint`（`yes`／`no`／`-`）、
@@ -2730,7 +2736,7 @@ INFO:     app.api.routes.ai: AI 端點（route=analyze-meal, input=image, hint=y
   新增食物「用 AI 填」的單樣、拍營養標示（先取消一次不送，再送「這是每 100 ml」）。`ai-multi-food.spec.ts`、`barcode.spec.ts` 多按一下「開始」，
   斷言沒打說明時 body **沒有** `hint`。
 
-**已知限制**在 §8.2「照片＋補充說明、AI 速度的已知限制」（8 點）。最要緊的：**沒有對真的 LLM 量過**（第 1 點）、Gemini 2.5 不收 `thinking_level`（第 2 點）、
+**已知限制**在 §8.2「照片＋補充說明、AI 速度的已知限制」（10 點）。最要緊的：**沒有對真的 LLM 量過**（第 1 點）、Gemini 2.5 不收 `thinking_level`（第 2 點）、
 production 不要開 DEBUG log（第 7 點）。
 
 ---

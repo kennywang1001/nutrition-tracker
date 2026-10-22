@@ -1607,7 +1607,7 @@ async def test_an_unclassified_exception_logs_outcome_error(caplog, monkeypatch)
 async def test_a_cancelled_call_logs_outcome_cancelled_once_and_stays_cancelled(
     provider, caplog, monkeypatch
 ):
-    """使用者關掉頁面、伺服器關機：等供應商的那個 task 被取消。`CancelledError` 是
+    """等供應商的那個 task 被外層取消（不管是誰取消的）。`CancelledError` 是
     `BaseException`，`except Exception` 接不到——計時那一行要照樣留一行（`outcome=cancelled`），
     取消要照樣往外拋，不能吞掉（審查 M3）。"""
     caplog.set_level(logging.INFO)

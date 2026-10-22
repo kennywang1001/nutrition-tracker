@@ -343,7 +343,7 @@ class GeminiEstimator:
             response = await self._generate(contents, config)
         except (Exception, asyncio.CancelledError) as exc:
             # 失敗也要一行：「30 秒後逾時」跟「馬上被拒」是兩件事。沒有用量可記。
-            # 被取消（使用者關掉頁面、伺服器關機）也算：`CancelledError` 是 `BaseException`，
+            # 等供應商時 task 被取消也算：`CancelledError` 是 `BaseException`，
             # 只接 `Exception` 會整行不見（審查 M3）。下面的 `raise` 照樣往外拋，不吞掉。
             log_provider_call(
                 logger,

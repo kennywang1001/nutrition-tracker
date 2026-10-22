@@ -143,7 +143,7 @@ INFO:     app.api.routes.ai: AI 端點（route=analyze-meal, input=image, hint=y
 - **`AI 呼叫`** 是供應商花的時間：`elapsed` 從送出到拿到回應（含 SDK 自己的重試）。`thoughts_tokens`（Gemini）／
   `thinking_tokens`（Anthropic）是**思考了多少**——照片估算 20 秒的大頭幾乎都在這裡，`AI_EFFORT` 調的就是它。
   Anthropic 那一行是 `stop_reason`、`input_tokens`、`output_tokens`（**含**思考）、`thinking_tokens`；Gemini 的
-  `candidates_tokens` **不含**思考。`effort=-` 是沒設 `AI_EFFORT`。`outcome` 是 `ok`／`misconfigured`／`upstream`／`error`。
+  `candidates_tokens` **不含**思考。`effort=-` 是沒設 `AI_EFFORT`。`outcome` 是 `ok`／`misconfigured`／`upstream`／`cancelled`（等供應商的時候那個請求被取消）／`error`。
 - **`AI 端點`** 是後端整個請求：`total` 從驗證身分開始到回應（不含讀 request body），`decode` 是解碼照片。
   `hint=yes/no` 是有沒有附補充說明（說明的內容不寫 log）；文字與配餐是 `hint=-`。登入失敗、額度用完也各有一行
   （`status=401`、`429`）。

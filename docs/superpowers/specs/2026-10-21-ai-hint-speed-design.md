@@ -185,7 +185,7 @@ async def read_label(self, image: bytes, media_type: str, hint: str | None = Non
 │ [縮圖，最高 160px]                 │
 │ 補充說明（選填）                    │
 │ ┌──────────────────────────────┐ │
-│ │例：飯半碗、雞皮沒吃、7-11 的   │ │  ← textarea、2 行、16px、maxLength 200
+│ │例：飯半碗、雞皮沒吃、7-11 的   │ │  ← textarea、3 行起（審查 M4）、16px、maxLength 200
 │ └──────────────────────────────┘ │
 │ 最多 200 字　　　　　（還能打 37 字）│  ← 打到 150 字以上才出現剩幾字
 │ [   開始估算   ] [    取消    ]    │  ← 44px、兩顆各半，拇指搆得到
@@ -219,7 +219,8 @@ AI 估算中…  12 秒                       ← status ＋ aria-hidden 的秒�
 - 縮圖 `alt="要送給 AI 的照片"`；object URL 在換照片、卸載時 `revokeObjectURL`。
 - 送出中：「開始估算」與「取消」都是 `aria-disabled`（按下去的當下焦點在它身上，原生 `disabled` 會讓焦點掉到
   body）、textarea `readOnly`。「取消」也停用：已經送出的那一次照樣會回來、照樣算額度，這時候收起卡片，結果卡片
-  還是會在 20 秒後冒出來——比等它回來更讓人困惑。
+  還是會在 20 秒後冒出來——比等它回來更讓人困惑。**只有**送出中停用「取消」：已經知道 AI 沒設定時只停用
+  「開始估算」，「取消」照樣能按（審查 M1）。
 - 成功：卡片收起。兩個面板把焦點移回入口的照片按鈕（`PhotoPickerButton` 多一個 `inputRef`），同「配好了 → 入口那顆
   按鈕」；新增食物照舊移到讀取結果那一段。「取消」也是回到照片按鈕。
 - 經過的秒數：`ElapsedSeconds`，掛載時從 0 開始、每秒加一，`aria-hidden`，在 `role="status"` 外面（D11）。三個入口
@@ -246,7 +247,8 @@ INFO:     app.ai.anthropic_estimator: AI 呼叫（kind=single, input=image, mode
 失敗（沒有用量可記）：`… outcome=upstream, elapsed=30.02s）`。
 
 - `kind`：`single`／`meal`／`suggest`／`label`（`_Call` 多一個欄位）。`input`：`text`／`image`。
-- `effort`：`AI_EFFORT` 的值，沒設是 `-`。`outcome`：`ok`／`misconfigured`／`upstream`／`error`（沒分類的例外）。
+- `effort`：`AI_EFFORT` 的值，沒設是 `-`。`outcome`：`ok`／`misconfigured`／`upstream`／`cancelled`（等供應商的 task 被取消，
+  審查 M3）／`error`（沒分類的例外）。
   `ok` 只表示供應商回了；回覆看不懂是路由那一行的 `status=502`。
 - `elapsed` 從送出 SDK 呼叫量到拿到回應（含 SDK 的重試，Anthropic 預設會重試兩次）。
 - 只記列舉名稱、整數、我們自己的設定——提示詞、說明、照片、模型的輸出都不記（同既有的 WARNING）。
@@ -390,3 +392,23 @@ INFO:     app.api.routes.ai: AI 端點（route=analyze-meal, input=image, hint=y
 | 測試 | 後端 `tests/test_ai_hint.py`（新）、`test_ai_timing.py`（新）、既有的 AI 測試；前端兩個新檔＋既有的；e2e 一個新檔＋兩個既有的 |
 | 文件 | `docs/handover.md`（進度表、數字、一節、已知限制）、`docs/deployment.md`（`AI_EFFORT`、看計時的指令、§9.3 的步驟） |
 | 不在這次 | 對真的 LLM 量時間與準度（使用者做，§9.3） |
+
+---
+
+## 12. 審查後的修正
+
+2026-10-22，審查的四個小問題（M1–M4），一個問題一個 commit，每一個都先寫紅的測試、修好、再做突變確認測試咬得住。
+
+1. **M1 AI 沒設定時卡片收不起來**（`7bf4984`）：兩個面板把 `busy || aiUnavailable` 交給卡片，`AI_NOT_CONFIGURED`
+   之後「開始估算」與「取消」一起停用。`PhotoHintStep` 多一個 `startDisabled`：只停用「開始」；「取消」與說明只在
+   真的有請求在路上（`busy`）時停用。新增食物的營養標示卡片沒有這個問題（只交 `isPending`）。測試：元件單測一條、
+   兩個面板各一條（503 之後「開始估算」`aria-disabled`、按了不再送，「取消」收起卡片）。
+2. **M2 「照片太大」一直掛著、還丟掉說明**（`cbaebbb`）：提示只在選到合格的照片時清掉；卡片開著時選到太大的照片
+   會把卡片連同說明一起收掉。現在開始別的事（文字估算、配餐、開始估算／讀取、取消）就清掉提示；卡片開著時選到太大的
+   照片，卡片、原來那張照片與說明都留著，只說太大（沒有卡片時照舊只說太大、不開卡片，D9）。測試：三個入口各兩條。
+3. **M3 取消時沒有計時那一行**（`65c9ff1`）：兩家 `_complete` 只接 `Exception`，`asyncio.CancelledError` 是
+   `BaseException`。改接 `(Exception, asyncio.CancelledError)`，留一行 `outcome=cancelled` 再原樣 `raise`（不吞掉）；
+   成功、失敗、取消都剛好一行（§7.1）。測試：兩家各一條，假 SDK 呼叫一直等、把 task 取消。
+4. **M4 說明欄太小**（`cf14cae`）：`rows={3}`；CSS `field-sizing: content`、`line-height: 1.5`、`min-height` 等於 3 行、
+   `max-height: 8em`、`overflow-y: auto`，字級照舊 16px。支援 field-sizing 的瀏覽器跟著字長高、到 8em 之後在欄位裡捲；
+   不支援的照 `rows` 固定 3 行。e2e（390px）量空的約 90px、字多了變高、快打滿時停在 128px 而且可以捲。
