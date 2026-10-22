@@ -62,6 +62,58 @@
 - 截圖（不進 repo）：`$S/home/{m,d}-*.png`（`m` 390×844、`d` 1280×800；1 一般、1-full 整頁、2 體重小卡片、3／3b `/weight`、4 超過、5 沒有目標、
   6 深色總覽〔a 一般、c 超過〕、7 深色 `/weight`），腳本 `$S/home-fe1-shots.cjs`。
 
+### Task 3（`825ec8a`）
+
+- 條數：quick-actions **4**（照計畫；多兩個斷言：掃條碼與記體重的形狀互不相認、新號碼跟舊號碼不同）、log-meal-ai **4**（計畫 3；多
+  「卡片按『取消』焦點回到『拍照估算』」——規格 §4 寫了，沒有測試守）、log-meal-barcode 2、weight 2、overview 新 **5**（計畫 3；多
+  「順序：圓環卡片 → 快速記錄 → 本月支出」，掃條碼與記體重的 state 拆成兩條，不用 `cleanup` 串在一條裡）＋Task 2 第 5 條改
+  `JSON.stringify(WEIGHT_FORM_STATE)`、app 新 3＋「從＋點記運動」改在 dialog 裡找。整套 `220 passed`、`3240 passed`。
+- 拍照記第 1 條的「沒有 hint」寫成 `toEqual([{ kind: "image", image_base64: btoa("x") }])`（整個比，多一個鍵就紅；resize 的 mock 回原檔）。
+- `AiMealPanel` 的 `pending` 初值用計畫給的第一種寫法 `initialFits && initialPhoto !== undefined ? … : null`，typecheck 乾淨。
+- `Weight` 的 `Props` 放在說明註解的前面（不然 JSDoc 黏到型別上）；`focusForm` 的說明併進 `Weight` 的註解。
+- 總覽的「快速記錄（Task 3）」佔位註解換掉；`WeightGlanceCard` 的暫時 state 換成 `WEIGHT_FORM_STATE`。
+- **StrictMode／重複套用**：`LogMealRoute` 的 `useState` 初值函式讀照片（讀了不清），清 history 的 effect 才 `releaseQuickPhoto()`；
+  照片進了 `AiMealPanel` 自己的 `pending`，`LogMeal` 裡 `AiMealPanel` 沒有 `key`、不會重掛，所以不會套用兩次。上一頁回到記一餐時 state
+  已經是 null（`replace`），暫存也放了。掃描層的相機在 `use-barcode-scanner.ts` 已經處理 StrictMode 的「掛、卸、再掛」與卸載時停掉串流，沒改。
+- 突變 **14/14**（計畫 11 條＋8b 記體重的 state、12 `App` 的 `startScanning={scan}`）。型別乾淨的寫法：5 `useState(startScanning === false)`
+  （先試的 `=== true && false` 讓 `useState` 推成 `false` 型別，`setScanning(true)` 型別錯，工具標 TYPE-ERROR）、6／10 `focusForm && false`、
+  8 `{ ...SCAN_STATE, quickScan: false }`、9 `photo === null ? undefined : undefined`、9b `void releaseQuickPhoto;`、
+  11 `(stashQuickPhoto(file), navigate("/meals/new"))`（拿掉 state 會讓 `stashQuickPhoto` 的 import 沒人用）。
+
+### Task 4（`48a2638`）
+
+- 搬測試用腳本（`$S/home-fe2-t4-move.py`）。驗證：`git diff` 裡 me.test 刪掉的每一行在 body-hub.test 都找得到，例外只有兩條順序測試、
+  `<Me />` 與四個 `describe` 名稱。me＋body-hub 的 `it` 33 → 32（−2 順序＋1 頁面）。
+- 頁面那一條的開關要 `findByRole`：`ExerciseBudgetSwitch` 等 `/api/me` 回來才畫（計畫寫 `getByRole`，紅）；最後等身體資料「還沒有填」免得 act 警告。
+- 多加的：tab-bar、side-nav 各一條「在 /me/health 亮的是我的」（守「我的」那一格沒有 `end`）；layout 兩格（含結尾斜線）；app 那一條也看導覽的
+  `aria-current`。三個檔案的測試名稱「回 /me」改「回 /me/health」，body-profile、targets 裡提到「我的」卡片的註解也改了。
+- 突變 **8/8**（計畫 6＋4b 標題、7 `nav-tabs.ts` 的「我的」加 `end: true` → 紅 tab-bar、side-nav、app）。第 5 條改成 `path="/me/healthz"`
+  （拿掉整條會讓 `BodyHub` 的 import 沒人用）。整套 `222 passed`、`3246 passed`。
+
+### Task 5（`df01a4d`）
+
+- me 入口 **6** 條（計畫 5；多「載入中…，連結照樣在」）。`WEIGHT_79` 改成兩筆（80.2 → 79）：只有一筆時「最新一筆」寫成 `at(0)` 也綠（突變 4b 證明）。
+- 「沒有三張卡片」那一條先等帳號的 email（`useMe` 回來）再看沒有卡片、沒有打 body-profile／target-suggestion。
+- 突變 **10/10**（計畫 6＋4b 最新一筆、4c「還沒設定」、4d「載入中…」、7 連結去處）。第 4 條寫成 `stats.data?.kcal_budget ?? stats.data?.target?.kcal`；
+  第 5 條加回 `<TargetsCard />` 要動 import，改成加一個 `<div data-testid="targets-card" />`。整套 `3258 passed`。
+
+### Task 6（`95bc91c`）
+
+- tab-bar 的新那一條另外印 router state（守 `WEIGHT_FORM_STATE`）；side-nav 那一條也比四個入口的順序。app「從＋點記體重」限定在 dialog 裡。
+- 突變：state、href、入口的名稱 **3/3**。**拿掉 `onClick={onNavigate}` 是等價突變**（計畫寫會紅）：`use-add-sheet.ts` 在 render 時看到
+  `location.key` 變了就把 `openedAt` 清掉，任何導頁都會關、上一頁也不會跳回來；記運動那一顆一樣。照樣留著 onClick（跟另外三顆一致）。
+  `.choices` 的欄數只有 e2e 量得到（截圖量到 2×2）。整套 `222 passed`、`3264 passed`。
+
+### Task 3–6 的截圖
+
+- `$S/home/t3-{m,d}-*.png`（`m` 390×844、`d` 1280×800；1 總覽、1-full 整頁、2 精簡的「我的」、3 身體與目標、4「＋」2×2、5 拍照記 → 確認照片
+  〔`setInputFiles` 在快速記錄的輸入〕、6 掃條碼 → 掃描層〔Chromium 的假相機〕、7 記體重 → `/weight`）、`t3-dark-m-{1-overview,3-hub}.png`；
+  腳本 `$S/home-fe2-shots.cjs`。
+- 量到的：快速記錄每格 86×82（390 寬）、95×82（1280 寬）；入口連結 334×44、608×44；「＋」每格 173×104、178×104。焦點：確認照片卡片、掃描層的
+  「取消」、取消之後記一餐的「掃條碼」、`/weight` 的體重欄位都對；`/me/health` 上「我的」是 `aria-current="page"`。
+- 「我的」在 390 寬有水平捲動：帳號卡片的 email 不換行（截圖帳號的 email 49 個字）。既有的，跟這次的改動無關，沒改。
+- 深色：掃條碼的徽章 `--color-action`（深色 `#ff8a6b`）跟拍照記的 food 橘接近，看得出是兩個顏色；規格 D17 沒要求快速記錄四色互異，沒加變數。
+
 ## 與規格的差異（寫計畫時決定的）
 
 1. **體重小卡片放在 `Overview.tsx` 裡**（`WeightGlanceCard`），不是規格 §10 寫的 `components/WeightGlanceCard.tsx`：它跟本月支出共用
