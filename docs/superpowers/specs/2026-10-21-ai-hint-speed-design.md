@@ -1,6 +1,6 @@
 # 照片＋補充說明、AI 速度的量測與調整
 
-**狀態：** 設計（2026-10-21，`feat/ai-hint-speed`；還沒實作）
+**狀態：** 已實作（2026-10-22，`feat/ai-hint-speed`；跟規格不一樣的地方在計畫的「與規格的差異」）
 **日期：** 2026-10-21
 **分支：** `feat/ai-hint-speed`
 **前置：** AI 估算（`POST /api/ai/analyze`、`/analyze-meal`、`/read-label`、兩家 estimator 的 `_complete`、

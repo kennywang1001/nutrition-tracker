@@ -97,10 +97,11 @@ BIND_ADDR=127.0.0.1
 | `AI_MODEL` | 那一家的模型名稱。**沒有預設值**：從供應商的文件確認目前可用的名稱再填（Anthropic：https://docs.anthropic.com/en/docs/about-claude/models、Gemini：https://ai.google.dev/gemini-api/docs/models） |
 | `ANTHROPIC_API_KEY` | 選 `anthropic` 時必填 |
 | `GEMINI_API_KEY` | 選 `gemini` 時必填 |
+| `AI_EFFORT` | 選填：AI 的思考力道，`low`、`medium` 或 `high`（小寫）。**留白＝供應商預設**（跟以前一樣，通常最準也最慢）。Anthropic 送 `output_config.effort`、Gemini 送 `thinkingConfig.thinking_level`。**填了別的值（`Low`、`fast`），api 容器會啟動失敗**；填了這個模型不收的值（例如 Gemini 2.5 系列沒有 `thinking_level`、有的模型不收 `medium`），估算回 `503 AI_MISCONFIGURED`「AI 設定有問題」、**不算次數**——把它留白、重新部署就回到以前的行為。怎麼調見下面「AI 估算慢的時候」 |
 | `AI_DAILY_LIMIT` | 每人每天最多呼叫幾次 AI。**留白＝20**。要填就填大於 0 的整數；填 0、負數或不是數字，api 容器會啟動失敗 |
 
 選了一家卻沒填它的金鑰或 `AI_MODEL`：端點回 503，訊息會說缺哪一個
-（例如「AI 分析未設定：缺 GEMINI_API_KEY」）。前四個變數由
+（例如「AI 分析未設定：缺 GEMINI_API_KEY」）。前五個變數由
 `docker-compose.yml` 用 `${VAR:-}` 傳進 api 容器（空字串＝沒設）；`AI_DAILY_LIMIT` 用的是
 `${AI_DAILY_LIMIT:-20}`——它是整數，空字串會讓 app 起不來，所以預設值寫在 compose 裡
 （沒設、留白都是 20）。
@@ -122,6 +123,50 @@ BIND_ADDR=127.0.0.1
 ——請求可能已經計費。畫面上（AI 估算面板）顯示的就是這兩句後端的訊息，
 不是通用的「AI 估算失敗，請再試一次」——看到「請管理員檢查」就去看 log、改設定，
 看到「請稍後再試」就是供應商那邊的事。
+
+#### AI 估算慢的時候：看計時、調 `AI_EFFORT`
+
+每一次估算（文字、照片、整餐、配餐、營養標示）api 的 log 都有兩行 INFO，只有數字、列舉與設定——**不含照片、
+補充說明、提示詞或模型回的內容**：
+
+```bash
+sudo docker compose --env-file .env.production \
+  -f docker-compose.yml -f docker-compose.prod.yml \
+  logs api --since 30m | grep -E "AI 呼叫|AI 端點"
+```
+
+```
+INFO:     app.ai.gemini_estimator: AI 呼叫（kind=meal, input=image, model=gemini-3.8-flash, effort=-, outcome=ok, elapsed=21.37s, finish_reason=STOP, prompt_tokens=1391, candidates_tokens=236, thoughts_tokens=2874, total_tokens=4501）
+INFO:     app.api.routes.ai: AI 端點（route=analyze-meal, input=image, hint=yes, status=200, decode=0.02s, total=21.52s）
+```
+
+- **`AI 呼叫`** 是供應商花的時間：`elapsed` 從送出到拿到回應（含 SDK 自己的重試）。`thoughts_tokens`（Gemini）／
+  `thinking_tokens`（Anthropic）是**思考了多少**——照片估算 20 秒的大頭幾乎都在這裡，`AI_EFFORT` 調的就是它。
+  Anthropic 那一行是 `stop_reason`、`input_tokens`、`output_tokens`（**含**思考）、`thinking_tokens`；Gemini 的
+  `candidates_tokens` **不含**思考。`effort=-` 是沒設 `AI_EFFORT`。`outcome` 是 `ok`／`misconfigured`／`upstream`／`error`。
+- **`AI 端點`** 是後端整個請求：`total` 從驗證身分開始到回應（不含讀 request body），`decode` 是解碼照片。
+  `hint=yes/no` 是有沒有附補充說明（說明的內容不寫 log）；文字與配餐是 `hint=-`。登入失敗、額度用完也各有一行
+  （`status=401`、`429`）。
+- **畫面上的秒數減掉 `total` ≈ 手機上傳照片的時間**（後端看不到那一段）。
+
+**調整的步驟**（沒有對真的模型量過哪一個值比較好——要你自己比）：
+
+1. 用這一版、`AI_EFFORT` **留白**。拍 5 張平常會拍的照片（便當、麵、飲料、營養標示各一，加一張你常吃的），記下畫面上
+   的秒數與估出來的數字；用上面的指令看每一次的 `elapsed`、`thoughts_tokens`。
+2. `.env.production` 寫 `AI_EFFORT=low`，**用同一個版本重新部署**（不是 `restart`——`restart` 不會重讀
+   `.env.production`；見「二、更新」的「改了 `.env.production` 之後」）：
+
+   ```bash
+   sudo ./scripts/deploy.sh "$(sed -n 's/^version=//p' deployed-version)"
+   ```
+
+   **同樣 5 張**再估一次。
+3. 比時間與數字：快很多、數字差不多 → 留著 `low`；數字明顯變差 → 試 `medium`，或留白回到預設。
+   估算回「AI 設定有問題」→ 這個模型不收這個值：看 log 的「AI 供應商拒絕了設定」那一行，把 `AI_EFFORT` 留白、重新部署。
+
+> **不要在 production 開 DEBUG log，也不要設 `ANTHROPIC_LOG=debug`。** 上面兩行計時與既有的 WARNING 刻意不寫內容，
+> 但 Anthropic SDK 自己的 DEBUG log 會印出**整個請求**——照片的 base64 與使用者打的補充說明都在裡面（google-genai 的
+> DEBUG 也可能印請求內容）。目前的設定下（`app` 是 INFO、SDK 沒有掛 handler）印不出來；要追問題時在本機開，不要在 NAS 上開。
 
 > **不要**把這個檔案改名成 `.env` —— 那個名字是本機開發用的，
 > 而且 `docker compose` 只會自動讀 `.env`，兩者混在一起遲早出事。
@@ -492,6 +537,12 @@ sudo docker compose --env-file .env.production \
 > `sudo docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml exec -T db psql -U wallet -d wallet -tAc "SELECT version_num FROM alembic_version"`）。
 > 跨過 `0012` 時腳本會印退版警告（見「退版」）：這次如果新版起不來、被自動退回到 NAS 上原本那一版，
 > 舊版**無法建立新帳號**——修好新版再部署一次就好，不用還原。`0015` 有重複餐費時會停在第 5 步。
+
+- **照片＋補充說明、AI 計時、`AI_EFFORT`（`feat/ai-hint-speed`，沒有 migration）**：拍照估算（單樣、整餐）與拍營養標示選了照片
+  之後多一步「確認照片」：看一眼縮圖、選填一段補充說明（最多 200 字，例如「飯半碗」「這是每 100 ml」），按「開始估算／開始讀取」
+  才送、才算次數。說明跟照片一起送給 AI 供應商，**後端不存、不寫 log**。等待時畫面顯示經過幾秒。新的選配環境變數 `AI_EFFORT`
+  （上面 AI 那張表；**留白＝跟以前一樣**，不用動 `.env.production`）。api 的 log 每一次估算多兩行 INFO（「AI 呼叫」「AI 端點」，
+  見「AI 估算慢的時候」）。
 
 - **單樣估算的輸出上限 1024 → 8192（2026-10-21，沒有 migration）**：拍照估算、文字估算（新增食物、編輯這一餐的加一項）
   以前上限 1024 token；目前的 Claude 與 Gemini Flash 預設會先思考、思考算在上限裡，1024 常常寫不完 JSON（畫面是

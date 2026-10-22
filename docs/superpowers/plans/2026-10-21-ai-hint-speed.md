@@ -55,6 +55,59 @@
   `read_label` 的解碼沒包、`analyze_meal` 不設 `timer.source`。整套 2235 passed；前端 3022 passed、
   typecheck、lint 綠。
 
+### Task 4（`32bdaf0`）
+
+- **`NewFood.tsx` 也進了這個 commit**：`useMutation({ mutationFn: readLabel })` 在 `readLabel` 多了選填的 `hint` 之後 typecheck 紅——
+  TanStack Query v5 把 mutation 的 context 當第二個參數傳進來，那個物件會被當成說明（執行時 `.trim()` 炸掉）。包一層
+  `(file: File) => readLabel(file)`；Task 6 再換成帶說明的版本。測試抓不到這件事（寫進 handover §7）。
+- 測試 9 格：「trim 過」3 格、「沒有 hint 這個 key」6 格（`"   "` 與不給，各三個函式）。每一格的 mockApi 只給自己那一支路由，
+  另外斷言實際的網址（`/api/ai/analyze` 的 includes 會接住 analyze-meal）。前端 206 個檔案／3033。
+- 突變 4 個全部被抓到：計畫的 3 個，加 `analyzeMealImage` 不展開 `hintField`。「不展開」的兩個第一次寫成拿掉那一行，`hint` 變成沒用到的參數、
+  型別檢查也紅（工具標 TYPE-ERROR）；改成 `hintField(hint === undefined ? undefined : undefined)` 重跑，只紅在斷言。
+
+### Task 5（`2272a6d`）
+
+- `pickPhoto()` 在**有那顆開始按鈕的「確認照片」卡片裡**找說明欄與按鈕（計畫的片段在整個畫面找）：新增食物可以同時開著兩張卡片
+  （「用 AI 填」與營養標示），兩張的開始按鈕名稱不同；找到的不是剛好一張就丟錯。
+- `PhotoHintStep.module.css` 的說明欄與標籤**自己給完整的樣式**（邊框、內距、底色、13px 的標籤），不靠 `ui.module.css` 的 `:where(.screen …)`：
+  記一餐沒有 `.screen`，兩邊要一樣。`AiEstimatePanel.module.css` 的 `.primary`／`.secondary` 多 `[aria-disabled="true"]` 的淡掉。
+- `ElapsedSeconds` 的註解多一句「由開始的時間點算」的理由（背景分頁的 interval 會變慢）。
+- 測試：`elapsed-seconds` 2 條（多斷言 1 秒那一格、掛載時有一個計時器）、`photo-hint-step` 8 條（計畫的 7 條，「按開始呼叫一次」與「送出中」分開）。
+  前端 210 個檔案／3053。
+- 突變 10 個全部被抓到：計畫的 5 個，加秒數不更新、取消不看 busy、`COUNT_FROM` 改 151、說明不是唯讀、拿掉 `aria-describedby`。
+  `PhotoPickerButton` 不掛 `inputRef` 這個時候沒有測試會紅（還沒有人用），留到 Task 6 跑：紅在三個入口的四條焦點測試。
+
+### Task 6（`e02d8d7`，畫面的修正 `de16725`）
+
+- **焦點移到卡片要晚一個 task**（計畫是 effect 裡同步 `focus()`）：user-event 的 `upload` 在 `change` 之後把焦點還給 file input
+  （模擬選檔視窗關掉；瀏覽器也會還、而且不保證在 change 之前），同步移的焦點被蓋回照片按鈕——第一條新測試紅在這裡。
+  `PhotoHintStep.tsx` 多 `focusStepAfterFileDialog(ref)`（`setTimeout 0`），三個入口共用。突變「改回同步」→ 紅（6.11）。
+- `focusNextRef` 的 `"picker"`：只在照片按鈕**不是 disabled** 時才算找到目標、清旗標（送出中它是 disabled，`focus()` 不會動、旗標卻被清掉）。
+- `AiMealPanel` 照片太大的 alert 用 `styles.error`（同面板其他錯誤的紅字）。
+- `NewFood`：`LabelPhoto` 型別；`.labelResult:has(...)` 那條「沒有字不佔空間」的選擇器跟著改成穿過 `.statusRow`。新的 label 測試斷言
+  「沒有讀營養標示」而不是「fetch 沒被呼叫」——新增食物自己會打 `/api/me`。
+- `ai-estimate-panel` 既有的「照片太大」那條就是 Step 2 的第 4 條：沒有另寫，多斷言「沒有確認照片」。
+- 既有測試改走 `pickPhoto` 的是 **13 處**（計畫估 30）：`ai-estimate-panel` 1、`ai-meal-panel` 1、`log-meal-ai` 4、`new-food-barcode` 7；
+  改之前 17 條紅（`log-meal-ai` 的 helper 被好幾條共用）。`edit-meal` 不用改。body 的斷言一個字沒動。
+- 新測試：`ai-estimate-panel` 7 條、`ai-meal-panel` 5 條、`new-food-barcode` 7 條。前端 210 個檔案／3091。
+- 突變 15 個全部被抓到：計畫的 10 個，加焦點同步移（6.11）、換照片清掉說明、文字估算不收卡片、營養標示成功不收卡片、整餐拿掉大小檢查。
+  6.11、6.13 第一次型別也紅（沒用到的 import／參數），改成型別乾淨的寫法重跑。
+- **看畫面**（390×844、1280×800，`$S/hint/`）：卡片的按鈕在記一餐是 13.3px（瀏覽器預設）、在新增食物是 15px（`.screen` 給的）——卡片自己給 15px；
+  焦點外框改 `:focus-visible`（同讀取結果那一段；卡片本身有框，用手點再疊一圈像兩張卡片）。快到上限的說明在 2 行的 textarea 裡要捲，照規格不改。
+
+### Task 7（`c02b0cc`）
+
+- 整餐那條多斷言：焦點在卡片上、送出中「開始估算」停用（Playwright 的 `toBeDisabled` 認 `aria-disabled`）、放行後秒數不見、焦點回到照片按鈕。
+  觸控高度量 `button, textarea`。營養標示那條把「取消」放在前面（先取消一次、`sent` 沒變多、焦點回到「拍營養標示」，再送）。
+- 突變 4 個全部被抓到（`hint-e2e-mutate.py`，照 `bc-e2e-mutate.py` 改成跑三個 spec）：計畫的 2 個，加「空的也帶 hint」（紅在既有的兩條）、
+  整餐不移焦點到卡片。**同步移與晚一個 task 移在 Playwright 分不出來**（`setInputFiles` 不開視窗、不還焦點），那件事只有 vitest 守得到。
+- 三個 spec 8 條綠；整套 **62 條**（59 ＋ 3）連跑兩次都是 `62 passed`（50.2 秒、52.0 秒，預設 workers）。`docker compose logs api --since 20m | grep 重用`：0 行。
+
+### Task 8
+
+- 數字：端點 108（不變，OpenAPI operation 數）；後端 **2235 passed**（`pytest -q -W error`，6 分 2 秒；`ruff check .`、`mypy app` 綠）；前端 `Test Files 210`、`Tests 3091`；e2e 62 條兩次綠。
+- 規格 §5 的提示詞跟程式碼逐字一樣（腳本比對過），沒有改。規格的狀態改成已實作。
+
 ## 與規格的差異
 
 （執行時填。）寫計畫時已經知道的：
@@ -67,6 +120,9 @@
    驗證身分與資料庫；登入失敗（401）也有一行。
 3. **anthropic SDK 的 DEBUG log 帶著整個請求**（見上面 Task 3）：規格 §9.1「後端不寫 log」在 production 的
    log 等級下成立；開了 DEBUG 就不成立。寫進部署文件（Task 8）。
+4. **焦點移到「確認照片」卡片晚一個 task**（規格 §6.3 只說「移到卡片」）：選檔的視窗關掉時瀏覽器會把焦點還給照片按鈕，
+   同步移的會被蓋回去（見上面 Task 6）。
+5. **卡片的焦點外框只在 `:focus-visible` 畫**、按鈕 15px（規格沒寫）：看畫面之後的修正（Task 6）。
 
 ## 執行環境
 
