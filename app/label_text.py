@@ -179,11 +179,22 @@ def _rows(lines: list[str]) -> list[_Row]:
         label = line if first_number is None else line[: first_number.start()]
         tokens = _tokens(line)
         # 名稱與數字在相鄰兩行（規格 §4.3）。這一行有數字、只是太大不算數的，不去借下一行的。
-        if first_number is None and index + 1 < len(lines) and not _is_row_label(lines[index + 1]):
+        if first_number is None and index + 1 < len(lines) and _lends(lines[index + 1]):
             tokens = _tokens(lines[index + 1])
         if tokens:
             rows.append(_Row(nutrients[0], label, tokens, index))
     return rows
+
+
+def _lends(line: str) -> bool:
+    """這一行的數字能不能借給上一行的名稱：別的列不行；每一份量、份數、表頭也不行（「高蛋白燕麥」
+    底下的「每一份量 35 公克」不是蛋白質 35，第二輪審查 I2）。"""
+    return not (
+        _is_row_label(line)
+        or _SERVING_SIZE.search(line)
+        or _SERVINGS.search(line)
+        or _is_header_line(line)
+    )
 
 
 # ---- 欄（規格 §4.2）----
@@ -196,9 +207,10 @@ _HEADER_SERVING = re.compile(
 )
 _HEADER_PER_100 = re.compile(r"每\s*100\s*(公克|克|毫升|g|ml)|per\s*100\s*(g|ml)", re.IGNORECASE)
 _HEADER_DV = re.compile(r"參考值|%\s*dv|daily\s*value", re.IGNORECASE)
-# 表頭的字後面直接是量（「每份 35 公克」）：那是每一份量。用 `\s*(?::\s*)?`、不用 `\s*:?\s*`
-# （一長串空白上是平方時間，審查 M1）。
-_AN_AMOUNT = re.compile(r"\s*(?::\s*)?\d")
+# 表頭的字後面直接是量（「每份 35 公克」）：那是每一份量。數字後面要有單位：
+# 「每份0 每日參考值百分比」的 0 是雜訊，那一行還是表頭（第二輪審查）。
+# 用 `\s*(?::\s*)?`、不用 `\s*:?\s*`（一長串空白上是平方時間，審查 M1）。
+_AN_AMOUNT = re.compile(r"\s*(?::\s*)?\d+(?:\.\d+)?\s*(?:公克|克|g|毫升|ml)", re.IGNORECASE)
 # 只認得一個表頭時，同一行另一邊「像表頭的字」：讀錯的「每份」（`每仿`）、英文的 `per …`。
 _HEADER_LIKE = re.compile(r"每|\bper(?![a-z])", re.IGNORECASE)
 _STANDARD = [Column.SERVING, Column.PER_100]  # 衛福部的格式：每份、每 100
@@ -266,14 +278,19 @@ def _beside(line: str, known: re.Match[str], kind: Column) -> list[Column] | Non
     return None
 
 
-def _columns(header: _Header, rows: list[_Row]) -> tuple[list[Column] | None, bool]:
-    """(欄, 順序是不是從表頭讀到的)。讀不到順序的兩欄先排成衛福部的「每份、每 100」，
-    要靠每一份量交叉檢查才定得下來（`parse_label_text`）。"""
+# 欄的順序從哪裡來：兩個表頭都在表頭那一行（`read`，交叉檢查不換）、從單獨一個表頭推的
+# （`inferred`）、讀不到（`unknown`）。後兩種由交叉檢查定（第二輪審查 I1）。
+Order = Literal["read", "inferred", "unknown"]
+
+
+def _columns(header: _Header, rows: list[_Row]) -> tuple[list[Column] | None, Order]:
+    """(欄, 順序從哪裡來)。讀不到順序的兩欄先排成衛福部的「每份、每 100」，
+    要靠每一份量交叉檢查才定得下來（`parse_label_text`）。一欄的不用排，算 `read`。"""
     line = header.line
     serving = None if line is None else _serving_header(line)
     per_100 = None if line is None else _HEADER_PER_100.search(line)
     if serving and per_100:
-        return (_STANDARD if serving.start() < per_100.start() else _PER_100_FIRST), True
+        return (_STANDARD if serving.start() < per_100.start() else _PER_100_FIRST), "read"
     # 只讀到一個（或零個）表頭：至少兩列剛好兩個數字、而且沒有每日參考值那一欄，才是兩欄。
     # 有每日參考值時第二個數字可能是讀丟了 % 的百分比，不能猜。
     two_values = sum(1 for row in rows if row.nutrient != "kcal" and len(_plain_values(row)) == 2)
@@ -282,13 +299,13 @@ def _columns(header: _Header, rows: list[_Row]) -> tuple[list[Column] | None, bo
         if line is not None and known is not None:
             beside = _beside(line, known, Column.SERVING if serving else Column.PER_100)
             if beside is not None:
-                return beside, True
-        return _STANDARD, False
+                return beside, "inferred"
+        return _STANDARD, "unknown"
     if serving:
-        return [Column.SERVING], True
+        return [Column.SERVING], "read"
     if per_100:
-        return [Column.PER_100], True
-    return None, False
+        return [Column.PER_100], "read"
+    return None, "unknown"
 
 
 def _fit(values: list[Decimal], width: int, cut: bool) -> list[Decimal] | None:
@@ -392,29 +409,54 @@ def _servings(text: str) -> Decimal | None:
 # ---- 兩欄的交叉檢查（審查 C1）----
 
 _HUNDRED = Decimal(100)
-# 標示自己的進位：熱量印到整數、其他印到一位小數，每份那一邊的半格乘上 100 ÷ 一份；每 100 那一邊
-# 給 0.5（≤ 0.5 公克可以標 0，也蓋過它自己的半格）。再加 3%：兩欄各自從沒進位的數字算、歐盟 10 公克
-# 以上印整數。排反的兩欄差 (100 ÷ 一份)² 倍（35 公克是 8 倍、90 公克也還有 23%），遠在這之外。
-_HALF_STEP_KCAL = Decimal("0.5")
-_HALF_STEP_GRAMS = Decimal("0.05")
-_PER_100_SLACK = Decimal("0.5")
+# 容許差＝兩邊各自印出來的半格（每份那一邊乘上 100 ÷ 一份）＋ 兩者較大的 3%（第二輪審查改過）：
+# - 半格：熱量印成整數的是 0.5，其他（一位小數）是 0.05。
+# - 「可以標 0」（衛福部「包裝食品營養標示應遵行事項」附表二，門檻是每 100 公克／毫升）：熱量
+#   ≤ 4 大卡、蛋白質／脂肪／碳水化合物 ≤ 0.5 公克。**只在有一邊印成 0 時**才加這個寬容。
+# - 3%：兩欄各自從沒進位的數字算；歐盟 10 公克以上印整數（17 公克以上半公克就在 3% 內）。
+#   每 100 是 6.8 時是 0.20，加上半格（一份 35 公克）0.40——6.0 讀成 6.8 擋得住。
+# 排反的兩欄差 (100 ÷ 一份)² 倍（35 公克是 8 倍、90 公克也還有 23%），遠在這之外。
+_HALF_STEP_WHOLE = Decimal("0.5")
+_HALF_STEP_TENTH = Decimal("0.05")
+_PRINTED_AS_ZERO: dict[Nutrient, Decimal] = {
+    "kcal": Decimal(4),
+    "protein_g": Decimal("0.5"),
+    "fat_g": Decimal("0.5"),
+    "carb_g": Decimal("0.5"),
+}
 _RELATIVE = Decimal("0.03")
+# 一種排法要至少兩項對得起來才算數：一項可能是碰巧（每一份量讀錯時的蛋白質，第二輪審查 I1）。
+_MIN_AGREEING = 2
+
+
+def _half_step(nutrient: Nutrient, value: Decimal) -> Decimal:
+    """印出來的那個數字的半格：整數的熱量 0.5，其他 0.05（營養素一律當成印到一位小數）。"""
+    if nutrient == "kcal" and value == value.to_integral_value():
+        return _HALF_STEP_WHOLE
+    return _HALF_STEP_TENTH
 
 
 def _agrees(nutrient: Nutrient, per_100: Decimal, per_serving: Decimal, size: Decimal) -> bool:
     """每 100 ≈ 每份 × 100 ÷ 一份。"""
     scale = _HUNDRED / size
     expected = per_serving * scale
-    half_step = _HALF_STEP_KCAL if nutrient == "kcal" else _HALF_STEP_GRAMS
-    tolerance = half_step * scale + _PER_100_SLACK + _RELATIVE * max(per_100, expected)
+    tolerance = (
+        _half_step(nutrient, per_serving) * scale
+        + _half_step(nutrient, per_100)
+        + _RELATIVE * max(per_100, expected)
+    )
+    if per_100.is_zero() or per_serving.is_zero():
+        tolerance += _PRINTED_AS_ZERO[nutrient]
     return abs(per_100 - expected) <= tolerance
 
 
 def _agreeing(
     per_100: Mapping[Nutrient, Decimal], per_serving: Mapping[Nutrient, Decimal], size: Decimal
 ) -> frozenset[Nutrient]:
+    """對得起來的項目；不到 `_MIN_AGREEING` 項就當成一項都沒有。"""
     common = per_100.keys() & per_serving.keys()
-    return frozenset(n for n in common if _agrees(n, per_100[n], per_serving[n], size))
+    agree = frozenset(n for n in common if _agrees(n, per_100[n], per_serving[n], size))
+    return agree if len(agree) >= _MIN_AGREEING else frozenset()
 
 
 # ---- 結果 ----
@@ -446,11 +488,14 @@ def parse_label_text(text: str) -> LabelText:
     lines = [line.strip() for line in normalized.split("\n") if line.strip()]
     rows = _rows(lines)
     header = _header(lines, rows[0].line if rows else len(lines))
-    columns, ordered = _columns(header, rows)
+    columns, order = _columns(header, rows)
     read = _read_columns(rows, columns, header.dv) if columns is not None else {}
 
     serving = _serving_size(normalized, header.line)
-    per_100_header = _HEADER_PER_100.search(normalized)
+    # 單位先看表頭那一行；它沒有每 100 才看全文（上面一句「每100毫升含…」的說明不算，第二輪審查）。
+    per_100_header = (
+        None if header.line is None else _HEADER_PER_100.search(header.line)
+    ) or _HEADER_PER_100.search(normalized)
     if per_100_header is not None:
         base_unit = _unit_of(per_100_header.group(1) or per_100_header.group(2))
     elif serving is not None:
@@ -478,19 +523,20 @@ def parse_label_text(text: str) -> LabelText:
             servings_per_package=servings,
         )
 
-    # 交叉檢查（審查 C1）：兩欄都有、知道一份多少 → 每 100 ≈ 每份 × 100 ÷ 一份。對得起來的項目
-    # 比較多的那一種排法就是欄的順序（表頭排反了就換過來）；一項都對不起來 → 哪一欄都不信。
-    # 兩欄、順序讀不到、又不能交叉檢查 → 不猜。
+    # 交叉檢查（審查 C1、第二輪 I1）：兩欄都有、知道一份多少 → 每 100 ≈ 每份 × 100 ÷ 一份。
+    # 兩個表頭都讀到（`read`）就照表頭、不換；順序是推的或讀不到，對得起來的項目比較多的那一種
+    # 排法就是順序。對得起來的不到兩項 → 哪一欄都不信。兩欄、順序讀不到、又不能交叉檢查 → 不猜。
     contradicted: frozenset[Nutrient] = frozenset()
     if per_100 and per_serving and size is not None:
         agree = _agreeing(per_100, per_serving, size)
-        swapped = _agreeing(per_serving, per_100, size)
-        if len(swapped) > len(agree):
-            per_100, per_serving, agree = per_serving, per_100, swapped
+        if order != "read":
+            swapped = _agreeing(per_serving, per_100, size)
+            if len(swapped) > len(agree):
+                per_100, per_serving, agree = per_serving, per_100, swapped
         if not agree:
-            return result({}, "implausible" if ordered else "columns_unknown", None)
+            return result({}, "columns_unknown" if order == "unknown" else "implausible", None)
         contradicted = frozenset(per_100.keys() - agree)
-    elif columns is not None and not ordered:
+    elif columns is not None and order == "unknown":
         return result({}, "columns_unknown", None)
 
     converted = (
@@ -501,6 +547,8 @@ def parse_label_text(text: str) -> LabelText:
 
     def side(nutrient: Nutrient) -> Basis | None:
         """對不起來的那一項：只有一邊在物理上限內 → 那一邊；不然分不出哪一欄錯。"""
+        # 不變式：兩欄的每一列都是一起讀的（`_read_columns` 的 zip），所以 per_100、per_serving
+        # 與 converted 的 key 一樣；contradicted 只在有一份的量時非空，converted 一定有這一項。
         in_per_100 = _sane(nutrient, per_100[nutrient])
         in_converted = _sane(nutrient, converted[nutrient])
         if in_per_100 == in_converted:
