@@ -1,13 +1,59 @@
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import react from "@vitejs/plugin-react";
+import type { Plugin } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 // 用 "vitest/config" 而不是 "vite" 的 defineConfig：前者是後者的型別超集，
 // 讓下面的 test 區塊有型別檢查，不需要額外的 /// <reference types="vitest" />。
 import { configDefaults, defineConfig } from "vitest/config";
 
+const require = createRequire(import.meta.url);
+
+/** 手機辨識的語言資料（標示 OCR 規格 D12）。Tesseract.js 用 `${langPath}/chi_tra.traineddata.gz`
+ *  組網址，檔名不能有雜湊，所以不用 `?url`：dev 由 middleware 給、build 時放進 dist 的固定路徑。
+ *  路徑帶資料的版本，換版本就是新網址。**跟 `src/lib/label-ocr-engine.ts` 的 `OCR_LANG_PATH`
+ *  同一個字串**（Task 4 的 build 檢查會 grep 兩邊）。 */
+const OCR_LANG_DIR = "ocr/tessdata-4.0.0_best_int";
+const OCR_LANG_FILES: Record<string, string> = {
+	"chi_tra.traineddata.gz":
+		"@tesseract.js-data/chi_tra/4.0.0_best_int/chi_tra.traineddata.gz",
+};
+
+function ocrLangData(): Plugin {
+	return {
+		name: "ocr-lang-data",
+		configureServer(server) {
+			const prefix = `/${OCR_LANG_DIR}/`;
+			server.middlewares.use((req, res, next) => {
+				const name = req.url?.startsWith(prefix)
+					? req.url.slice(prefix.length)
+					: undefined;
+				const file = name === undefined ? undefined : OCR_LANG_FILES[name];
+				if (file === undefined) {
+					next();
+					return;
+				}
+				res.setHeader("content-type", "application/gzip");
+				res.end(readFileSync(require.resolve(file)));
+			});
+		},
+		generateBundle() {
+			for (const [name, file] of Object.entries(OCR_LANG_FILES)) {
+				this.emitFile({
+					type: "asset",
+					fileName: `${OCR_LANG_DIR}/${name}`,
+					source: readFileSync(require.resolve(file)),
+				});
+			}
+		},
+	};
+}
+
 // https://vite.dev/config/
 export default defineConfig({
 	plugins: [
 		react(),
+		ocrLangData(),
 		VitePWA({
 			registerType: "autoUpdate",
 			manifest: {
@@ -29,6 +75,23 @@ export default defineConfig({
 				// 那是 UI 的責任，不是 service worker 設定能單獨完成的事。
 				// 先快取了資料卻沒有標示，比不快取更糟。
 				globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2}"],
+				// 手機辨識的引擎（tesseract-core，3.9 MB）超過預先快取的 2 MiB 上限（超過了
+				// vite-plugin-pwa 讓 build 失敗），也不是每個人都會用：不進預先快取（標示 OCR 規格 D13）。
+				globIgnores: ["**/node_modules/**/*", "**/tesseract-core-*.js"],
+				// 改成第一次用的時候存起來，第二次不用再下載 1.47 MB。這是**靜態的引擎檔**（雜湊檔名、
+				// 內容不會變），不是 API 回應——上面那條 L2 的規矩管的是後者。最多 2 筆：一台裝置只會用到
+				// SIMD 或不是 SIMD 其中一個，另一筆留給換版本的那一次。語言資料不在這裡：Tesseract.js
+				// 自己存在 IndexedDB（不依賴 service worker 接管 worker 的請求）。
+				runtimeCaching: [
+					{
+						urlPattern: /\/assets\/tesseract-core-[^/]+\.js$/,
+						handler: "CacheFirst",
+						options: {
+							cacheName: "ocr-engine",
+							expiration: { maxEntries: 2 },
+						},
+					},
+				],
 			},
 		}),
 	],
