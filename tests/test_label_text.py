@@ -513,10 +513,12 @@ FULL_TABLE = TABLE.format(fat="脂肪 9.8 公克 28.0 公克")
     ids=["protein", "fat", "carb"],
 )
 @pytest.mark.parametrize(("serving", "agrees"), [("0.1", True), ("0.2", True), ("0.3", False)])
-def test_a_gram_value_printed_as_zero_per_100(row, name, index, serving, agrees):
+@pytest.mark.parametrize("zero", ["0", "0.0"])
+def test_a_gram_value_printed_as_zero_per_100(row, name, index, serving, agrees, zero):
     # 每 100 不超過 0.5 公克可以標 0：每份 0.1、0.2 → 每 100 是 0.29、0.57（0.2 四捨五入前可能是
     # 0.15，在 0.5 以內）；0.3 → 0.86（四捨五入前至少 0.71），超過 0.5，不能標 0。
-    text = FULL_TABLE.replace(row, f"{name} {serving} 公克 0 公克")
+    # 「0.0」的半格只有 0.05：寬容是「可以標 0」的 0.5；「0」的半格本身就是 0.5，取大的、不相加。
+    text = FULL_TABLE.replace(row, f"{name} {serving} 公克 {zero} 公克")
     values = ["514.00", "6.00", "28.00", "60.90"]
     values[index] = "0.00" if agrees else "-"
     head = "complete per_100" if agrees else "missing_fields -"
@@ -559,6 +561,13 @@ def test_kcal_printed_as_zero_per_serving():
     assert _summary(parse_label_text(text)) == "complete per_100 g 35.00 - 4.00/0.00/0.00/1.00"
 
 
+def test_kcal_printed_as_zero_per_serving_on_a_large_serving():
+    # 「可以標 0」的門檻是每 100 的量（4 大卡），不跟著一份放大縮小：250 毫升每份標 0、
+    # 每 100 是 4，還是對得起來（第三輪審查：以前把 4 乘上 100 ÷ 250 變成 1.6）。
+    text = DRINK.format(kcal="0 大卡 4 大卡")
+    assert _summary(parse_label_text(text)) == "complete per_100 ml 250.00 - 4.00/0.00/0.00/1.00"
+
+
 @pytest.mark.parametrize(
     ("protein", "kcal", "expected"),
     [
@@ -594,23 +603,121 @@ def test_the_tolerance_covers_whole_kcal_per_100():
     assert _summary(result) == "complete per_100 ml 250.00 - 4.00/0.00/0.00/1.10"
 
 
-def test_the_tolerance_covers_whole_kcal_on_a_small_serving():
-    # 一份 10 公克：4.4 大卡印成 4，每 100 是 44。
+SMALL_SERVING = _text(
+    "每一份量 10 公克",
+    "每份 每100公克",
+    "熱量 {kcal}",
+    "蛋白質 0.1 公克 1.2 公克",
+    "脂肪 0 公克 0 公克",
+    "碳水化合物 1.0 公克 10.4 公克",
+)
+
+
+@pytest.mark.parametrize(
+    ("kcal", "expected"),
+    [
+        # 一份 10 公克：4.4 大卡印成 4，每 100 是 44。
+        ("4 大卡 44 大卡", "complete per_100 g 10.00 - 44.00/1.20/0.00/10.40"),
+        # 印到一位小數就是 4.4：4.0 對 44.0 是讀錯，整數的半格不能幫它（第三輪審查）。
+        ("4.0 大卡 44.0 大卡", "missing_fields - g 10.00 - -/1.20/0.00/10.40"),
+    ],
+    ids=["whole", "one_decimal"],
+)
+def test_the_tolerance_covers_whole_kcal_on_a_small_serving(kcal, expected):
+    assert _summary(parse_label_text(SMALL_SERVING.format(kcal=kcal))) == expected
+
+
+@pytest.mark.parametrize(
+    ("energy", "expected"),
+    [
+        # 18.6 kJ 印成 19：kJ 的半格 0.5 ÷ 4.184 ≈ 0.12 大卡。
+        ("19 kJ 186 kJ", "complete per_100 g 10.00 - 44.46/1.20/0.00/10.40"),
+        # 17 是讀錯（每 100 是 40.6 大卡，不是 44.5）：kJ 的半格不是 0.5 大卡。
+        ("17 kJ 186 kJ", "missing_fields - g 10.00 - -/1.20/0.00/10.40"),
+    ],
+    ids=["whole_kj", "misread_kj"],
+)
+def test_the_half_step_of_kj_is_in_kcal(energy, expected):
+    text = SMALL_SERVING.format(kcal=energy)
+    assert _summary(parse_label_text(text)) == expected
+
+
+def test_the_tolerance_covers_a_rounded_serving_size():
+    # 每一份量本身也是進位過的：一片 35.4 公克印成 35，每份的數字照 35.4 算（514 × 0.354 = 182）。
+    # 半格蓋不到（熱量差 6），要靠 3%（第三輪審查：兩邊的半格照印法算之後，3% 留給這個）。
     text = _text(
-        "每一份量 10 公克",
+        "每一份量 35 公克",
         "每份 每100公克",
-        "熱量 4 大卡 44 大卡",
-        "蛋白質 0.1 公克 1.2 公克",
-        "脂肪 0 公克 0 公克",
-        "碳水化合物 1.0 公克 10.4 公克",
+        "熱量 182 大卡 514 大卡",
+        "蛋白質 2.1 公克 6.0 公克",
+        "脂肪 9.9 公克 28.0 公克",
+        "碳水化合物 21.6 公克 60.9 公克",
     )
-    assert _summary(parse_label_text(text)) == "complete per_100 g 10.00 - 44.00/1.20/0.00/10.40"
+    assert _summary(parse_label_text(text)) == f"complete per_100 g 35.00 - {RIGHT}"
 
 
 def test_the_tolerance_covers_whole_grams():
     # 歐盟的進位：10 公克以上印整數（18.27 → 18、60.9 → 61）。
     text = KJ_ONLY.replace("18.3 g 60.9 g", "18 g 61 g")
     assert _summary(parse_label_text(text)) == "complete per_100 g 30.00 - 514.10/6.00/28.00/61.00"
+
+
+@pytest.mark.parametrize(
+    ("size", "kcal", "protein", "fat", "carb"),
+    [
+        # 一份 200 公克：蛋白質每 100 是 10.5 → 印成 11、每份 21；21 ÷ 2 = 10.5 對 11，
+        # 兩邊都是整數的半格。
+        ("200", "238", "21", "6.4", "24"),
+        # 一份 80 公克：每份 8.4（不到 10 公克，印一位小數）× 1.25 = 10.5 對每 100 的 11——
+        # 要的是每 100 那一邊自己的半格 0.5，不是每份那一邊的 0.05。
+        ("80", "95", "8.4", "2.6", "9.6"),
+    ],
+    ids=["both_whole", "per_100_whole"],
+)
+def test_the_tolerance_covers_eu_whole_grams(size, kcal, protein, fat, carb):
+    # 歐盟的進位：10 公克以上印整數（第三輪審查）。
+    text = _text(
+        f"每一份量 {size} 公克",
+        "每份 每100公克",
+        f"熱量 {kcal} 大卡 119 大卡",
+        f"蛋白質 {protein} 公克 11 公克",
+        f"脂肪 {fat} 公克 3.2 公克",
+        f"碳水化合物 {carb} 公克 12 公克",
+    )
+    expected = f"complete per_100 g {size}.00 - 119.00/11.00/3.20/12.00"
+    assert _summary(parse_label_text(text)) == expected
+
+
+WHOLE_GRAMS = _text(
+    "每一份量 20 公克",
+    "每份 每100公克",
+    "熱量 80 大卡 398 大卡",
+    "蛋白質 2 公克 9.4 公克",
+    "脂肪 {fat} 公克 26.8 公克",
+    "碳水化合物 6 公克 29.7 公克",
+)
+
+
+@pytest.mark.parametrize(
+    ("fat", "expected"),
+    [
+        # 每份印成整數（台灣可以印整數或一位小數）：26.8 × 0.2 = 5.36 → 5。
+        ("5", "complete per_100 g 20.00 - 398.00/9.40/26.80/29.70"),
+        # 同一個數字印到一位小數就該是 5.4：5.0 差 1.8，超過 0.05 × 5 ＋ 3%，還是讀錯。
+        ("5.0", "missing_fields - g 20.00 - 398.00/9.40/-/29.70"),
+    ],
+    ids=["whole", "one_decimal_misread"],
+)
+def test_the_printed_precision_sets_the_half_step(fat, expected):
+    assert _summary(parse_label_text(WHOLE_GRAMS.format(fat=fat))) == expected
+
+
+def test_a_whole_zero_per_serving_next_to_a_small_value():
+    # 每份印成整數：每 100 是 1.2 公克、一份 30 公克 → 0.36 → 印成 0。0 的寬容是整數的半格
+    # （0.5 × 100 ÷ 30），不只「可以標 0」的 0.5。
+    text = KJ_ONLY.replace("Protein 1.8 g 6.0 g", "Protein 0 g 1.2 g")
+    expected = "complete per_100 g 30.00 - 514.10/1.20/28.00/60.90"
+    assert _summary(parse_label_text(text)) == expected
 
 
 # ---- 審查後的修正：很長的數字不丟例外（規格 §4.2）----

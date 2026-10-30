@@ -17,6 +17,7 @@ from typing import Literal
 
 from app.models.food import BaseUnit
 from app.nutrition_units import (
+    KJ_PER_KCAL,
     MAX_EXTERNAL_NUMBER,
     MAX_KCAL_PER_100,
     kj_to_kcal,
@@ -112,6 +113,17 @@ def _bounded(digits: str) -> Decimal | None:
 class _Token:
     value: Decimal
     unit: Unit | None
+    # 印出來的那個數字的半格（第三輪審查）：整數 0.5、一位小數 0.05、兩位 0.005。`round_cents`
+    # 之後「6」與「6.0」都是 6.00，所以要在這裡從原本的字記下來。
+    half_step: Decimal
+
+
+_FIVE = Decimal(5)
+
+
+def _half_step(digits: str) -> Decimal:
+    """`"6"` → 0.5、`"6.0"` → 0.05、`"0.86"` → 0.005。"""
+    return _FIVE.scaleb(-len(digits.partition(".")[2]) - 1)
 
 
 def _tokens(line: str) -> list[_Token]:
@@ -120,7 +132,7 @@ def _tokens(line: str) -> list[_Token]:
         value = _bounded(match.group(1))
         if value is not None:
             unit = None if match.group(2) is None else _UNITS[match.group(2).lower()]
-            tokens.append(_Token(value, unit))
+            tokens.append(_Token(value, unit, _half_step(match.group(1))))
     return tokens
 
 
@@ -217,9 +229,9 @@ _STANDARD = [Column.SERVING, Column.PER_100]  # 衛福部的格式：每份、�
 _PER_100_FIRST = [Column.PER_100, Column.SERVING]
 
 
-def _plain_values(row: _Row) -> list[Decimal]:
+def _plain_values(row: _Row) -> list[_Token]:
     """不是熱量的那三種：克或沒單位（讀錯的單位也是沒單位）；% 與 mg、ml 不要。"""
-    return [token.value for token in row.tokens if token.unit in ("g", None)]
+    return [token for token in row.tokens if token.unit in ("g", None)]
 
 
 def _serving_header(line: str) -> re.Match[str] | None:
@@ -308,7 +320,7 @@ def _columns(header: _Header, rows: list[_Row]) -> tuple[list[Column] | None, Or
     return None, "unknown"
 
 
-def _fit(values: list[Decimal], width: int, cut: bool) -> list[Decimal] | None:
+def _fit(values: list[_Token], width: int, cut: bool) -> list[_Token] | None:
     """`cut`：表頭有每日參考值那一欄、而且這一列自己沒有帶 % 的數字——剛好多一個時，多的那個
     是讀丟了 % 的百分比（它在最後面）。帶著 % 的列多出來的是拆開的數字（「1 9.0」），不砍
     （審查 I3）。"""
@@ -319,40 +331,59 @@ def _fit(values: list[Decimal], width: int, cut: bool) -> list[Decimal] | None:
     return None
 
 
-def _energy(row: _Row, width: int, cut: bool) -> list[Decimal] | None:
-    kcal = [token.value for token in row.tokens if token.unit == "kcal"]
-    kj = [token.value for token in row.tokens if token.unit == "kj"]
+@dataclass(frozen=True)
+class _Reading:
+    """一欄裡的一項：`round_cents` 過的值，與它印出來的半格（同一個單位；熱量是 kcal）。"""
+
+    value: Decimal
+    half_step: Decimal
+
+
+def _as_read(token: _Token) -> _Reading:
+    return _Reading(round_cents(token.value), token.half_step)
+
+
+def _kj_as_kcal(token: _Token) -> _Reading:
+    # kJ 的半格也換成 kcal：整數的 kJ 是 0.5 ÷ 4.184 ≈ 0.12 大卡（第三輪審查）。
+    return _Reading(kj_to_kcal(token.value), token.half_step / KJ_PER_KCAL)
+
+
+def _energy(row: _Row, width: int, cut: bool) -> list[_Reading] | None:
+    kcal = [token for token in row.tokens if token.unit == "kcal"]
+    kj = [token for token in row.tokens if token.unit == "kj"]
     if len(kcal) == width:
-        return kcal
+        return [_as_read(token) for token in kcal]
     if len(kj) == width:
-        return [kj_to_kcal(value) for value in kj]
-    bare = [token.value for token in row.tokens if token.unit is None]
+        return [_kj_as_kcal(token) for token in kj]
+    bare = [token for token in row.tokens if token.unit is None]
     if _ENERGY_IN_KCAL.search(row.label):
-        return _fit(bare, width, cut)
+        fitted = _fit(bare, width, cut)
+        return None if fitted is None else [_as_read(token) for token in fitted]
     if _ENERGY_IN_KJ.search(row.label):
         fitted = _fit(bare, width, cut)
-        return None if fitted is None else [kj_to_kcal(value) for value in fitted]
+        return None if fitted is None else [_kj_as_kcal(token) for token in fitted]
     return None  # 熱量沒有單位：不猜是 kcal 還是 kJ
 
 
 def _read_columns(
     rows: list[_Row], columns: list[Column], dv: bool
-) -> dict[Column, dict[Nutrient, Decimal]]:
-    result: dict[Column, dict[Nutrient, Decimal]] = {column: {} for column in columns}
+) -> dict[Column, dict[Nutrient, _Reading]]:
+    result: dict[Column, dict[Nutrient, _Reading]] = {column: {} for column in columns}
     done: set[Nutrient] = set()
     for row in rows:
         if row.nutrient in done:
             continue  # 同一種有好幾行：用第一行分得出欄的
         cut = dv and not any(token.unit == "pct" for token in row.tokens)
         if row.nutrient == "kcal":
-            values = _energy(row, len(columns), cut)
+            readings = _energy(row, len(columns), cut)
         else:
-            values = _fit(_plain_values(row), len(columns), cut)
-        if values is None:
+            fitted = _fit(_plain_values(row), len(columns), cut)
+            readings = None if fitted is None else [_as_read(token) for token in fitted]
+        if readings is None:
             continue
         done.add(row.nutrient)
-        for column, value in zip(columns, values, strict=True):
-            result[column][row.nutrient] = round_cents(value)
+        for column, reading in zip(columns, readings, strict=True):
+            result[column][row.nutrient] = reading
     return result
 
 
@@ -409,15 +440,15 @@ def _servings(text: str) -> Decimal | None:
 # ---- 兩欄的交叉檢查（審查 C1）----
 
 _HUNDRED = Decimal(100)
-# 容許差＝兩邊各自印出來的半格（每份那一邊乘上 100 ÷ 一份）＋ 兩者較大的 3%（第二輪審查改過）：
-# - 半格：熱量印成整數的是 0.5，其他（一位小數）是 0.05。
-# - 「可以標 0」（衛福部「包裝食品營養標示應遵行事項」附表二，門檻是每 100 公克／毫升）：熱量
-#   ≤ 4 大卡、蛋白質／脂肪／碳水化合物 ≤ 0.5 公克。**只在有一邊印成 0 時**才加這個寬容。
-# - 3%：兩欄各自從沒進位的數字算；歐盟 10 公克以上印整數（17 公克以上半公克就在 3% 內）。
-#   每 100 是 6.8 時是 0.20，加上半格（一份 35 公克）0.40——6.0 讀成 6.8 擋得住。
+# 容許差＝兩邊各自的寬容（每份那一邊乘上 100 ÷ 一份）＋ 兩者較大的 3%（第二、三輪審查改過）：
+# - 寬容是那個數字**印出來的半格**（`_Token.half_step`：整數 0.5、一位小數 0.05、兩位 0.005；
+#   kJ 換成 kcal 時一起除以 4.184）。台灣可以印整數或一位小數，看不到印法就會把對的標示當成讀錯。
+# - 印成 0 的那一邊，寬容是半格與「可以標 0」兩者較大的（衛福部「包裝食品營養標示應遵行事項」
+#   附表二，門檻是每 100 公克／毫升：熱量 ≤ 4 大卡、蛋白質／脂肪／碳水化合物 ≤ 0.5 公克）。
+#   不相加：整數的「0」與「可以標 0」說的是同一件事（真的值 ≤ 0.5）。
+# - 3%：兩欄各自從沒進位的數字算的差。每 100 是 6.8、一份 35 公克時容許差是 0.40——
+#   6.0 讀成 6.8 擋得住。
 # 排反的兩欄差 (100 ÷ 一份)² 倍（35 公克是 8 倍、90 公克也還有 23%），遠在這之外。
-_HALF_STEP_WHOLE = Decimal("0.5")
-_HALF_STEP_TENTH = Decimal("0.05")
 _PRINTED_AS_ZERO: dict[Nutrient, Decimal] = {
     "kcal": Decimal(4),
     "protein_g": Decimal("0.5"),
@@ -429,29 +460,28 @@ _RELATIVE = Decimal("0.03")
 _MIN_AGREEING = 2
 
 
-def _half_step(nutrient: Nutrient, value: Decimal) -> Decimal:
-    """印出來的那個數字的半格：整數的熱量 0.5，其他 0.05（營養素一律當成印到一位小數）。"""
-    if nutrient == "kcal" and value == value.to_integral_value():
-        return _HALF_STEP_WHOLE
-    return _HALF_STEP_TENTH
+def _slack(nutrient: Nutrient, value: Decimal, half_step: Decimal) -> Decimal:
+    """一邊的寬容（`half_step` 已經換成每 100 的量）：印出來的半格；印成 0 的，與「可以標 0」
+    取大的。「可以標 0」的門檻本來就是每 100 的量，不乘 100 ÷ 一份。"""
+    if value.is_zero():
+        return max(half_step, _PRINTED_AS_ZERO[nutrient])
+    return half_step
 
 
-def _agrees(nutrient: Nutrient, per_100: Decimal, per_serving: Decimal, size: Decimal) -> bool:
+def _agrees(nutrient: Nutrient, per_100: _Reading, per_serving: _Reading, size: Decimal) -> bool:
     """每 100 ≈ 每份 × 100 ÷ 一份。"""
     scale = _HUNDRED / size
-    expected = per_serving * scale
+    expected = per_serving.value * scale
     tolerance = (
-        _half_step(nutrient, per_serving) * scale
-        + _half_step(nutrient, per_100)
-        + _RELATIVE * max(per_100, expected)
+        _slack(nutrient, per_serving.value, per_serving.half_step * scale)
+        + _slack(nutrient, per_100.value, per_100.half_step)
+        + _RELATIVE * max(per_100.value, expected)
     )
-    if per_100.is_zero() or per_serving.is_zero():
-        tolerance += _PRINTED_AS_ZERO[nutrient]
-    return abs(per_100 - expected) <= tolerance
+    return abs(per_100.value - expected) <= tolerance
 
 
 def _agreeing(
-    per_100: Mapping[Nutrient, Decimal], per_serving: Mapping[Nutrient, Decimal], size: Decimal
+    per_100: Mapping[Nutrient, _Reading], per_serving: Mapping[Nutrient, _Reading], size: Decimal
 ) -> frozenset[Nutrient]:
     """對得起來的項目；不到 `_MIN_AGREEING` 項就當成一項都沒有。"""
     common = per_100.keys() & per_serving.keys()
@@ -505,8 +535,8 @@ def parse_label_text(text: str) -> LabelText:
     size = serving[0] if serving is not None and serving[1] == base_unit else None
     servings = _servings(normalized)
 
-    per_100 = read.get(Column.PER_100, {})
-    per_serving = read.get(Column.SERVING, {})
+    readings_100 = read.get(Column.PER_100, {})
+    readings_serving = read.get(Column.SERVING, {})
 
     def result(
         found: Mapping[Nutrient, Decimal | None], reason: Reason | None, basis: Basis | None
@@ -527,18 +557,21 @@ def parse_label_text(text: str) -> LabelText:
     # 兩個表頭都讀到（`read`）就照表頭、不換；順序是推的或讀不到，對得起來的項目比較多的那一種
     # 排法就是順序。對得起來的不到兩項 → 哪一欄都不信。兩欄、順序讀不到、又不能交叉檢查 → 不猜。
     contradicted: frozenset[Nutrient] = frozenset()
-    if per_100 and per_serving and size is not None:
-        agree = _agreeing(per_100, per_serving, size)
+    if readings_100 and readings_serving and size is not None:
+        agree = _agreeing(readings_100, readings_serving, size)
         if order != "read":
-            swapped = _agreeing(per_serving, per_100, size)
+            swapped = _agreeing(readings_serving, readings_100, size)
             if len(swapped) > len(agree):
-                per_100, per_serving, agree = per_serving, per_100, swapped
+                readings_100, readings_serving = readings_serving, readings_100
+                agree = swapped
         if not agree:
             return result({}, "columns_unknown" if order == "unknown" else "implausible", None)
-        contradicted = frozenset(per_100.keys() - agree)
+        contradicted = frozenset(readings_100.keys() - agree)
     elif columns is not None and order == "unknown":
         return result({}, "columns_unknown", None)
 
+    per_100 = {nutrient: reading.value for nutrient, reading in readings_100.items()}
+    per_serving = {nutrient: reading.value for nutrient, reading in readings_serving.items()}
     converted = (
         {nutrient: per_100_from_serving(value, size) for nutrient, value in per_serving.items()}
         if size is not None
