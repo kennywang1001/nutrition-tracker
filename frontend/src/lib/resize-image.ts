@@ -24,19 +24,25 @@
  *  慢速連線（這個 app 走 Tailscale）上傳一張手機拍出來、動輒十幾 MB
  *  的原圖傳了 30 秒才被伺服器拒絕。
  *
- *  長邊已經 <= maxEdge 時直接回傳原檔，不做沒有意義的重新編碼。 */
+ *  長邊已經 <= maxEdge 時直接回傳原檔，不做沒有意義的重新編碼。
+ *
+ *  `alwaysRedraw`：小的也經過 canvas 重新編碼（不放大）。`createImageBitmap` 會照 EXIF 的方向
+ *  轉正，畫出來的 JPEG 沒有方向標記——給**自己不看 EXIF** 的消費者用（手機辨識：Tesseract.js
+ *  自己解 JPEG，直拍的照片會是橫躺的；標示 OCR 計畫「Task 3–4 審查後的修正」M4）。其他呼叫端
+ *  不傳，行為照舊。 */
 export async function shrinkToLongestEdge(
 	file: File,
 	maxEdge: number,
+	options: { alwaysRedraw?: boolean } = {},
 ): Promise<File> {
 	const bitmap = await createImageBitmap(file);
 	try {
 		const longestEdge = Math.max(bitmap.width, bitmap.height);
-		if (longestEdge <= maxEdge) {
+		if (longestEdge <= maxEdge && options.alwaysRedraw !== true) {
 			return file;
 		}
 
-		const scale = maxEdge / longestEdge;
+		const scale = Math.min(1, maxEdge / longestEdge);
 		const width = Math.max(1, Math.round(bitmap.width * scale));
 		const height = Math.max(1, Math.round(bitmap.height * scale));
 

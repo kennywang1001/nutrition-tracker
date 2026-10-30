@@ -31,7 +31,10 @@ export async function recognizeLabel(
 	signal: AbortSignal,
 ): Promise<string> {
 	try {
-		const image = await shrinkToLongestEdge(file, OCR_MAX_EDGE);
+		// 小的也重畫：Tesseract.js 不看 EXIF 的方向，經過 canvas 才是轉正的（resize-image.ts）。
+		const image = await shrinkToLongestEdge(file, OCR_MAX_EDGE, {
+			alwaysRedraw: true,
+		});
 		signal.throwIfAborted();
 		const engine = await import("./label-ocr-engine");
 		signal.throwIfAborted();

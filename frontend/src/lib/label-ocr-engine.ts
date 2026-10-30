@@ -1,4 +1,11 @@
-import { createWorker, OEM, PSM, type Worker } from "tesseract.js";
+import {
+	createWorker,
+	type ImageLike,
+	OEM,
+	PSM,
+	type Worker,
+	type WorkerOptions,
+} from "tesseract.js";
 import workerUrl from "tesseract.js/dist/worker.min.js?url";
 import corePlainUrl from "tesseract.js-core/tesseract-core-lstm.wasm.js?url";
 import coreSimdUrl from "tesseract.js-core/tesseract-core-simd-lstm.wasm.js?url";
@@ -22,16 +29,56 @@ const OCR_CACHE_PATH = "ocr-tessdata-4.0.0_best_int";
 /** 下載＋辨識的上限（規格 D16）。 */
 export const OCR_TIMEOUT_MS = 90_000;
 
+/** 瀏覽器的 Web Worker（`Worker` 這個名字在這個檔案裡是 Tesseract.js 的）。 */
+type WebWorker = InstanceType<typeof globalThis.Worker>;
+
+/** 叫 `createWorker`，同時抓住它建的那一個 Web Worker。
+ *
+ *  初始化失敗時 `createWorker` 不 settle，Tesseract.js 的 worker 物件拿不到，它開的 Web Worker
+ *  （已經下載了 core、可能還在抓語言資料）就一直留著（計畫「Task 3–4 審查後的修正」M2）。7.0.0 的
+ *  `src/createWorker.js` 在第一個 await 之前就 `spawnWorker()`（瀏覽器版是 `new Worker(workerPath)`），
+ *  所以只在這個**同步**的呼叫裡把全域的 `Worker` 換成一個會記下實例的子類別，呼叫一回來（還沒有
+ *  任何 await）就換回去：別的程式碼看不到被換過的 `Worker`。 */
+function createWorkerCapturing(options: Partial<WorkerOptions>): {
+	creating: Promise<Worker>;
+	spawned: WebWorker | null;
+} {
+	const Native = globalThis.Worker;
+	const captured: { worker: WebWorker | null } = { worker: null };
+	globalThis.Worker = class extends Native {
+		constructor(...args: ConstructorParameters<typeof Native>) {
+			super(...args);
+			captured.worker = this;
+		}
+	};
+	try {
+		return {
+			creating: createWorker("chi_tra", OEM.LSTM_ONLY, options),
+			spawned: captured.worker,
+		};
+	} finally {
+		globalThis.Worker = Native;
+	}
+}
+
 /** 圖片 → 字。PSM 6（單一區塊）＋自動轉正（規格 D11）。每次建一個 worker、用完收掉（D14）。
  *
  *  **Tesseract.js 7.0.0 的毛病（規格 D16、寫計畫時實測）**：語言資料抓不到、初始化失敗時，
  *  `createWorker` 的 promise 永遠不 settle，只有 `errorHandler` 會被叫——所以自己跟它、逾時、
- *  中止三個賽跑。失敗時拿不到那個 worker（計畫「與規格的差異」第 3 點）。 */
+ *  中止三個賽跑。沒建好就停下來時，直接收掉它開的 Web Worker（`createWorkerCapturing`）。 */
 export async function recognizeText(
 	image: Blob,
 	signal: AbortSignal,
 ): Promise<string> {
 	signal.throwIfAborted();
+	// 照片先讀成 bytes 再交給 Tesseract.js：給它 Blob 的話它自己用 FileReader 讀（一個 task），
+	// 那段時間被收掉，它接著對已經是 null 的 worker `postMessage`，變成沒有人接的 rejection。
+	// 7.0.0 的 `loadImage` 收 Uint8Array（不是字串、元素、Blob 的照原樣包成 Uint8Array），型別沒寫。
+	const bytes = new Uint8Array(await image.arrayBuffer());
+	const corePath = (await simd()) ? coreSimdUrl : corePlainUrl;
+	// 中止落在上面兩個 await 裡：不要再開一個 Web Worker、下載 core。
+	signal.throwIfAborted();
+
 	let timer = 0;
 	let reportFailure: (error: unknown) => void = () => {};
 	const stopped = new Promise<never>((_, reject) => {
@@ -47,16 +94,18 @@ export async function recognizeText(
 	// 沒有人在等的時候 reject 也不要變成 unhandled rejection。
 	stopped.catch(() => undefined);
 
-	const creating = createWorker("chi_tra", OEM.LSTM_ONLY, {
-		workerPath: workerUrl,
-		corePath: (await simd()) ? coreSimdUrl : corePlainUrl,
-		langPath: new URL(OCR_LANG_PATH, window.location.origin).href,
-		cachePath: OCR_CACHE_PATH,
-		workerBlobURL: false,
-		errorHandler: (error: unknown) => reportFailure(error),
-	});
+	let creating: Promise<Worker> | null = null;
+	let spawned: WebWorker | null = null;
 	let worker: Worker | null = null;
 	try {
+		({ creating, spawned } = createWorkerCapturing({
+			workerPath: workerUrl,
+			corePath,
+			langPath: new URL(OCR_LANG_PATH, window.location.origin).href,
+			cachePath: OCR_CACHE_PATH,
+			workerBlobURL: false,
+			errorHandler: (error: unknown) => reportFailure(error),
+		}));
 		worker = await Promise.race([creating, stopped]);
 		await Promise.race([
 			worker.setParameters({
@@ -66,7 +115,7 @@ export async function recognizeText(
 			stopped,
 		]);
 		const { data } = await Promise.race([
-			worker.recognize(image, { rotateAuto: true }),
+			worker.recognize(bytes as unknown as ImageLike, { rotateAuto: true }),
 			stopped,
 		]);
 		return data.text;
@@ -75,8 +124,10 @@ export async function recognizeText(
 		if (worker !== null) {
 			await worker.terminate();
 		} else {
-			// 中止或逾時時 worker 可能還在建：建好了就收掉，不留一個在背景。
-			creating.then(
+			// 沒建好就停了（中止、逾時、初始化失敗）：它開的 Web Worker 現在就收掉（下載、
+			// 初始化跟著停，也不會再送訊息過來）。萬一沒抓到，建好了再收。
+			spawned?.terminate();
+			creating?.then(
 				(late) => late.terminate(),
 				() => undefined,
 			);

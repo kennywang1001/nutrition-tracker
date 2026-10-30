@@ -66,14 +66,18 @@ export function hasFoundValues(parse: LabelTextParse): boolean {
 
 /** 讀不完整時怎麼說（規格 §3.1；`no_values` 的說法見計畫「與規格的差異」第 1 點）。 */
 export function describeLabelParse(parse: LabelTextParse): string {
+	const implausible = "讀到的數字不太合理（可能少了小數點）";
 	switch (parse.reason) {
 		case "needs_serving_size":
 			return "只有每份的數字，但讀不到每一份量";
 		case "columns_unknown":
 			return "看不出是每份還是每 100 的數字";
 		case "implausible":
-			return "讀到的數字不太合理（可能少了小數點）";
+			return implausible;
 		case "missing_fields": {
+			// 後端的 missing_fields 只拿掉不合理的值（超過物理上限、兩欄對不起來）：一項都沒留下
+			// 就是讀到了數字、但都不合理，不說「讀到：」空的那一句。
+			if (!hasFoundValues(parse)) return implausible;
 			const read: string[] = [];
 			for (const nutrient of ORDER) {
 				const value = parse.found[nutrient];

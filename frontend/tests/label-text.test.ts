@@ -99,6 +99,21 @@ describe("營養標示文字的說法與填表單", () => {
 		);
 	});
 
+	it("缺幾項、可是讀到的都不合理（found 全是 null）：不說「讀到：」空的那一句", () => {
+		// 後端真的會這樣回（審查的 three_insane_no_carb：熱量 9999、蛋白質 600、脂肪 280、沒有碳水）：
+		// 讀到的三項都超過物理上限、被拿掉，原因還是 missing_fields。
+		const parse: LabelTextParse = {
+			...PARTIAL_PARSE,
+			found: { kcal: null, protein_g: null, fat_g: null, carb_g: null },
+			missing: ["kcal", "protein_g", "fat_g", "carb_g"],
+			reason: "missing_fields",
+		};
+
+		expect(describeLabelParse(parse)).toBe(
+			"讀到的數字不太合理（可能少了小數點）",
+		);
+	});
+
 	it.each([
 		["needs_serving_size", "只有每份的數字，但讀不到每一份量"],
 		["columns_unknown", "看不出是每份還是每 100 的數字"],

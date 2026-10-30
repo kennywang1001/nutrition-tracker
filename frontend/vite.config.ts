@@ -14,10 +14,14 @@ const require = createRequire(import.meta.url);
  *  路徑帶資料的版本，換版本就是新網址。**跟 `src/lib/label-ocr-engine.ts` 的 `OCR_LANG_PATH`
  *  同一個字串**（Task 4 的 build 檢查會 grep 兩邊）。 */
 const OCR_LANG_DIR = "ocr/tessdata-4.0.0_best_int";
-const OCR_LANG_FILES: Record<string, string> = {
-	"chi_tra.traineddata.gz":
+// Map 而不是物件：網址裡的檔名是使用者給的，物件會對到 `constructor`、`__proto__` 這些繼承來的鍵
+// （以前 dev 對它們回 500）。
+const OCR_LANG_FILES = new Map([
+	[
+		"chi_tra.traineddata.gz",
 		"@tesseract.js-data/chi_tra/4.0.0_best_int/chi_tra.traineddata.gz",
-};
+	],
+]);
 
 function ocrLangData(): Plugin {
 	return {
@@ -28,7 +32,7 @@ function ocrLangData(): Plugin {
 				const name = req.url?.startsWith(prefix)
 					? req.url.slice(prefix.length)
 					: undefined;
-				const file = name === undefined ? undefined : OCR_LANG_FILES[name];
+				const file = name === undefined ? undefined : OCR_LANG_FILES.get(name);
 				if (file === undefined) {
 					next();
 					return;
@@ -38,7 +42,7 @@ function ocrLangData(): Plugin {
 			});
 		},
 		generateBundle() {
-			for (const [name, file] of Object.entries(OCR_LANG_FILES)) {
+			for (const [name, file] of OCR_LANG_FILES) {
 				this.emitFile({
 					type: "asset",
 					fileName: `${OCR_LANG_DIR}/${name}`,
@@ -89,6 +93,19 @@ export default defineConfig({
 						options: {
 							cacheName: "ocr-engine",
 							expiration: { maxEntries: 2 },
+							// 只存真的 JavaScript：Caddy 對不存在的檔案 `try_files` 回 index.html（200
+							// text/html），CacheFirst 存了它就永遠拿它當引擎。有任何 cacheWillUpdate 時
+							// Workbox 不再自己擋非 200，所以狀態也在這裡看。這個函式會被序列化進 sw.js：
+							// 不能用到外面的變數。
+							plugins: [
+								{
+									cacheWillUpdate: async ({ response }) =>
+										response.status === 200 &&
+										response.headers.get("content-type")?.includes("javascript")
+											? response
+											: null,
+								},
+							],
 						},
 					},
 				],

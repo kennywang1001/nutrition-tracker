@@ -35,13 +35,17 @@ async function caughtFrom(promise: Promise<unknown>): Promise<unknown> {
 }
 
 describe("recognizeLabel：縮圖、延遲載入引擎（標示 OCR 規格 D11、D18）", () => {
-	it("長邊縮到 2000 再交給引擎，回辨識出來的字", async () => {
+	it("長邊縮到 2000、小的也重畫一次（EXIF 方向）再交給引擎，回辨識出來的字", async () => {
 		const controller = new AbortController();
 
 		const text = await recognizeLabel(PHOTO, controller.signal);
 
 		expect(text).toBe("熱量 514 大卡");
-		expect(vi.mocked(shrinkToLongestEdge)).toHaveBeenCalledWith(PHOTO, 2000);
+		// Tesseract.js 自己解 JPEG 不看 EXIF 的方向：長邊 ≤ 2000 的照片原檔直接給它，手機直拍的
+		// （Orientation 6）就是橫躺的。一律經過 canvas（createImageBitmap 會照 EXIF 轉正）。
+		expect(vi.mocked(shrinkToLongestEdge)).toHaveBeenCalledWith(PHOTO, 2000, {
+			alwaysRedraw: true,
+		});
 		expect(engine).toHaveBeenCalledWith(SMALL, controller.signal);
 		expect(OCR_MAX_EDGE).toBe(2000);
 	});
