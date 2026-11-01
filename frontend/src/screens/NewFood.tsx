@@ -1,46 +1,24 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-	type ChangeEvent,
-	type FormEvent,
-	useEffect,
-	useRef,
-	useState,
-} from "react";
+import { type FormEvent, useState } from "react";
 import { useNavigate } from "react-router";
-import {
-	describeAnalyzeError,
-	type LabelReadResponse,
-	readLabel,
-} from "../api/ai";
 import { describeBarcodeError, updateFoodBarcode } from "../api/barcode";
 import { apiFetch } from "../api/client";
 import { ApiError, describeFieldErrors, hasFieldError } from "../api/errors";
 import { useMe } from "../api/me";
-import { MAX_PHOTO_BYTES, PhotoTooLargeError } from "../api/photos";
 import { queryKeys } from "../api/queries";
 import type { components } from "../api/schema";
 import { AiEstimatePanel } from "../components/AiEstimatePanel";
 import { OffAttribution } from "../components/BarcodeScanEntry";
-import { ElapsedSeconds } from "../components/ElapsedSeconds";
-import {
-	focusStepAfterFileDialog,
-	PhotoHintStep,
-} from "../components/PhotoHintStep";
-import { PhotoPickerButton } from "../components/PhotoPickerButton";
+import { LabelReader } from "../components/LabelReader";
 import ui from "../components/ui.module.css";
 import { BARCODE_LENGTH_HINT, cleanBarcodeInput } from "../lib/barcode";
-import {
-	formatMacro,
-	isPlainPositiveDecimal,
-	perServingToPer100,
-} from "../lib/decimal";
+import { isPlainPositiveDecimal, perServingToPer100 } from "../lib/decimal";
+import type { LabelFill } from "../lib/label-text";
 import type { NewFoodHandoff } from "../lib/new-food-handoff";
 import styles from "./NewFood.module.css";
 
 type Food = components["schemas"]["FoodResponse"];
 type BaseUnit = components["schemas"]["BaseUnit"];
-/** 選好、還沒送出的營養標示照片與補充說明。 */
-type LabelPhoto = { file: File; hint: string };
 
 // 匯出給 FoodDetail.tsx（提議修改，Task 5）重用——兩個表單填的都是同一個
 // NutritionInput，欄位、label、上下限沒有理由各寫一份。
@@ -327,97 +305,21 @@ export function NewFood({ handoff = null }: Props) {
 		});
 	}
 
-	// 拍營養標示（掃條碼規格 §8.5）：AI 照抄、後端換算成每 100。
-	// 包一層：TanStack Query 會把 mutation 的 context 當第二個參數傳進來，直接傳 readLabel 的話
-	// 那個物件會被當成補充說明。
-	const readLabelMutation = useMutation({
-		mutationFn: ({ file, hint }: LabelPhoto) => readLabel(file, hint),
-	});
-	const [labelResult, setLabelResult] = useState<LabelReadResponse | null>(
-		null,
-	);
-	// 選好、還沒送出的營養標示照片＋補充說明（照片說明規格 §6）：按「開始讀取」才送。
-	const [labelPending, setLabelPending] = useState<LabelPhoto | null>(null);
-	// 選的當下就知道太大（規格 D9）：不出卡片，直接說。
-	const [labelPickError, setLabelPickError] = useState<string | null>(null);
-	// 讀完：「開始讀取」跟著卡片消失（焦點本來在它身上），所以移到狀態那一段（讀到的結果）。
-	// 旗標只在讀完那一次移，同記一餐的「已選擇」。
-	const labelResultRef = useRef<HTMLDivElement>(null);
-	const focusLabelResultRef = useRef(false);
-	useEffect(() => {
-		if (focusLabelResultRef.current && labelResultRef.current !== null) {
-			focusLabelResultRef.current = false;
-			labelResultRef.current.focus();
+	/** 讀到的數字填進表單（標示 OCR 規格 §3.1；同以前的 applyLabel）。**名稱是空的才填**、品牌與條碼
+	 *  不動、讀到的是每 100 所以「營養標示是」切回每 100、有一份就「份」＋那個量。讀不到的欄位是 ""。 */
+	function applyLabelFill(fill: LabelFill) {
+		const { name: readName } = fill;
+		if (readName !== null) {
+			setName((current) => (current.trim() === "" ? readName : current));
 		}
-	});
-	// 選了照片 → 卡片本身（不是說明欄：手機會跳鍵盤）；取消 → 照片按鈕（「取消」跟著卡片消失）。
-	const labelInputRef = useRef<HTMLInputElement>(null);
-	const labelStepRef = useRef<HTMLElement>(null);
-	const focusLabelNextRef = useRef<"step" | "picker" | null>(null);
-	useEffect(() => {
-		const next = focusLabelNextRef.current;
-		if (next === "step" && labelStepRef.current !== null) {
-			focusLabelNextRef.current = null;
-			focusStepAfterFileDialog(labelStepRef);
-		} else if (next === "picker" && labelInputRef.current !== null) {
-			focusLabelNextRef.current = null;
-			labelInputRef.current.focus();
-		}
-	});
-
-	/** 讀到的東西填進表單。**名稱是空的才填**（使用者打的字不蓋掉）；品牌、條碼不動（標示上通常
-	 *  沒有品牌、條碼是掃來的）。讀到的是每 100 那一組，所以「營養標示是」切回每 100。 */
-	function applyLabel(result: LabelReadResponse) {
-		setName((current) =>
-			current.trim() === "" ? (result.name ?? "") : current,
-		);
-		setBaseUnit(result.nutrition.base_unit);
-		setValues({
-			kcal: result.nutrition.kcal,
-			protein_g: result.nutrition.protein_g,
-			fat_g: result.nutrition.fat_g,
-			carb_g: result.nutrition.carb_g,
-		});
+		setBaseUnit(fill.baseUnit);
+		setValues(fill.values);
 		setBasisChoice("per100");
-		if (result.serving !== null) {
+		if (fill.serving !== null) {
 			setPortionLabel(SERVING_LABEL);
-			setPortionGrams(result.serving.amount);
-			setFilledServing(result.serving.amount);
+			setPortionGrams(fill.serving);
+			setFilledServing(fill.serving);
 		}
-		setLabelResult(result);
-	}
-
-	function handleLabelPhoto(event: ChangeEvent<HTMLInputElement>) {
-		const file = event.target.files?.[0] ?? null;
-		// 清掉：同一張照片再選一次也要觸發 change。
-		event.target.value = "";
-		if (file === null) return;
-		// 太大在選的當下就擋（規格 D9）：不要讓人打完說明才知道白打。preparePhoto 送出前照樣再擋一次。
-		// 卡片開著時不動它：原來那張照片與打好的說明都留著，只說這一張太大（審查 M2）。
-		if (file.size > MAX_PHOTO_BYTES) {
-			setLabelPickError(new PhotoTooLargeError().message);
-			return;
-		}
-		setLabelPickError(null);
-		readLabelMutation.reset();
-		// 換一張照片：說明留著（多半是同一個包裝、只是拍糊了）。
-		setLabelPending((current) => ({ file, hint: current?.hint ?? "" }));
-		focusLabelNextRef.current = "step";
-	}
-
-	function startLabel(pending: LabelPhoto) {
-		setLabelResult(null);
-		// 開始讀了：「照片太大」不能一直掛在讀到的結果旁邊（審查 M2）。
-		setLabelPickError(null);
-		// 填表單放在 mutate 的第二個參數：元件卸載之後不跑（handover §7）。
-		// 失敗時卡片留著（規格 D10）：再按一次「開始讀取」就是重試。
-		readLabelMutation.mutate(pending, {
-			onSuccess: (result) => {
-				applyLabel(result);
-				setLabelPending(null);
-				focusLabelResultRef.current = true;
-			},
-		});
 	}
 
 	return (
@@ -426,7 +328,7 @@ export function NewFood({ handoff = null }: Props) {
 			{/* 掃到的條碼查不到任何資料（掃條碼規格 §11）：放在「用 AI 填」上面，指出下一步。 */}
 			{handoff !== null && prefill === null && (
 				<p className={styles.notice}>
-					找不到這個條碼的資料。拍營養標示讓 AI 讀數字，或自己填。
+					找不到這個條碼的資料。拍營養標示讀數字，或自己填。
 				</p>
 			)}
 			{/* 用 AI 填（AI 估算前端規格 §5.2）：跟記一餐同一個面板。存好之後跟
@@ -446,74 +348,9 @@ export function NewFood({ handoff = null }: Props) {
 					textButtonLabel={() => "估算"}
 					onFoodReady={finishFromAiPanel}
 				/>
-				{/* 拍包裝背面的營養標示（掃條碼規格 §8.5）：要拍，所以帶 capture（掃描層的「從照片讀
-				    條碼」不帶——那一顆要能選相簿）。讀到的填進下面的表單，不直接建食物。 */}
-				<div className={styles.labelRow}>
-					<PhotoPickerButton
-						id="label-photo"
-						label="拍營養標示"
-						accept="image/*"
-						capture="environment"
-						variant="accent"
-						disabled={readLabelMutation.isPending}
-						inputRef={labelInputRef}
-						onChange={handleLabelPhoto}
-					/>
-				</div>
-				{labelPickError !== null && <p role="alert">{labelPickError}</p>}
-				{labelPending !== null && (
-					<PhotoHintStep
-						file={labelPending.file}
-						hint={labelPending.hint}
-						onHintChange={(hint) => setLabelPending({ ...labelPending, hint })}
-						startLabel="開始讀取"
-						placeholder="例：這是每 100 ml、一包 2 份"
-						busy={readLabelMutation.isPending}
-						sectionRef={labelStepRef}
-						onStart={() => startLabel(labelPending)}
-						onCancel={() => {
-							setLabelPending(null);
-							setLabelPickError(null);
-							readLabelMutation.reset();
-							focusLabelNextRef.current = "picker";
-						}}
-					/>
-				)}
-				<div ref={labelResultRef} tabIndex={-1} className={styles.labelResult}>
-					{/* 秒數在 role="status" 外面（規格 D11）：每秒變一次的字放進 live region，讀屏會每秒念一次。 */}
-					<div className={styles.statusRow}>
-						<div role="status">
-							{readLabelMutation.isPending && <p>AI 讀取中…</p>}
-							{labelResult !== null && !readLabelMutation.isPending && (
-								<>
-									<p className={styles.labelCheck}>
-										AI 讀的數字，請對照包裝確認
-									</p>
-									{labelResult.consistency.flagged && (
-										<p className={styles.warning}>
-											熱量跟三大營養素算起來對不太上，請特別確認
-										</p>
-									)}
-									{labelResult.servings_per_package !== null && (
-										<p>
-											本包裝含 {formatMacro(labelResult.servings_per_package)}{" "}
-											份
-										</p>
-									)}
-									<p className={styles.muted}>
-										今天還能用 {labelResult.remaining_today} 次
-									</p>
-								</>
-							)}
-						</div>
-						{readLabelMutation.isPending && (
-							<ElapsedSeconds className={styles.muted} />
-						)}
-					</div>
-					{readLabelMutation.isError && (
-						<p role="alert">{describeAnalyzeError(readLabelMutation.error)}</p>
-					)}
-				</div>
+				{/* 拍包裝背面的營養標示（標示 OCR 規格 §3）：先在手機上辨識，不完整才改用 AI；也可以貼上文字。
+				    讀到的填進下面的表單，不直接建食物。 */}
+				<LabelReader onFill={applyLabelFill} />
 			</section>
 			<form onSubmit={handleSubmit}>
 				{prefill !== null && (
