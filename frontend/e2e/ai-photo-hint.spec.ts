@@ -215,6 +215,8 @@ test("營養標示：說明送到 /api/ai/read-label；取消不送", async ({
 	page,
 	request,
 }) => {
+	// 照片先過真的手機辨識（第一次要下載辨識資料），同 label-ocr.spec.ts 給 60 秒。
+	test.setTimeout(60_000);
 	const account = await newAccount(request, "hint-label");
 	const label = {
 		analysis_id: 31,
@@ -248,22 +250,29 @@ test("營養標示：說明送到 /api/ai/read-label；取消不送", async ({
 	const picker = page.getByLabel("拍營養標示", { exact: true });
 	const step = page.getByRole("region", { name: "確認照片", exact: true });
 
-	// 1. 選了又取消：卡片收起、沒有送、焦點回到照片按鈕。
+	// 1. 選了又取消：卡片收起、沒有送、焦點回到照片按鈕。選了照片先在手機上辨識（標示 OCR
+	//    規格 §3.1），辨識中「取消」也按得到（＝中止辨識）。
 	await picker.setInputFiles(await photo(page, "wrong.jpg"));
 	await step.getByRole("button", { name: "取消", exact: true }).click();
 	await expect(step).toHaveCount(0);
 	await expect(picker).toBeFocused();
 	expect(sent).toHaveLength(0);
 
-	// 2. 再選一張、打說明、開始讀取。
+	// 2. 再選一張：這張 8×8 的圖手機讀不出字，辨識完才出現說明欄與「改用 AI 讀」。
+	//    第一次要下載辨識資料＋辨識（dev 上約 1–3 秒）；機器慢、整套平行跑時留寬一點。
 	await picker.setInputFiles(await photo(page, "label.jpg"));
+	const useAi = step.getByRole("button", {
+		name: "改用 AI 讀（用 1 次額度）",
+		exact: true,
+	});
+	await expect(useAi).toBeVisible({ timeout: 30_000 });
 	const hint = step.getByLabel("補充說明（選填）", { exact: true });
 	await expect(hint).toHaveAttribute(
 		"placeholder",
 		"例：這是每 100 ml、一包 2 份",
 	);
 	await hint.fill("這是每 100 ml");
-	await step.getByRole("button", { name: "開始讀取", exact: true }).click();
+	await useAi.click();
 
 	await expect(
 		page.getByText("AI 讀的數字，請對照包裝確認", { exact: true }),
