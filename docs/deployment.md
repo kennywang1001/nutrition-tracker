@@ -538,6 +538,36 @@ sudo docker compose --env-file .env.production \
 > 跨過 `0012` 時腳本會印退版警告（見「退版」）：這次如果新版起不來、被自動退回到 NAS 上原本那一版，
 > 舊版**無法建立新帳號**——修好新版再部署一次就好，不用還原。`0015` 有重複餐費時會停在第 5 步。
 
+- **營養標示的手機辨識（`feat/label-ocr`，沒有 migration、沒有新的環境變數，可以直接退版）**：新增食物的「拍營養標示」先在手機上認字（Tesseract.js，
+  不用 AI 額度、照片不離開裝置），認出來的字送新的 `POST /api/foods/parse-label-text`（每人每分鐘 30 次，不碰資料庫、不寫 log）；讀不完整才「改用 AI 讀」。
+  退版只是程式退回去：舊版沒有這個端點，畫面回到直接用 AI 讀。**後端沒有新的設定**，AI 沒設定的話手機辨識照樣能用（只有「改用 AI 讀」會失敗）。
+
+  **手機辨識的資源**：引擎的檔案是前端 build 的一部分，要在映像裡（`dist/` 底下）：
+  - `ocr/tessdata-4.0.0_best_int/chi_tra.traineddata.gz`（1,656,239 B；由 `vite.config.ts` 的小 plugin 放進去，**不是**打包出來的資源，沒有雜湊）；
+  - `assets/tesseract-core-simd-lstm.wasm-*.js` 與 `assets/tesseract-core-lstm.wasm-*.js`（各約 3.9 MB；一台裝置只下載其中一個，**不在 PWA 的預先快取**，
+    第一次用的時候才下載，之後 runtime 快取）；
+  - worker（`assets/worker.min-*.js`）與延遲載入塊（`assets/label-ocr-engine-*.js`）在預先快取裡。
+
+  第一次辨識下載約 3.2 MB（core 約 1.47 MB 經 zstd、語言資料 1.66 MB 不再壓）。Caddyfile 不用改。
+
+  **部署完的檢查**（`<host>` 換成你從手機連的那個網址；不必登入）：
+
+  ```bash
+  # 語言資料：要 200、application/gzip、沒有 Content-Encoding、Content-Length 1656239
+  curl -sI -H 'Accept-Encoding: zstd, gzip' https://<host>/ocr/tessdata-4.0.0_best_int/chi_tra.traineddata.gz
+
+  # core：檔名要看 dist/assets 底下實際的（tesseract-core-simd-lstm.wasm-<雜湊>.js）；經 zstd 約 1.47 MB（有壓縮）
+  curl -s -o /dev/null -w '%{size_download}\n' -H 'Accept-Encoding: zstd' https://<host>/assets/<tesseract-core-simd-lstm 的檔名>
+  ```
+
+  回 `text/html`（或 core 的大小只有幾 KB）表示檔案不在——Caddy 的 `try_files` 對不存在的路徑回的是 `index.html`（200）。這時手機辨識會說
+  「這台裝置現在不能用手機辨識」，**AI 那條照樣能用**。查映像：`sudo docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml exec -T caddy ls /srv/ocr/tessdata-4.0.0_best_int`
+  （Caddy 的網站根目錄是 `/srv`）。
+
+  **部署完請用手機拍一張營養標示確認**：這條路（真的包裝的準確度、手機上的速度、iOS 的 wasm 與 service worker）**開發時只在桌機的 Chromium 用合成的標示量過**，
+  沒有在手機上跑過。看三件事：(1) 第一次有沒有在合理的時間內讀完（桌機約 1–2.5 秒含下載；手機預期慢 3–5 倍）；(2) 讀完整的標示，表單的四個數字跟包裝對不對
+  （畫面本來就寫「請對照包裝確認」）；(3) 讀不出來時有沒有出現「改用 AI 讀（用 1 次額度）」。已知限制在交接文件 §8.2「營養標示的手機辨識的已知限制」。
+
 - **照片＋補充說明、AI 計時、`AI_EFFORT`（`feat/ai-hint-speed`，沒有 migration）**：拍照估算（單樣、整餐）與拍營養標示選了照片
   之後多一步「確認照片」：看一眼縮圖、選填一段補充說明（最多 200 字，例如「飯半碗」「這是每 100 ml」），按「開始估算／開始讀取」
   才送、才算次數。說明跟照片一起送給 AI 供應商，**後端不存、不寫 log**。等待時畫面顯示經過幾秒。新的選配環境變數 `AI_EFFORT`
