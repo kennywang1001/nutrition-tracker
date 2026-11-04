@@ -1,0 +1,99 @@
+/* 新增食物的「拍營養標示」與「貼上營養標示文字」（LabelReader.tsx；從 NewFood.module.css 搬過來）。
+ * 一般權重（0,1,0）：贏過 .screen 的零權重規則（卡片、p 的 margin）。 */
+
+/* 「拍營養標示」「貼上營養標示文字」一列（AI 面板的兩顆在上面一列）。面板底下本來就留了間距，這裡不再加。 */
+.labelRow {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+}
+
+/* 一致性被標記（同 AI 估算面板的 .warning，字大一點：這一句是要人停下來看的）。 */
+.warning {
+	color: var(--color-danger);
+}
+
+/* 讀的狀態與結果：焦點會移到這一塊（tabindex=-1），外框跟著對焦的慣例畫。 */
+.labelResult {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	margin-top: var(--space-2);
+	border-radius: var(--radius-button);
+}
+
+/* 狀態那一塊一直在（live region 才唸得到），沒有字的時候不佔空間。
+   狀態包在 .statusRow 裡（旁邊讀取中才有秒數）。 */
+.labelResult:has(> .statusRow:only-child > [role="status"]:empty:only-child) {
+	margin-top: 0;
+}
+
+/* 「手機辨識中…」「AI 讀取中…」與經過的秒數排同一行（秒數在 role="status" 外面，見 ElapsedSeconds）。 */
+.statusRow {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-2);
+}
+
+.labelResult:focus-visible {
+	outline: 2px solid var(--color-action);
+	outline-offset: 2px;
+}
+
+.labelResult:focus:not(:focus-visible) {
+	outline: none;
+}
+
+.labelResult [role="status"] {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+}
+
+.labelCheck {
+	font-weight: 700;
+}
+
+.muted {
+	font-size: 13px;
+	color: var(--color-text-muted);
+}
+
+/* 卡片裡手機辨識的結果（讀到什麼、缺什麼）。 */
+.ocrMessage {
+	margin: 0;
+}
+
+/* 卡片與貼上那一塊的按鈕（審查 M3）：AiEstimatePanel 的 .actions 讓每顆 flex: 1 平分一列，三顆在
+   390px 的手機上各剩約 93px——「改用 AI 讀（用 1 次額度）」折成三行、「填入讀到的」的「的」掉到下一行。
+   改成照字的寬度、不折字；一列放不下就換列（.actions 本來就 flex-wrap: wrap），每一列再平分剩下的寬度。
+   手機上三顆時主要那顆自己一列、另外兩顆一列；電腦版三顆一列。高度照 .actions 的 min-height 44px。
+   div.＋子選擇器（0,1,2）贏過 .actions button（0,1,1），不靠兩個 CSS 檔載入的順序；AI 估算面板不受影響。 */
+div.actions > button {
+	flex: 1 0 auto;
+	white-space: nowrap;
+}
+
+/* 貼上營養標示文字：卡片跟「拍營養標示」那一列分開一點。 */
+.paste {
+	margin-top: var(--space-2);
+}
+
+/* 16px：iOS 在小於 16px 的輸入框聚焦時會放大整頁（同 PhotoHintStep 的 .hint）。
+   高度至少 6 行（line-height 寫死，min-height 才算得準），再多就在欄位裡捲。 */
+.pasteText {
+	display: block;
+	box-sizing: border-box;
+	width: 100%;
+	min-height: calc(6 * 1.5em + 2 * var(--space-2) + 2px);
+	margin-top: var(--space-1);
+	padding: var(--space-2) var(--space-3);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-button);
+	background: var(--color-bg);
+	color: var(--color-text);
+	font-size: 16px;
+	line-height: 1.5;
+	font-family: inherit;
+	resize: vertical;
+}

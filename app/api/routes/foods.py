@@ -8,17 +8,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app import off
+from app.ai.consistency import check_consistency
 from app.api.deps import get_current_user
 from app.api.params import ResourceId
 from app.config import settings
 from app.db import get_db
 from app.errors import ConflictError, ForbiddenError, NotFoundError
 from app.food_visibility import assert_food_visible, load_visible_food
+from app.label_text import parse_label_text
 from app.models.food import Food, FoodPortion, FoodRevision, RevisionStatus
 from app.models.meal import Meal, MealItem
 from app.models.user import User, UserRole
 from app.off import ProductLookup, ProductPrefill
-from app.ratelimit import barcode_lookup_rate_limiter
+from app.ratelimit import barcode_lookup_rate_limiter, label_text_rate_limiter
+from app.schemas.ai import ConsistencyResult
 from app.schemas.food import (
     Barcode,
     BarcodeLookupResponse,
@@ -27,6 +30,7 @@ from app.schemas.food import (
     FoodCreateRequest,
     FoodResponse,
     FoodScope,
+    NutritionResponse,
     Per100Nutrition,
     PortionCreateRequest,
     PortionResponse,
@@ -35,6 +39,7 @@ from app.schemas.food import (
     RevisionResponse,
     ServingSize,
 )
+from app.schemas.label_text import LabelTextFound, LabelTextParseResponse, LabelTextRequest
 
 router = APIRouter(prefix="/foods", tags=["foods"])
 
@@ -389,6 +394,51 @@ async def lookup_barcode(
     found = await lookup.lookup(code)
     return BarcodeLookupResponse(
         code=code, food=None, prefill=None if found is None else _prefill(found)
+    )
+
+
+@router.post("/parse-label-text", response_model=LabelTextParseResponse)
+async def parse_label_text_route(
+    payload: LabelTextRequest,
+    user: User = Depends(get_current_user),
+) -> LabelTextParseResponse:
+    """營養標示的文字（手機辨識或貼上的）→ 每 100 的營養素（標示 OCR 規格 §5）。確定性的規則，
+    **不呼叫 AI、不算額度、不寫 `ai_analyses`**。讀不完整也是 200（`complete: false`）。
+    每人每分鐘 30 次（429 `TOO_MANY_LABEL_PARSES`）。文字不存、不寫 log。"""
+    label_text_rate_limiter.hit(str(user.id))
+    parsed = parse_label_text(payload.text)
+    found = parsed.found
+    kcal, protein, fat, carb = found["kcal"], found["protein_g"], found["fat_g"], found["carb_g"]
+    nutrition: NutritionResponse | None = None
+    consistency: ConsistencyResult | None = None
+    if (
+        parsed.complete
+        and kcal is not None
+        and protein is not None
+        and fat is not None
+        and carb is not None
+    ):
+        nutrition = NutritionResponse(
+            base_unit=parsed.base_unit, kcal=kcal, protein_g=protein, fat_g=fat, carb_g=carb
+        )
+        consistency = ConsistencyResult.model_validate(
+            check_consistency(kcal=kcal, protein_g=protein, fat_g=fat, carb_g=carb)
+        )
+    return LabelTextParseResponse(
+        complete=nutrition is not None,
+        base_unit=parsed.base_unit,
+        nutrition=nutrition,
+        found=LabelTextFound(kcal=kcal, protein_g=protein, fat_g=fat, carb_g=carb),
+        missing=list(parsed.missing),
+        reason=parsed.reason,
+        serving=(
+            None
+            if parsed.serving_size is None
+            else ServingSize(amount=parsed.serving_size, unit=parsed.base_unit)
+        ),
+        servings_per_package=parsed.servings_per_package,
+        basis=parsed.basis,
+        consistency=consistency,
     )
 
 

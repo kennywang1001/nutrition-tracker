@@ -6,6 +6,11 @@ Open Food Facts 的預填（`app/off.py`）與營養標示的解析（`app/ai/la
 
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
+from pydantic import ValidationError
+
+from app.models.food import BaseUnit
+from app.schemas.food import NutritionInput
+
 # 熱化學卡：1 kcal = 4.184 kJ。營養標示與 OFF 用的都是這一個。
 KJ_PER_KCAL = Decimal("4.184")
 _HUNDRED = Decimal(100)
@@ -51,6 +56,23 @@ def is_physically_plausible(
     糖漿以 ml 標示）可能超過 105 g，會被當成讀錯——那種標示幾乎都是每 100 g。
     """
     return protein_g + fat_g + carb_g <= MAX_MACROS_PER_100 and kcal <= MAX_KCAL_PER_100
+
+
+def plausible_per_100(
+    base_unit: BaseUnit, kcal: Decimal, protein_g: Decimal, fat_g: Decimal, carb_g: Decimal
+) -> NutritionInput | None:
+    """外部讀來的每 100（AI 讀的標示、手機辨識或貼上的文字）能不能用：`NutritionInput` 的範圍
+    （跟新增食物同一份定義，掃條碼規格 D27）＋物理上限（`is_physically_plausible`，審查 M3）。
+    過不了 → None。兩條路共用這一份（標示 OCR 規格 D8）。"""
+    try:
+        checked = NutritionInput(
+            base_unit=base_unit, kcal=kcal, protein_g=protein_g, fat_g=fat_g, carb_g=carb_g
+        )
+    except ValidationError:
+        return None
+    if not is_physically_plausible(checked.kcal, checked.protein_g, checked.fat_g, checked.carb_g):
+        return None
+    return checked
 
 
 def to_decimal(value: object) -> Decimal | None:

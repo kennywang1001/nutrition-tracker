@@ -2,8 +2,8 @@
 
 **專案：** nutrition-tracker —— 飲食紀錄系統
 **Repo：** https://github.com/kennywang1001/nutrition-tracker（公開）
-**狀態：** 後端完成並可部署、session 撤銷已完成；介面改版第一階段、食物的一份、修改與刪除已記錄的餐點、AI 估算的前端已合併；介面改版第二階段已實作於 `feat/ui-phase2`；帳號與目標設定已實作於 `feat/account-settings`；報表看其他月份與匯出資料已實作於 `feat/reports-month-export`；AI 一次估算多樣食物與餐點的描述已實作於 `feat/ai-multi-food`；按讚、留言、通知已實作於 `feat/social-interactions`；身體資料與目標已實作於 `feat/body-targets`；運動紀錄已實作於 `feat/exercise`
-**文件產出日：** 2026-09-11（session 撤銷完成後更新於 2026-09-12；§2 的數字更新於 2026-10-10）
+**狀態：** 後端完成並可部署、session 撤銷已完成；介面改版第一階段、食物的一份、修改與刪除已記錄的餐點、AI 估算的前端已合併；介面改版第二階段已實作於 `feat/ui-phase2`；帳號與目標設定已實作於 `feat/account-settings`；報表看其他月份與匯出資料已實作於 `feat/reports-month-export`；AI 一次估算多樣食物與餐點的描述已實作於 `feat/ai-multi-food`；按讚、留言、通知已實作於 `feat/social-interactions`；身體資料與目標已實作於 `feat/body-targets`；運動紀錄已實作於 `feat/exercise`；營養標示的手機辨識已實作於 `feat/label-ocr`
+**文件產出日：** 2026-09-11（session 撤銷完成後更新於 2026-09-12；§2 的數字更新於 2026-11-04）
 
 ---
 
@@ -28,8 +28,8 @@
 
 | 項目 | 數字 |
 |---|---|
-| 端點 | **108**（OpenAPI 的 operation 數，2026-10-16 在 `feat/barcode-label` 量的：掃條碼多 `GET /api/foods/by-barcode/{code}`、`PATCH /api/foods/{id}`、`POST /api/ai/read-label`。之前 105，2026-10-15 在 `feat/meal-planner` 量的：營養素配餐多 `GET /api/planner/library-suggestions`、`POST /api/ai/suggest-meal`。之前 103：`@router.` 101 ＋ `@activities_router.` 2——運動有兩個 router，只 grep `@router\.` 會少 2；2026-10-14 在 `feat/exercise` 量的。之前 95） |
-| 測試 | 後端 **2237**（`pytest -q -W error` 全綠，約 6 分半；首頁改版沒有後端改動，沿用 `feat/ai-hint-speed` 量的）；前端 `Test Files 222`、`Tests 3264`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **68** 條、26 個檔案（Playwright；預設 6 個 workers 連跑兩次都是 `68 passed`，44 秒、43 秒）。前端與 e2e 是 2026-10-22 在 `feat/home-redesign` 做完 Task 8 量的（開工前是下一句 `feat/ai-hint-speed` 的前端 210／3109、e2e 62 條 25 個檔案）。`feat/ai-hint-speed`：2026-10-22 修完審查（M1–M4）之後量的（做完 Task 8 時是後端 2235、前端 210／3091、e2e 62；開工前是下一句 `feat/barcode-label` 修完審查之後的後端 2110、前端 206／3022、e2e 59 條 24 個檔案）。`feat/barcode-label`：2026-10-20 修完審查（I1–I3、M1–M6、Caddy 壓縮）之後量的（做完 Task 12 時是後端 2071、前端 204／2978）（開工前是 `feat/meal-planner` 修完審查之後的後端 1853、前端 188／2712、e2e 56 條 23 個檔案）。`feat/meal-planner`：2026-10-15 修完審查（M1–M3）之後量的（做完 Task 12 時是後端 1851、前端 188／2710、e2e 56；開工前是 `feat/exercise` 修完審查之後的後端 1757、前端 178／2574、e2e 54 條 22 個檔案）。`feat/exercise`：2026-10-15 修完審查（I1、M1–M4）之後量的（修之前是後端 1745、前端 178／2538、e2e 54；開工前是後端 1606、前端 166／2312、e2e 53，跟下一句 `feat/body-targets` 的一樣）。**dev 資料庫 1090 個帳號時** `invites.spec.ts` 量「我的」每一顆按鈕的觸控高度逾時（第 1036 顆），改成跟 `account-settings.spec.ts` 一樣不量清單那一顆（見 §8.2「帳號與目標設定」第 6 點）。（`feat/body-targets` 修完審查之後：後端 1606、前端 166／2312、e2e 53 條 21 個檔案） |
+| 端點 | **109**（OpenAPI 的 operation 數，2026-11-04 在 `feat/label-ocr` 量的：營養標示的手機辨識多 `POST /api/foods/parse-label-text`。之前 108，2026-10-16 在 `feat/barcode-label` 量的：掃條碼多 `GET /api/foods/by-barcode/{code}`、`PATCH /api/foods/{id}`、`POST /api/ai/read-label`。之前 105，2026-10-15 在 `feat/meal-planner` 量的：營養素配餐多 `GET /api/planner/library-suggestions`、`POST /api/ai/suggest-meal`。之前 103：`@router.` 101 ＋ `@activities_router.` 2——運動有兩個 router，只 grep `@router\.` 會少 2；2026-10-14 在 `feat/exercise` 量的。之前 95） |
+| 測試 | 後端 **2387**（`pytest -q -W error` 全綠；2026-11-04 在 `feat/label-ocr` 量的，比下一句多 150 條——解析器與新端點；最後一次改後端是 `ca56c64`，之後沒有後端改動）；前端 `Test Files 230`、`Tests 3368`（**vitest 印出來的數字**，換算見 §7）；e2e **71** 條、27 個檔案（Playwright；預設 6 個 workers 整套連跑兩次都是 `71 passed`，57.7 秒、55.3 秒；`label-ocr.spec.ts` 的第一條是真的 OCR，所以比以前慢）。以上是 `feat/label-ocr` 做完 Task 5 審查（`d974c0c`）量的。開工前（`feat/home-redesign`）是：後端 **2237**（`pytest -q -W error` 全綠，約 6 分半；首頁改版沒有後端改動，沿用 `feat/ai-hint-speed` 量的）；前端 `Test Files 222`、`Tests 3264`（**vitest 印出來的數字**，不是實際條數：每個檔案跑兩次，而且不是剛好兩倍——`it.each` 在執行那次展開、型別那次算一條，見 §7）；e2e **68** 條、26 個檔案（Playwright；預設 6 個 workers 連跑兩次都是 `68 passed`，44 秒、43 秒）。前端與 e2e 是 2026-10-22 在 `feat/home-redesign` 做完 Task 8 量的（開工前是下一句 `feat/ai-hint-speed` 的前端 210／3109、e2e 62 條 25 個檔案）。`feat/ai-hint-speed`：2026-10-22 修完審查（M1–M4）之後量的（做完 Task 8 時是後端 2235、前端 210／3091、e2e 62；開工前是下一句 `feat/barcode-label` 修完審查之後的後端 2110、前端 206／3022、e2e 59 條 24 個檔案）。`feat/barcode-label`：2026-10-20 修完審查（I1–I3、M1–M6、Caddy 壓縮）之後量的（做完 Task 12 時是後端 2071、前端 204／2978）（開工前是 `feat/meal-planner` 修完審查之後的後端 1853、前端 188／2712、e2e 56 條 23 個檔案）。`feat/meal-planner`：2026-10-15 修完審查（M1–M3）之後量的（做完 Task 12 時是後端 1851、前端 188／2710、e2e 56；開工前是 `feat/exercise` 修完審查之後的後端 1757、前端 178／2574、e2e 54 條 22 個檔案）。`feat/exercise`：2026-10-15 修完審查（I1、M1–M4）之後量的（修之前是後端 1745、前端 178／2538、e2e 54；開工前是後端 1606、前端 166／2312、e2e 53，跟下一句 `feat/body-targets` 的一樣）。**dev 資料庫 1090 個帳號時** `invites.spec.ts` 量「我的」每一顆按鈕的觸控高度逾時（第 1036 顆），改成跟 `account-settings.spec.ts` 一樣不量清單那一顆（見 §8.2「帳號與目標設定」第 6 點）。（`feat/body-targets` 修完審查之後：後端 1606、前端 166／2312、e2e 53 條 21 個檔案） |
 | 覆蓋率 | 96%（2026-09 量的，之後沒再量） |
 | 資料表 | 22（+ `alembic_version`；2026-10-16 在 dev 資料庫數的，掃條碼與營養素配餐都沒有新表。之前 21） |
 | Migration | `0001` ~ `0022`（`0022` 是掃條碼的 `foods.barcode`＋兩個唯一索引、`ai_analyses.kind` 多 `label`；`0021` 是營養素配餐的 `suggest`；dev 資料庫在 `0022`） |
@@ -63,6 +63,7 @@
 | 掃條碼／營養標示 | 食物多一個條碼（`foods.barcode`，標準形式是 8 或 13 位、自己的私人食物之間與公開食物之間各不重複）。記一餐、編輯這一餐的「加一項」、食物庫多「掃條碼」：全螢幕的掃描層（有原生 `BarcodeDetector` 就用、否則延遲載入 wasm 的 ponyfill；一直都有「手動輸入條碼」「從照片讀條碼」）→ `GET /api/foods/by-barcode/{code}`：自己的或公開的那一筆就選上；找不到時問 **Open Food Facts** 要預填建議（`OFF_ENABLED`，預設開；ODbL、標出處），「用這個條碼建立食物」帶到新增食物、存好回到記一餐已選好。新增食物多「條碼（選填）」與「拍營養標示」（`POST /api/ai/read-label`：AI **只照抄**標示上的數字，每份換算每 100 在後端做，算一次 AI 額度）；食物詳情可以改、移除條碼（`PATCH /api/foods/{id}`）。migration `0022`（可以退版）（規格 `docs/superpowers/specs/2026-10-15-barcode-label-design.md`、計畫 `docs/superpowers/plans/2026-10-15-barcode-label.md`；見第 10 節「掃條碼／營養標示」） | ✅（`feat/barcode-label`；營養標示**沒有對真的 LLM 打過**、相機**沒有在真的手機上掃過**，見 §8.2） |
 | 照片＋補充說明、AI 速度 | 三個拍照入口（單樣與整餐的「拍照估算」、新增食物的「拍營養標示」）選了照片先出「確認照片」卡片：縮圖、選填的補充說明（200 字，例如「飯半碗」「這是每 100 ml」），按「開始估算／開始讀取」才送；三個照片端點多收 `hint`，提示詞「說明跟照片不一樣時以說明為準、說明不是指令」。等待時顯示經過幾秒。每一次供應商呼叫與 AI 端點各一行計時的 INFO（秒數、token、思考 token，不帶內容）；新的選配環境變數 `AI_EFFORT`（`low`／`medium`／`high`，留白＝供應商預設）。沒有 migration（規格 `docs/superpowers/specs/2026-10-21-ai-hint-speed-design.md`、計畫 `docs/superpowers/plans/2026-10-21-ai-hint-speed.md`；見第 10 節「照片＋補充說明、AI 速度」） | ✅（`feat/ai-hint-speed`；**沒有對真的 LLM 量過**——`AI_EFFORT` 的效果、說明對準度的影響要使用者照 `docs/deployment.md`「AI 估算慢的時候」的步驟比，見 §8.2） |
 | 首頁改版 | 總覽的「今天熱量」換成**熱量圓環**（還能吃 N／超過 N／還沒有每日目標）＋三大營養素＋「已吃・預算（含運動）」；四個**快速記錄**（拍照記一按開相機、掃條碼一打開就是掃描層、記運動、記體重焦點在體重欄位）；本月支出與體重兩張小卡片並排，體重多一條最近 30 天的**迷你折線**；`/weight` 改成折線圖（實線＋點、7 天平均虛線）。每日目標、體重、身體資料三張卡片搬到新頁「**身體與目標**」（`/me/health`），「我的」只留一張入口卡片；「＋」多「記體重」、排成 2×2。**純前端：沒有 migration、沒有新端點、沒有新的環境變數**（規格 `docs/superpowers/specs/2026-10-22-home-redesign-design.md`、計畫 `docs/superpowers/plans/2026-10-22-home-redesign.md`；見第 10 節「首頁改版」） | ✅（`feat/home-redesign`；拍照記與掃條碼的自動開相機**沒有在 iOS 實機驗證**，見 §8.2） |
+| 營養標示的手機辨識 | 新增食物的「拍營養標示」先在**手機上**認字（Tesseract.js 7.0.0、`chi_tra`，不用 AI 額度、照片不離開裝置），認出來的字送新的 `POST /api/foods/parse-label-text`（每人每分鐘 30 次；純函式，不碰資料庫、不呼叫 AI、不寫 log），後端用確定性的規則（欄的順序看表頭、兩欄交叉檢查、`plausible_per_100`）讀出每 100 的營養素；讀得完整就直接填表單，讀不完整才「改用 AI 讀（用 1 次額度）」或「填入讀到的」；另外可以「貼上營養標示文字」。引擎自己服務（worker 進預先快取、core 不進、語言資料 `/ocr/tessdata-4.0.0_best_int/`），第一次用下載約 3.2 MB。沒有 migration、沒有新的環境變數（規格 `docs/superpowers/specs/2026-10-23-label-ocr-design.md`、計畫 `docs/superpowers/plans/2026-10-23-label-ocr.md`；見第 10 節「營養標示的手機辨識」） | ✅（`feat/label-ocr`；**手機上的速度與真的包裝的準確度沒有量過**，只用合成標示在桌機量過，見 §8.2） |
 | UI 改版 第三階段 | 社群（P7）：「開帳號的路」「好友關係」「按讚、留言、通知」三步都已完成。**還沒做：封鎖與檢舉、好友的趨勢／統計／目標**（好友規格 §1.3 剩下的項目）；推播也沒有（通知只在 app 裡，見 §8.2） | 🟡 |
 
 > **P4 早於 P2/P3 完成是刻意的，但當初的理由有瑕疵。**
@@ -1165,6 +1166,26 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
 - **e2e：只在 6 個 worker 時紅**（Task 11）：單跑 `barcode.spec.ts` 綠、第一次跑整套紅一條。食物的份量是另外載入的，回到記一餐太快按「記錄」記成 1 g
   （`--repeat-each=12` 重現 5／12）。先等份量「份」選上。**這是產品裡既有的競態**（§8.2「掃條碼的已知限制」第 10 點）。
 
+### 營養標示的手機辨識：解析器的「綠燈」是擾動測試與突變才看得出來的
+
+沒有編新的號碼。逐條的經過在計畫 `docs/superpowers/plans/2026-10-23-label-ocr.md` 的「執行中發現的差異」。
+
+- **測試的標示都是正常排法，看不出欄排反**（Task 1 審查）：39 條測試全綠，但英國的 `Per 100g  Per 45g bar` 讀成 231 kcal、表頭上面的 `每份 35 公克`、說明文字裡的
+  `per serving and per 100 g` 都給出**完整又合理**的每份數字。審查拿「換一個寫法」的標示去打才紅。修正是兩欄交叉檢查（每 100 ≈ 每份 × 100 ÷ 一份）。
+- **突變存活才補的測試**（Task 1 審查，三輪）：第一輪「用第一個表頭行」「整段文字當表頭」存活，因為英文說明那條有每一份量、交叉檢查把排反的換回來了，補了沒有每一份量的那一版才紅；
+  第二輪「至少兩項」存活（容許差收緊後原本的例子已經對不起來），補了 0 對 0 才紅；第三輪「可以標 0 只用門檻」存活，**抓到真的錯**（第一版把門檻乘上 100 ÷ 一份，
+  250 毫升每份 0 大卡對每 100 的 4 大卡被當成讀錯）。
+- **擾動測試比 fixture 誠實**（第二、三輪）：審查寫的單字元擾動（`ocr-rev1b-fuzz.py`，把標示的每個字元改成相近的字）量「完整而對／完整而錯／錯超過 10%」。
+  第二輪的收緊把 5 個完整而錯變不完整、錯超過 10% 2 → 0；第三輪的進位掃描（印對的兩欄標示）抓到「每份整數印法」495/1144 被當成讀錯，修到 1144/1144。
+  **單字元的擾動碰不到「兩件事同時讀錯」**——已知的洞留在 §8.2 的已知限制（第 12 點）。
+- **引擎的生命週期沒有測試**（Task 3–4 審查 I1）：Task 4 的 4 條測試全綠，但失敗時 Web Worker 沒收、中止有兩個空窗、EXIF 方向不見（長邊 ≤ 2000 的照片原樣給引擎）、
+  `CacheFirst` 會把 SPA 退回來的 HTML 存成 core。新的 `label-ocr-engine.test.ts` 用假的 `tesseract.js`（`createWorker` 什麼時候 settle 由測試決定）守著，12 條突變全紅。
+- **e2e 與突變證明不了的設定**（Task 6）：`rotateAuto: true` 改 `false`，三條 e2e 照樣綠（那張固定照片不轉也讀得出來）。記下來，不假裝守得到（§8.2 第 14 點）。
+- **e2e 的「手機辨識中…」那一行**：它在 change 的那一次 render 就出現、閒的機器上也有約 1.4 秒（真的 OCR），所以 `toBeVisible` 輪詢得到；突變（把那一段拿掉）證明它不是空轉。
+  用假的、馬上回來的 OCR 就會是 flaky。
+- **jsdom 的 `DOMException` 不是 Node 的**（Task 4）：`error instanceof DOMException` 在 Vitest 裡對 `AbortController` 的 reason 是 false，改 `instanceof Error` 也不行
+  （見 §7）。改成只看 `name === "AbortError"`，瀏覽器裡行為不變。
+
 ---
 
 ## 7. 踩過的技術坑（節錄，完整版在各計畫文件）
@@ -1269,6 +1290,13 @@ e2e 的 B 裝置因此多了畫面的斷言——讓 access token 過期、點�
 | 行內 `<span>` 接成可及名稱沒有空白 | jsdom（dom-accessibility-api）把連結裡行內的 `<span>` 直接接起來：「體重」＋「79 公斤」是「體重79 公斤」。總覽小卡片在標籤與數字之間放 `{" "}`（欄排版裡空白不佔位置，畫面不變）；Chromium 算出來的也是「體重 79.4 公斤 比 7 天前 -0.9 公斤」（`home.spec.ts` 斷言整個名稱） |
 | grid 拉伸的卡片，裡面的連結沒有跟著撐滿 | 兩張小卡片並排時 grid 把矮的那張拉成一樣高，裡面的連結照樣只有 `min-height` 的 44px，下半張點了沒反應（截圖才看得到，jsdom 沒有版面）。連結加 `box-sizing: border-box; height: 100%`（grid 拉伸過的項目高度算是確定的） |
 | e2e：重現「不換行的長字串」 | 第一次寫的長 email（`newAccount` 的 label 帶連字號）在 390 寬**換行了**，測試沒紅——「-」後面是換行的地方。沒有空白、沒有連字號的才溢出（`home.spec.ts` 用 `homemelongemailwraps`）。另外 `<p>` 是區塊，外框永遠是容器的寬，字溢出去量 `boundingBox()` 看不到——量元素自己的 `scrollWidth - clientWidth` |
+| jsdom 裡 `error instanceof DOMException` 是 false | Vitest 的 `AbortController` 是 Node 的、全域的 `DOMException` 是 jsdom 的：`controller.abort()` 的 reason 不是後者的實例；改 `instanceof Error` 也不行（jsdom 的 `DOMException` 不是 Node 的 `Error`）。認中止只看 `name === "AbortError"`（同 `lib/save-file.ts` 的 `errorName`）。`abort()` 也**不要帶 reason**，否則被當成別的失敗 |
+| Tesseract.js 7.0.0 載入失敗時 `createWorker` 不 settle | 它是 `async` 函式，`new Worker` 在第一個 await 之前同步發生；失敗後那個 Web Worker 拿不到、之後還會在主執行緒丟 `Cannot read properties of undefined (reading 'resolve')`。繞法：呼叫的當下把 `globalThis.Worker` 換成會記下實例的子類別、`finally` 換回，失敗／逾時／中止時直接 `terminate()`。用假的 `tesseract.js`（`createWorker` 的 settle 由測試決定）才測得到 |
+| Workbox `cacheWillUpdate` 一出現就不再擋非 200 | 只要有任何 `cacheWillUpdate`，`StrategyHandler` 就跳過 `status !== 200` 那一段，所以要自己看狀態。`ocr-engine` 的 `CacheFirst` 只存 200 而且 content-type 有 `javascript`——檔案不在時 Caddy 的 `try_files` 回 200 `text/html`，不擋就把 HTML 存成 core |
+| 小圖的 EXIF 方向不見 | 長邊已經 ≤ 2000 的照片，`shrinkToLongestEdge` 原樣回傳，EXIF 方向（`Orientation 6`，手機常見）留在檔案裡，引擎讀成橫躺的亂碼。`lib/label-ocr.ts` 傳 `{ alwaysRedraw: true }`，小的也經 canvas 重新編碼（其他呼叫端行為照舊） |
+| 辨識中使用者在別的欄位打字，讀完焦點被搶走 | `show()` 讀完把焦點移到結果那一段，名稱欄打到一半的字就斷了、手機收鍵盤。只在 `document.activeElement` 是 `null` 或 `body`（焦點跟著收起來的卡片掉了）才移。測試要用 `keyboard()` 不用 `type()`（後者先點一下把焦點拉回來，測不到） |
+| `getByLabel("營養標示文字")` 要 `exact` | 貼上那一塊的 `region` 的 `aria-label` 是「貼上營養標示文字」，不帶 `exact` 兩個都對到。按鈕「貼上營養標示文字」跟 region 是**同一個字、不同角色** |
+| e2e 的 `fill()` 不是真的貼上 | `label-ocr.spec.ts` 的貼上用 `fill`，沒有走剪貼簿與 `paste` 事件 |
 
 ---
 
@@ -1714,6 +1742,28 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
   8. **迷你折線沒有刻度**：x 從最近 30 天裡的**第一筆**畫到最後一筆（不是從 30 天前），只看得出方向；30 天內少於 2 筆不畫。
   9. **深色模式的顏色接近**：快速記錄裡掃條碼的徽章是 `--color-action`（深色 `#ff8a6b`），跟拍照記的 food 橘看得出是兩個色但很近；`/weight` 的 7 天平均（`--color-action`）跟每天的線（`--color-accent`）在深色是同一個色，只差虛線與 `opacity`。看截圖分得出來，沒有加新的設計變數（規格 D17、D24 都沒要求）。
   10. **「我的」的長 email 斷在任何字元**：以前沒有空白、沒有連字號的 email 在 390 寬溢出、撐出整頁的水平捲動（既有的，首頁改版的截圖看到的）。現在 `AccountCard.module.css` 的 `.email` 是 `overflow-wrap: anywhere`，會斷在「@exampl／e.com」這種地方，不是斷在 `@` 或 `.`。
+- **營養標示的手機辨識的已知限制**（規格 §9 的十點，加上審查與實作中發現的；計畫「與規格的差異」第 3 點已在審查後解決，不列）：
+  1. **手機辨識在真的包裝上的準確度沒有量過**：只用合成標示量過（規格 §6.3：用 Playwright 把標示畫成 HTML 表格截圖，乾淨的 PNG 與「像手機拍的」JPEG）。
+     沒有反光、彎曲、透視、小字、花紋底；`rotateAuto` 只轉小角度、不修透視。e2e 的固定照片也是畫出來的。
+  2. **手機上的時間沒有量過**：量到的毫秒數（e2e 印的 1,371–2,975 ms；獨立的 dev 檢查腳本 `ocr-t6-devcheck.mjs` 第一次 1,099 ms；都含第一次下載）是這台 Windows 桌機。規格的估計是中階手機慢 3–5 倍（建 worker 0.5–1.5 秒、辨識 3–6 秒），
+     第一次再加約 3.2 MB 的下載。iOS Safari 的 wasm、記憶體、service worker 能不能接管 dedicated worker 的請求都沒有實機驗證。
+  3. 英文標示的 `kJ` 常讀不出來（熱量讀不到 → AI 或自己填）；`chi_tra` 單獨讀英文字還可以，但不是為英文訓練的。美式的 `Calories 230`（沒有單位）**一律不讀**。
+  4. 少了小數點不猜：每 100 那一欄壞了會退到每份，兩欄都壞就是 `implausible`。有些讀錯（`6.0g` 讀成 `6.09`）合理性擋不住，所以畫面一律「請對照包裝確認」。
+  5. **貼上與 Live Text 在真的手機上沒有試過**：e2e 用 `fill()`。原況文字／Google Lens 貼上的格式沒有實測；如果它們一欄一欄（先全部名稱、再全部數字）輸出，
+     這一版讀不到（只處理同一行與相鄰兩行）。
+  6. 語言資料在 IndexedDB 裡存解開的 2.4 MB；換資料版本之後舊的那一筆不會被刪。iOS 的網頁（沒有加到主畫面）七天沒用會被清掉，下次再下載。
+  7. **第一次辨識會自動下載約 3.2 MB**（規格 D1），不先問（畫面有一行說明）。
+  8. `tesseract.js` 7.0.0 的兩個毛病（`{code, data}` 壞掉、載入失敗時 `createWorker` 不 settle）靠固定網址與抓住 Web Worker 來繞，升版要重看（見第 10 節）。
+  9. 每張照片只辨識一次（PSM 6）；不自動換 PSM 再試（實驗裡 PSM 4 沒有讀出 PSM 6＋轉正讀不出的東西）。
+  10. **文字解析在後端**：沒有網路時 OCR 做完也讀不了（引擎的快取只是省下載）；畫面說「讀不了，請檢查網路再試一次」。
+  11. **單欄的標示沒有第二欄可以交叉檢查**：只有每份或只有每 100 一欄時，那一欄裡讀錯的數字仍可能回「完整而錯」。擾動測試（單字元）裡就是 `serving_photo`
+      的 187 個「錯超過 10%」（`ca56c64`：`both_photo`、`both_4000`、`tw_both_dv3` 都是 0）。畫面一律「請對照包裝確認」是唯一的守衛。
+  12. **推的或讀不到的欄位順序，加上每一份量讀成約 10000 ÷ 真的一份**（例如 35 → 286）：排反的兩欄可能剛好「對得起來」，換成錯的一欄，而且是完整的。
+      要表頭（或順序）與一份的量**同時**讀錯；單字元的擾動測試沒有碰到。讀得到的順序（兩個表頭都讀到）照表頭、不受影響。
+  13. **「填入讀到的」會清掉沒讀到的欄位**（規格 D3）：包括使用者原本打好的數字。故意的——填進去的是每 100、單位可能換了，留著的那一格可能是每份或別的單位，
+      會混成一筆看起來填好了的食物；空著的欄位送出前一定會被擋。「填入了讀到的數字，其餘請自己填」那句話是這個行為的提示。
+  14. **`rotateAuto` 這個設定沒有任何測試守得到**：把它改成 `false`，e2e 的固定照片照樣讀得出來（突變存活）；守它的只有規格 §6.3 的實驗（`serving` 那張靠它才讀得出來）。
+  15. 實驗的 Node 版（`chi_tra+eng` 從本機目錄載入時 `eng` 載不起來）與沒有放進 vitest 的真 OCR 測試：vitest 跑在 jsdom，真的 OCR 只有 e2e 在真的 Chromium 跑（規格 §10 第 9 點）。
 - **編輯自己已送出的提案**：後端沒有這個端點，目前只能等審核結果。
 
 ---
@@ -2819,6 +2869,107 @@ production 不要開 DEBUG log（第 7 點）。
 
 **已知限制**在 §8.2「首頁改版的已知限制」（10 點）。最要緊的：拍照記與掃條碼的自動開相機**沒有在 iOS 實機驗證**（第 1 點）、拍照記只能拍不能從相簿選（第 2 點）、
 深色模式幾個顏色很接近（第 9 點）。
+
+### 營養標示的手機辨識
+
+新增食物的「拍營養標示」先在**手機上**認字（Tesseract.js，不用 AI 額度、照片不離開裝置），認出來的字送新的端點，由確定性的規則讀出每 100 的營養素；
+讀得完整就直接填表單，讀不完整才「改用 AI 讀（用 1 次額度）」。另外可以「貼上營養標示文字」。目的是省 AI 額度與費用
+（規格 `docs/superpowers/specs/2026-10-23-label-ocr-design.md`、計畫 `docs/superpowers/plans/2026-10-23-label-ocr.md`，
+計畫的「執行中發現的差異」記了每個 task 與每一輪審查的 commit、條數、突變與量到的數字，「與規格的差異」是摘要）。
+**沒有 migration、沒有新的環境變數；一個新端點（108 → 109）。**
+
+**端點**（1 個；要登入）：
+
+| 端點 | 做什麼 | 要記得的 |
+|---|---|---|
+| `POST /api/foods/parse-label-text` | body `{text}`（1–4000 字，Python 的 `len`）→ `200 LabelTextParseResponse`：`complete`、`base_unit`、`nutrition`（**每 100**，完整才有）、`found`（讀到的每 100）、`missing`、`reason`、`serving`、`servings_per_package`、`basis`（`per_100`／`per_serving`）、`consistency` | 順序：401 → 422（空字串、超過 4000 字）→ 限速 429 `TOO_MANY_LABEL_PARSES`（帶 `Retry-After`）→ 解析。**不完整也是 200**（`complete: false`、`nutrition`／`basis`／`consistency` 是 null）。純函式：不碰資料庫、不呼叫 AI、不算額度、不寫 `ai_analyses`，**文字不寫進任何 log**。每人每分鐘 30 次，**每一次都算**、在解析之前（422 進不到路由，不算）。`reason` 五個值：`no_values`、`columns_unknown`、`needs_serving_size`、`implausible`、`missing_fields` |
+
+schema 放在新檔 `app/schemas/label_text.py`（同時用 `food.py` 的 `NutritionResponse`／`ServingSize` 與 `ai.py` 的 `ConsistencyResult`，放進任一邊會循環 import）。
+合理性檢查跟 AI 那一條共用 `app/nutrition_units.py`（新的 `plausible_per_100`，`test_ai_label.py` 一個字沒改就綠）。
+
+**解析規則**（`app/label_text.py`，純函式；規格 §4 在審查後改寫過三輪，以規格與程式為準）：
+
+- **正規化**：NFKC、表格線換空白、小數點兩邊的空白拿掉（數字中間的空白**不**合併：`180 514` 是兩欄）、逗號（三位是千分位、一或兩位是小數點）、
+  數字樣的片段裡 `O`→`0`、`I`／`l`→`1`。**少了小數點不猜**（`2809` 就是 2809，交給合理性擋）。很長的數字（> 1e6）不算數字。
+- **欄的順序看表頭那一行**（最後一個在第一列之前的表頭行）：兩個表頭都讀到就照表頭、不換；只讀到一個就看同一行另一邊有沒有像表頭的字；
+  `per serving／bar／portion`、`per N g／ml`（N ≠ 100）是每份那一欄。每日參考值只看表頭行。
+- **交叉檢查**：兩欄都有數字又有每一份量，每一項檢查 每 100 ≈ 每份 × 100 ÷ 一份。容許差＝兩邊各自的**印出來的半格**（整數 0.5、一位小數 0.05、
+  兩位 0.005；kJ 換 kcal 時一起除以 4.184）＋ 3%；有一邊印成 0 時再看「可以標 0」（衛福部附表二：熱量 ≤ 4 大卡、營養素 ≤ 0.5 公克，是每 100 的門檻），
+  取兩者較大的。**至少兩項**對得起來才算數。**推的或讀不到的順序**照對得起來的項目換；**讀到的順序**不換。
+- **名稱不借數字**：名稱那一行沒有數字，不借下一行的每一份量、份數、表頭的數字。只處理同一行與相鄰兩行。
+- **選欄**：每 100 完整且 `plausible_per_100` 過、對不起來的項目都是它對 → `per_100`；否則每份（要有每一份量）→ `per_serving`；否則不完整。
+  沒有表頭、或單獨一個表頭、又沒有每一份量 → `columns_unknown`（不照衛福部的順序猜）。單位看表頭那一行。
+- 完整時 `consistency` 用 AI 那條同一個 `check_consistency`（只標記，不擋）。
+
+**引擎**（前端）：
+
+- 套件（全部釘版本、不帶 `^`）：`tesseract.js` 7.0.0、`tesseract.js-core` 7.0.0、`@tesseract.js-data/chi_tra` 1.0.0（資料是 tesseract-ocr/tessdata，Apache-2.0）、
+  `wasm-feature-detect` 1.9.0（有 SIMD 用 `simd-lstm`，否則 `lstm`）。授權 Apache-2.0／MIT。**只用 `chi_tra`**（`chi_tra+eng` 多 2.95 MB、台灣標示沒變好、英文標示的小數點反而掉）。
+- 設定：PSM 6、`rotateAuto: true`（只轉小角度、不修透視）、照片先 `shrinkToLongestEdge(file, 2000, { alwaysRedraw: true })`（小的也經 canvas 重新編碼，EXIF 方向才會被套上；先鋪白底，透明 PNG 才不會變成黑底）。
+  不做灰階、對比、二值化（量過變差）。每張照片只辨識一次、不自動換 PSM 再試。
+- **自己服務**：worker 與 core 用 `?url`，語言資料用 `vite.config.ts` 的小 plugin 放在 `/ocr/tessdata-4.0.0_best_int/chi_tra.traineddata.gz`
+  （Tesseract.js 要固定檔名）；`workerPath`／`corePath`／`langPath` 都指向自己，`workerBlobURL: false`。Playwright 記下的第三方請求 **0 個**。
+- **快取**：worker 與延遲載入塊進預先快取；**core 不進**，runtime `CacheFirst`（快取名 `ocr-engine`，`cacheWillUpdate` 只存 **200 而且 content-type 有 `javascript`**，
+  因為檔案不在時 Caddy 的 `try_files` 會回 200 `text/html` 的 `index.html`，不擋的話會把 HTML 當 core 存起來）；語言資料用 Tesseract.js 內建的 IndexedDB（存解開的 2.4 MB），不依賴 service worker 接管 worker 的請求。
+- **生命週期**：一張照片建一個 worker、用完 `terminate()`（不在整個 session 留著）；沒有 SIMD 自動換 `lstm`；一張照片一個 90 秒的逾時（`OCR_TIMEOUT_MS`：下載、初始化、辨識**合計**，不是只算初始化）→ `OcrUnavailableError`
+  （畫面「這台裝置現在不能用手機辨識」＋AI 按鈕）。中止的辨識用 `AbortController#abort()`——**不要帶 reason**，`recognizeLabel` 以 `name === "AbortError"` 認中止。
+- **Tesseract.js 7.0.0 的兩個毛病**：(1) 語言資料用 `{code, data}` 給是壞的 → 改成固定網址；(2) 載入失敗時 `createWorker` **永遠不 settle**，而且它開的 Web Worker 拿不到，
+  之後還會在主執行緒丟一個 `Cannot read properties of undefined (reading 'resolve')`。繞法：呼叫 `createWorker` 的當下（它在第一個 await 之前同步 `new Worker`）把
+  `globalThis.Worker` 換成會記下實例的子類別、馬上換回，失敗、逾時、中止時直接 `terminate()` 那個 Web Worker。**升版要重看這兩條。**
+
+**前端：**
+
+| 東西 | 在哪裡 | 要記得的 |
+|---|---|---|
+| 引擎 | `lib/label-ocr.ts`（主程式：縮圖、`import()` 延遲載入、取消）、`lib/label-ocr-engine.ts`（延遲載入塊：Tesseract.js、`chi_tra`） | 主程式裡**沒有 `tesseract`**（build 後要檢查）；`OCR_MAX_EDGE` 2000 |
+| API 與說法 | `api/label-text.ts`（`parseLabelText`，超過 4000 字切掉再送，切在表情符號中間時丟掉落單的前半）、`lib/label-text.ts`（`describeLabelParse`、`fillFromParse`／`fillFromAi`） | `reason` 的說法跟後端五個值一一對上；`missing_fields` 但 `found` 全是 null 時說「讀到的數字不太合理」 |
+| 元件 | `components/LabelReader.tsx`（新）、`components/HintField.tsx`（從 `PhotoHintStep` 抽出，兩邊共用）、`screens/NewFood.tsx` | 拍營養標示整段流程從 `NewFood` 搬進 `LabelReader`，用 `onFill` 交回表單；`src/test/setup.ts` 把引擎 mock 成讀不到字 |
+
+`LabelReader` 的行為：選了照片 → 卡片（縮圖、「手機辨識中…」＋秒數；第一次用說「第一次使用要下載辨識資料（約 3 MB）」）→ **讀完整**直接填表單（每 100、份、份數，
+「手機辨識的數字，請對照包裝確認」）；**不完整**卡片留著，說讀到什麼，三顆按鈕：「改用 AI 讀（用 1 次額度）」（帶同一張照片與說明）、「填入讀到的」、「取消」；
+OCR 讀出空字串是「手機讀不出這張營養標示」（不打後端），`no_values` 是「讀不出營養標示的數字」（兩句不同）。完整之後還有「數字不對？改用 AI 讀」。
+「貼上營養標示文字」：textarea＋「讀取文字」，沒有 AI 按鈕（沒有照片）。辨識中或 AI 讀取中，「讀取文字」與貼上那一塊的「填入讀到的」是 `aria-disabled`
+並說為什麼（不然讀完的結果會蓋掉貼上的）。讀完時焦點只在掉到 `body` 的時候才移到結果那一段（使用者辨識中去名稱欄打字時不搶焦點）。
+**「填入讀到的」讀到的填進去、沒讀到的清空（原本打了數字的也清掉）**——規格 D3，理由：填進去的是每 100、單位可能換了，留著的那一格可能是每份或別的單位。
+
+**新的東西在哪裡：**
+
+- 後端：`app/label_text.py`、`app/schemas/label_text.py`（新）；`app/nutrition_units.py`（`plausible_per_100`）、`app/ai/label.py`（改用它）、`app/api/routes/foods.py`、
+  `app/ratelimit.py`（`label_text_rate_limiter`）、`tests/conftest.py`（重置）。測試 `tests/test_label_text.py`（133 條）、`test_foods_parse_label_text.py`、
+  `test_nutrition_units.py` 的新增；`tests/fixtures/label_text/*.txt` 是**實驗裡真的 OCR 輸出**（含雜訊）。
+- 前端：上表的檔案，加上 `package.json`、`vite.config.ts`（語言資料的 plugin、`globIgnores`、`runtimeCaching`）、`src/api/schema.d.ts`。測試
+  `label-ocr-engine.test.ts`（引擎的生命週期，假的 `tesseract.js`）、`label-ocr`、`label-text`、`label-reader`、`new-food-barcode` 的新增與修改。
+- e2e：`e2e/label-ocr.spec.ts`（三條，新帳號、手機尺寸、`e2e/fixtures/nutrition-label.jpg`，`make-label.mjs` 重畫照片用）：
+  1. **真的 OCR 讀固定照片**：表單 514.00／6.00／28.00／60.90、份 35 → 建立 → 詳情頁；`read-label` **0 次**、`parse-label-text` 的 body 只有 `text`；
+  2. **讀不出來**（`jpeg.ts` 的 8×8 小圖，OCR 回空字串）：卡片只有「改用 AI 讀」「取消」與說明欄、不打 `parse-label-text`；
+  3. **貼上文字**：每份 → 每 100 ml；貼上不完整 →「填入讀到的」；兩次送出的 body 就是 `{ text }`、沒有打 AI。
+  `barcode.spec.ts`、`ai-photo-hint.spec.ts` 的營養標示改成先等「改用 AI 讀（用 1 次額度）」（辨識完才出現）。
+
+**量到的數字**（`feat/label-ocr`，`d974c0c`）：
+
+| 項目 | 數字 |
+|---|---|
+| 測試 | 後端 2387 passed；前端 `Test Files 230`、`Tests 3368`（vitest 印出來的）；e2e 71 條、27 個檔案，整套連跑兩次 71 passed（57.7 秒、55.3 秒） |
+| 第一條 e2e 的 OCR 時間（含第一次下載，dev 伺服器） | 三支合跑 1,385 ms；整套兩輪 1,898 ms、2,421 ms；序列 1,371–1,386 ms；6 個平行 1,966–2,975 ms；獨立跑第一次 1,099 ms、第二次（暖的）847 ms。**這是桌機，不是手機** |
+| 規格 §6.3 的實驗（合成標示，桌機 Chromium） | PSM 6＋`chi_tra`＋`rotateAuto`：8 列對、每張 0.45–0.55 秒；長邊 2000 時 0.91–1.19 秒、長邊 4088 反而讀錯；建 worker 0.12–0.28 秒 |
+| build：主程式 `index-*.js` | 599,535 B（gzip 184.03 kB），比 master 的 591,834 B 多 7,701 B（`LabelReader`、`label-text`、引擎的入口）；**沒有 `tesseract`** |
+| build：延遲載入塊 | `label-ocr-engine-*.js` 約 18.7 KB（gzip 約 8 kB）；`worker.min-*.js` 111,307 B |
+| build：core | `tesseract-core-simd-lstm.wasm-*.js` 3,899,472 B、`tesseract-core-lstm.wasm-*.js` 3,896,484 B（一台裝置只下載其中一個）；**不在預先快取**；經 Caddy 的 zstd 實際傳 1,473,651 B |
+| build：語言資料 | `chi_tra.traineddata.gz` 1,656,239 B（已經是 gzip，Caddy 不再壓） |
+| build：預先快取 | 12 筆、837.51 KiB（master 10 筆、702.53 KiB：多 worker 與延遲載入塊） |
+| 第一次使用下載 | 約 3.2 MB（core 1.47＋語言資料 1.66，加 worker 約 34 KB）；之後 core 在 `CacheFirst`、語言資料在 IndexedDB |
+| dev／preview 實跑 | dev 921 ms、846 ms；`vite preview`（service worker 接管後）786 ms、658 ms；第三方請求 0 個 |
+
+**審查與突變**（細節在計畫）：解析器審查三輪（欄排反給出完整又錯的每份、至少兩項、半格照印出來的位數）、引擎審查一輪（生命週期的測試、失敗時收掉 Web Worker、中止空窗、
+EXIF 方向、快取不存 HTML）、`LabelReader` 審查一輪（讀完不搶焦點、讀照片時不能貼上、按鈕不折行、秒數靠著狀態）。每個 task 的突變都記了，**存活的**：
+`rotateAuto` 改 `false`（e2e 那張照片不轉也讀得出來，守這個設定的只有規格 §6.3 的實驗）、兩個重複的 `signal.throwIfAborted()`（各拿掉一個，等價）、
+「3% 乘較小的那個」（等價）。
+
+**部署**：沒有 migration、沒有環境變數；映像裡要有 `dist/ocr/tessdata-4.0.0_best_int/chi_tra.traineddata.gz` 與 `assets/tesseract-core-*.js`，
+部署後的檢查在 `docs/deployment.md`「各版本的升級備註」最上面那一條。
+
+**已知限制**在 §8.2「營養標示的手機辨識的已知限制」（15 點）。最要緊的三點：**手機上的速度與真的包裝的準確度沒有量過**（第 1、2 點）、
+貼上與 Live Text 在真的手機上沒有試過（第 5 點）、單欄的標示讀錯一個數字仍可能回「完整而錯」（第 11 點）。
 
 ---
 

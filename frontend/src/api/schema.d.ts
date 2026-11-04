@@ -567,6 +567,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/foods/parse-label-text": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Parse Label Text Route
+         * @description 營養標示的文字（手機辨識或貼上的）→ 每 100 的營養素（標示 OCR 規格 §5）。確定性的規則，
+         *     **不呼叫 AI、不算額度、不寫 `ai_analyses`**。讀不完整也是 200（`complete: false`）。
+         *     每人每分鐘 30 次（429 `TOO_MANY_LABEL_PARSES`）。文字不存、不寫 log。
+         */
+        post: operations["parse_label_text_route_api_foods_parse_label_text_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/foods/{food_id}": {
         parameters: {
             query?: never;
@@ -2820,6 +2842,48 @@ export interface components {
             remaining_today: number;
         };
         /**
+         * LabelTextFound
+         * @description 讀到的每 100（g 或 ml，看 `base_unit`）；讀不到的是 null。
+         */
+        LabelTextFound: {
+            /** Kcal */
+            kcal: string | null;
+            /** Protein G */
+            protein_g: string | null;
+            /** Fat G */
+            fat_g: string | null;
+            /** Carb G */
+            carb_g: string | null;
+        };
+        /**
+         * LabelTextParseResponse
+         * @description 營養標示的文字讀出來的東西。**讀不完整也是 200**（`complete: false`）：`found` 是讀到的、
+         *     `missing` 是缺的、`reason` 是為什麼。`nutrition` 只在完整時有（每 100，直接餵得進
+         *     `FoodCreateRequest.nutrition`）。確定性的規則：不呼叫 AI、不算額度、不寫 `ai_analyses`。
+         */
+        LabelTextParseResponse: {
+            /** Complete */
+            complete: boolean;
+            base_unit: components["schemas"]["BaseUnit"];
+            nutrition: components["schemas"]["NutritionResponse"] | null;
+            found: components["schemas"]["LabelTextFound"];
+            /** Missing */
+            missing: ("kcal" | "protein_g" | "fat_g" | "carb_g")[];
+            /** Reason */
+            reason: ("no_values" | "columns_unknown" | "needs_serving_size" | "implausible" | "missing_fields") | null;
+            serving: components["schemas"]["ServingSize"] | null;
+            /** Servings Per Package */
+            servings_per_package: string | null;
+            /** Basis */
+            basis: ("per_100" | "per_serving") | null;
+            consistency: components["schemas"]["ConsistencyResult"] | null;
+        };
+        /** LabelTextRequest */
+        LabelTextRequest: {
+            /** Text */
+            text: string;
+        };
+        /**
          * LibraryFoodMatch
          * @description 食物庫裡跟這一樣**名稱完全相同**的食物（看得到的、有生效版本的；AI 多樣估算規格 D4、D5）。
          *
@@ -4858,6 +4922,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BarcodeLookupResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    parse_label_text_route_api_foods_parse_label_text_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LabelTextRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabelTextParseResponse"];
                 };
             };
             /** @description Validation Error */

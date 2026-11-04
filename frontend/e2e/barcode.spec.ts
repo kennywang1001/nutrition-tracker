@@ -320,6 +320,8 @@ test("沒有預填＋拍營養標示（只假造讀標示）：真的後端說�
 	page,
 	request,
 }) => {
+	// 照片先過真的手機辨識（第一次要下載辨識資料），同 label-ocr.spec.ts 給 60 秒。
+	test.setTimeout(60_000);
 	const account = await newAccount(request, "barcode-label");
 	const productName = `E2E 海苔洋芋片 ${Date.now()}`;
 	const labelResponse = {
@@ -382,7 +384,7 @@ test("沒有預填＋拍營養標示（只假造讀標示）：真的後端說�
 		page.getByRole("heading", { name: "新增食物", exact: true }),
 	).toBeVisible();
 	await expect(
-		page.getByText("找不到這個條碼的資料。拍營養標示讓 AI 讀數字，或自己填。", {
+		page.getByText("找不到這個條碼的資料。拍營養標示讀數字，或自己填。", {
 			exact: true,
 		}),
 	).toBeVisible();
@@ -397,12 +399,17 @@ test("沒有預填＋拍營養標示（只假造讀標示）：真的後端說�
 		mimeType: "image/jpeg",
 		buffer: await generateJpegBuffer(page),
 	});
-	// 選了照片先出「確認照片」卡片（照片說明規格 §6）；不打說明，直接開始讀。
+	// 選了照片先出「確認照片」卡片（照片說明規格 §6），先在手機上辨識，這張 8×8 的圖讀不出字
+	// （標示 OCR 規格 §3.1）：辨識完才出現「改用 AI 讀」。不打說明，直接按。
 	// 下面的 Object.keys 斷言正好守著「沒打說明就沒有 hint」。
-	await page
-		.getByRole("region", { name: "確認照片", exact: true })
-		.getByRole("button", { name: "開始讀取", exact: true })
-		.click();
+	const step = page.getByRole("region", { name: "確認照片", exact: true });
+	const useAi = step.getByRole("button", {
+		name: "改用 AI 讀（用 1 次額度）",
+		exact: true,
+	});
+	// 第一次要下載辨識資料＋辨識（dev 上約 1–3 秒）；機器慢、整套平行跑時留寬一點。
+	await expect(useAi).toBeVisible({ timeout: 30_000 });
+	await useAi.click();
 	await expect(
 		page.getByText("AI 讀的數字，請對照包裝確認", { exact: true }),
 	).toBeVisible();

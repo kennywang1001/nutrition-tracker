@@ -34,6 +34,15 @@ vi.mock("../lib/barcode-ponyfill", () => ({
 	createPonyfillDetector: vi.fn(async () => ({ detect: async () => [] })),
 }));
 
+// 手機辨識（標示 OCR 規格 D18）：引擎會建 worker、抓 wasm 與語言資料——jsdom 都沒有，測試也不該
+// 依賴它。預設讀不到任何字；要讀到字的測試 mock `lib/label-ocr` 的 `recognizeLabel`。
+// `vi.fn`：`tests/label-ocr.test.ts` 斷言 `recognizeLabel` 真的走到這裡。
+vi.mock("../lib/label-ocr-engine", () => ({
+	recognizeText: vi.fn(async () => ""),
+	OCR_LANG_PATH: "/ocr/tessdata-4.0.0_best_int",
+	OCR_TIMEOUT_MS: 90_000,
+}));
+
 // 電腦版版面（規格 §6）：jsdom 沒有 matchMedia；預設是手機版。
 // useIsDesktop 快取它的 MediaQueryList，每個測試前丟掉，從乾淨的狀態開始。
 installMatchMedia();

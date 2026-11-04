@@ -173,13 +173,15 @@ describe("PhotoHintStep（確認照片）", () => {
 		expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:fake-2");
 	});
 
-	it("營養標示：按鈕名稱是「開始讀取」", () => {
+	// 營養標示不再用這張卡片（標示 OCR：LabelReader 自己的卡片，只共用 HintField）；
+	// 開始按鈕的名稱照樣是呼叫端給的。
+	it("開始按鈕的名稱是呼叫端給的 startLabel", () => {
 		render(
-			<Harness startLabel="開始讀取" onStart={vi.fn()} onCancel={vi.fn()} />,
+			<Harness startLabel="估算這一餐" onStart={vi.fn()} onCancel={vi.fn()} />,
 		);
 
 		expect(
-			screen.getByRole("button", { name: "開始讀取" }),
+			screen.getByRole("button", { name: "估算這一餐" }),
 		).toBeInTheDocument();
 		expect(
 			screen.queryByRole("button", { name: "開始估算" }),
