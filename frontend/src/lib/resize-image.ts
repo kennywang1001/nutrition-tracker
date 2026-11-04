@@ -56,6 +56,10 @@ export async function shrinkToLongestEdge(
 			// 自己處理，好過讓整個上傳失敗。
 			return file;
 		}
+		// JPEG 沒有透明度：不先鋪底的話，透明的地方會變成黑的——透明 PNG 的營養標示
+		// 會整張黑底黑字，手機辨識一定讀不到（標示 OCR 計畫「最終審查後的修正」）。
+		ctx.fillStyle = "#fff";
+		ctx.fillRect(0, 0, width, height);
 		ctx.drawImage(bitmap, 0, 0, width, height);
 
 		const blob = await new Promise<Blob | null>((resolve) => {

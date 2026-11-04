@@ -80,6 +80,17 @@ describe("營養標示文字的 API", () => {
 		expect(sentBody(fetchMock).text.length).toBe(4000);
 	});
 
+	it("切在表情符號中間：不送半個字（後端會 422 string_unicode）", async () => {
+		const fetchMock = mockParse();
+
+		// "😀" 是兩個 UTF-16 單位，切在 4000 會剛好留下前半（\uD83D）。
+		await parseLabelText(`${"a".repeat(3999)}😀`);
+
+		const sent = sentBody(fetchMock).text;
+		expect(sent.length).toBe(3999);
+		expect(/[\uD800-\uDFFF]/.test(sent)).toBe(false);
+	});
+
 	it("被限速說後端那一句；送不出去說檢查網路", () => {
 		expect(
 			describeLabelTextError(

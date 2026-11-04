@@ -1745,7 +1745,7 @@ secure context，所以本機上這些能力全部可用，那個綠燈證明不
 - **營養標示的手機辨識的已知限制**（規格 §9 的十點，加上審查與實作中發現的；計畫「與規格的差異」第 3 點已在審查後解決，不列）：
   1. **手機辨識在真的包裝上的準確度沒有量過**：只用合成標示量過（規格 §6.3：用 Playwright 把標示畫成 HTML 表格截圖，乾淨的 PNG 與「像手機拍的」JPEG）。
      沒有反光、彎曲、透視、小字、花紋底；`rotateAuto` 只轉小角度、不修透視。e2e 的固定照片也是畫出來的。
-  2. **手機上的時間沒有量過**：e2e 印的毫秒數（1,099–2,975 ms，含第一次下載）是這台 Windows 桌機。規格的估計是中階手機慢 3–5 倍（建 worker 0.5–1.5 秒、辨識 3–6 秒），
+  2. **手機上的時間沒有量過**：量到的毫秒數（e2e 印的 1,371–2,975 ms；獨立的 dev 檢查腳本 `ocr-t6-devcheck.mjs` 第一次 1,099 ms；都含第一次下載）是這台 Windows 桌機。規格的估計是中階手機慢 3–5 倍（建 worker 0.5–1.5 秒、辨識 3–6 秒），
      第一次再加約 3.2 MB 的下載。iOS Safari 的 wasm、記憶體、service worker 能不能接管 dedicated worker 的請求都沒有實機驗證。
   3. 英文標示的 `kJ` 常讀不出來（熱量讀不到 → AI 或自己填）；`chi_tra` 單獨讀英文字還可以，但不是為英文訓練的。美式的 `Calories 230`（沒有單位）**一律不讀**。
   4. 少了小數點不猜：每 100 那一欄壞了會退到每份，兩欄都壞就是 `implausible`。有些讀錯（`6.0g` 讀成 `6.09`）合理性擋不住，所以畫面一律「請對照包裝確認」。
@@ -2905,13 +2905,13 @@ schema 放在新檔 `app/schemas/label_text.py`（同時用 `food.py` 的 `Nutri
 
 - 套件（全部釘版本、不帶 `^`）：`tesseract.js` 7.0.0、`tesseract.js-core` 7.0.0、`@tesseract.js-data/chi_tra` 1.0.0（資料是 tesseract-ocr/tessdata，Apache-2.0）、
   `wasm-feature-detect` 1.9.0（有 SIMD 用 `simd-lstm`，否則 `lstm`）。授權 Apache-2.0／MIT。**只用 `chi_tra`**（`chi_tra+eng` 多 2.95 MB、台灣標示沒變好、英文標示的小數點反而掉）。
-- 設定：PSM 6、`rotateAuto: true`（只轉小角度、不修透視）、照片先 `shrinkToLongestEdge(file, 2000, { alwaysRedraw: true })`（小的也經 canvas 重新編碼，EXIF 方向才會被套上）。
+- 設定：PSM 6、`rotateAuto: true`（只轉小角度、不修透視）、照片先 `shrinkToLongestEdge(file, 2000, { alwaysRedraw: true })`（小的也經 canvas 重新編碼，EXIF 方向才會被套上；先鋪白底，透明 PNG 才不會變成黑底）。
   不做灰階、對比、二值化（量過變差）。每張照片只辨識一次、不自動換 PSM 再試。
 - **自己服務**：worker 與 core 用 `?url`，語言資料用 `vite.config.ts` 的小 plugin 放在 `/ocr/tessdata-4.0.0_best_int/chi_tra.traineddata.gz`
   （Tesseract.js 要固定檔名）；`workerPath`／`corePath`／`langPath` 都指向自己，`workerBlobURL: false`。Playwright 記下的第三方請求 **0 個**。
 - **快取**：worker 與延遲載入塊進預先快取；**core 不進**，runtime `CacheFirst`（快取名 `ocr-engine`，`cacheWillUpdate` 只存 **200 而且 content-type 有 `javascript`**，
   因為檔案不在時 Caddy 的 `try_files` 會回 200 `text/html` 的 `index.html`，不擋的話會把 HTML 當 core 存起來）；語言資料用 Tesseract.js 內建的 IndexedDB（存解開的 2.4 MB），不依賴 service worker 接管 worker 的請求。
-- **生命週期**：一張照片建一個 worker、用完 `terminate()`（不在整個 session 留著）；沒有 SIMD 自動換 `lstm`；初始化 90 秒逾時 → `OcrUnavailableError`
+- **生命週期**：一張照片建一個 worker、用完 `terminate()`（不在整個 session 留著）；沒有 SIMD 自動換 `lstm`；一張照片一個 90 秒的逾時（`OCR_TIMEOUT_MS`：下載、初始化、辨識**合計**，不是只算初始化）→ `OcrUnavailableError`
   （畫面「這台裝置現在不能用手機辨識」＋AI 按鈕）。中止的辨識用 `AbortController#abort()`——**不要帶 reason**，`recognizeLabel` 以 `name === "AbortError"` 認中止。
 - **Tesseract.js 7.0.0 的兩個毛病**：(1) 語言資料用 `{code, data}` 給是壞的 → 改成固定網址；(2) 載入失敗時 `createWorker` **永遠不 settle**，而且它開的 Web Worker 拿不到，
   之後還會在主執行緒丟一個 `Cannot read properties of undefined (reading 'resolve')`。繞法：呼叫 `createWorker` 的當下（它在第一個 await 之前同步 `new Worker`）把
@@ -2922,7 +2922,7 @@ schema 放在新檔 `app/schemas/label_text.py`（同時用 `food.py` 的 `Nutri
 | 東西 | 在哪裡 | 要記得的 |
 |---|---|---|
 | 引擎 | `lib/label-ocr.ts`（主程式：縮圖、`import()` 延遲載入、取消）、`lib/label-ocr-engine.ts`（延遲載入塊：Tesseract.js、`chi_tra`） | 主程式裡**沒有 `tesseract`**（build 後要檢查）；`OCR_MAX_EDGE` 2000 |
-| API 與說法 | `api/label-text.ts`（`parseLabelText`，超過 4000 字切掉再送；`describeLabelParse`）、`lib/label-text.ts` | `reason` 的說法跟後端五個值一一對上；`missing_fields` 但 `found` 全是 null 時說「讀到的數字不太合理」 |
+| API 與說法 | `api/label-text.ts`（`parseLabelText`，超過 4000 字切掉再送，切在表情符號中間時丟掉落單的前半）、`lib/label-text.ts`（`describeLabelParse`、`fillFromParse`／`fillFromAi`） | `reason` 的說法跟後端五個值一一對上；`missing_fields` 但 `found` 全是 null 時說「讀到的數字不太合理」 |
 | 元件 | `components/LabelReader.tsx`（新）、`components/HintField.tsx`（從 `PhotoHintStep` 抽出，兩邊共用）、`screens/NewFood.tsx` | 拍營養標示整段流程從 `NewFood` 搬進 `LabelReader`，用 `onFill` 交回表單；`src/test/setup.ts` 把引擎 mock 成讀不到字 |
 
 `LabelReader` 的行為：選了照片 → 卡片（縮圖、「手機辨識中…」＋秒數；第一次用說「第一次使用要下載辨識資料（約 3 MB）」）→ **讀完整**直接填表單（每 100、份、份數，

@@ -374,7 +374,7 @@ PSM 3／4 在**乾淨**的 PNG 上也會把「每份」那一整欄丟掉。大�
 - **e2e**：`e2e/label-ocr.spec.ts`（新帳號、手機尺寸）：真的 OCR 讀固定照片 → 表單 514.00／6.00／28.00／60.90、份 35 → 建立；`read-label` **0 次**、
   `parse-label-text` 的 body 只有 `text`。讀不出來（`jpeg.ts` 的小圖）→「改用 AI 讀」（假的 read-label 1 次）。貼上文字（每份 → 每 100 ml）。貼上不完整 →「填入讀到的」。
   `barcode.spec.ts`、`ai-photo-hint.spec.ts` 的營養標示改成「改用 AI 讀（用 1 次額度）」。
-- **建置**：`npm run build` 之後檢查 `dist/ocr/tessdata-4.0.0_best_int/chi_tra.traineddata.gz` 在、`dist/sw.js` 不含 `tesseract-core`、主程式不含 `tesseract`。
+- **建置**：`npm run build` 之後檢查 `dist/ocr/tessdata-4.0.0_best_int/chi_tra.traineddata.gz` 在、`dist/sw.js` 的**預先快取清單**裡沒有 `tesseract-core`（`sw.js` 裡會有這個字，在 runtime `CacheFirst` 的規則裡，這是故意的）、主程式不含 `tesseract`。
 
 ---
 
