@@ -32,6 +32,7 @@ import styles from "./LabelReader.module.css";
 import { focusStepAfterFileDialog } from "./PhotoHintStep";
 import step from "./PhotoHintStep.module.css";
 import { PhotoPickerButton } from "./PhotoPickerButton";
+import ui from "./ui.module.css";
 
 /** 選好的營養標示照片＋補充說明（說明只給 AI，規格 D2）。 */
 type LabelPhoto = { file: File; hint: string };
@@ -59,6 +60,8 @@ const PARTIAL_NOTE = "填入了讀到的數字，其餘請自己填";
 const AI_LABEL = "改用 AI 讀（用 1 次額度）";
 const WRONG_LABEL = "數字不對？改用 AI 讀（用 1 次額度）";
 const NOTHING_READ = "手機讀不出這張營養標示";
+const DOWNLOAD_NOTE = "第一次使用要下載辨識資料（約 3 MB）";
+const PASTE_BUSY = "手機辨識或 AI 讀取中，完成或取消後再貼上";
 
 function appliedFromParse(
 	source: "ocr" | "paste",
@@ -121,13 +124,18 @@ export function LabelReader({ onFill }: Props) {
 	const ocrControllerRef = useRef<AbortController | null>(null);
 	useEffect(() => () => ocrControllerRef.current?.abort(), []);
 
-	// 讀完：卡片消失（焦點本來在它裡面），移到結果那一段。旗標只在那一次移。
+	// 讀完：卡片（或貼上那一塊）收起來，焦點本來在它裡面的話會掉到 body——那時才移到結果那一段。
+	// 使用者已經在別的地方（例如辨識中去名稱打字）就不動：搶焦點會打斷輸入、手機會收起鍵盤（審查 I1）。
+	// 旗標只在那一次看。
 	const resultRef = useRef<HTMLDivElement>(null);
 	const focusResultRef = useRef(false);
 	useEffect(() => {
 		if (focusResultRef.current && resultRef.current !== null) {
 			focusResultRef.current = false;
-			resultRef.current.focus();
+			const active = document.activeElement;
+			if (active === null || active === document.body) {
+				resultRef.current.focus();
+			}
 		}
 	});
 	// 選了照片 → 卡片本身（晚一個 task，handover §7）；取消 → 照片按鈕。
@@ -148,6 +156,11 @@ export function LabelReader({ onFill }: Props) {
 
 	const ocrRunning = ocr?.status === "running";
 	const busy = ocrRunning || readLabelMutation.isPending;
+	const aiPending = readLabelMutation.isPending;
+	// 讀照片的時候（手機辨識或 AI）貼上的不送、不填：照片的結果晚回來會把它蓋掉，而且讀的時候
+	// 結果那一段是收起來的，使用者看不到貼上的讀到了什麼（審查 I2）。
+	const pasteBlocked =
+		busy || pasteMutation.isPending || pasteText.trim() === "";
 
 	function show(fill: LabelFill, next: Applied) {
 		onFill(fill);
@@ -264,8 +277,8 @@ export function LabelReader({ onFill }: Props) {
 	}
 
 	function submitPaste() {
+		if (pasteBlocked) return;
 		const text = pasteText.trim();
-		if (text === "" || pasteMutation.isPending) return;
 		setPasteMessage(null);
 		setPastePartial(null);
 		pasteMutation.mutate(text, {
@@ -290,9 +303,6 @@ export function LabelReader({ onFill }: Props) {
 		setPasteMessage(null);
 		setPastePartial(null);
 	}
-
-	const aiPending = readLabelMutation.isPending;
-	const pasteBlocked = pasteMutation.isPending || pasteText.trim() === "";
 
 	return (
 		<>
@@ -339,7 +349,7 @@ export function LabelReader({ onFill }: Props) {
 							readOnly={aiPending}
 						/>
 					)}
-					<div className={base.actions}>
+					<div className={`${base.actions} ${styles.actions}`}>
 						{ocr?.status === "done" && (
 							<button
 								type="button"
@@ -401,12 +411,17 @@ export function LabelReader({ onFill }: Props) {
 						readOnly={pasteMutation.isPending}
 						onChange={(event) => setPasteText(event.target.value)}
 					/>
-					<p role="status">{pasteMessage ?? ""}</p>
-					<div className={base.actions}>
+					{/* 讀照片的時候說為什麼不能送：live region（狀態一變就念）＋「讀取文字」的 aria-describedby
+					    （讀照片中才打開這一塊時，live region 一出現就有字不一定會念；聚焦到按鈕時一定念）。 */}
+					<p role="status" id={`${pasteId}-status`}>
+						{busy ? PASTE_BUSY : (pasteMessage ?? "")}
+					</p>
+					<div className={`${base.actions} ${styles.actions}`}>
 						<button
 							type="button"
 							className={base.primary}
 							aria-disabled={pasteBlocked}
+							aria-describedby={busy ? `${pasteId}-status` : undefined}
 							onClick={submitPaste}
 						>
 							讀取文字
@@ -415,7 +430,9 @@ export function LabelReader({ onFill }: Props) {
 							<button
 								type="button"
 								className={base.secondary}
+								aria-disabled={busy}
 								onClick={() => {
+									if (busy) return;
 									const partial = pastePartial;
 									closePaste();
 									setPasteText("");
@@ -446,9 +463,9 @@ export function LabelReader({ onFill }: Props) {
 						{ocrRunning && (
 							<>
 								<p>手機辨識中…</p>
-								<p className={styles.muted}>
-									第一次使用要下載辨識資料（約 3 MB）
-								</p>
+								{/* 看得到的那一行在 .statusRow 底下（秒數才排得在「手機辨識中…」旁邊，審查 M4）；
+								    讀屏從這裡念（同 LikeButton 的 aria-hidden＋srOnly）。 */}
+								<p className={ui.srOnly}>{DOWNLOAD_NOTE}</p>
 							</>
 						)}
 						{aiPending && <p>AI 讀取中…</p>}
@@ -475,6 +492,11 @@ export function LabelReader({ onFill }: Props) {
 					</div>
 					{busy && <ElapsedSeconds className={styles.muted} />}
 				</div>
+				{ocrRunning && (
+					<p className={styles.muted} aria-hidden="true">
+						{DOWNLOAD_NOTE}
+					</p>
+				)}
 				{applied?.source === "ocr" &&
 					!busy &&
 					pending === null &&

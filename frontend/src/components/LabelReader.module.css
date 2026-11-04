@@ -64,6 +64,16 @@
 	margin: 0;
 }
 
+/* 卡片與貼上那一塊的按鈕（審查 M3）：AiEstimatePanel 的 .actions 讓每顆 flex: 1 平分一列，三顆在
+   390px 的手機上各剩約 93px——「改用 AI 讀（用 1 次額度）」折成三行、「填入讀到的」的「的」掉到下一行。
+   改成照字的寬度、不折字；一列放不下就換列（.actions 本來就 flex-wrap: wrap），每一列再平分剩下的寬度。
+   手機上三顆時主要那顆自己一列、另外兩顆一列；電腦版三顆一列。高度照 .actions 的 min-height 44px。
+   div.＋子選擇器（0,1,2）贏過 .actions button（0,1,1），不靠兩個 CSS 檔載入的順序；AI 估算面板不受影響。 */
+div.actions > button {
+	flex: 1 0 auto;
+	white-space: nowrap;
+}
+
 /* 貼上營養標示文字：卡片跟「拍營養標示」那一列分開一點。 */
 .paste {
 	margin-top: var(--space-2);

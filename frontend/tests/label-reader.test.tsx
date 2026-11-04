@@ -30,6 +30,8 @@ const AI = "改用 AI 讀（用 1 次額度）";
 const WRONG = "數字不對？改用 AI 讀（用 1 次額度）";
 const FILL_READ = "填入讀到的";
 const PASTE = "貼上營養標示文字";
+const FLAGGED = "熱量跟三大營養素算起來對不太上，請特別確認";
+const PASTE_BUSY = "手機辨識或 AI 讀取中，完成或取消後再貼上";
 const PARTIAL_MESSAGE =
 	"讀到：熱量 514 kcal、蛋白質 6 g、脂肪 28 g（每 100 g）；讀不到：碳水化合物";
 
@@ -139,12 +141,40 @@ describe("LabelReader：拍營養標示", () => {
 			screen.queryByRole("region", { name: "確認照片" }),
 		).not.toBeInTheDocument();
 		expect(screen.getByText("本包裝含 4 份")).toBeInTheDocument();
+		expect(screen.queryByText(FLAGGED)).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: WRONG })).toBeInTheDocument();
 		await waitFor(() => expect(note.closest("[tabindex='-1']")).toHaveFocus());
 		expect(urls(fetchMock)).toEqual([PARSE]);
 		expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
 			text: "營養標示\n熱量 514 大卡",
 		});
+	});
+
+	it("手機讀完整、熱量跟三大營養素對不太上：多一句請特別確認", async () => {
+		vi.mocked(recognizeLabel).mockResolvedValue("營養標示");
+		mockApi([
+			{
+				method: "POST",
+				path: PARSE,
+				handler: () =>
+					json({
+						...COMPLETE_PARSE,
+						consistency: {
+							atwater_kcal: "900.00",
+							deviation: "386.00",
+							flagged: true,
+						},
+					}),
+			},
+		]);
+		renderReader();
+
+		await userEvent.upload(picker(), JPEG());
+
+		expect(await screen.findByText(FLAGGED)).toBeInTheDocument();
+		expect(
+			screen.getByText("手機辨識的數字，請對照包裝確認"),
+		).toBeInTheDocument();
 	});
 
 	it("辨識中：「手機辨識中…」＋秒數、卡片只有「取消」、沒有說明欄、照片按鈕停用；取消會中止、卡片收起、焦點回照片按鈕", async () => {
@@ -159,12 +189,18 @@ describe("LabelReader：拍營養標示", () => {
 		await userEvent.upload(picker(), JPEG());
 
 		const running = await screen.findByText("手機辨識中…");
-		expect(
-			screen.getByText("第一次使用要下載辨識資料（約 3 MB）"),
-		).toBeInTheDocument();
+		const status = running.closest("[role=status]");
+		// 下載的說明：看得到的那一行在秒數那一列底下（aria-hidden），讀屏從 status 裡的那一份念。
+		const notes = screen.getAllByText("第一次使用要下載辨識資料（約 3 MB）");
+		expect(notes).toHaveLength(2);
+		expect(notes.filter((note) => status?.contains(note))).toHaveLength(1);
+		expect(notes.find((note) => !status?.contains(note))).toHaveAttribute(
+			"aria-hidden",
+			"true",
+		);
 		expect(screen.getByText("0 秒")).toBeInTheDocument();
 		// 秒數在 role="status" 外面：讀屏不會每秒念一次。
-		expect(running.closest("[role=status]")).not.toHaveTextContent("秒");
+		expect(status).not.toHaveTextContent("秒");
 		await waitFor(() => expect(card()).toHaveFocus());
 		expect(
 			within(card())
@@ -387,12 +423,13 @@ describe("LabelReader：拍營養標示", () => {
 		expect(readLabelBodies(fetchMock)).toEqual([body, body]);
 	});
 
-	it("讀完整之後「數字不對？」：同一張照片重新打開卡片（不重新辨識）、打 AI 一次", async () => {
+	it("讀完整之後「數字不對？」：同一張照片重新打開卡片（不重新辨識）、打 AI 一次；AI 讀的時候舊的結果收起來", async () => {
 		vi.mocked(recognizeLabel).mockResolvedValue("營養標示");
 		const created = vi.spyOn(URL, "createObjectURL");
+		const reply = deferred<Response>();
 		const fetchMock = mockApi([
 			{ method: "POST", path: PARSE, handler: () => json(COMPLETE_PARSE) },
-			{ method: "POST", path: READ_LABEL, handler: () => json(LABEL) },
+			{ method: "POST", path: READ_LABEL, handler: () => reply.promise },
 		]);
 		const { onFill } = renderReader();
 		const photo = JPEG();
@@ -417,7 +454,19 @@ describe("LabelReader：拍營養標示", () => {
 		).not.toBeInTheDocument();
 		await waitFor(() => expect(card()).toHaveFocus());
 
+		// 重新打開卡片時，上一次（手機）的結果還在；AI 讀的時候收起來，只說「AI 讀取中…」。
+		expect(
+			screen.getByText("手機辨識的數字，請對照包裝確認"),
+		).toBeInTheDocument();
+
 		await userEvent.click(within(card()).getByRole("button", { name: AI }));
+
+		expect(await screen.findByText("AI 讀取中…")).toBeInTheDocument();
+		expect(
+			screen.queryByText("手機辨識的數字，請對照包裝確認"),
+		).not.toBeInTheDocument();
+		expect(screen.queryByText("本包裝含 4 份")).not.toBeInTheDocument();
+		reply.resolve(json(LABEL));
 
 		await screen.findByText("AI 讀的數字，請對照包裝確認");
 		expect(recognizeLabel).toHaveBeenCalledOnce();
@@ -778,5 +827,92 @@ describe("LabelReader：貼上營養標示文字", () => {
 		await screen.findByText("從貼上的文字讀的數字，請對照包裝確認");
 		expect(onFill).toHaveBeenCalledExactlyOnceWith(COMPLETE_FILL);
 		expect(urls(fetchMock)).toEqual([PARSE, PARSE]);
+	});
+
+	it("手機辨識中不能送：「讀取文字」aria-disabled、說為什麼；按了不打後端、不填；取消辨識之後就能送", async () => {
+		vi.mocked(recognizeLabel).mockImplementation(
+			() => new Promise<string>(() => {}),
+		);
+		const fetchMock = mockApi([
+			{ method: "POST", path: PARSE, handler: () => json(COMPLETE_PARSE) },
+		]);
+		const { onFill } = renderReader();
+		await userEvent.upload(picker(), JPEG());
+		await screen.findByText("手機辨識中…");
+		const region = await openPaste();
+		await userEvent.type(
+			within(region).getByLabelText("營養標示文字"),
+			"營養標示",
+		);
+		const read = within(region).getByRole("button", { name: "讀取文字" });
+
+		expect(read).toHaveAttribute("aria-disabled", "true");
+		expect(read).toHaveAccessibleDescription(PASTE_BUSY);
+		expect(within(region).getByRole("status")).toHaveTextContent(PASTE_BUSY);
+		await userEvent.click(read);
+		await settle();
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(onFill).not.toHaveBeenCalled();
+
+		await userEvent.click(within(card()).getByRole("button", { name: "取消" }));
+
+		expect(read).toHaveAttribute("aria-disabled", "false");
+		expect(read).not.toHaveAccessibleDescription(PASTE_BUSY);
+		expect(within(region).getByRole("status")).toHaveTextContent("");
+		await userEvent.click(read);
+		await screen.findByText("從貼上的文字讀的數字，請對照包裝確認");
+		expect(onFill).toHaveBeenCalledExactlyOnceWith(COMPLETE_FILL);
+		expect(urls(fetchMock)).toEqual([PARSE]);
+	});
+
+	it("AI 讀的時候也不能送、也不能填貼上讀到的；AI 讀好之後才可以", async () => {
+		const reply = deferred<Response>();
+		const fetchMock = mockApi([
+			{ method: "POST", path: PARSE, handler: () => json(PARTIAL_PARSE) },
+			{ method: "POST", path: READ_LABEL, handler: () => reply.promise },
+		]);
+		const { onFill } = renderReader();
+		// 先貼一段讀不完整的：這一塊有「填入讀到的」。
+		const region = await openPaste();
+		await userEvent.type(
+			within(region).getByLabelText("營養標示文字"),
+			"營養標示",
+		);
+		await userEvent.click(
+			within(region).getByRole("button", { name: "讀取文字" }),
+		);
+		await waitFor(() =>
+			expect(within(region).getByRole("status")).toHaveTextContent(
+				PARTIAL_MESSAGE,
+			),
+		);
+
+		// 拍照（手機讀不出來）→ 改用 AI 讀，AI 還沒回來。
+		await pickPhoto("拍營養標示", JPEG(), { start: AI });
+		await screen.findByText("AI 讀取中…");
+
+		const read = within(region).getByRole("button", { name: "讀取文字" });
+		const fill = within(region).getByRole("button", { name: FILL_READ });
+		expect(read).toHaveAttribute("aria-disabled", "true");
+		expect(fill).toHaveAttribute("aria-disabled", "true");
+		expect(read).toHaveAccessibleDescription(PASTE_BUSY);
+		expect(within(region).getByRole("status")).toHaveTextContent(PASTE_BUSY);
+		await userEvent.click(read);
+		await userEvent.click(fill);
+		await settle();
+		expect(onFill).not.toHaveBeenCalled();
+		expect(urls(fetchMock).filter((url) => url === PARSE)).toHaveLength(1);
+
+		reply.resolve(json(LABEL));
+
+		await screen.findByText("AI 讀的數字，請對照包裝確認");
+		expect(onFill).toHaveBeenCalledExactlyOnceWith(
+			expect.objectContaining({ name: "海苔洋芋片" }),
+		);
+		// AI 讀好了：這一塊回到原來的樣子（讀到什麼、可以填）。
+		expect(within(region).getByRole("status")).toHaveTextContent(
+			PARTIAL_MESSAGE,
+		);
+		expect(fill).toHaveAttribute("aria-disabled", "false");
 	});
 });

@@ -20,7 +20,7 @@ import type { NewFoodHandoff } from "../src/lib/new-food-handoff";
 import { NewFood } from "../src/screens/NewFood";
 import { pickPhoto } from "./helpers/ai-photo";
 import { makeFood } from "./helpers/foods";
-import { COMPLETE_PARSE } from "./helpers/label-text";
+import { COMPLETE_PARSE, PARTIAL_PARSE } from "./helpers/label-text";
 import { json, mockApi } from "./helpers/mock-api";
 
 // 照片會先經過 shrinkToLongestEdge（canvas，jsdom 沒有）——原樣回傳。
@@ -634,6 +634,74 @@ describe("新增食物：拍營養標示（掃條碼規格 §8.5）", () => {
 				.map(([input]) => String(input))
 				.filter((url) => url !== "/api/me"),
 		).toEqual(["/api/foods/parse-label-text"]);
+	});
+
+	it("辨識中在名稱打字：讀完整填好表單，但不搶焦點（打的字一個不少）", async () => {
+		let finish: (text: string) => void = () => {};
+		vi.mocked(recognizeLabel).mockImplementation(
+			() =>
+				new Promise<string>((done) => {
+					finish = done;
+				}),
+		);
+		mockApi([
+			{
+				method: "POST",
+				path: "/api/foods/parse-label-text",
+				handler: () => json(COMPLETE_PARSE),
+			},
+		]);
+		render(wrap(<NewFood />));
+		await userEvent.upload(screen.getByLabelText("拍營養標示"), JPEG());
+		// 選了照片焦點先到卡片（晚一個 task），使用者再自己點名稱開始打。
+		await waitFor(() =>
+			expect(screen.getByRole("region", { name: "確認照片" })).toHaveFocus(),
+		);
+		const name = screen.getByLabelText("名稱");
+		await userEvent.click(name);
+		await userEvent.keyboard("abc");
+
+		finish("營養標示");
+		await screen.findByText("手機辨識的數字，請對照包裝確認");
+		// 讓填完之後的 effect 都跑完，再看焦點。
+		await new Promise((done) => setTimeout(done, 20));
+
+		expect(name).toHaveFocus();
+		// keyboard（不是 type）：打在現在有焦點的地方，不會先點一下把焦點拉回來。
+		await userEvent.keyboard("def");
+		expect(name).toHaveValue("abcdef");
+		expect(screen.getByLabelText("熱量（每 100 單位 kcal）")).toHaveValue(
+			"514.00",
+		);
+	});
+
+	it("手機讀不完整 →「填入讀到的」：讀到的填進去、沒讀到的清空（原本打的也清掉，改成每 100 了）", async () => {
+		vi.mocked(recognizeLabel).mockResolvedValue("營養標示");
+		mockApi([
+			{
+				method: "POST",
+				path: "/api/foods/parse-label-text",
+				handler: () => json(PARTIAL_PARSE),
+			},
+		]);
+		render(wrap(<NewFood />));
+		await userEvent.type(screen.getByLabelText("碳水化合物（g）"), "12");
+
+		await userEvent.upload(screen.getByLabelText("拍營養標示"), JPEG());
+		await userEvent.click(
+			await screen.findByRole("button", { name: "填入讀到的" }),
+		);
+
+		expect(
+			await screen.findByText("填入了讀到的數字，其餘請自己填"),
+		).toBeInTheDocument();
+		expect(screen.getByLabelText("熱量（每 100 單位 kcal）")).toHaveValue(
+			"514.00",
+		);
+		expect(screen.getByLabelText("蛋白質（g）")).toHaveValue("6.00");
+		expect(screen.getByLabelText("脂肪（g）")).toHaveValue("28.00");
+		expect(screen.getByLabelText("碳水化合物（g）")).toHaveValue("");
+		expect(screen.getByRole("radio", { name: "每 100 g" })).toBeChecked();
 	});
 
 	it("讀好：名稱、單位、四個數字、一份填好；提醒、幾份、剩幾次；條碼不動", async () => {

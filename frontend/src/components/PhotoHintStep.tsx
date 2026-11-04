@@ -15,7 +15,7 @@ type Props = {
 	file: File;
 	hint: string;
 	onHintChange: (hint: string) => void;
-	/** 「開始估算」或「開始讀取」。 */
+	/** 開始按鈕的名稱（兩個呼叫端都是「開始估算」）。 */
 	startLabel: string;
 	placeholder: string;
 	/** 真的有請求在路上：兩顆按鈕 aria-disabled、說明唯讀。 */
@@ -30,7 +30,8 @@ type Props = {
 };
 
 /** 選了照片之後、送出之前的那一步（照片說明規格 §6）：看一眼照片、選填一段補充說明、按開始。
- *  三個拍照入口（單樣、整餐、營養標示）共用。
+ *  兩個拍照入口（單樣的 AiEstimatePanel、整餐的 AiMealPanel）共用。營養標示不用這張卡片：
+ *  `LabelReader` 選了照片先在手機上辨識，卡片是它自己的（標示 OCR），只共用說明欄 `HintField`。
  *
  *  - **不自動對焦到說明**：手機會直接跳出鍵盤、蓋住「開始估算」，多數人不打說明。焦點由呼叫端移到卡片本身。
  *  - 按鈕用 `aria-disabled`：按下「開始估算」的當下焦點在它身上，原生 `disabled` 會讓焦點掉到 body。
