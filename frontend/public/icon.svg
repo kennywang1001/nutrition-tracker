@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="吃什麼">
+	<rect width="512" height="512" fill="#fff4ef"/>
+	<circle cx="256" cy="256" r="148" fill="#ff7a59"/>
+	<circle cx="256" cy="256" r="108" fill="#ffffff"/>
+	<path d="M216 222 A40 40 0 1 1 272 258 C262 264 256 272 256 286 V292" fill="none" stroke="#b8432a" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+	<circle cx="256" cy="328" r="15" fill="#b8432a"/>
+	<g fill="#b8432a">
+		<rect x="58" y="150" width="12" height="70" rx="6"/>
+		<rect x="76" y="150" width="12" height="70" rx="6"/>
+		<rect x="94" y="150" width="12" height="70" rx="6"/>
+		<path d="M58 212 H106 V236 C106 252 94 260 82 260 C70 260 58 252 58 236 Z"/>
+		<rect x="72" y="250" width="20" height="120" rx="10"/>
+		<ellipse cx="432" cy="196" rx="26" ry="44"/>
+		<rect x="422" y="226" width="20" height="144" rx="10"/>
+	</g>
+</svg>

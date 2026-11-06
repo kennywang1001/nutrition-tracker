@@ -61,15 +61,34 @@ export default defineConfig({
 		VitePWA({
 			registerType: "autoUpdate",
 			manifest: {
-				name: "飲食紀錄",
-				short_name: "飲食",
+				// 改名規格 D10：三個字主畫面放得下，短名稱跟名稱一樣。
+				name: "吃什麼",
+				short_name: "吃什麼",
 				start_url: "/",
 				display: "standalone",
 				background_color: "#ffffff",
 				theme_color: "#ffffff",
+				// 圖示從 public/icon.svg 產生（`npm run icons`，改名規格 D11、D12）。maskable 另一張：
+				// 內容縮到安全圓裡，Android 裁成圓形時叉子與湯匙不會被切掉。
 				icons: [
-					{ src: "/icon-192.png", sizes: "192x192", type: "image/png" },
-					{ src: "/icon-512.png", sizes: "512x512", type: "image/png" },
+					{
+						src: "/icon-192.png",
+						sizes: "192x192",
+						type: "image/png",
+						purpose: "any",
+					},
+					{
+						src: "/icon-512.png",
+						sizes: "512x512",
+						type: "image/png",
+						purpose: "any",
+					},
+					{
+						src: "/icon-maskable-512.png",
+						sizes: "512x512",
+						type: "image/png",
+						purpose: "maskable",
+					},
 				],
 			},
 			workbox: {
