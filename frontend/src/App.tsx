@@ -28,6 +28,7 @@ import { TabBar } from "./components/TabBar";
 import { contentWidthFor } from "./lib/layout";
 import { readLinkToken } from "./lib/link-token";
 import {
+	labelPhotoState,
 	newFoodHandoffFrom,
 	newFoodState,
 	pickedFoodFrom,
@@ -112,6 +113,13 @@ function LogMealRoute() {
 				navigate("/foods/new", {
 					replace: true,
 					state: newFoodState(code, prefill, "/meals/new"),
+				})
+			}
+			// 「拍營養標示」（改名規格 D5）：同「用這個條碼建立食物」，去與回都 `replace`。
+			onLabelPhoto={(file) =>
+				navigate("/foods/new", {
+					replace: true,
+					state: labelPhotoState(file, "/meals/new"),
 				})
 			}
 			onSaved={({ photoFailed }) =>

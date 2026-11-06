@@ -12,6 +12,7 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetRefreshStateForTests } from "../src/auth/refresh";
 import { clearTokens, setTokens } from "../src/auth/store";
+import { newFoodHandoffFrom } from "../src/lib/new-food-handoff";
 import { FoodLibrary } from "../src/screens/FoodLibrary";
 import { json, mockApi } from "./helpers/mock-api";
 
@@ -286,6 +287,27 @@ describe("食物庫：掃條碼（掃條碼規格 §11）", () => {
 			returnTo: null,
 		});
 		// push：返回回到食物庫（不是食物庫之前的那一頁）。
+		await userEvent.click(screen.getByRole("button", { name: "返回" }));
+		expect(
+			await screen.findByRole("heading", { name: "食物庫" }),
+		).toBeInTheDocument();
+	});
+	it("「拍營養標示」選好照片 → /foods/new，state 帶照片、沒有 returnTo；一般的 push", async () => {
+		mockApi([{ path: "/api/foods", handler: () => json([]) }]);
+		renderLibrary();
+
+		const file = new File(["x"], "label.jpg", { type: "image/jpeg" });
+		await userEvent.upload(screen.getByLabelText("拍營養標示"), file);
+
+		expect(
+			await screen.findByRole("heading", { name: "新增食物頁" }),
+		).toBeInTheDocument();
+		const seenState = JSON.parse(screen.getByTestId("state").textContent ?? "");
+		expect(typeof seenState.labelPhoto).toBe("number");
+		expect(seenState.returnTo).toBeNull();
+		expect(newFoodHandoffFrom(seenState)?.labelPhoto).toBe(file);
+		expect(newFoodHandoffFrom(seenState)?.returnTo).toBeNull();
+		// push：返回回到食物庫。
 		await userEvent.click(screen.getByRole("button", { name: "返回" }));
 		expect(
 			await screen.findByRole("heading", { name: "食物庫" }),

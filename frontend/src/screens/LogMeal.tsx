@@ -67,6 +67,9 @@ type Props = {
 	initialPhoto?: File;
 	/** 總覽「掃條碼」來的：一打開就是掃描層（D9）。只在掛載時讀。 */
 	startScanning?: boolean;
+	/** 「拍營養標示」選好的照片（改名規格 D2）。導頁由 `LogMealRoute` 做（`replace`、帶 `returnTo`，
+	 *  同 `onCreateFromBarcode`）：這個元件不碰 router。 */
+	onLabelPhoto?: (file: File) => void;
 };
 
 /** 餐存好、照片沒傳上去時給總覽顯示的話。補傳走飲食頁 `MealList` 既有的上傳。 */
@@ -81,6 +84,7 @@ export function LogMeal({
 	onCreateFromBarcode,
 	initialPhoto,
 	startScanning,
+	onLabelPhoto,
 }: Props) {
 	const queryClient = useQueryClient();
 	const [selectedFood, setSelectedFood] = useState<Food | null>(
@@ -360,6 +364,7 @@ export function LogMeal({
 			<FoodPicker
 				onSelect={setSelectedFood}
 				onCreateFromBarcode={onCreateFromBarcode}
+				onLabelPhoto={onLabelPhoto}
 				startScanning={startScanning}
 				renderBelowSearch={(query) => (
 					<AiMealPanel

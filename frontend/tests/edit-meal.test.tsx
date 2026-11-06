@@ -2224,4 +2224,23 @@ describe("編輯這一餐：掃條碼建立食物再回來（掃條碼規格 D20
 		await userEvent.click(screen.getByRole("button", { name: "返回" }));
 		expect(await screen.findByText("飲食頁")).toBeInTheDocument();
 	});
+	it("加一項裡「拍營養標示」選好照片 → 新增食物：returnTo 是這一餐、replace（返回回到進來之前的那一頁）", async () => {
+		mockApi(routes());
+		renderWith(["/", "/diet", "/meals/5/edit"]);
+
+		await userEvent.click(
+			await screen.findByRole("button", { name: "＋ 加一項" }),
+		);
+		const file = new File(["x"], "label.jpg", { type: "image/jpeg" });
+		await userEvent.upload(screen.getByLabelText("拍營養標示"), file);
+
+		expect(
+			await screen.findByRole("heading", { name: "新增食物頁" }),
+		).toBeInTheDocument();
+		const state = JSON.parse(screen.getByTestId("state").textContent ?? "");
+		expect(state.returnTo).toBe("/meals/5/edit");
+		expect(typeof state.labelPhoto).toBe("number");
+		await userEvent.click(screen.getByRole("button", { name: "返回" }));
+		expect(await screen.findByText("飲食頁")).toBeInTheDocument();
+	});
 });

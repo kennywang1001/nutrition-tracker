@@ -3,8 +3,9 @@ import { Link, useNavigate } from "react-router";
 import { type Food, type FoodScope, useFoodSearch } from "../api/foods";
 import { BarcodeScanEntry } from "../components/BarcodeScanEntry";
 import { FoodResultList } from "../components/FoodResultList";
+import { LabelPhotoEntry } from "../components/LabelPhotoEntry";
 import ui from "../components/ui.module.css";
-import { newFoodState } from "../lib/new-food-handoff";
+import { labelPhotoState, newFoodState } from "../lib/new-food-handoff";
 import { useDebounced } from "../lib/use-debounced";
 
 const SCOPES: ReadonlyArray<{ value: FoodScope; label: string }> = [
@@ -38,6 +39,12 @@ export function FoodLibrary() {
 					navigate("/foods/new", {
 						state: newFoodState(code, prefill, null),
 					})
+				}
+			/>
+			{/* 拍營養標示（改名規格 D2、D5）：一般的 push、沒有 returnTo——存好照舊到詳情頁。 */}
+			<LabelPhotoEntry
+				onPhoto={(file) =>
+					navigate("/foods/new", { state: labelPhotoState(file, null) })
 				}
 			/>
 

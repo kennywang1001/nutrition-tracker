@@ -19,6 +19,8 @@ type Props = {
 	/** 指到真的 `<input type=file>`：估算面板在確認照片的卡片收起來（成功、取消）時，
 	 *  把焦點移回這裡——按下去的那顆按鈕跟著卡片消失了。 */
 	inputRef?: Ref<HTMLInputElement>;
+	/** 說明這顆按鈕的那一段字的 id（接在 input 的 `aria-describedby`）。 */
+	describedBy?: string;
 };
 
 /** 「選一張照片」的按鈕：虛線框的標籤＋相機圖示，真的 `<input type=file>`
@@ -42,6 +44,7 @@ export function PhotoPickerButton({
 	variant = "muted",
 	className,
 	inputRef,
+	describedBy,
 }: Props) {
 	const labelClass = [
 		styles.button,
@@ -65,6 +68,7 @@ export function PhotoPickerButton({
 				capture={capture}
 				className={styles.input}
 				disabled={disabled}
+				aria-describedby={describedBy}
 				onChange={onChange}
 			/>
 		</>

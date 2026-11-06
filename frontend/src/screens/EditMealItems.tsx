@@ -17,7 +17,7 @@ import {
 	usePortionQuantity,
 } from "../components/PortionQuantityFields";
 import { formatMacro } from "../lib/decimal";
-import { newFoodState } from "../lib/new-food-handoff";
+import { labelPhotoState, newFoodState } from "../lib/new-food-handoff";
 import { useConfirmFocus } from "../lib/use-confirm-focus";
 import styles from "./EditMeal.module.css";
 
@@ -334,6 +334,12 @@ function AddItem({
 					navigate("/foods/new", {
 						replace: true,
 						state: newFoodState(code, prefill, `/meals/${mealId}/edit`),
+					})
+				}
+				onLabelPhoto={(file) =>
+					navigate("/foods/new", {
+						replace: true,
+						state: labelPhotoState(file, `/meals/${mealId}/edit`),
 					})
 				}
 				renderBelowSearch={(query) => (
