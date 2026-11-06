@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, type Route, test } from "@playwright/test";
 import type { components } from "../src/api/schema.d.ts";
 import { generateJpegBuffer } from "./jpeg.ts";
 import { loginAs, newAccount } from "./new-account.ts";
@@ -465,7 +465,7 @@ test("沒有預填＋拍營養標示（只假造讀標示）：真的後端說�
 	await expect(dietItem(page, productName)).toContainText("35 g");
 });
 
-test("偵測器的 wasm 抓不到：只剩手動輸入，「技術細節」帶著 zxing 印的原因（iPhone 看不到主控台）", async ({
+test("偵測器的 wasm 抓不到：只剩手動輸入，「技術細節」帶著 zxing 印的原因；放行之後再開一次會重新載", async ({
 	page,
 	request,
 }) => {
@@ -484,10 +484,10 @@ test("偵測器的 wasm 抓不到：只剩手動輸入，「技術細節」帶�
 	});
 	// 只擋抓 wasm 本身的那一個：dev 的 `?url` 匯入（`zxing_reader.wasm?import&url`）是模組，
 	// 擋了它是整個 ponyfill 載不起來，不是 zxing 抓不到 wasm。
-	await page.route(
-		(url) => url.search === "" && /zxing_reader[^/]*\.wasm$/.test(url.pathname),
-		(route) => route.fulfill({ status: 404, body: "" }),
-	);
+	const isWasm = (url: URL) =>
+		url.search === "" && /zxing_reader[^/]*\.wasm$/.test(url.pathname);
+	const blockWasm = (route: Route) => route.fulfill({ status: 404, body: "" });
+	await page.route(isWasm, blockWasm);
 	await loginAs(page, account);
 
 	await openLogMeal(page);
@@ -514,4 +514,21 @@ test("偵測器的 wasm 抓不到：只剩手動輸入，「技術細節」帶�
 	await expect(
 		dialog.getByRole("button", { name: "手動輸入條碼", exact: true }),
 	).toBeVisible();
+
+	// 重試（改名規格 D15、D16）：關掉、放行 wasm、再按「掃條碼」→ 真的重新抓 wasm、這次載得起來。
+	// 相機在這個測試裡是「沒有」，所以是那一句，「從照片讀」也回來了。以前 zxing 記住了失敗：
+	// 不會再抓、一直是「不能用相機掃條碼」，要整個關掉 app 才好。
+	await dialog.getByRole("button", { name: "取消", exact: true }).click();
+	await expect(dialog).toHaveCount(0);
+	await page.unroute(isWasm, blockWasm);
+	const wasmLoaded = page.waitForResponse(
+		(response) => isWasm(new URL(response.url())) && response.status() === 200,
+	);
+	await page.getByRole("button", { name: "掃條碼", exact: true }).click();
+	await wasmLoaded;
+	await expect(dialog.getByRole("status")).toHaveText(
+		"找不到可以用的相機。可以手動輸入條碼，或從照片讀。",
+	);
+	await expect(dialog.locator('label[for="barcode-photo"]')).toHaveCount(1);
+	await expect(dialog.getByText("技術細節", { exact: true })).toHaveCount(0);
 });
