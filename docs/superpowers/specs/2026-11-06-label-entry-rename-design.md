@@ -1,6 +1,6 @@
 # 拍營養標示的入口、改名「吃什麼」與新圖示、掃條碼載入失敗後重試
 
-**狀態：** 設計（2026-11-06，使用者核准拆解；之後的決定用推薦的，記在這裡）
+**狀態：** 已實作（2026-11-06，`feat/label-entry-rename`）
 **日期：** 2026-11-06
 **分支：** `feat/label-entry-rename`
 **前置：** 標示 OCR（`LabelReader`、`POST /api/foods/parse-label-text`）、掃條碼（`BarcodeScanEntry`、新增食物的交接 `lib/new-food-handoff.ts`）、
@@ -95,3 +95,9 @@
 - 交接（`docs/handover.md`）：名稱、入口、重試、測試數字；iPhone 要重新加入主畫面（D14）。
 - `docs/deployment.md`：改名稱或圖示之後 iPhone 主畫面的處理（D14）。
 - README 標題：「吃什麼 —— 飲食紀錄系統」。
+
+## 與規格的差異
+
+- 照片太大時（從別的畫面帶來的），焦點移到「拍營養標示」按鈕，讓按鈕下面的錯誤捲進視窗（審查發現：頁面可能停在下面、錯誤在視窗外）。
+- 入口的字級 15px／600，同「掃條碼」（審查發現：沒設的話在食物庫會是 13px）。
+- `icon.svg` 多了 `role="img" aria-label="吃什麼"`（Biome 的 a11y 規則）。
