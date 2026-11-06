@@ -464,3 +464,54 @@ test("沒有預填＋拍營養標示（只假造讀標示）：真的後端說�
 	await openDiet(page);
 	await expect(dietItem(page, productName)).toContainText("35 g");
 });
+
+test("偵測器的 wasm 抓不到：只剩手動輸入，「技術細節」帶著 zxing 印的原因（iPhone 看不到主控台）", async ({
+	page,
+	request,
+}) => {
+	const account = await newAccount(request, "barcode-no-detector");
+	// 相機固定成「沒有」：headless 的權限行為因版本而異（見檔頭），這條要的是偵測器那一句。
+	// 原生偵測器明確拿掉（iPhone 就是沒有）：哪天 headless Chromium 有了，這條照樣走 ponyfill。
+	await page.addInitScript(() => {
+		Object.defineProperty(navigator, "mediaDevices", {
+			configurable: true,
+			value: {
+				getUserMedia: () =>
+					Promise.reject(new DOMException("no camera", "NotFoundError")),
+			},
+		});
+		Reflect.deleteProperty(window, "BarcodeDetector");
+	});
+	// 只擋抓 wasm 本身的那一個：dev 的 `?url` 匯入（`zxing_reader.wasm?import&url`）是模組，
+	// 擋了它是整個 ponyfill 載不起來，不是 zxing 抓不到 wasm。
+	await page.route(
+		(url) => url.search === "" && /zxing_reader[^/]*\.wasm$/.test(url.pathname),
+		(route) => route.fulfill({ status: 404, body: "" }),
+	);
+	await loginAs(page, account);
+
+	await openLogMeal(page);
+	await page.getByRole("button", { name: "掃條碼", exact: true }).click();
+	const dialog = page.getByRole("dialog", { name: "掃條碼", exact: true });
+	// 先是「找不到可以用的相機」，ponyfill 載完、wasm 失敗才換這一句。ponyfill 是延遲載入的：
+	// dev 第一次轉譯它要幾秒（實測冷的時候超過預設的 5 秒）。
+	await expect(dialog.getByRole("status")).toHaveText(
+		"這台裝置不能用相機掃條碼，請手動輸入。",
+		{ timeout: 15_000 },
+	);
+	await expect(dialog.locator('label[for="barcode-photo"]')).toHaveCount(0);
+	const summary = dialog.getByText("技術細節", { exact: true });
+	await expectTouchTargets(summary, "掃描層：技術細節");
+	const detail = dialog.locator("details pre");
+	await expect(detail).toBeHidden();
+	await summary.click();
+	await expect(detail).toBeVisible();
+	// 丟出來的那一個（退路也失敗）＋只印在主控台的那幾行（串流編譯為什麼失敗）。
+	await expect(detail).toContainText("Aborted(");
+	await expect(detail).toContainText("wasm streaming compile failed");
+	await expect(detail).toContainText("連線：有");
+	// 手動輸入照樣能用。
+	await expect(
+		dialog.getByRole("button", { name: "手動輸入條碼", exact: true }),
+	).toBeVisible();
+});

@@ -188,6 +188,13 @@ export function BarcodeScanner({
 			<p role="status" className={broken ? styles.problem : styles.status}>
 				{statusText}
 			</p>
+			{broken && status.reason === "no-detector" && (
+				// iPhone 上看不到主控台：收起來的實際錯誤，回報問題時照抄（偵測器載不起來的原因只在這裡）。
+				<details className={styles.detail}>
+					<summary>技術細節</summary>
+					<pre>{status.detail}</pre>
+				</details>
+			)}
 			<div className={styles.actions}>
 				{status.kind === "scanning" && status.torch !== null && (
 					<button

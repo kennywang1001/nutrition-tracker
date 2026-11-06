@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	describeDetectorFailure,
 	firstProductCode,
 	loadDetector,
 	PRODUCT_FORMATS,
@@ -93,6 +94,34 @@ describe("loadDetector：ponyfill 的 wasm 載不起來（審查 M1）", () => {
 		ponyfill.mockRejectedValueOnce(new Error("wasm 抓不到"));
 
 		await expect(loadDetector()).rejects.toThrow("wasm 抓不到");
+	});
+});
+
+describe("describeDetectorFailure：掃描層「技術細節」那幾行", () => {
+	it("錯誤的名稱與訊息、有沒有連線、瀏覽器", () => {
+		vi.stubGlobal("navigator", { onLine: false, userAgent: "TestPhone/1.0" });
+
+		expect(
+			describeDetectorFailure(new TypeError("Load failed\nsecond line")),
+		).toBe("TypeError: Load failed\nsecond line\n連線：沒有\nTestPhone/1.0");
+	});
+
+	it("emscripten 丟的是字串，不是 Error：照樣寫出來", () => {
+		vi.stubGlobal("navigator", { onLine: true, userAgent: "TestPhone/1.0" });
+
+		expect(describeDetectorFailure("both async and sync fetching failed")).toBe(
+			"both async and sync fetching failed\n連線：有\nTestPhone/1.0",
+		);
+	});
+
+	it("很長的錯誤截斷（不撐爆掃描層）", () => {
+		vi.stubGlobal("navigator", { onLine: true, userAgent: "TestPhone/1.0" });
+
+		const detail = describeDetectorFailure(new Error("x".repeat(5000)));
+
+		expect(detail.length).toBeLessThan(1200);
+		expect(detail).toContain("…");
+		expect(detail.endsWith("TestPhone/1.0")).toBe(true);
 	});
 });
 

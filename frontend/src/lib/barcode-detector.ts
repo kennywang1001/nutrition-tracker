@@ -46,6 +46,23 @@ export async function loadDetector(): Promise<Detector> {
 	return await createPonyfillDetector(PRODUCT_FORMATS);
 }
 
+const DETAIL_MAX_LENGTH = 1000;
+
+/** 偵測器載不起來時，掃描層「技術細節」那幾行：錯誤（ponyfill 的帶著 zxing 印的那幾行）、
+ *  有沒有連線、瀏覽器。iPhone 上看不到主控台，回報問題時照抄這一段。 */
+export function describeDetectorFailure(error: unknown): string {
+	let text =
+		error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+	if (text.length > DETAIL_MAX_LENGTH) {
+		text = `${text.slice(0, DETAIL_MAX_LENGTH)}…`;
+	}
+	return [
+		text,
+		`連線：${navigator.onLine ? "有" : "沒有"}`,
+		navigator.userAgent,
+	].join("\n");
+}
+
 /** 偵測結果裡第一個「看起來像商品條碼」的值（8／12／13 位數字）。檢查碼不在這裡驗（規格 D3）。 */
 export function firstProductCode(
 	results: readonly DetectedBarcode[],

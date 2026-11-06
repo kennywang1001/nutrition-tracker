@@ -8,14 +8,17 @@ import {
 import {
 	type Detector,
 	loadDetector as defaultLoadDetector,
+	describeDetectorFailure,
 	firstProductCode,
 } from "./barcode-detector";
 
-/** 相機的狀態。`torch` 是 null＝這支相機沒有手電筒（按鈕不畫）。 */
+/** 相機的狀態。`torch` 是 null＝這支相機沒有手電筒（按鈕不畫）。`detail`：偵測器載不起來的
+ *  技術細節（`describeDetectorFailure`）。 */
 export type ScannerStatus =
 	| { kind: "starting" }
 	| { kind: "scanning"; torch: boolean | null }
-	| { kind: "error"; reason: CameraProblem };
+	| { kind: "error"; reason: Exclude<CameraProblem, "no-detector"> }
+	| { kind: "error"; reason: "no-detector"; detail: string };
 
 /** - `denied`：使用者（或瀏覽器設定）不給相機權限。
  *  - `no-camera`：沒有相機、沒有 `mediaDevices`（不是安全連線也是這個）、約束滿足不了。
@@ -57,7 +60,7 @@ function defaultGetUserMedia(): GetUserMedia | null {
 	return devices?.getUserMedia ? devices.getUserMedia.bind(devices) : null;
 }
 
-function problemOf(error: unknown): CameraProblem {
+function problemOf(error: unknown): "denied" | "no-camera" | "failed" {
 	const name = error instanceof DOMException ? error.name : "";
 	if (name === "NotAllowedError" || name === "SecurityError") return "denied";
 	if (
@@ -131,20 +134,25 @@ export function useBarcodeScanner({
 			// 相機那條提早結束（沒有相機、權限被拒）時沒有人 await 偵測器——先接住它，不然被拒絕就是
 			// 一個 unhandled rejection。偵測器也載不起來的話「從照片讀」同樣不能用，說明換成只剩手動輸入。
 			let cameraFailed = false;
-			let detectorBroken = false;
-			detectorPromise.catch(() => {
-				detectorBroken = true;
+			let detectorFailure: string | null = null;
+			detectorPromise.catch((error: unknown) => {
+				detectorFailure = describeDetectorFailure(error);
 				if (cameraFailed && !cancelled) {
-					setStatus({ kind: "error", reason: "no-detector" });
+					setStatus({
+						kind: "error",
+						reason: "no-detector",
+						detail: detectorFailure,
+					});
 				}
 			});
-			const fail = (reason: CameraProblem) => {
+			const fail = (reason: ReturnType<typeof problemOf>) => {
 				cameraFailed = true;
 				if (cancelled) return;
-				setStatus({
-					kind: "error",
-					reason: detectorBroken ? "no-detector" : reason,
-				});
+				setStatus(
+					detectorFailure === null
+						? { kind: "error", reason }
+						: { kind: "error", reason: "no-detector", detail: detectorFailure },
+				);
 			};
 
 			if (request === null) {
@@ -170,9 +178,13 @@ export function useBarcodeScanner({
 			let found: Detector;
 			try {
 				found = await detectorPromise;
-			} catch {
+			} catch (error) {
 				stop();
-				setStatus({ kind: "error", reason: "no-detector" });
+				setStatus({
+					kind: "error",
+					reason: "no-detector",
+					detail: describeDetectorFailure(error),
+				});
 				return;
 			}
 			if (cancelled) return;
