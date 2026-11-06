@@ -309,6 +309,42 @@ describe("BarcodeScanner：相機不能用的說明", () => {
 		).toBeInTheDocument();
 		expect(screen.queryByLabelText("從照片讀條碼")).not.toBeInTheDocument();
 	});
+
+	it("偵測器載不起來：「技術細節」收著實際的錯誤（iPhone 上看不到主控台）", async () => {
+		const user = userEvent.setup();
+		const camera = fakeCamera();
+		renderScanner({
+			getUserMedia: camera.getUserMedia,
+			loadDetector: () => Promise.reject(new TypeError("Load failed")),
+		});
+
+		const summary = await screen.findByText("技術細節");
+		const details = summary.closest("details");
+		expect(details).not.toBeNull();
+		expect(details).not.toHaveAttribute("open");
+		await user.click(summary);
+		expect(details).toHaveAttribute("open");
+		expect(details).toHaveTextContent("TypeError: Load failed");
+	});
+
+	it("偵測器載不起來、相機也沒有：「技術細節」照樣有", async () => {
+		renderScanner({
+			loadDetector: () => Promise.reject(new Error("wasm 抓不到")),
+		});
+
+		const summary = await screen.findByText("技術細節");
+		expect(summary.closest("details")).toHaveTextContent("Error: wasm 抓不到");
+	});
+
+	it("相機的問題（偵測器好好的）：沒有「技術細節」", async () => {
+		renderScanner({
+			getUserMedia: () =>
+				Promise.reject(new DOMException("denied", "NotAllowedError")),
+		});
+
+		expect(await screen.findByText(/沒有相機權限/)).toBeInTheDocument();
+		expect(screen.queryByText("技術細節")).not.toBeInTheDocument();
+	});
 });
 
 describe("BarcodeScanner：偵測一直失敗（審查 M1）", () => {

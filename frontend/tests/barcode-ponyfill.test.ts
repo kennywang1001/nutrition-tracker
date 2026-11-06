@@ -61,4 +61,65 @@ describe("createPonyfillDetector（審查 M1）", () => {
 		);
 		expect(zxing.constructed).toEqual([]);
 	});
+
+	it("載不起來時，丟出去的錯誤帶著 zxing 載入時印的那幾行（串流編譯失敗的原因只在那裡）", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		zxing.prepareZXingModule.mockImplementation(
+			async (options: { overrides: { printErr: (text: string) => void } }) => {
+				options.overrides.printErr(
+					"wasm streaming compile failed: TypeError: Load failed",
+				);
+				options.overrides.printErr("falling back to ArrayBuffer instantiation");
+				// emscripten 的 abort 丟的是 WebAssembly.RuntimeError（jsdom 沒有，換個名字的 Error）。
+				throw Object.assign(
+					new Error("Aborted(both async and sync fetching of the wasm failed)"),
+					{ name: "RuntimeError" },
+				);
+			},
+		);
+		const { createPonyfillDetector } = await realPonyfill();
+
+		const error = await createPonyfillDetector(["ean_13"]).catch(
+			(caught: unknown) => caught,
+		);
+
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).name).toBe("RuntimeError");
+		expect((error as Error).message).toMatch(
+			/^Aborted\(both async and sync fetching of the wasm failed\)\n/,
+		);
+		expect((error as Error).message).toContain(
+			"wasm streaming compile failed: TypeError: Load failed",
+		);
+		expect((error as Error).message).toContain(
+			"falling back to ArrayBuffer instantiation",
+		);
+		// 主控台照樣看得到（接著 Mac 的 Safari 看的時候）。
+		expect(warn).toHaveBeenCalledWith(
+			"wasm streaming compile failed: TypeError: Load failed",
+		);
+		warn.mockRestore();
+	});
+
+	it("zxing 記住了失敗、第二次沒有再印：第二次的錯誤照樣帶著第一次印的那幾行", async () => {
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		const failure = new Error("Aborted(boom)");
+		let printed = false;
+		zxing.prepareZXingModule.mockImplementation(
+			async (options: { overrides: { printErr: (text: string) => void } }) => {
+				if (!printed) {
+					options.overrides.printErr("only printed once");
+					printed = true;
+				}
+				throw failure;
+			},
+		);
+		const { createPonyfillDetector } = await realPonyfill();
+
+		await createPonyfillDetector(["ean_13"]).catch(() => {});
+		await expect(createPonyfillDetector(["ean_13"])).rejects.toThrow(
+			"only printed once",
+		);
+		vi.mocked(console.warn).mockRestore();
+	});
 });

@@ -71,6 +71,28 @@
 	color: var(--color-text);
 }
 
+/* 偵測器載不起來時的「技術細節」：平常收著，展開是原樣的錯誤（可以選取、長字會折行）。 */
+.detail {
+	font-size: 13px;
+	color: var(--color-text-muted);
+}
+
+/* 12 + 20 + 12 = 44px 的點擊目標。不用 flex：summary 換掉 list-item 會把展開的三角形拿掉。 */
+.detail summary {
+	padding: 12px 0;
+	line-height: 20px;
+	cursor: pointer;
+}
+
+.detail pre {
+	margin: 0;
+	font-size: 12px;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	user-select: text;
+	-webkit-user-select: text;
+}
+
 /* .screen 的卡片規則也選得到它：這一列不是卡片，拿掉底色與內距。 */
 .actions {
 	display: flex;
