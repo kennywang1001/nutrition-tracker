@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { LabelReadResponse } from "../src/api/ai";
 import type { LabelTextParse } from "../src/api/label-text";
@@ -87,14 +88,14 @@ beforeEach(() => {
 	setTokens({ access_token: "a", refresh_token: "r" });
 });
 
-function renderReader() {
+function renderReader(initialPhoto?: File) {
 	const onFill = vi.fn();
 	const client = new QueryClient({
 		defaultOptions: { mutations: { retry: false } },
 	});
 	const view = render(
 		<QueryClientProvider client={client}>
-			<LabelReader onFill={onFill} />
+			<LabelReader onFill={onFill} initialPhoto={initialPhoto} />
 		</QueryClientProvider>,
 	);
 	return { onFill, ...view };
@@ -614,6 +615,75 @@ describe("LabelReader：拍營養標示", () => {
 			screen.queryByRole("region", { name: "確認照片" }),
 		).not.toBeInTheDocument();
 		expect(recognizeLabel).not.toHaveBeenCalled();
+	});
+
+	it("initialPhoto（記一餐、食物庫的「拍營養標示」帶來的）：掛上就在手機上辨識；讀完整交給表單（改名規格 D7）", async () => {
+		vi.mocked(recognizeLabel).mockResolvedValue("營養標示\n熱量 514 大卡");
+		mockApi([
+			{ method: "POST", path: PARSE, handler: () => json(COMPLETE_PARSE) },
+		]);
+		const photo = JPEG();
+		const { onFill } = renderReader(photo);
+
+		expect(
+			await screen.findByText("手機辨識的數字，請對照包裝確認"),
+		).toBeInTheDocument();
+		expect(recognizeLabel).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(recognizeLabel).mock.calls[0]?.[0]).toBe(photo);
+		expect(onFill).toHaveBeenCalledExactlyOnceWith(COMPLETE_FILL);
+	});
+
+	it("initialPhoto 辨識中：跟選了照片一樣是卡片＋「手機辨識中…」，焦點在卡片", async () => {
+		const pending = deferred<string>();
+		vi.mocked(recognizeLabel).mockReturnValue(pending.promise);
+		mockApi([]);
+		renderReader(JPEG());
+
+		await waitFor(() => expect(card()).toHaveFocus());
+		expect(screen.getByText("手機辨識中…")).toBeInTheDocument();
+		expect(picker()).toBeDisabled();
+		pending.resolve("");
+	});
+
+	it("initialPhoto 太大：照舊在按鈕下面說，不出卡片、不辨識", async () => {
+		mockApi([]);
+		const big = JPEG();
+		Object.defineProperty(big, "size", { value: MAX_PHOTO_BYTES + 1 });
+		renderReader(big);
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("照片超過");
+		expect(
+			screen.queryByRole("region", { name: "確認照片" }),
+		).not.toBeInTheDocument();
+		expect(recognizeLabel).not.toHaveBeenCalled();
+	});
+
+	it("initialPhoto 遇上 StrictMode 的「掛、卸、再掛」：只填一次、結果出現、卡片不卡住", async () => {
+		vi.mocked(recognizeLabel).mockResolvedValue("營養標示\n熱量 514 大卡");
+		mockApi([
+			{ method: "POST", path: PARSE, handler: () => json(COMPLETE_PARSE) },
+		]);
+		const onFill = vi.fn();
+		const client = new QueryClient({
+			defaultOptions: { mutations: { retry: false } },
+		});
+		render(
+			<StrictMode>
+				<QueryClientProvider client={client}>
+					<LabelReader onFill={onFill} initialPhoto={JPEG()} />
+				</QueryClientProvider>
+			</StrictMode>,
+		);
+
+		expect(
+			await screen.findByText("手機辨識的數字，請對照包裝確認"),
+		).toBeInTheDocument();
+		await settle();
+		expect(onFill).toHaveBeenCalledExactlyOnceWith(COMPLETE_FILL);
+		expect(
+			screen.queryByRole("region", { name: "確認照片" }),
+		).not.toBeInTheDocument();
+		expect(screen.queryByText("手機辨識中…")).not.toBeInTheDocument();
 	});
 });
 

@@ -1109,3 +1109,43 @@ describe("新增食物：拍營養標示＋補充說明（照片說明規格 §6
 		);
 	});
 });
+
+describe("新增食物：「拍營養標示」帶來的照片（改名規格 D4、D7、D9）", () => {
+	it("一進來就在手機上辨識那張照片、數字填好；沒有「找不到這個條碼」那句", async () => {
+		vi.mocked(recognizeLabel).mockResolvedValue("營養標示\n熱量 514 大卡");
+		mockApi([
+			{
+				method: "POST",
+				path: "/api/foods/parse-label-text",
+				handler: () => json(COMPLETE_PARSE),
+			},
+		]);
+		const photo = JPEG();
+		render(
+			wrap(
+				<NewFood
+					handoff={handoff({
+						barcode: null,
+						labelPhoto: photo,
+						returnTo: "/meals/new",
+					})}
+				/>,
+			),
+		);
+
+		expect(
+			await screen.findByText("手機辨識的數字，請對照包裝確認"),
+		).toBeInTheDocument();
+		expect(vi.mocked(recognizeLabel).mock.calls[0]?.[0]).toBe(photo);
+		expect(screen.getByLabelText("熱量（每 100 單位 kcal）")).toHaveValue(
+			"514.00",
+		);
+		expect(
+			screen.queryByText("找不到這個條碼的資料。拍營養標示讀數字，或自己填。"),
+		).not.toBeInTheDocument();
+		expect(screen.getByLabelText("條碼（選填）")).toHaveValue("");
+		expect(
+			screen.getByRole("button", { name: "取消，回到記一餐" }),
+		).toBeInTheDocument();
+	});
+});

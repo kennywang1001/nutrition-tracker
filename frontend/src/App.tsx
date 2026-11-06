@@ -32,6 +32,7 @@ import {
 	newFoodState,
 	pickedFoodFrom,
 } from "./lib/new-food-handoff";
+import { releaseStashedPhoto } from "./lib/photo-stash";
 import { plannerHandoffFrom } from "./lib/planner";
 import {
 	quickPhotoFrom,
@@ -125,7 +126,7 @@ function LogMealRoute() {
 	);
 }
 
-/** `/foods/new`：掃條碼沒命中帶來的交接（條碼、Open Food Facts 的預填、存好要回去的地方；
+/** `/foods/new`：掃條碼沒命中、或「拍營養標示」帶來的交接（條碼、Open Food Facts 的預填、存好要回去的地方；
  *  掃條碼規格 D20）。同 `LogMealRoute`：讀一次放進自己的 state、`replace` 清掉 history 的 state——
  *  重新整理不會再預填一次。 */
 function NewFoodRoute() {
@@ -134,6 +135,8 @@ function NewFoodRoute() {
 	const [handoff] = useState(() => newFoodHandoffFrom(location.state));
 	useEffect(() => {
 		if (location.state == null) return;
+		// 「拍營養標示」的照片已經在新增食物自己的 state 裡（改名規格 D6）：不留著一張可能好幾 MB 的檔案。
+		releaseStashedPhoto();
 		navigate(`${location.pathname}${location.search}`, {
 			replace: true,
 			state: null,
