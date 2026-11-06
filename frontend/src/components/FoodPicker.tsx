@@ -9,6 +9,7 @@ import { useDebounced } from "../lib/use-debounced";
 import { BarcodeScanEntry } from "./BarcodeScanEntry";
 import styles from "./FoodPicker.module.css";
 import { FoodResultList } from "./FoodResultList";
+import { LabelPhotoEntry } from "./LabelPhotoEntry";
 
 /** `FoodResponse.nutrition` 為 `null` 時要顯示的說明。跟 `FoodDetail.tsx`
  *  「目前生效的營養素」區塊的空狀態用同一句文字——不重寫一份是為了不讓
@@ -66,6 +67,8 @@ type Props = {
 	onCreateFromBarcode?: (code: string, prefill: BarcodePrefill | null) => void;
 	/** 一掛載就打開掃條碼的掃描層（總覽的「掃條碼」，首頁改版規格 D9）：交給 `BarcodeScanEntry`。只在掛載時讀。 */
 	startScanning?: boolean;
+	/** 「拍營養標示」選好的照片（改名規格 D2）：呼叫端帶到新增食物。不給就沒有這顆。 */
+	onLabelPhoto?: (file: File) => void;
 };
 
 /** 搜尋框＋常吃／最近吃清單（記一餐與編輯餐點的「加一項」共用）。
@@ -80,6 +83,7 @@ export function FoodPicker({
 	renderBelowSearch,
 	onCreateFromBarcode,
 	startScanning,
+	onLabelPhoto,
 }: Props) {
 	const [searchInput, setSearchInput] = useState("");
 
@@ -121,6 +125,7 @@ export function FoodPicker({
 				requireNutrition
 				startScanning={startScanning}
 			/>
+			{onLabelPhoto !== undefined && <LabelPhotoEntry onPhoto={onLabelPhoto} />}
 			{renderBelowSearch?.(searchInput.trim())}
 
 			{hasSearchQuery && (

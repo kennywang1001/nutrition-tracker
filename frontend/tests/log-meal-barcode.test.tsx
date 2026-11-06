@@ -182,3 +182,20 @@ describe("記一餐：總覽的掃條碼（首頁改版規格 D9）", () => {
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 	});
 });
+
+describe("記一餐：拍營養標示（改名規格 D2）", () => {
+	it("入口在掃條碼下面；選好照片交給 onLabelPhoto", async () => {
+		routes();
+		const onLabelPhoto = vi.fn();
+		render(wrap(<LogMeal onSaved={vi.fn()} onLabelPhoto={onLabelPhoto} />));
+
+		const scan = screen.getByRole("button", { name: "掃條碼" });
+		const input = screen.getByLabelText("拍營養標示");
+		expect(
+			scan.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		const file = new File(["x"], "label.jpg", { type: "image/jpeg" });
+		await userEvent.upload(input, file);
+		expect(onLabelPhoto).toHaveBeenCalledExactlyOnceWith(file);
+	});
+});

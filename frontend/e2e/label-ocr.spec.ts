@@ -311,3 +311,57 @@ test("貼上營養標示文字：只有每份 → 每 100 ml；不完整 → 填
 	expect(parsed).toEqual([{ text: SERVING_ONLY }, { text: THREE_OF_FOUR }]);
 	expect(ai).toHaveLength(0);
 });
+
+async function openLogMeal(page: Page) {
+	await page.getByRole("button", { name: "新增紀錄", exact: true }).click();
+	await page.getByRole("link", { name: "記一餐", exact: true }).click();
+	await expect(
+		page.getByRole("heading", { name: "記一餐", exact: true }),
+	).toBeVisible();
+}
+
+test("記一餐的「拍營養標示」：拍完到新增食物、一進去就手機辨識 → 建立 → 回到記一餐、選好那個食物（改名規格 §2.1 A）", async ({
+	page,
+	request,
+}) => {
+	test.setTimeout(60_000);
+	const account = await newAccount(request, "label-entry");
+	const ai: string[] = [];
+	await page.route("**/api/ai/**", async (route) => {
+		ai.push(route.request().url());
+		await route.abort();
+	});
+	await loginAs(page, account);
+	await openLogMeal(page);
+
+	const entry = page.getByLabel("拍營養標示", { exact: true });
+	await expect(entry).toHaveAttribute("capture", "environment");
+	await expectTouchTargets(
+		page.locator("label").filter({ hasText: "拍營養標示" }),
+		"記一餐：拍營養標示",
+	);
+	await entry.setInputFiles(LABEL_PHOTO);
+
+	await expect(
+		page.getByRole("heading", { name: "新增食物", exact: true }),
+	).toBeVisible();
+	await expect(
+		page.getByText("手機辨識的數字，請對照包裝確認", { exact: true }),
+	).toBeVisible({ timeout: 30_000 });
+	await expectValues(page, ["514.00", "6.00", "28.00", "60.90"]);
+	await expect(
+		page.getByText("找不到這個條碼的資料。拍營養標示讀數字，或自己填。"),
+	).toHaveCount(0);
+
+	const name = `E2E 記一餐拍標示 ${Date.now()}`;
+	await page.getByLabel("名稱", { exact: true }).fill(name);
+	await page.getByRole("button", { name: "建立食物", exact: true }).click();
+
+	await expect(
+		page.getByRole("heading", { name: "記一餐", exact: true }),
+	).toBeVisible();
+	await expect(
+		page.getByText(`已選擇：${name}`, { exact: true }),
+	).toBeVisible();
+	expect(ai).toEqual([]);
+});

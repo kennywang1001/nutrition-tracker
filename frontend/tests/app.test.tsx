@@ -11,6 +11,12 @@ import {
 	getRefreshToken,
 	setTokens,
 } from "../src/auth/store";
+import { recognizeLabel } from "../src/lib/label-ocr";
+import {
+	releaseStashedPhoto,
+	stashedPhoto,
+	stashPhoto,
+} from "../src/lib/photo-stash";
 import { itemsState, SUGGEST_STATE } from "../src/lib/planner";
 import {
 	quickPhotoFrom,
@@ -27,6 +33,12 @@ import { OK_SUGGESTIONS } from "./helpers/planner-routes";
 // 上傳會呼叫 shrinkToLongestEdge（用 canvas，jsdom 沒有）。
 vi.mock("../src/lib/resize-image", () => ({
 	shrinkToLongestEdge: vi.fn((file: File) => Promise.resolve(file)),
+}));
+
+// 手機辨識（標示 OCR）：讀不到字就好——只要證明辨識從帶來的照片開始。
+vi.mock("../src/lib/label-ocr", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../src/lib/label-ocr")>()),
+	recognizeLabel: vi.fn(async () => ""),
 }));
 
 const ME = {
@@ -538,6 +550,35 @@ describe("App", () => {
 		expect(window.location.pathname).toBe("/meals/new");
 		// 清 state 的同時放掉暫存：上一頁回來不會再帶這張照片。畫面上的卡片照樣在（它在 AiMealPanel 的 state 裡）。
 		expect(quickPhotoFrom({ quickPhoto: probe.quickPhoto + 1 })).toBeNull();
+		expect(
+			screen.getByRole("region", { name: "確認照片" }),
+		).toBeInTheDocument();
+	});
+
+	it("記一餐的「拍營養標示」：到新增食物、確認照片的卡片已經打開，history 的 state 清掉、暫存的照片放掉、history 沒有變長（改名規格 D6）", async () => {
+		setTokens({ access_token: "a", refresh_token: "r" });
+		mockBackend(foodLists);
+		window.history.replaceState(null, "", "/meals/new");
+		const lengthBefore = window.history.length;
+		// 號碼是遞增的：先量下一個，上傳的那一張是它的下一號。
+		const probe = stashPhoto(new File(["p"], "p.jpg", { type: "image/jpeg" }));
+		releaseStashedPhoto();
+		const file = new File(["x"], "label.jpg", { type: "image/jpeg" });
+		render(<App />);
+
+		await userEvent.upload(await screen.findByLabelText("拍營養標示"), file);
+
+		expect(
+			await screen.findByRole("heading", { level: 1, name: "新增食物" }),
+		).toBeInTheDocument();
+		expect(
+			await screen.findByRole("region", { name: "確認照片" }),
+		).toBeInTheDocument();
+		expect(vi.mocked(recognizeLabel).mock.calls[0]?.[0]).toBe(file);
+		await waitFor(() => expect(window.history.state?.usr ?? null).toBeNull());
+		expect(window.location.pathname).toBe("/foods/new");
+		expect(window.history.length).toBe(lengthBefore);
+		expect(stashedPhoto(probe + 1)).toBeNull();
 		expect(
 			screen.getByRole("region", { name: "確認照片" }),
 		).toBeInTheDocument();

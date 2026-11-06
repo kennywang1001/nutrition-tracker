@@ -183,3 +183,33 @@ describe("FoodPicker：掃條碼（掃條碼規格 D18、D19）", () => {
 		expect(onCreateFromBarcode).toHaveBeenCalledWith("4710088432094", null);
 	});
 });
+
+describe("FoodPicker：拍營養標示（改名規格 D1、D2）", () => {
+	const routes = () =>
+		mockApi({
+			"/api/foods/frequent": () => json([]),
+			"/api/foods/recent": () => json([]),
+		});
+
+	it("有 onLabelPhoto：「拍營養標示」開後鏡頭、說不用 AI 額度；選好交給 onLabelPhoto", async () => {
+		routes();
+		const onLabelPhoto = vi.fn();
+		render(wrap(<FoodPicker onSelect={vi.fn()} onLabelPhoto={onLabelPhoto} />));
+
+		const input = screen.getByLabelText("拍營養標示");
+		expect(input).toHaveAttribute("capture", "environment");
+		expect(input).toHaveAttribute("accept", "image/*");
+		expect(input).toHaveAccessibleDescription("在手機上讀數字，不用 AI 額度");
+		const file = new File(["x"], "label.jpg", { type: "image/jpeg" });
+		await userEvent.upload(input, file);
+
+		expect(onLabelPhoto).toHaveBeenCalledExactlyOnceWith(file);
+	});
+
+	it("沒有 onLabelPhoto：沒有這顆", () => {
+		routes();
+		render(wrap(<FoodPicker onSelect={vi.fn()} />));
+
+		expect(screen.queryByLabelText("拍營養標示")).not.toBeInTheDocument();
+	});
+});

@@ -73,7 +73,7 @@ type NutritionBasis = "per100" | "perServing";
  *  的回應本體，導去哪裡是這個畫面自己才知道的事，不是像 `LogMeal` 的
  *  `onSaved` 那樣「導回一個固定路徑」。 */
 type Props = {
-	/** 掃條碼沒命中帶來的交接（掃條碼規格 D20）：條碼、Open Food Facts 的預填、存好要回去的地方。
+	/** 掃條碼沒命中（掃條碼規格 D20）或「拍營養標示」（改名規格 D4）帶來的交接：條碼、Open Food Facts 的預填、存好要回去的地方。
 	 *  **只在掛載時讀**（`NewFoodRoute` 讀一次 router state 就清掉）。 */
 	handoff?: NewFoodHandoff | null;
 };
@@ -325,8 +325,9 @@ export function NewFood({ handoff = null }: Props) {
 	return (
 		<section className={ui.screen}>
 			<h1>新增食物</h1>
-			{/* 掃到的條碼查不到任何資料（掃條碼規格 §11）：放在「用 AI 填」上面，指出下一步。 */}
-			{handoff !== null && prefill === null && (
+			{/* 掃到的條碼查不到任何資料（掃條碼規格 §11）：放在「用 AI 填」上面，指出下一步。
+			    「拍營養標示」帶照片來的不說（沒有條碼，改名規格 D9）。 */}
+			{handoff !== null && handoff.barcode !== null && prefill === null && (
 				<p className={styles.notice}>
 					找不到這個條碼的資料。拍營養標示讀數字，或自己填。
 				</p>
@@ -349,8 +350,12 @@ export function NewFood({ handoff = null }: Props) {
 					onFoodReady={finishFromAiPanel}
 				/>
 				{/* 拍包裝背面的營養標示（標示 OCR 規格 §3）：先在手機上辨識，不完整才改用 AI；也可以貼上文字。
-				    讀到的填進下面的表單，不直接建食物。 */}
-				<LabelReader onFill={applyLabelFill} />
+				    讀到的填進下面的表單，不直接建食物。
+				    記一餐、食物庫的「拍營養標示」帶來的照片一進來就辨識（改名規格 D7）。 */}
+				<LabelReader
+					onFill={applyLabelFill}
+					initialPhoto={handoff?.labelPhoto ?? undefined}
+				/>
 			</section>
 			<form onSubmit={handleSubmit}>
 				{prefill !== null && (

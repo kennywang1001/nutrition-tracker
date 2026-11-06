@@ -93,13 +93,17 @@ function LabelPreview({ file }: { file: File }) {
 type Props = {
 	/** 讀到的數字交給表單（`NewFood` 的 `applyLabelFill`）。 */
 	onFill: (fill: LabelFill) => void;
+	/** 一進來就辨識的照片：記一餐、食物庫的「拍營養標示」帶來的（改名規格 D7）。**只在掛載時讀**——
+	 *  跟在這裡選了一張照片走同一段（太大就擋、否則出卡片、自動手機辨識）。 */
+	initialPhoto?: File;
 };
 
 /** 新增食物的「拍營養標示」與「貼上營養標示文字」（標示 OCR 規格 §3）。
  *
  *  選了照片**自動先在手機上辨識**（不用額度、照片不離開裝置，D1）→ 文字送後端解析 → 完整就填表單；
- *  不完整才給「改用 AI 讀（用 1 次額度）」（同一張照片＋選填的說明打既有的 read-label）與「填入讀到的」。 */
-export function LabelReader({ onFill }: Props) {
+ *  不完整才給「改用 AI 讀（用 1 次額度）」（同一張照片＋選填的說明打既有的 read-label）與「填入讀到的」。
+ *  記一餐、食物庫的「拍營養標示」選好的照片從 `initialPhoto` 進來，掛上就辨識（改名規格 D7）。 */
+export function LabelReader({ onFill, initialPhoto }: Props) {
 	const pasteId = useId();
 	const [pending, setPending] = useState<LabelPhoto | null>(null);
 	// 讀完整（或填了讀到的）之後留著，給「數字不對？改用 AI 讀」（D4）。
@@ -212,14 +216,13 @@ export function LabelReader({ onFill }: Props) {
 		});
 	}
 
-	function handlePick(event: ChangeEvent<HTMLInputElement>) {
-		const file = event.target.files?.[0] ?? null;
-		// 清掉：同一張照片再選一次也要觸發 change。
-		event.target.value = "";
-		if (file === null) return;
+	function startPhoto(file: File) {
 		// 太大在選的當下就擋（照片說明規格 D9）；卡片開著時不動它，只說這一張太大（審查 M2）。
 		if (file.size > MAX_PHOTO_BYTES) {
 			setPickError(new PhotoTooLargeError().message);
+			// 焦點回到按鈕（改名規格 D7）：從別的畫面帶著照片進來時，頁面可能停在下面（捲動位置會跟著導頁），
+			// 按鈕下面的錯誤在視窗外、焦點又在 BODY。聚焦檔案輸入會把按鈕與緊跟著的錯誤捲進視窗；在頁面上選的也無害。
+			focusNextRef.current = "picker";
 			return;
 		}
 		setPickError(null);
@@ -231,6 +234,23 @@ export function LabelReader({ onFill }: Props) {
 		focusNextRef.current = "step";
 		void runOcr(photo);
 	}
+
+	function handlePick(event: ChangeEvent<HTMLInputElement>) {
+		const file = event.target.files?.[0] ?? null;
+		// 清掉：同一張照片再選一次也要觸發 change。
+		event.target.value = "";
+		if (file !== null) startPhoto(file);
+	}
+
+	// 帶來的照片（改名規格 D7、D8）：掛上就走「選了一張照片」那一段。StrictMode 的「掛、卸、再掛」：
+	// 卸載時上面那個 effect 中止辨識，再掛時這裡重新開始（`runOcr` 一開始也會中止前一次），只有最後
+	// 那一次的結果會用。ref：只在掛載時讀，之後 prop 變了也不重跑。
+	const initialPhotoRef = useRef(initialPhoto);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: 只在掛載時讀帶來的照片（startPhoto 每次 render 都是新的函式）
+	useEffect(() => {
+		const file = initialPhotoRef.current;
+		if (file !== undefined) startPhoto(file);
+	}, []);
 
 	function startAi(photo: LabelPhoto) {
 		setPickError(null);

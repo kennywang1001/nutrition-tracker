@@ -1,0 +1,24 @@
+/* 「拍營養標示」的入口（LabelPhotoEntry.tsx）。版面同「掃條碼」那一列（BarcodeScanEntry.module.css）：
+ * 按鈕＋一行灰色的說明，窄的時候說明換到下一行。 */
+
+.row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	column-gap: var(--space-3);
+	row-gap: var(--space-1);
+}
+
+/* 同上面的「掃條碼」：每個畫面都一樣大。.screen 的 label 規則（:where，零權重）會讓它在食物庫變成 13px；
+ * 這個 class（0,1,0）穩穩贏過。 */
+.button {
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.note {
+	flex: 1 1 12em;
+	margin: 0;
+	font-size: 13px;
+	color: var(--color-text-muted);
+}

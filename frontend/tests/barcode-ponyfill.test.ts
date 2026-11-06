@@ -5,11 +5,13 @@ import type * as PonyfillModule from "../src/lib/barcode-ponyfill";
 // `importActual`。它底下的 `barcode-detector/ponyfill`（會去抓 wasm）換成假的。
 const zxing = vi.hoisted(() => ({
 	prepareZXingModule: vi.fn(),
+	purgeZXingModule: vi.fn(),
 	constructed: [] as string[][],
 }));
 
 vi.mock("barcode-detector/ponyfill", () => ({
 	prepareZXingModule: zxing.prepareZXingModule,
+	purgeZXingModule: zxing.purgeZXingModule,
 	BarcodeDetector: class {
 		constructor(options: { formats: string[] }) {
 			zxing.constructed.push(options.formats);
@@ -26,6 +28,7 @@ async function realPonyfill() {
 
 beforeEach(() => {
 	zxing.prepareZXingModule.mockReset();
+	zxing.purgeZXingModule.mockReset();
 	zxing.constructed.length = 0;
 });
 
@@ -48,6 +51,7 @@ describe("createPonyfillDetector（審查 M1）", () => {
 		expect(options.overrides.locateFile("x.js", "/p/")).toBe("/p/x.js");
 		expect(zxing.constructed).toEqual([["ean_13", "ean_8"]]);
 		await expect(detector.detect(new Blob())).resolves.toEqual([]);
+		expect(zxing.purgeZXingModule).not.toHaveBeenCalled();
 	});
 
 	it("wasm 載不起來：丟出去（loadDetector 的呼叫端顯示 no-detector），不建偵測器", async () => {
@@ -60,6 +64,7 @@ describe("createPonyfillDetector（審查 M1）", () => {
 			"wasm 抓不到",
 		);
 		expect(zxing.constructed).toEqual([]);
+		expect(zxing.purgeZXingModule).toHaveBeenCalledTimes(1);
 	});
 
 	it("載不起來時，丟出去的錯誤帶著 zxing 載入時印的那幾行（串流編譯失敗的原因只在那裡）", async () => {
@@ -101,25 +106,44 @@ describe("createPonyfillDetector（審查 M1）", () => {
 		warn.mockRestore();
 	});
 
-	it("zxing 記住了失敗、第二次沒有再印：第二次的錯誤照樣帶著第一次印的那幾行", async () => {
+	it("載不起來：清掉 zxing 記住的模組，下一次真的重新載；第二次的錯誤只帶第二次印的（改名規格 D15）", async () => {
 		vi.spyOn(console, "warn").mockImplementation(() => {});
-		const failure = new Error("Aborted(boom)");
-		let printed = false;
+		let attempt = 0;
 		zxing.prepareZXingModule.mockImplementation(
 			async (options: { overrides: { printErr: (text: string) => void } }) => {
-				if (!printed) {
-					options.overrides.printErr("only printed once");
-					printed = true;
-				}
-				throw failure;
+				attempt += 1;
+				options.overrides.printErr(`attempt ${attempt} printed`);
+				throw new Error(`Aborted(attempt ${attempt})`);
 			},
 		);
 		const { createPonyfillDetector } = await realPonyfill();
 
 		await createPonyfillDetector(["ean_13"]).catch(() => {});
-		await expect(createPonyfillDetector(["ean_13"])).rejects.toThrow(
-			"only printed once",
-		);
+		const second = (await createPonyfillDetector(["ean_13"]).catch(
+			(caught: unknown) => caught,
+		)) as Error;
+
+		expect(zxing.prepareZXingModule).toHaveBeenCalledTimes(2);
+		expect(zxing.purgeZXingModule).toHaveBeenCalledTimes(2);
+		expect(second.message).toContain("Aborted(attempt 2)");
+		expect(second.message).toContain("attempt 2 printed");
+		expect(second.message).not.toContain("attempt 1 printed");
+		// 重新載也帶同一份 overrides：清掉之後 zxing 的預設是從 jsDelivr 抓 wasm（第三方、離線不能用）。
+		const [first, retry] = zxing.prepareZXingModule.mock.calls;
+		expect(retry?.[0].overrides).toBe(first?.[0].overrides);
 		vi.mocked(console.warn).mockRestore();
+	});
+
+	it("失敗之後再載成功：建得出偵測器", async () => {
+		zxing.prepareZXingModule
+			.mockRejectedValueOnce(new Error("Aborted(network)"))
+			.mockResolvedValueOnce({});
+		const { createPonyfillDetector } = await realPonyfill();
+
+		await expect(createPonyfillDetector(["ean_13"])).rejects.toThrow(
+			"Aborted(network)",
+		);
+		await expect(createPonyfillDetector(["ean_13"])).resolves.toBeDefined();
+		expect(zxing.constructed).toEqual([["ean_13"]]);
 	});
 });
