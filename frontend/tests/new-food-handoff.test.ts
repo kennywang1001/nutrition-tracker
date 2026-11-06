@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { BarcodePrefill } from "../src/api/barcode";
 import {
+	labelPhotoState,
 	newFoodHandoffFrom,
 	newFoodState,
 	pickedFoodFrom,
 	returnToFrom,
 } from "../src/lib/new-food-handoff";
+import { releaseStashedPhoto } from "../src/lib/photo-stash";
 import { makeFood } from "./helpers/foods";
 
 const PREFILL: BarcodePrefill = {
@@ -51,6 +53,7 @@ describe("newFoodHandoffFrom", () => {
 		).toEqual({
 			barcode: "5449000000996",
 			prefill: PREFILL,
+			labelPhoto: null,
 			returnTo: "/meals/new",
 		});
 	});
@@ -59,6 +62,7 @@ describe("newFoodHandoffFrom", () => {
 		expect(newFoodHandoffFrom(newFoodState("96385074", null, null))).toEqual({
 			barcode: "96385074",
 			prefill: null,
+			labelPhoto: null,
 			returnTo: null,
 		});
 	});
@@ -71,6 +75,7 @@ describe("newFoodHandoffFrom", () => {
 		expect(newFoodHandoffFrom(state)).toEqual({
 			barcode: "5449000000996",
 			prefill: PREFILL,
+			labelPhoto: null,
 			returnTo: "/meals/7/edit",
 		});
 	});
@@ -104,6 +109,7 @@ describe("newFoodHandoffFrom", () => {
 		).toEqual({
 			barcode: "5449000000996",
 			prefill: null,
+			labelPhoto: null,
 			returnTo: "/meals/new",
 		});
 	});
@@ -118,6 +124,7 @@ describe("newFoodHandoffFrom", () => {
 		).toEqual({
 			barcode: "5449000000996",
 			prefill: PREFILL,
+			labelPhoto: null,
 			returnTo: null,
 		});
 	});
@@ -128,6 +135,45 @@ describe("newFoodHandoffFrom", () => {
 			expect(newFoodHandoffFrom(state)).toBeNull();
 		},
 	);
+});
+
+describe("newFoodHandoffFrom：拍營養標示帶來的照片（改名規格 D4）", () => {
+	const photo = () => new File(["x"], "label.jpg", { type: "image/jpeg" });
+
+	it("照片＋回去的地方：沒有條碼、沒有預填", () => {
+		const file = photo();
+		expect(newFoodHandoffFrom(labelPhotoState(file, "/meals/new"))).toEqual({
+			barcode: null,
+			prefill: null,
+			labelPhoto: file,
+			returnTo: "/meals/new",
+		});
+	});
+
+	it("食物庫來的：沒有 returnTo；returnTo 照樣走白名單", () => {
+		const file = photo();
+		expect(
+			newFoodHandoffFrom(labelPhotoState(file, null))?.returnTo,
+		).toBeNull();
+		expect(
+			newFoodHandoffFrom(labelPhotoState(file, "/foods/1"))?.returnTo,
+		).toBeNull();
+	});
+
+	it("號碼換不到照片（重新整理、舊的 history）→ 沒有交接", () => {
+		const state = labelPhotoState(photo(), "/meals/new");
+		releaseStashedPhoto();
+		expect(newFoodHandoffFrom(state)).toBeNull();
+		expect(
+			newFoodHandoffFrom({ labelPhoto: "1", returnTo: "/meals/new" }),
+		).toBeNull();
+	});
+
+	it("state 只帶號碼，不帶 File", () => {
+		const state = labelPhotoState(photo(), null);
+		expect(Object.keys(state).sort()).toEqual(["labelPhoto", "returnTo"]);
+		expect(typeof state.labelPhoto).toBe("number");
+	});
 });
 
 describe("pickedFoodFrom", () => {

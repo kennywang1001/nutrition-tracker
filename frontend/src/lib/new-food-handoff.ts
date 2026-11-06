@@ -1,5 +1,6 @@
 import type { BarcodePrefill } from "../api/barcode";
 import type { Food } from "../api/foods";
+import { stashedPhoto, stashPhoto } from "./photo-stash";
 import { isFood } from "./planner";
 
 /** 新增食物存好之後可以回去的地方（白名單；history 裡壞掉或舊版本的 state 不能把人導到別處）。
@@ -9,8 +10,15 @@ const RETURN_TO = /^\/meals\/(new|[1-9]\d{0,15}\/edit)$/;
 export type NewFoodHandoff = {
 	barcode: string | null;
 	prefill: BarcodePrefill | null;
+	/** 「拍營養標示」選好的照片（改名規格 D4）：新增食物一進去就在手機上辨識它。 */
+	labelPhoto: File | null;
 	returnTo: string | null;
 };
+
+/** 「拍營養標示」帶給 `/foods/new` 的 router state（改名規格 D3、D4）：照片進暫存，state 只帶號碼。 */
+export function labelPhotoState(file: File, returnTo: string | null) {
+	return { labelPhoto: stashPhoto(file), returnTo };
+}
 
 /** 「用這個條碼建立食物」帶給 `/foods/new` 的 router state。 */
 export function newFoodState(
@@ -41,21 +49,27 @@ function isPrefill(value: unknown): value is BarcodePrefill {
 }
 
 /** `/foods/new` 收到的 state → 交接。條碼不是 8／13 位數字（後端回的一定是標準形式）就整個不要；
- *  預填形狀不對只丟預填——條碼本身還是對的，使用者照樣省一次輸入。 */
+ *  預填形狀不對只丟預填——條碼本身還是對的，使用者照樣省一次輸入。或「拍營養標示」的照片
+ *  （號碼換不到就整個不要）。 */
 export function newFoodHandoffFrom(state: unknown): NewFoodHandoff | null {
 	if (typeof state !== "object" || state === null) return null;
 	const s = state as Record<string, unknown>;
+	const returnTo = returnToFrom(s.returnTo);
 	if (
-		typeof s.barcodeCode !== "string" ||
-		!/^(\d{8}|\d{13})$/.test(s.barcodeCode)
+		typeof s.barcodeCode === "string" &&
+		/^(\d{8}|\d{13})$/.test(s.barcodeCode)
 	) {
-		return null;
+		return {
+			barcode: s.barcodeCode,
+			prefill: isPrefill(s.barcodePrefill) ? s.barcodePrefill : null,
+			labelPhoto: null,
+			returnTo,
+		};
 	}
-	return {
-		barcode: s.barcodeCode,
-		prefill: isPrefill(s.barcodePrefill) ? s.barcodePrefill : null,
-		returnTo: returnToFrom(s.returnTo),
-	};
+	const labelPhoto = stashedPhoto(s.labelPhoto);
+	return labelPhoto === null
+		? null
+		: { barcode: null, prefill: null, labelPhoto, returnTo };
 }
 
 /** 新增食物存好、回到記一餐（或編輯這一餐）時帶回來的那個食物。 */

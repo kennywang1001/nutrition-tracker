@@ -113,6 +113,7 @@ function handoff(overrides: Partial<NewFoodHandoff> = {}): NewFoodHandoff {
 	return {
 		barcode: "4710088432094",
 		prefill: null,
+		labelPhoto: null,
 		returnTo: null,
 		...overrides,
 	};
