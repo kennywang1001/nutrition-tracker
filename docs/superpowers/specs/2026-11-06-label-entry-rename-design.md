@@ -88,7 +88,7 @@
   - 記一餐 →「拍營養標示」放固定的標示照片（`e2e/fixtures/nutrition-label.jpg`，真的 Tesseract、真的後端解析）→ 到新增食物、數字填好 → 打名稱、建立 → 回到記一餐、那個食物選好。
   - 掃條碼：wasm 抓不到 → `no-detector`；關掉、放行 wasm、再按「掃條碼」→ 不是 `no-detector`（相機那條在測試裡是假的「沒有相機」，所以是「沒有相機」那句）。
   - 標題是「吃什麼」；`/apple-touch-icon.png`、`/icon.svg` 拿得到（200、對的 content-type）。
-- build：`dist/manifest.webmanifest` 的名稱與四個圖示；圖示檔在 `dist/`。
+- build：`dist/manifest.webmanifest` 的名稱與三個圖示（192、512、maskable 512；`apple-touch-icon` 在 `index.html`）；圖示檔在 `dist/`。
 
 ## 6. 文件
 

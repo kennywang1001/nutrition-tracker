@@ -541,7 +541,7 @@ sudo docker compose --env-file .env.production \
 - **改名「吃什麼」與新圖示、記一餐的「拍營養標示」（`feat/label-entry-rename`，沒有 migration、沒有新的環境變數，可以直接退版）**：
   **iPhone 主畫面上的 app 不會自己換名稱與圖示**——部署之後在主畫面上刪掉舊的圖示，用 Safari 打開網址、
   分享 →「加入主畫面」再加一次。主畫面 app 的儲存跟 Safari 分開，刪掉就清了，所以**要重新登入一次**；
-  資料都在伺服器上，不會不見。Android 的 Chrome 會在幾天內自己更新圖示與名稱。
+  資料都在伺服器上，不會不見。Android 的 Chrome 會自己更新圖示與名稱（可能要幾天，新版可能會先問要不要更新）。
 
 - **營養標示的手機辨識（`feat/label-ocr`，沒有 migration、沒有新的環境變數，可以直接退版）**：新增食物的「拍營養標示」先在手機上認字（Tesseract.js，
   不用 AI 額度、照片不離開裝置），認出來的字送新的 `POST /api/foods/parse-label-text`（每人每分鐘 30 次，不碰資料庫、不寫 log）；讀不完整才「改用 AI 讀」。

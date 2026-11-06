@@ -521,9 +521,15 @@ test("偵測器的 wasm 抓不到：只剩手動輸入，「技術細節」帶�
 	await dialog.getByRole("button", { name: "取消", exact: true }).click();
 	await expect(dialog).toHaveCount(0);
 	await page.unroute(isWasm, blockWasm);
-	const wasmLoaded = page.waitForResponse(
-		(response) => isWasm(new URL(response.url())) && response.status() === 200,
-	);
+	// 自己服務的那一份（同源）：清掉 zxing 記住的模組之後，它的預設是從 jsDelivr 抓。
+	const wasmLoaded = page.waitForResponse((response) => {
+		const url = new URL(response.url());
+		return (
+			isWasm(url) &&
+			url.origin === new URL(page.url()).origin &&
+			response.status() === 200
+		);
+	});
 	await page.getByRole("button", { name: "掃條碼", exact: true }).click();
 	await wasmLoaded;
 	await expect(dialog.getByRole("status")).toHaveText(

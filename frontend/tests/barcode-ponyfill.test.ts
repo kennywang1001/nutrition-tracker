@@ -128,6 +128,9 @@ describe("createPonyfillDetector（審查 M1）", () => {
 		expect(second.message).toContain("Aborted(attempt 2)");
 		expect(second.message).toContain("attempt 2 printed");
 		expect(second.message).not.toContain("attempt 1 printed");
+		// 重新載也帶同一份 overrides：清掉之後 zxing 的預設是從 jsDelivr 抓 wasm（第三方、離線不能用）。
+		const [first, retry] = zxing.prepareZXingModule.mock.calls;
+		expect(retry?.[0].overrides).toBe(first?.[0].overrides);
 		vi.mocked(console.warn).mockRestore();
 	});
 
