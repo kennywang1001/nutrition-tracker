@@ -169,6 +169,34 @@ describe("newFoodHandoffFrom：拍營養標示帶來的照片（改名規格 D4�
 		).toBeNull();
 	});
 
+	it("有效條碼和暫存的照片同時在 state 裡 → 條碼優先，labelPhoto 是 null", () => {
+		const state = {
+			...newFoodState("5449000000996", PREFILL, "/meals/new"),
+			...labelPhotoState(photo(), "/meals/new"),
+		};
+		expect(newFoodHandoffFrom(state)).toEqual({
+			barcode: "5449000000996",
+			prefill: PREFILL,
+			labelPhoto: null,
+			returnTo: "/meals/new",
+		});
+	});
+
+	it("條碼無效（123）＋暫存的照片 → 走照片的交接", () => {
+		const file = photo();
+		const state = {
+			barcodeCode: "123",
+			barcodePrefill: PREFILL,
+			...labelPhotoState(file, "/meals/new"),
+		};
+		expect(newFoodHandoffFrom(state)).toEqual({
+			barcode: null,
+			prefill: null,
+			labelPhoto: file,
+			returnTo: "/meals/new",
+		});
+	});
+
 	it("state 只帶號碼，不帶 File", () => {
 		const state = labelPhotoState(photo(), null);
 		expect(Object.keys(state).sort()).toEqual(["labelPhoto", "returnTo"]);

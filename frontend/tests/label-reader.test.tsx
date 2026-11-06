@@ -658,6 +658,16 @@ describe("LabelReader：拍營養標示", () => {
 		expect(recognizeLabel).not.toHaveBeenCalled();
 	});
 
+	it("initialPhoto 太大：焦點回到「拍營養標示」，錯誤就在它下面、捲得進視窗（改名規格 D7）", async () => {
+		mockApi([]);
+		const big = JPEG();
+		Object.defineProperty(big, "size", { value: MAX_PHOTO_BYTES + 1 });
+		renderReader(big);
+
+		await waitFor(() => expect(picker()).toHaveFocus());
+		expect(screen.getByRole("alert")).toHaveTextContent("照片超過");
+	});
+
 	it("initialPhoto 遇上 StrictMode 的「掛、卸、再掛」：只填一次、結果出現、卡片不卡住", async () => {
 		vi.mocked(recognizeLabel).mockResolvedValue("營養標示\n熱量 514 大卡");
 		mockApi([
@@ -680,6 +690,8 @@ describe("LabelReader：拍營養標示", () => {
 		).toBeInTheDocument();
 		await settle();
 		expect(onFill).toHaveBeenCalledExactlyOnceWith(COMPLETE_FILL);
+		// 掛、卸、再掛各辨識一次（第一次被取消）：證明真的重掛過。
+		expect(recognizeLabel).toHaveBeenCalledTimes(2);
 		expect(
 			screen.queryByRole("region", { name: "確認照片" }),
 		).not.toBeInTheDocument();

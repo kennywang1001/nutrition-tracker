@@ -28,6 +28,7 @@ export function LabelPhotoEntry({ onPhoto }: Props) {
 		<div className={styles.row}>
 			<PhotoPickerButton
 				id={id}
+				className={styles.button}
 				label="拍營養標示"
 				accept="image/*"
 				capture="environment"

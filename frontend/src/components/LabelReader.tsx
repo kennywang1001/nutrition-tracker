@@ -220,6 +220,9 @@ export function LabelReader({ onFill, initialPhoto }: Props) {
 		// 太大在選的當下就擋（照片說明規格 D9）；卡片開著時不動它，只說這一張太大（審查 M2）。
 		if (file.size > MAX_PHOTO_BYTES) {
 			setPickError(new PhotoTooLargeError().message);
+			// 焦點回到按鈕（改名規格 D7）：從別的畫面帶著照片進來時，頁面可能停在下面（捲動位置會跟著導頁），
+			// 按鈕下面的錯誤在視窗外、焦點又在 BODY。聚焦檔案輸入會把按鈕與緊跟著的錯誤捲進視窗；在頁面上選的也無害。
+			focusNextRef.current = "picker";
 			return;
 		}
 		setPickError(null);

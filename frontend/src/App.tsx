@@ -88,7 +88,7 @@ function LogMealRoute() {
 	const [handoff] = useState(() => plannerHandoffFrom(location.state));
 	// 掃條碼（規格 D21）：新增食物存好交回來的那個食物，同一套「讀一次、清掉 history 的 state」。
 	const [picked] = useState(() => pickedFoodFrom(location.state));
-	// 總覽的快速記錄（首頁改版規格 D8、D9）：同一套「讀一次、清掉 history 的 state」。照片在 `lib/quick-actions`
+	// 總覽的快速記錄（首頁改版規格 D8、D9）：同一套「讀一次、清掉 history 的 state」。照片在 `lib/photo-stash`
 	// 的暫存裡，清 state 的同時放掉它（state 只有號碼；照片已經在 AiMealPanel 自己的 state 裡）。
 	const [photo] = useState(() => quickPhotoFrom(location.state));
 	const [scan] = useState(() => quickScanFrom(location.state));

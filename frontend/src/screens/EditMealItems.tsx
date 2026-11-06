@@ -336,6 +336,7 @@ function AddItem({
 						state: newFoodState(code, prefill, `/meals/${mealId}/edit`),
 					})
 				}
+				// 「拍營養標示」（改名規格 D5）：同上，去與回都 `replace`。
 				onLabelPhoto={(file) =>
 					navigate("/foods/new", {
 						replace: true,
